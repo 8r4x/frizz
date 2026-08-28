@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
-import { AwaitingBackgroundCard, awaitingBackgroundSubject } from "./AwaitingBackgroundCard.tsx"
+import { AwaitingBackgroundCard, AwaitingWaitTable, awaitingBackgroundSubject } from "./AwaitingBackgroundCard.tsx"
 import type { ThreadView } from "@frizz/shared"
 
 // One card, three surfaces, and since 2026-08-15 one TABLE: every kind of live work the thread declared
@@ -274,4 +274,40 @@ test("the snooze renders in a recessed footer band, flush with the card's bottom
   // No actions => no band and the shell keeps its own padding (the drawer / full-screen shape).
   const bare = render(t)
   assert.doesNotMatch(bare, /pb-0/)
+})
+
+// THE TABLE AS A PIECE (2026-08-28). The awaiting FENCE card draws it whenever the thread is NOT at rest
+// on its fence — mid-turn on a follow-up, or woken by the shell it named — where it used to print the
+// fence's machinery as one muted line of runtime ids ("shell b7w140a81   for 45m"; maintainer 2026-08-27,
+// with a screenshot: "for shells, I keep on seeing this fucking disgusting thing"). What these pin: the
+// piece renders the SAME rows off the same thread data the resting card uses, the divider follows the
+// prose flag, and a thread with nothing live draws nothing at all — never a heading over an empty grid,
+// and never the ids.
+test("AwaitingWaitTable draws the resting card's rows off a thread that is not at rest", () => {
+  const midTurn = {
+    ...thread([agent("running")], [shell("running")]),
+    watches: [shellWatch("bzvtnt3ig"), watcher(), timerWatch()],
+  } as Parameters<typeof AwaitingWaitTable>[0]["thread"]
+  const html = renderToStaticMarkup(createElement(AwaitingWaitTable, { thread: midTurn, divider: true }))
+  const plain = html.replace(/<[^>]+>/g, "")
+  // One row per kind, grouped under the resting card's own headings, in its order.
+  for (const head of ["Sub-agents", "Background shells", "Pull requests", "Timers"]) assert.match(plain, new RegExp(head))
+  assert.ok(plain.indexOf("Sub-agents") < plain.indexOf("Background shells") && plain.indexOf("Background shells") < plain.indexOf("Pull requests") && plain.indexOf("Pull requests") < plain.indexOf("Timers"))
+  // The shell row resolves its declared handle to the shell's NAME, and the id stays in data attributes.
+  assert.match(html, /data-wait-row="bzvtnt3ig" data-wait-kind="shell"/)
+  assert.match(plain, /vite dev/)
+  assert.doesNotMatch(plain, /bzvtnt3ig/, "a runtime id is never the reader's text")
+  assert.match(plain, /running · /)
+  // The divider is the caller's call — it separates prose the caller drew above.
+  assert.match(html, /-mx-4 mt-3 border-t border-border/)
+  assert.doesNotMatch(renderToStaticMarkup(createElement(AwaitingWaitTable, { thread: midTurn, divider: false })), /-mx-4 mt-3 border-t border-border/)
+  // The resting card renders these very rows — one table, two surfaces.
+  assert.match(render({ ...midTurn } as Parameters<typeof AwaitingBackgroundCard>[0]["thread"]), /data-wait-row="bzvtnt3ig" data-wait-kind="shell"/)
+})
+
+test("AwaitingWaitTable draws nothing for a thread with nothing live", () => {
+  // The shell the fence named has finished (it is no longer in bgShells, so the board synthesized no
+  // watch row) and the worker is working on its result: the fence card keeps its prose and gets no grid.
+  const spent = { ...thread([], []), watches: [] } as Parameters<typeof AwaitingWaitTable>[0]["thread"]
+  assert.equal(renderToStaticMarkup(createElement(AwaitingWaitTable, { thread: spent, divider: true })), "")
 })

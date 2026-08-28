@@ -536,7 +536,82 @@ function AgentRow({ agent, slug, now }: { agent: ThreadView["subAgents"][number]
   )
 }
 
+// ---- THE TABLE, AS A PIECE -----------------------------------------------------------------------
+// Every live wait the thread has out, grouped by kind — the resting card's real content, and since
+// 2026-08-28 the AWAITING FENCE CARD's too (ChatView.FenceCard). The two draw the SAME fence: the
+// resting card while the thread is at rest on it, the fence card whenever it is not — mid-turn on a
+// follow-up the human typed while the worker was still working, or after a wake, until the worker says
+// something else. The fence card used to print the fence's machinery there instead, one muted line of
+// runtime ids ("shell b7w140a81   for 45m"), and the maintainer kept meeting it on SHELL waits precisely
+// because a shell wait is the one that resumes mid-turn — a PR fence at least carried its ref as a link
+// (2026-08-27: "for shells, I keep on seeing this fucking disgusting thing … I feel like we've had many
+// other times where I see it render a shell waiter much nicer than this"). The board synthesizes the
+// same watch rows whether or not the thread is idle (board.fenceWatchViews), so the fence card always
+// had this table's data; it only lacked the table.
+function awaitingWaitGroups(thread: Pick<ThreadView, "id" | "subAgents" | "bgShells" | "watches">, now: number): Array<{ head: string; rows: ReactNode[] }> {
+  const prs = (thread.watches ?? []).filter((w) => w.kind === "github" && w.state === "armed")
+  const shells = declaredShellWatches(thread)
+  const agents = liveAgents(thread)
+  const timers = armedTimerWatches(thread)
+  // GROUPED BY KIND (maintainer 2026-08-15: "Definitely group them by kind"), and the order is the one
+  // the ops strip already settled, for the same reason: a sub-agent and a shell are running RIGHT NOW,
+  // a watched PR is waiting on somebody else, and a timer is waiting on nothing but the clock. Read
+  // most-alive first. An empty group renders nothing — never a heading over no rows.
+  return [
+    { head: "Sub-agents", rows: agents.map((a) => <AgentRow key={a.id ?? a.label} agent={a} slug={thread.id} now={now} />) },
+    { head: "Background shells", rows: shells.map((w) => <ShellWatchRow key={w.id} watch={w} thread={thread} slug={thread.id} now={now} />) },
+    { head: "Pull requests", rows: prs.map((w) => <GithubWatchRow key={w.id} watch={w} />) },
+    { head: "Timers", rows: timers.map((w) => <TimerRow key={w.id} watch={w} now={now} />) },
+  ].filter((g) => g.rows.length > 0)
+}
+
+function WaitGrid({ groups, divider }: { groups: ReadonlyArray<{ head: string; rows: ReactNode[] }>; divider: boolean }) {
+  if (groups.length === 0) return null
+  return (
+    <>
+      {/* THE DIVIDER — the horizontal rule between the worker's message and the machinery, full bleed
+          (maintainer 2026-08-24). It comes and goes with the prose: a card with rows alone (a bare
+          sub-agent rest) needs no seam, and a seam over nothing reads as a scratch. */}
+      {divider && <div aria-hidden className="-mx-4 mt-3 border-t border-border" />}
+      {/* THE TABLE — the card's real content, not an appendix to a sentence.
+          ONE grid for every group, so `grid-cols-subgrid` on each row shares FOUR tracks across the whole
+          card and the light-gray statuses line up down one edge even across a heading. Per-group grids
+          would each size their own name column and the statuses would step.
+
+          mt-3 UNCONDITIONALLY — 12px, and it is the WHOLE gap rather than an addition: CardContent's own
+          mt-1 collapses into it, which is why an earlier mt-2 measured 8px and put the first row closer
+          to the card title than to the row beneath it (measured, sans and mono, dsf 3). */}
+      <div className="mt-3 grid grid-cols-[auto_1fr_auto_auto] gap-y-px">
+        {groups.map((g, i) => (
+          <Fragment key={g.head}>
+            {/* The heading spans all four tracks. `mt-*` on every group but the first: the gap between
+                a group and the one above it has to beat the gap between two rows, or the heading reads
+                as belonging to the rows above rather than the ones below. */}
+            <div className={`col-span-4 text-[10.5px] uppercase tracking-wide text-muted/45 ${i > 0 ? "mt-2.5" : ""}`}>
+              {g.head}
+            </div>
+            {g.rows}
+          </Fragment>
+        ))}
+      </div>
+    </>
+  )
+}
+
+/** The table on its own, for the awaiting fence card. Live-ticking exactly as the resting card is, and
+ *  NOTHING when the thread has no rows: a fence whose shell has since finished (the worker woke on it
+ *  and is working) draws its prose alone rather than a heading over an empty grid — and never the raw
+ *  ids the fence was written in. `divider` says whether there is prose above for the rule to separate. */
+export function AwaitingWaitTable({ thread, divider }: {
+  thread: Pick<ThreadView, "id" | "subAgents" | "bgShells" | "watches">
+  divider: boolean
+}) {
+  const now = useNowMs()
+  return <WaitGrid groups={awaitingWaitGroups(thread, now)} divider={divider} />
+}
+
 /** Does the CHAT show the resting card at the bottom of this thread?
+
  *
  *  Three conditions, and the last two were added on 2026-08-14 after the maintainer found it on threads
  *  it had no business being on: "this snooze card only shows up at the bottom of a rendered chat thread
@@ -580,20 +655,7 @@ export function AwaitingBackgroundCard({ thread, actions }: {
   // Live-ticking, so a shell's "running · 4m" keeps counting while the board sends nothing (a quiet
   // child pushes no delta). One clock read for the whole card rather than one per row.
   const now = useNowMs()
-  const prs = (thread.watches ?? []).filter((w) => w.kind === "github" && w.state === "armed")
-  const shells = declaredShellWatches(thread)
-  const agents = liveAgents(thread)
-  const timers = armedTimerWatches(thread)
-  // GROUPED BY KIND (maintainer 2026-08-15: "Definitely group them by kind"), and the order is the one
-  // the ops strip already settled, for the same reason: a sub-agent and a shell are running RIGHT NOW,
-  // a watched PR is waiting on somebody else, and a timer is waiting on nothing but the clock. Read
-  // most-alive first. An empty group renders nothing — never a heading over no rows.
-  const groups: Array<{ head: string; rows: ReactNode[] }> = [
-    { head: "Sub-agents", rows: agents.map((a) => <AgentRow key={a.id ?? a.label} agent={a} slug={thread.id} now={now} />) },
-    { head: "Background shells", rows: shells.map((w) => <ShellWatchRow key={w.id} watch={w} thread={thread} slug={thread.id} now={now} />) },
-    { head: "Pull requests", rows: prs.map((w) => <GithubWatchRow key={w.id} watch={w} />) },
-    { head: "Timers", rows: timers.map((w) => <TimerRow key={w.id} watch={w} now={now} />) },
-  ].filter((g) => g.rows.length > 0)
+  const groups = awaitingWaitGroups(thread, now)
   return (
     // The SAME shell as every transcript card (TranscriptCard). This card stacks directly under an
     // awaiting fence card on a queue card, and it used to be a visibly different object there —
@@ -657,33 +719,7 @@ export function AwaitingBackgroundCard({ thread, actions }: {
           )}
         </p>
       )}
-      {/* THE TABLE — the card's real content, not an appendix to a sentence.
-          ONE grid for every group, so `grid-cols-subgrid` on each row shares FOUR tracks across the whole
-          card and the light-gray statuses line up down one edge even across a heading. Per-group grids
-          would each size their own name column and the statuses would step.
-
-          mt-3 UNCONDITIONALLY — 12px, and it is the WHOLE gap rather than an addition: CardContent's own
-          mt-1 collapses into it, which is why an earlier mt-2 measured 8px and put the first row closer
-          to the card title than to the row beneath it (measured, sans and mono, dsf 3). */}
-      {/* THE DIVIDER — the horizontal rule between the worker's message and the machinery, full bleed
-          (maintainer 2026-08-24). It comes and goes with the prose: a card with rows alone (a bare
-          sub-agent rest) needs no seam, and a seam over nothing reads as a scratch. */}
-      {prose && groups.length > 0 && <div aria-hidden className="-mx-4 mt-3 border-t border-border" />}
-      {groups.length > 0 && (
-        <div className="mt-3 grid grid-cols-[auto_1fr_auto_auto] gap-y-px">
-          {groups.map((g, i) => (
-            <Fragment key={g.head}>
-              {/* The heading spans all four tracks. `mt-*` on every group but the first: the gap between
-                  a group and the one above it has to beat the gap between two rows, or the heading reads
-                  as belonging to the rows above rather than the ones below. */}
-              <div className={`col-span-4 text-[10.5px] uppercase tracking-wide text-muted/45 ${i > 0 ? "mt-2.5" : ""}`}>
-                {g.head}
-              </div>
-              {g.rows}
-            </Fragment>
-          ))}
-        </div>
-      )}
+      <WaitGrid groups={groups} divider={!!prose} />
       {/* THE FOOTER BAND — the queue's snooze, in a recessed full-width strip flush with the card's
           bottom corners (the queue card's own footer idiom), so the control reads as chrome under the
           content rather than as one more row of it. Only the queue passes actions, so the drawer and

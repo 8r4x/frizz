@@ -5,7 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUp, ArrowUpRight, Bot, Check, ChevronRight, FileText, HelpCircle, Hourglass, KeyRound, ListChecks, Loader2, Radar, TerminalSquare, X, type LucideIcon } from "lucide-react"
 import { awaitingFenceTitle, parseRecurringPrompt } from "@frizz/shared"
-import type { AwaitingHint, BgShellView, PendingAsk, SubAgentView, ThreadView as ThreadViewData, TranscriptEdit, TranscriptMessage, TranscriptPart, TranscriptTodo, TranscriptToolCall } from "@frizz/shared"
+import type { AwaitingHint, BgShellView, PendingAsk, RegisteredQuestionView, SubAgentView, ThreadView as ThreadViewData, TranscriptEdit, TranscriptMessage, TranscriptPart, TranscriptTodo, TranscriptToolCall } from "@frizz/shared"
 import { store, threadBySlug, pushDrawer, pushSubAgentDrawer, pushBackgroundShellDrawer, showToast } from "../store.ts"
 import { useBackgroundShellLines, useBoard, useProjectDir, useTranscript, type ChatMessage, type TranscriptData } from "../hooks.ts"
 import { rpc } from "../api/rpc.ts"
@@ -26,6 +26,7 @@ import { splitFenceBlocks, type FenceKind } from "../lib/fenceBlocks.ts"
 import { showsRegisteredDoneCard } from "../lib/registeredDone.ts"
 import { RestedCard, showsRestedCard } from "./RestedCard.tsx"
 import { parseAnswersCard, pairAllAnswers, type PairedAnswer } from "../lib/answersMessage.ts"
+import { questionsByAnchor } from "../lib/questionAnchor.ts"
 import { FrizzWake } from "./FrizzWake.tsx"
 import { RecurringPromptLine } from "./RecurringPromptLine.tsx"
 import { LinkifiedText } from "./LinkifiedText.tsx"
@@ -43,7 +44,7 @@ import { shouldSubmitStagedEnter } from "../lib/composerKeyboard.ts"
 import { lastAskIndex, messagePresentationText } from "../lib/messagePresentation.ts"
 import { snoozePresetInstant, formatSnoozeWake } from "../lib/snooze.ts"
 import { noteGithubRefs } from "../lib/githubHovercards.ts"
-import { AWAITING_FALLBACK_TITLE, AWAITING_PARK_BUTTON, awaitingForLabel, awaitingItemLabels, awaitingParkAction, awaitingPresentationLine, prWatchRefs } from "../lib/awaitingPresentation.ts"
+import { AWAITING_FALLBACK_TITLE, AWAITING_PARK_BUTTON, awaitingParkAction, awaitingPresentationLine, prWatchRefs } from "../lib/awaitingPresentation.ts"
 import { ICON_LABEL_NUDGE } from "../lib/iconAlign.ts"
 import { prefs } from "../lib/prefs.ts"
 import { canAdoptThread } from "../lib/adoption.ts"
@@ -80,7 +81,7 @@ import { QuestionBlockCard } from "./QuestionBlockCard.tsx"
 import { FRAMED_IMAGE, ImageFrame } from "./ImageFrame.tsx"
 // The resting card, shared with the queue (TodosView passes it the event-Snooze; these two surfaces
 // deliberately pass no action — see the module header).
-import { AwaitingBackgroundCard, showsRestingCard } from "./AwaitingBackgroundCard.tsx"
+import { AwaitingBackgroundCard, AwaitingWaitTable, showsRestingCard } from "./AwaitingBackgroundCard.tsx"
 import { SnoozeCard, showsSnoozeCard } from "./SnoozeCard.tsx"
 // Re-exported from their new homes so existing importers (TodosView, the fixtures) keep one
 // import path while the definitions live where both question producers can reach them.
@@ -644,6 +645,9 @@ type VirtualThreadRow =
   // correct while TanStack's own `anchorTo:"end"` preservation stays dormant. It renders nothing.
   | { key: "head-anchor"; kind: "head-anchor" }
   | { key: "interactions"; kind: "interactions" }
+  // A REGISTERED question, dropped at the REST IT WAS ASKED AT rather than at the tail — see
+  // lib/questionAnchor. Its own row because it belongs BETWEEN two messages, which the tail cannot be.
+  | { key: string; kind: "questions"; questions: RegisteredQuestionView[] }
   | { key: "transport-fallback"; kind: "transport-fallback" }
   | { key: string; kind: "earlier-history" }
   | ({ kind: "message" } & VirtualTranscriptMessageRow)
@@ -748,13 +752,42 @@ function VirtualizedThreadTranscript({
       && thread?.runtime !== "perm-prompt"
     return workingWins ? workingIndicatorGap(activityMessages.map((entry) => entry.message)) : STEP
   }, [activityMessages, showWorking, thread])
+  // EVERY OPEN QUESTION, placed at the rest it was asked at. `byRow` keys into `messageRows` (the
+  // coalesced list actually rendered, which drops messages the transcript does not draw), so the group
+  // hangs off the last row at or before its anchor; -1 means the rest is older than the loaded window and
+  // it goes above everything rather than back at the bottom, lying about being current. `tail` is the
+  // ordinary case — the worker asked and rested — and keeps the placement this had before.
+  const questionGroups = useMemo(() => {
+    const tail: RegisteredQuestionView[] = []
+    const byRow = new Map<number, RegisteredQuestionView[]>()
+    const tailAnchor = messages.length - 1
+    for (const [anchor, group] of questionsByAnchor(messages, thread?.questions ?? [])) {
+      if (anchor >= tailAnchor) { tail.push(...group); continue }
+      let rowIdx = -1
+      for (let i = 0; i < messageRows.length; i++) {
+        if (messageRows[i].messageIndex > anchor) break
+        rowIdx = i
+      }
+      const at = byRow.get(rowIdx)
+      if (at) at.push(...group)
+      else byRow.set(rowIdx, [...group])
+    }
+    return { byRow, tail }
+  }, [messageRows, messages, thread?.questions])
+
   const rows = useMemo<VirtualThreadRow[]>(() => {
     const next: VirtualThreadRow[] = [{ key: "head-anchor", kind: "head-anchor" }]
     if (transportFallback) next.push({ key: "transport-fallback", kind: "transport-fallback" })
     if (hasEarlier || loadingEarlier || earlierError) {
       next.push({ key: `earlier-history:${beforeCursor ?? "complete"}`, kind: "earlier-history" })
     }
-    next.push(...messageRows.map((row) => ({ ...row, kind: "message" as const })))
+    const before = questionGroups.byRow.get(-1)
+    if (before) next.push({ key: "questions:head", kind: "questions", questions: before })
+    messageRows.forEach((row, i) => {
+      next.push({ ...row, kind: "message" as const })
+      const group = questionGroups.byRow.get(i)
+      if (group) next.push({ key: `questions:${row.key}`, kind: "questions", questions: group })
+    })
     // THE ASK GOES AT THE TAIL. It was row 0 until 2026-08-02, which put an answerable card ABOVE the
     // operator's own first message — a transcript scrolled to its end (this list anchors there) left it
     // 5,000px up and unmounted by the virtualizer, so a thread blocked on a question rendered as nothing
@@ -770,7 +803,7 @@ function VirtualizedThreadTranscript({
       queuedGap = STEP
     })
     return next
-  }, [beforeCursor, earlierError, hasEarlier, hasRuntimeStatus, loadingEarlier, messageRows, messages, transportFallback])
+  }, [beforeCursor, earlierError, hasEarlier, hasRuntimeStatus, loadingEarlier, messageRows, messages, questionGroups, transportFallback])
 
   // Which row carries the CURRENT ASK — the message the `stickyUserMessage` pref pins to the pane top.
   // -1 when the pref is off or the transcript has no landed user message yet; then nothing is hoisted
@@ -791,6 +824,7 @@ function VirtualizedThreadTranscript({
       if (row.kind === "earlier-history") return 42
       if (row.kind === "transport-fallback") return 76
       if (row.kind === "runtime-status") return 54
+      if (row.kind === "questions") return 220
       return row.kind === "message" ? 108 + row.gap : 82 + row.gap
     },
     overscan: 8,
@@ -1240,8 +1274,14 @@ function VirtualizedThreadTranscript({
             : row.kind === "interactions" ? (
               <>
                 <InteractionStack thread={thread} className="px-6 pt-5" autoFocusFirst />
-                <RegisteredQuestionStack thread={thread} className="px-6 pt-5" />
+                {/* The TAIL group only — questions asked at an older rest render up there, in place. The
+                    in-flight answer stays here whatever the questions do: it is the human's newest turn,
+                    and the delivered copy of it lands at the tail a second later. */}
+                <RegisteredQuestionStack thread={thread} questions={questionGroups.tail} className="px-6 pt-5" />
               </>
+            )
+            : row.kind === "questions" ? (
+              <RegisteredQuestionStack thread={thread} questions={row.questions} showInFlight={false} className="px-6 pt-5" />
             ) : row.kind === "transport-fallback" ? (
               transportFallback ? <div className="px-6 pt-3"><div
                 data-transcript-sync-fallback
@@ -3543,8 +3583,9 @@ export function InlineVisualization({ file }: { file: string }) {
 // A SIGNAL fence rendered as a card in place of the raw ```done / ```awaiting block (the fence
 // language IS the state; the body is the message). `done` → a compact presentation-only success card;
 // its thread's Archive lives in the stable lifecycle footer. `awaiting` → the SAME card shape: a
-// heading naming the wait ("PR watcher armed"), the body prose plus a plain-English action summary
-// for non-watcher waits (with legacy pr/ci/session support), then the park button + its explainer.
+// heading naming the wait (the worker's own `title:`, else "Awaiting"), the body prose, then the resting
+// card's own wait table — the same rows, off the same thread — for a fence whose thread is not at rest
+// on it (see the FALLBACK note at the table below), then the park button + its explainer.
 export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKind; body: string; hints: AwaitingHint[]; wrap?: boolean }) {
   const html = useMarkdownHtml(body)
   const awaitingLine = awaitingPresentationLine(body)
@@ -3559,11 +3600,6 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
   // the block sheet; inside a card `.card-md` pulls it to the card's own 13px and lets the colour inherit,
   // which is why no CARD_BODY rides alongside it.
   const awaitingHtml = useMarkdownHtml(awaitingLine)
-  // WHAT IT IS WAITING ON, as structure rather than as the raw `kind: value` lines the fence is made of.
-  // The reason above is the sentence; this is the SET, and it is the part a human scans to answer "will
-  // anything actually wake this?" — the question the card exists for.
-  const itemLabels = awaitingItemLabels(hints)
-  const forLabel = awaitingForLabel(hints)
   // The owning thread's slug — set by the thread view AND the queue card — so the confirm button
   // resolves its thread and renders on both surfaces (null in a sub-agent's own transcript → no button).
   const slug = useContext(ThreadSlugContext)
@@ -3640,6 +3676,11 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
   // row of their own under the prose, because `aside` is shrink-0 and a six-PR fence would shove the
   // heading off a narrow queue card.
   const watched = prWatchRefs(hints)
+  // …and ONLY the refs the wait table below does not already row. A registered PR is a github row down
+  // there — verdict glyph, counts, the same link — so a chip for it too would be one PR twice on a card
+  // that has been trimmed for exactly that. What is left for a chip is a `prs:` entry nothing registered.
+  const rowedRefs = new Set((fenceThread?.watches ?? []).filter((w) => w.kind === "github" && w.state === "armed").map((w) => w.target))
+  const unrowed = watched.filter((w) => !rowedRefs.has(w.ref))
   // TWO CARDS SAYING "AWAITING" IS ONE TOO MANY. Since a PR wait stopped carrying a park action
   // (2026-08-13), this card falls back to a bare "Awaiting" heading — and directly beneath it the
   // resting card says "Awaiting background work", lists the watched PRs with their live check state, and
@@ -3663,37 +3704,33 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
     // worker-authored now, and the header's wrap-don't-truncate rule was written for code-authored
     // kinds that carry no unbreakable token. A `title:` naming a branch, a URL or a base64 id is one,
     // and here it shares the row with a PR ref in `aside`, which is shrink-0.
-    <TranscriptCard data-awaiting-fence icon={AwaitingIcon} label={<span className="[overflow-wrap:anywhere]">{parkTitle}</span>} aside={watched.length === 1 ? <WatchedRef watch={watched[0]} /> : undefined}>
+    <TranscriptCard data-awaiting-fence icon={AwaitingIcon} label={<span className="[overflow-wrap:anywhere]">{parkTitle}</span>} aside={unrowed.length === 1 ? <WatchedRef watch={unrowed[0]} /> : undefined}>
       <LinkedHtml className={`md-body${wrap ? ` ${QUEUE_WRAP}` : ""}`} html={awaitingHtml} />
-      {(itemLabels.length > 0 || forLabel) && (
-        // ONLY ON THIS BRANCH. When the resting card is showing it owns this entirely — a table grouped
-        // by kind, a row per thing, with live state and a drill-in (AwaitingBackgroundCard) — and the
-        // branch above drops its chrome precisely so the two do not both state the wait. This is the
-        // FALLBACK: no resting card, so the fence is the only place the set is named at all, and without
-        // it the fence's `shells:`/`agents:`/`timers:` reach the card and fall straight through it.
-        //
-        // Muted and small: it is the machinery, under the prose that explains it. `gap-x-3` matches the
-        // PR-ref row below so the two read as one band rather than two competing lists.
-        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[12px] text-muted">
-          {/* Index in the key: two timers both label as "a timer" (awaitingItemLabels counts ids as
-              noise), and a bare-label key then collides. The list is static per render, so the index
-              is a stable discriminator. */}
-          {itemLabels.map((label, i) => <span key={`${i}-${label}`}>{label}</span>)}
-          {forLabel && <span className="text-muted/70">{forLabel}</span>}
-        </div>
-      )}
-      {watched.length > 1 && (
+      {unrowed.length > 1 && (
         // `gap-x-3` rather than a punctuation separator: the refs are a set of targets, not a sentence,
         // and a wrapped "·" stranded at a line end reads as a typo. They wrap onto as many lines as the
         // card's width needs — six refs take three rows on a phone-width queue card without overflowing
         // it. `mt-2` (against the prose's own 20px leading) is what makes the block read as its own
         // group rather than as one more line of the paragraph.
         <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-0.5">
-          {watched.map((watch) => (
+          {unrowed.map((watch) => (
             <WatchedRef key={watch.ref} watch={watch} />
           ))}
         </div>
       )}
+      {/* WHAT IT IS WAITING ON — the resting card's own table, grouped by kind, a row per thing with its
+          live state and drill-in. ONLY ON THIS BRANCH: when the resting card is showing it owns the wait
+          entirely and the branch above drops this card so the two do not both state it. This is the
+          FALLBACK — the fence is the worker's last word but the thread is NOT at rest on it: mid-turn on
+          a follow-up the human sent while the worker was still working, or woken by the very shell it
+          named and working on. It used to print the fence's machinery here instead, one muted line of
+          runtime ids — "shell b7w140a81   for 45m" — and a shell wait is the one that meets this branch
+          most, because it is the one that resumes mid-turn (maintainer 2026-08-27, with a screenshot:
+          "for shells, I keep on seeing this fucking disgusting thing"). The board synthesizes the same
+          rows whether or not the thread is idle (board.fenceWatchViews), so nothing here is new data.
+          No `for:` readout either: the resting card never shows one, and the two surfaces render the
+          same fence. Null in a sub-agent's own transcript (no thread) and null when nothing is live. */}
+      {fenceThread && <AwaitingWaitTable thread={fenceThread} divider />}
       {canAct && fenceThread && <AwaitingParkButton thread={fenceThread} hints={hints} />}
     </TranscriptCard>
   )

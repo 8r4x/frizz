@@ -29,7 +29,7 @@ window.fetch = async (input, init) => {
   return nativeFetch(input, init)
 }
 
-const thread = (id: string, title: string): ThreadView => ({
+const thread = (id: string, title: string, live: Partial<Pick<ThreadView, "runtime" | "subAgents" | "bgShells" | "watches">> = {}): ThreadView => ({
   id,
   title,
   status: "active",
@@ -52,7 +52,22 @@ const thread = (id: string, title: string): ThreadView => ({
   bgShells: [],
   watches: [],
   questions: [],
+  ...live,
 })
+
+// THE SHELL FENCE, MET MID-TURN — the screenshot of 2026-08-27 ("for shells, I keep on seeing this
+// fucking disgusting thing"). The worker parked on a shell and its human's follow-up landed in the same
+// second, so the thread never came to rest and the fence card drew instead of the resting card — with
+// the fence's machinery as one muted line, "shell b7w140a81   for 45m". The board synthesizes the shell's
+// watch row whether or not the thread is idle, so the thread behind THIS entry carries exactly what a
+// real one does: the running shell and its declared watch. The card must draw the resting card's own
+// "Background shells" row for it, and never the id.
+const shellStartedAt = new Date(Date.now() - 4 * 60_000).toISOString()
+const midTurnShellThread: Partial<Pick<ThreadView, "runtime" | "subAgents" | "bgShells" | "watches">> = {
+  runtime: "running",
+  bgShells: [{ id: "toolu_shell1", taskId: "b7w140a81", label: "Compile matrix ×2 at 10 items, then the moltar bench", startedAt: shellStartedAt, state: "running" }],
+  watches: [{ id: "shell:g-shell-midturn:b7w140a81", kind: "shell", target: "b7w140a81", state: "armed", createdAt: shellStartedAt }],
+}
 
 const timerIso = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString()
 
@@ -95,8 +110,10 @@ const fences: { slug: string; label: string; kind: "done" | "awaiting"; body: st
     ],
   },
   // THE STRUCTURAL FENCE, which is what a worker writes now: YAML frontmatter naming the things it waits
-  // on and a duration, then its prose below the `---`. The card renders the prose and the rest as a muted
-  // band — the raw fence syntax must never reach the reader (maintainer 2026-08-16).
+  // on and a duration, then its prose below the `---`. The card renders the prose; the raw fence syntax
+  // must never reach the reader (maintainer 2026-08-16), and neither may its ids — the thread behind this
+  // entry has nothing live, so the card draws the prose ALONE (the mid-turn entry below is the one with
+  // a row).
   {
     slug: "g-structural",
     label: "```awaiting · the structural fence",
@@ -117,6 +134,17 @@ const fences: { slug: string; label: string; kind: "done" | "awaiting"; body: st
     // and the line frizz refused arrive in the same place, and the card has to tell them apart itself.
     body: "watch: bvg44v4ij\nCI on acme/app#1227 is running.",
     hints: [{ kind: "for", value: "40m" }],
+  },
+  {
+    slug: "g-shell-midturn",
+    label: "```awaiting · shells, thread mid-turn (the resting card's table, not a line of ids)",
+    kind: "awaiting",
+    body: "Running on the quiet machine (load 6.7): the compile matrix twice with both array rows at 10 items, then the cross-library moltar benchmark again. When they finish: fill the shared-axis chart, regenerate the compile post's SVGs and alt text, and re-sweep the \"array of 50\" mentions in both posts.",
+    hints: [
+      { kind: "title", value: "10-item arrays + moltar re-run" },
+      { kind: "shell", value: "b7w140a81" },
+      { kind: "for", value: "45m" },
+    ],
   },
   { slug: "g-timer", label: "```awaiting · timer", kind: "awaiting", body: "Re-checking the rollout at the checkpoint.", hints: [{ kind: "timer", value: "tmr_a1b2c3" }, { kind: "for", value: "2h" }] },
   { slug: "g-pr", label: "```awaiting · prs", kind: "awaiting", body: "PR is open and CI is green. Watching for review.", hints: [{ kind: "pr", value: "acme/app#391" }] },
@@ -195,7 +223,7 @@ const board: BoardSnapshot = {
   projectDir: "/tmp/fixture",
   projectName: "fixture",
   projectLabel: "fixture/fixture",
-  threads: fences.map((f) => thread(f.slug, f.label)),
+  threads: fences.map((f) => thread(f.slug, f.label, f.slug === "g-shell-midturn" ? midTurnShellThread : {})),
   errors: [],
   warnings: [],
 }

@@ -8,8 +8,6 @@ import {
   awaitingPresentationLine,
   awaitingProseBlock,
   prWatchRefs,
-  awaitingItemLabels,
-  awaitingForLabel,
   awaitingWaitClause,
   reasonSentence,
   awaitingProse,
@@ -104,24 +102,6 @@ test("a fence with no reason still shows its body rather than carding blank", ()
   assert.equal(awaitingPresentationLine(""), "Waiting for an external update.")
 })
 
-test("the items and the duration render as labels, and PRs are left to their own links", () => {
-  const hints = [
-    { kind: "shell" as const, value: "bvg44v4ij" },
-    { kind: "agent" as const, value: "agent_7" },
-    { kind: "timer" as const, value: "tmr_a1b2c3" },
-    { kind: "pr" as const, value: "acme/app#391" },
-    { kind: "for" as const, value: "40m" },
-  ]
-  // A PR is deliberately absent: it gets a real LINK of its own (prWatchRefs), and listing it here too
-  // is the duplication this card has been trimmed for twice already.
-  assert.deepEqual(awaitingItemLabels(hints), ["shell bvg44v4ij", "sub-agent agent_7", "a timer"])
-  assert.equal(awaitingForLabel(hints), "for 40m")
-  // No `for:` is a MALFORMED park rather than an unbounded one — frizz refuses it, so the card must not
-  // imply a wait is running by inventing a duration.
-  assert.equal(awaitingForLabel([{ kind: "shell", value: "b1" }]), null)
-})
-
-
 // THE RAIL'S WAIT CLAUSE. The sidebar row is a TITLE and nothing else (maintainer 2026-08-19), so what
 // the fence names is only legible on hover — and it has to READ there. One verb over one conjoined
 // list, generated from the hint KINDS, so the same fence always reads the same way and no runtime id
@@ -173,7 +153,6 @@ test("hintGloss is the phone's one line, and it is the PR ref", () => {
   assert.equal(hintGloss([{ kind: "shell", value: "bvg44v4ij" }]), null)
 })
 
-
 // THE WORKER'S REASON, SET AS A SENTENCE. It stands alone everywhere frizz draws it — its own paragraph
 // under the rail popover's sentence, its own line on the card — and it arrives lowercase because the
 // shipped contract's example was a fragment (maintainer 2026-08-19: "why is that second sentence
@@ -200,7 +179,6 @@ test("a reason that opens on CODE is left exactly as written", () => {
   ]
   for (const reason of cases) assert.equal(reasonSentence(reason), reason, reason)
 })
-
 
 // WHAT THE POPOVER READS, and why it is not `reason:` — a key since retired outright (2026-08-24), when
 // the frontmatter became YAML and could no longer hold prose. An awaiting fence is FRONTMATTER, THEN

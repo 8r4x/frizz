@@ -98,3 +98,22 @@ test("every transcript surface cuts staleness at the same index", () => {
   // regression — it cannot see position, so it reports a settled fence-only message as visible.
   assert.doesNotMatch(source, /\n\s+messageRendersNothing,\n/, "no row builder may take the position-blind predicate")
 })
+
+// THE FALLBACK IS THE RESTING CARD'S TABLE, NOT THE FENCE'S MACHINERY. A live fence whose thread is not
+// at rest on it — mid-turn on a follow-up the human sent while the worker was still working, or woken by
+// the very shell it named — reaches FenceCard rather than the resting card, and until 2026-08-28 that
+// branch printed the fence's items as one muted line of runtime ids ("shell b7w140a81   for 45m"). A
+// shell wait met it most, because a shell wait is the one that resumes mid-turn (maintainer 2026-08-27,
+// with a screenshot: "for shells, I keep on seeing this fucking disgusting thing"). The board synthesizes
+// the same watch rows whether or not the thread is idle, so the card draws the same table the resting
+// card does, off the same thread.
+test("the fallback fence card draws the wait table and never the raw ids", () => {
+  const card = source.match(/export function FenceCard\([\s\S]*?\n}/)?.[0]
+  assert.ok(card, "FenceCard must exist")
+  const code = card.replace(/^\s*\/\/.*$/gm, "").replace(/\{\/\*[\s\S]*?\*\/\}/g, "")
+  assert.match(code, /<AwaitingWaitTable thread=\{fenceThread\} divider \/>/, "the resting card's own table, off the same thread")
+  assert.doesNotMatch(code, /awaitingItemLabels|awaitingForLabel|itemLabels|forLabel/, "no label line of ids and a duration")
+  // A `prs:` entry that the table already rows as a github watch gets no chip as well — one PR, one place.
+  assert.match(code, /const unrowed = watched\.filter\(\(w\) => !rowedRefs\.has\(w\.ref\)\)/)
+  assert.doesNotMatch(code, /watched\.length|watched\[0\]|watched\.map/, "every chip site reads the unrowed set")
+})

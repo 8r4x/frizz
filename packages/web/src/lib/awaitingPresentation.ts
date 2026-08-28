@@ -162,28 +162,6 @@ function stripFenceSyntax(body: string): string {
     .trim()
 }
 
-/** What the fence says it is waiting ON, as short readable labels — the structure the card renders
- *  instead of the raw `kind: value` lines. PRs are excluded: they get real LINKS of their own
- *  (`prWatchRefs`), and listing them twice is the duplication this card has been trimmed for twice. */
-export function awaitingItemLabels(hints: readonly AwaitingHint[]): string[] {
-  const out: string[] = []
-  for (const h of hints) {
-    const value = h.value.trim()
-    if (!value) continue
-    if (h.kind === "shell") out.push(`shell ${value}`)
-    else if (h.kind === "agent") out.push(`sub-agent ${value}`)
-    else if (h.kind === "timer") out.push("a timer")
-  }
-  return out
-}
-
-/** The `for:` duration as the card shows it — "for 40m". Null when the fence carries none, which is a
- *  malformed park rather than an unbounded one: frizz refuses it, so the card does not imply otherwise. */
-export function awaitingForLabel(hints: readonly AwaitingHint[]): string | null {
-  const value = hints.find((h) => h.kind === "for")?.value.trim()
-  return value ? `for ${value}` : null
-}
-
 /** WHAT THIS THREAD IS WAITING ON, as a CLAUSE — the middle of a sentence the row's popover finishes.
  *
  *  The rail's rows carry a TITLE and nothing else (maintainer 2026-08-19: "there should never ever be
