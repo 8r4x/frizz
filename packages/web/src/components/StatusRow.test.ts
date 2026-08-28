@@ -8,7 +8,7 @@ import { StatusRow } from "./StatusRow.tsx"
 import { store, type ConnectionState } from "../store.ts"
 
 // The row's SHAPE is a spec, not an accident: home → settings → reload → quota, left to right and all
-// of it left-justified, with the project — its GitHub mark and owner/repo — pinned to the right edge.
+// of it left-justified, with the project — owner/repo, a link to the repo — pinned to the right edge.
 // It has been three separate pieces of chrome in three places (identity top-left, settings/reload
 // top-right, quota floating over the sidebar composer), then one fixed corner chip, then the same row
 // running the other way — so a regression here is a silent return to one of those rather than a
@@ -78,11 +78,11 @@ test("the row is LOOSE on the page — no fill, no border, no shadow, nothing fi
   }
 })
 
-test("the project is a LINK to its GitHub repo, wearing the GitHub mark — and the connection dot is gone", () => {
+test("the project is a LINK to its GitHub repo — and the connection dot is gone", () => {
   // Maintainer 2026-08-28: "There should be a way to open up the GitHub repo for a given project if
-  // one is detected … Perhaps it should actually be showing owner/repo if a repo is detected. And to
-  // get [the GitHub] icon, then maybe we should just drop the status indicator." The dot had been the
-  // connection's last remnant since 2026-08-19; the mark takes its slot.
+  // one is detected … Perhaps it should actually be showing owner/repo if a repo is detected … then
+  // maybe we should just drop the status indicator." The dot had been the connection's last remnant
+  // since 2026-08-19.
   const html = render("colinhacks/frizz")
 
   // The whole owner/repo, not the bare repo the row used to show.
@@ -90,13 +90,14 @@ test("the project is a LINK to its GitHub repo, wearing the GitHub mark — and 
   // A real anchor to the repo — new tab, and a label that says where it goes. No scripted window.open.
   assert.match(html, /<a href="https:\/\/github\.com\/colinhacks\/frizz" target="_blank" rel="noopener"/)
   assert.match(html, /aria-label="Open colinhacks\/frizz on GitHub"/)
-  // The mark is INSIDE the anchor (one control, not a glyph beside a link), and it is the Simple Icons
-  // GitHub path — a filled 24-unit glyph like the two provider marks it sits near, not a lucide stroke.
-  assert.match(html, /<a [^>]*><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="currentColor"/)
-  assert.match(html, /d="M12 \.297c-6\.63 0-12 5\.373-12 12/)
-  // The mark carries the row's icon tone; the name keeps its own weight and tone.
-  assert.match(html, /class="group flex min-w-0 items-baseline gap-1\.5 rounded-sm text-fg\/75 [^"]*hover:text-fg/)
-  assert.match(html, /font-semibold text-fg\/90 transition-colors group-hover:text-fg/)
+  // NO GITHUB MARK. The first cut wore one in the dot's old slot; the maintainer pulled it the same
+  // day because the prompt box's GitHub picker icon sits a few px below and means something else
+  // ("it kind of conflicts with the GitHub icon that shows up in the prompt box"). The link shows
+  // itself the way the app's other text links do — full fg and an underline on hover — and keeps the
+  // name's resting weight and tone, so a linked and an unlinked project read alike at rest.
+  const identity = html.slice(html.indexOf("data-project-identity-state"))
+  assert.doesNotMatch(identity, /<svg/)
+  assert.match(html, /<a [^>]*class="block min-w-0 rounded-sm font-semibold text-fg\/90 underline-offset-2 [^"]*hover:text-fg hover:underline/)
 
   // The connection dot, in every state, is gone — nothing in the row says "connected" any more.
   for (const connection of ["open", "connecting", "closed"] as const) {
@@ -107,7 +108,7 @@ test("the project is a LINK to its GitHub repo, wearing the GitHub mark — and 
   }
 })
 
-test("an owner/repo from ANOTHER forge is plain text: no mark, no link", () => {
+test("an owner/repo from ANOTHER forge is plain text: no link", () => {
   // The board carries `githubRepo` only for a github.com origin. A GitLab origin still yields an
   // owner/repo display label, and pointing that at github.com would be a wrong destination rather
   // than a missing one — so the name renders as prose and nothing in it is a control.
@@ -117,10 +118,6 @@ test("an owner/repo from ANOTHER forge is plain text: no mark, no link", () => {
   assert.match(html, />colinhacks\/frizz</)
   assert.doesNotMatch(html, /<a href="https:\/\/github\.com/)
   assert.doesNotMatch(html, /on GitHub/)
-  // No glyph of any kind inside the identity — scoped to the span, because every lucide button before
-  // it is an svg too.
-  const identity = html.slice(html.indexOf("data-project-identity-state"))
-  assert.doesNotMatch(identity, /<svg/)
 })
 
 test("the name clips from the START, so the repo half survives a narrow column", () => {

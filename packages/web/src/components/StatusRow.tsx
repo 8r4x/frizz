@@ -9,7 +9,7 @@ import { RestartFrizzButton } from "./RestartFrizzButton.tsx"
 // THE STATUS ROW — one loose line along the TOP OF THE PROMPT BOX, controls at the left edge and the
 // project at the right:
 //
-//   home │ settings · reload │ Claude 83% · Codex 59%                       ⌂ owner/repo
+//   home │ settings · reload │ Claude 83% · Codex 59%                         owner/repo
 //
 // It rides the dispatch composer wherever that composer is: the sidebar's own top on a normal board,
 // and the centered first-task box on a brand-new project (TodosView's `nothingAtAll` branch), which
@@ -34,15 +34,21 @@ import { RestartFrizzButton } from "./RestartFrizzButton.tsx"
 //
 // THE PROJECT IS A LINK TO ITS REPO, AND THE CONNECTION INDICATOR IS GONE (maintainer 2026-08-28:
 // "There should be a way to open up the GitHub repo for a given project if one is detected … Perhaps
-// it should actually be showing owner/repo if a repo is detected. And to get [the GitHub] icon, then
-// maybe we should just drop the status indicator"). The connection had already been reduced from a
-// green dot plus the word "connected" to the dot alone on 2026-08-19 ("drop the connected indicator,
-// certainly. It's pretty useless"); the dot then said "green" every second of every session, and its
-// one informative state — disconnected — is something the page ALSO tells you by going stale. The
-// GitHub mark takes its slot, and the mark is the whole affordance: it renders only when the board
-// carries `githubRepo` (origin is github.com), so a GitLab origin or a remote-less directory shows its
-// name as plain text with no mark and no link. Name and mark are ONE anchor — a real `<a target=_blank>`
-// rather than a scripted window.open, so ⌘-click, middle-click and copy-link all work.
+// it should actually be showing owner/repo if a repo is detected … then maybe we should just drop the
+// status indicator"). The connection had already been reduced from a green dot plus the word
+// "connected" to the dot alone on 2026-08-19 ("drop the connected indicator, certainly. It's pretty
+// useless"); the dot then said "green" every second of every session, and its one informative state —
+// disconnected — is something the page ALSO tells you by going stale. The name is a real
+// `<a target=_blank>` rather than a scripted window.open, so ⌘-click, middle-click and copy-link all
+// work — and it links only when the board carries `githubRepo` (origin is github.com), so a GitLab
+// origin or a remote-less directory shows its name as plain text.
+//
+// NO GITHUB MARK BESIDE IT. The first cut put GitHub's mark in the dot's old slot as the link's
+// affordance; the maintainer pulled it the same day ("it kind of conflicts with the GitHub icon that
+// shows up in the prompt box" — the picker's door, a few px below this row, is the one GitHub glyph
+// on the surface and it means "browse issues and PRs", not "this repo"). The link shows itself the
+// way every other text link in the app does: full-fg + underline on hover, and a title that says
+// where it goes.
 //
 // THE 272px SIDEBAR IS THE BINDING WIDTH, not the viewport. The old bar was capped to the VIEWPORT, so
 // it never ran out of room; this row lives in a column that floors at 272px in the tablet band. With
@@ -63,20 +69,6 @@ import { RestartFrizzButton } from "./RestartFrizzButton.tsx"
 
 function Divider() {
   return <span aria-hidden="true" className="h-3 w-px shrink-0 bg-border" />
-}
-
-// GitHub's mark, from Simple Icons (CC0-1.0), copied into a code-native SVG so no runtime image is
-// fetched — the same treatment as the two provider marks in ProviderMark.tsx, which are its neighbours
-// in this row: https://github.com/simple-icons/simple-icons/blob/develop/icons/github.svg
-//
-// `currentColor` so it takes the anchor's tone, and `aria-hidden` because the anchor's own label
-// already says "on GitHub" — a second "GitHub" from the image would read the word twice.
-function GithubMark({ className }: { className?: string }) {
-  return (
-    <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="currentColor" className={className}>
-      <path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12" />
-    </svg>
-  )
 }
 
 // The name, clipped from the START. A plain `truncate` keeps the head of the string and drops the
@@ -167,41 +159,24 @@ export function StatusRow() {
         aria-busy={identity.state === "loading" || undefined}
       >
         {name && githubRepo ? (
-          // `gap-1.5`, NOT the row's `gap-3`: the mark is a mark QUALIFYING this name, the same
-          // relationship a quota chip has between its provider mark and its number — and that one is
-          // deliberately half the row's distance, which is what keeps each pair reading as one thing
-          // rather than as two loose marks.
-          //
-          // `text-fg/75` is STATUS_ROW_ACTION's tone, so the mark sits at the same brightness as the
-          // home, settings and reload glyphs; the NAME keeps the fg/90 it always had, and the whole
-          // anchor lifts to full fg on hover — the same hover STATUS_ROW_ACTION uses, which is what
-          // tells a reader the name is now a control. `size-3` (12px) because this mark fills its
-          // 24-unit viewBox edge to edge, so 12px nominal IS the ~12px of ink every other glyph in the
-          // row paints (the provider marks need 14px/12.75px for the same ink; measured 2026-08-28
-          // with scripts/ink-gaps.mjs --dsf=4 --pad=0 — re-measure rather than re-guess).
-          //
-          // VERTICALLY THE MARK SITS ON THE CAP BAND, AND THE BROWSER DOES THE ARITHMETIC. This app
-          // renders in two fonts (html[data-font]) with different cap heights, and `items-center`
-          // measured the mark 0.23px low in sans but 0.83px low in mono — no single hand-fitted nudge
-          // is right in both. So the pair is `items-baseline`: the mark's bottom lands on the text's
-          // baseline, and `0.5em - 0.5cap` then drops its centre onto the middle of the resolved
-          // font's cap band, whatever that font is. Re-measured 2026-08-28 (visual-review routine,
-          // /tmp/sr-vertical.js in the handoff): residual vs cap-band centre within the glyph's own
-          // 0.15px box asymmetry in BOTH fonts.
+          // The name IS the anchor: the same hover every other text link in the app wears
+          // (GithubPickerModal's rows, ChildOpRow's labels) — full fg plus an underline — is what tells
+          // a reader this one is a control, and the title says where it goes. `text-fg/90` at rest is
+          // the weight and tone the name always had, so a linked and an unlinked project read alike
+          // until you reach for one.
           <a
             href={`https://github.com/${githubRepo}`}
             target="_blank"
             rel="noopener"
             title={`Open ${name} on GitHub`}
             aria-label={`Open ${name} on GitHub`}
-            className="group flex min-w-0 items-baseline gap-1.5 rounded-sm text-fg/75 outline-none transition-colors hover:text-fg focus-visible:ring-1 focus-visible:ring-border-strong"
+            className="block min-w-0 rounded-sm font-semibold text-fg/90 underline-offset-2 outline-none transition-colors hover:text-fg hover:underline focus-visible:ring-1 focus-visible:ring-border-strong"
           >
-            <GithubMark className="size-3 shrink-0 self-baseline translate-y-[calc(0.5em_-_0.5cap)]" />
-            <StartTruncated text={name} className="font-semibold text-fg/90 transition-colors group-hover:text-fg" />
+            <StartTruncated text={name} />
           </a>
         ) : name ? (
           // A verified NON-GitHub origin (owner/repo from GitLab, say) or a remote-less directory: the
-          // name is prose, not a control, so no mark and nothing to hover.
+          // name is prose, not a control, so nothing to hover.
           <StartTruncated text={name} title={name} className="font-semibold text-fg/90" />
         ) : (
           // Only before the first board keyframe, or on a keyframe with nothing nameable in it. A repo

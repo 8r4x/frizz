@@ -20,7 +20,7 @@ import "./styles.css"
 //   ?state=longemail  — an account address past the popover's width, to check the truncation
 //   ?identity=loading|unavailable|gitlab|local
 //                                  — gitlab: an owner/repo label with NO githubRepo (a non-GitHub
-//                                    origin), which must render as plain text: no mark, no link.
+//                                    origin), which must render as plain text with no link.
 //                                    local: a remote-less directory, same plain treatment.
 //   ?width=272                     — the column's width. 489 is the sidebar at a 1440px viewport; 272 is
 //                                    its floor in the tablet band, where "owner/repo" no longer fits
