@@ -138,10 +138,10 @@ export function openFrizzDatabase(options: OpenFrizzDatabaseOptions = {}): Frizz
         db.prepare("INSERT INTO imported_project (project_id, source, rows, imported_at) VALUES (?, ?, 0, ?)")
           .run(projectId, join(dir, "ui.db"), new Date().toISOString())
         alreadyImported.add(projectId)
-        frizzLog.info("frizz-db", `: restored ui.db.imported to ui.db and recorded it as imported`)
+        frizzLog.info("frizz-db", `${projectId}: restored ui.db.imported to ui.db and recorded it as imported`)
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error)
-        frizzLog.warn("frizz-db", `: could not restore ui.db.imported: `)
+        frizzLog.warn("frizz-db", `${projectId}: could not restore ui.db.imported: ${detail}`)
       }
     }
     for (const projectId of legacyProjectIds(projectsDir)) {
