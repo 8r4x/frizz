@@ -10,8 +10,8 @@
 //
 // Usage: node scripts/seed-markdown-reader.mjs --home=/abs/temp-home
 import { execFileSync } from "node:child_process"
-import { globSync, mkdirSync, writeFileSync } from "node:fs"
-import { join } from "node:path"
+import { existsSync, globSync, mkdirSync, writeFileSync } from "node:fs"
+import { basename, join } from "node:path"
 
 const flags = Object.fromEntries(
   process.argv.slice(2).filter((a) => a.startsWith("--")).map((a) => a.replace(/^--/, "").split("=")),
@@ -22,8 +22,14 @@ if (!home) {
   process.exit(1)
 }
 
-const db = globSync(join(home, ".frizz/projects/*/ui.db"))[0]
-if (!db) throw new Error(`no ui.db under ${home}/.frizz/projects`)
+// One unified database per HOME since a995792e (`~/.frizz/ui.db`, rows keyed by project_id); the
+// per-project `projects/<id>/ui.db` is the pre-cutover layout, kept so an older sandbox still seeds.
+const unifiedDb = join(home, ".frizz/ui.db")
+const db = existsSync(unifiedDb) ? unifiedDb : globSync(join(home, ".frizz/projects/*/ui.db"))[0]
+if (!db) throw new Error(`no ui.db under ${home}/.frizz`)
+// The project this row belongs to: the launcher's id, which is the name of its state directory.
+const projectId = flags.projectId ?? basename(globSync(join(home, ".frizz/projects/*"))[0] ?? "")
+const hasProjectId = execFileSync("sqlite3", [db, "PRAGMA table_info(session)"], { encoding: "utf8" }).includes("|project_id|")
 const cwdSlug = cwd.replace(/[/.]/g, "-")
 const jsonlDir = join(home, ".claude", "projects", cwdSlug)
 mkdirSync(jsonlDir, { recursive: true })
@@ -120,7 +126,7 @@ writeFileSync(join(jsonlDir, `${sessionId}.jsonl`), records.map((r) => JSON.stri
 
 execFileSync("sqlite3", [
   db,
-  `INSERT OR REPLACE INTO session (slug, session_id, thread_name, spawned_at, title, backend, model, effort, permission_mode, rested_at)
-   VALUES ('${slug}', '${sessionId}', 'frizz-${slug}', '${now()}', 'markdown reader', 'claude', 'opus', 'high', 'default', '${now()}')`,
+  `INSERT OR REPLACE INTO session (${hasProjectId ? "project_id, " : ""}slug, session_id, thread_name, spawned_at, title, backend, model, effort, permission_mode, rested_at)
+   VALUES (${hasProjectId ? `'${projectId}', ` : ""}'${slug}', '${sessionId}', 'frizz-${slug}', '${now()}', 'markdown reader', 'claude', 'opus', 'high', 'default', '${now()}')`,
 ])
 console.log(`seeded ${slug} → ${sessionId} (docs under ${docs})`)

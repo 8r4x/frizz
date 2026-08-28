@@ -69,6 +69,7 @@ export function Composer({
   busy,
   footer,
   leftAction,
+  context,
   slashSuggest,
   onInterruptSubmit,
 }: {
@@ -89,6 +90,12 @@ export function Composer({
   // Rendered INSIDE the box along its bottom edge (the dispatch form's inline mode/model/effort
   // readouts). The textarea auto-grows above it; the footer strip is always reserved.
   footer?: React.ReactNode
+  // STAGED CONTEXT, rendered INSIDE the box along its top edge, above the text — the ⌘I selection
+  // chips (ThreadComposerBox passes ComposerContextChips). Inside the border rather than a row above
+  // it, so the prompt reads as one unit: "these quotes, plus this text" (maintainer 2026-08-27:
+  // "they should be inline chips inside of the prompt box"). Renders nothing when there is nothing
+  // staged, so the box keeps its compact single-row shape.
+  context?: React.ReactNode
   // A small action rendered just LEFT of the send button (the dispatch composer's GitHub-picker icon).
   // Only surfaces that pass it get it; reply/queue composers omit it.
   leftAction?: React.ReactNode
@@ -516,6 +523,7 @@ export function Composer({
           ))}
         </div>
       )}
+      {context}
       <textarea
         id={id}
         ref={taRef}

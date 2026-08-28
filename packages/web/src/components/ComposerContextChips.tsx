@@ -5,10 +5,11 @@ import { removeContextItem, setContextComment, store } from "../store.ts"
 import { contextDisplayPath } from "../lib/composerContext.ts"
 import { useProjectDir } from "../lib/drafts.ts"
 
-// The staged SELECTED-CONTEXT items for a thread, as chips above its composer (the ⌘I flow — see
-// FileViewerPanel and lib/composerContext.ts). One chip per selection: the file's basename plus its
-// line range. Clicking a chip opens it — the quoted text plus a comment box — so each item can carry
-// a note the way a review comment does. The set serializes into the next send and clears with it.
+// The staged SELECTED-CONTEXT items for a thread, as chips INSIDE its prompt box along the top edge
+// (the ⌘I flow — see FileViewerPanel and lib/composerContext.ts; Composer renders this through its
+// `context` slot). One chip per selection: the file's basename plus its line range. Clicking a chip
+// opens it — the quoted text plus a comment box — so each item can carry a note the way a review
+// comment does. The set serializes into the next send and clears with it.
 export function ComposerContextChips({ slug }: { slug: string }): ReactElement | null {
   const snap = useSnapshot(store)
   const projectDir = useProjectDir()
@@ -17,7 +18,11 @@ export function ComposerContextChips({ slug }: { slug: string }): ReactElement |
   if (!items?.length) return null
   const open = openId !== null ? items.find((item) => item.id === openId) : undefined
   return (
-    <div data-composer-context className="mb-1.5">
+    // px-3.5 = the textarea's own text inset, so the first chip's border sits on the text column
+    // (at px-3 it stood 2px proud of the first letter). pt-2.5 mirrors the textarea's top inset; the
+    // -mb-1 pulls the text up under the chips so chip→text reads ~10px like border→chip, instead of
+    // the 16px the two stacked insets produced.
+    <div data-composer-context className="px-3.5 pt-2.5 -mb-1">
       <div className="flex flex-wrap items-center gap-1.5">
         {items.map((item) => {
           const base = item.path.split("/").filter(Boolean).pop() || item.path
@@ -43,6 +48,8 @@ export function ComposerContextChips({ slug }: { slug: string }): ReactElement |
               </button>
               <button
                 type="button"
+                // Like every control beside a live input here: never blur the textarea on the click.
+                onMouseDown={(e) => e.preventDefault()}
                 onClick={() => {
                   removeContextItem(slug, item.id)
                   if (openId === item.id) setOpenId(null)

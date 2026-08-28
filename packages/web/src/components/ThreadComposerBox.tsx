@@ -134,8 +134,8 @@ export function ThreadComposerBox({
       {...(surface === "chatComposer" ? { "data-thread-action-bar": "" } : {})}
       className={className}
     >
-      <ComposerContextChips slug={slug} />
       <Composer
+        context={<ComposerContextChips slug={slug} />}
         id={id}
         surface={surface}
         value={message}
