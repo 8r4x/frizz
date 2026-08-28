@@ -3200,6 +3200,78 @@ test("authFault: cleared by the next REAL assistant text, kept across an interve
   assert.equal(s.authFault, undefined, "a genuine response proves the credential works")
 })
 
+// ---- The GENERAL fault: any failed turn (PR #26) ----
+// The two classifiers above recognise an auth rejection (by text) and a usage limit (by category); every
+// other API error used to leave no trace, and a synthetic error record still advances `lastAssistantAt`,
+// so a thread failing every turn read as an agent resting after each one. Measured in the field before
+// the flag existed: ~5,700 sign-off reminders to one session, one per scheduler tick, until every turn
+// failed with a context-window 400 that the reminders themselves kept permanent. These pin the seam the
+// scheduler guards depend on — the record raises the flag, a real reply clears it, and the value reaches
+// `telemetry()` (deleting either site has to fail a test here, not only a stub-driven scheduler test).
+
+const ERROR_400_TEXT = 'API Error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"Prompt is too long"}}'
+const error400 = (at: string) => ({
+  type: "assistant", isApiErrorMessage: true, error: "invalid_request", apiErrorStatus: 400, timestamp: at,
+  message: { model: "<synthetic>", content: [{ type: "text", text: ERROR_400_TEXT }] },
+})
+
+test("apiFault: a synthetic error record of a category NO classifier recognises sets the flag", () => {
+  const s = newTailState("t", "sid", "/x")
+  applyRecord(s, error400("2026-07-01T00:00:01.000Z"))
+  assert.equal(s.apiFault, true)
+  assert.equal(s.authFault, undefined, "not an auth rejection")
+  assert.equal(s.limitFault, undefined, "not a usage limit")
+  assert.equal(s.lastAssistantAt, "2026-07-01T00:00:01.000Z", "the record still advances the rest instant — which is why the flag is needed")
+})
+
+test("apiFault: the categories the narrow classifiers DO recognise raise it too", () => {
+  const auth = newTailState("t", "sid", "/x")
+  applyRecord(auth, { type: "assistant", isApiErrorMessage: true, message: { model: "<synthetic>", content: [{ type: "text", text: AUTH_401_TEXT }] } })
+  assert.equal(auth.apiFault, true)
+  assert.equal(auth.authFault, "authentication_rejected")
+  const limit = newTailState("t2", "sid2", "/y")
+  applyRecord(limit, {
+    type: "assistant", isApiErrorMessage: true, error: "rate_limit", apiErrorStatus: 429, timestamp: "2026-07-01T00:00:01.000Z",
+    message: { model: "<synthetic>", content: [{ type: "text", text: "You've hit your session limit" }] },
+  })
+  assert.equal(limit.apiFault, true)
+  assert.ok(limit.limitFault, "the specific classifier still fires beside it")
+})
+
+test("apiFault: user-authored or assistant-quoted error text can NEVER set it", () => {
+  const s = newTailState("t", "sid", "/x")
+  applyRecord(s, { type: "user", timestamp: "2026-07-01T00:00:01.000Z", message: { content: [{ type: "text", text: ERROR_400_TEXT }] } })
+  assert.equal(s.apiFault, undefined)
+  applyRecord(s, { type: "assistant", timestamp: "2026-07-01T00:00:02.000Z", message: { content: [{ type: "text", text: `The last turn failed with: ${ERROR_400_TEXT} — retrying.` }] } })
+  assert.equal(s.apiFault, undefined, "a real assistant message quoting the error lacks isApiErrorMessage")
+})
+
+test("apiFault: cleared by the next REAL assistant text, kept across an intervening user retry", () => {
+  const s = newTailState("t", "sid", "/x")
+  applyRecord(s, error400("2026-07-01T00:00:01.000Z"))
+  applyRecord(s, { type: "user", timestamp: "2026-07-01T00:00:02.000Z", message: { content: [{ type: "text", text: "try again" }] } })
+  assert.equal(s.apiFault, true, "a retry alone is not proof the turn reached the model")
+  applyRecord(s, error400("2026-07-01T00:00:03.000Z"))
+  assert.equal(s.apiFault, true, "a second failure keeps it raised")
+  applyRecord(s, { type: "assistant", timestamp: "2026-07-01T00:00:04.000Z", message: { model: "claude-opus-4-8", stop_reason: "end_turn", content: [{ type: "text", text: "On it." }] } })
+  assert.equal(s.apiFault, undefined, "a genuine response proves the turn reached the model")
+})
+
+// The value the SCHEDULER reads is the telemetry projection, not TailState — a flag the fold sets but
+// `telemetry()` omits makes every guard on it dead in production while every fold test stays green.
+test("apiFault: reaches telemetry() through the real tailer, and clears there too", () => {
+  const h = harness()
+  h.storage.upsertSession(row())
+  fixture(h.logDir, "sid", [IN_FLIGHT, JSON.stringify(error400("2026-07-01T00:00:01.000Z"))])
+  const t = makeTailer(h)
+  t.tick()
+  assert.equal(t.get("t")?.apiFault, true)
+  assert.equal(t.get("t")?.lastAssistantAt, "2026-07-01T00:00:01.000Z")
+  appendFileSync(join(h.logDir, "sid.jsonl"), DONE + "\n")
+  t.tick()
+  assert.equal(t.get("t")?.apiFault, undefined)
+})
+
 test("isClaudeAuthErrorText: narrow conjunction", () => {
   assert.equal(isClaudeAuthErrorText(AUTH_401_TEXT), true)
   assert.equal(isClaudeAuthErrorText("Please run /login"), true)

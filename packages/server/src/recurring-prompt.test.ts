@@ -807,6 +807,31 @@ test("an auth-faulted thread is never re-prompted — the Goal cannot fix a sign
     assert.deepEqual(h.delivered, [])
   } finally { h.close() }
 })
+
+// AND THE GENERAL CASE OF IT (PR #26). A failed turn of ANY kind — a context-window 400, a 500, a dropped
+// connection — is written as a synthetic assistant record, so it advances the rest instant: a fresh
+// `stopHookFenceId` per failure, which is exactly what defeats the per-rest dedupe. This trigger has NO
+// cap of its own (the sign-off reminder's SIGNOFF_NUDGE_MAX has no counterpart here), so before the
+// guard a thread with an armed Goal whose every turn failed was bumped once per tick indefinitely — and
+// on a context-window 400 each bump is what keeps the conversation over the limit. The control below is
+// the same thread WITHOUT the fault: the advancing rest instant must draw a bump, or this assertion is
+// vacuous.
+test("a thread whose every turn fails is never re-prompted — the Goal has no cap, so the guard is the bound", async () => {
+  // One clock for both threads: each tick is a fresh failed turn, read through the getter every time
+  // the stub is consulted (the harness re-spreads it per `get()`).
+  let failedAt = "2026-08-02T00:01:00.000Z"
+  const faulted = scheduler({ apiFault: true, get lastAssistantAt() { return failedAt } } as Partial<SessionTelemetry>)
+  const control = scheduler({ get lastAssistantAt() { return failedAt } } as Partial<SessionTelemetry>)
+  try {
+    for (let i = 2; i <= 21; i++) {
+      await faulted.s.tick()
+      await control.s.tick()
+      failedAt = `2026-08-02T00:${String(i).padStart(2, "0")}:00.000Z`
+    }
+    assert.deepEqual(faulted.delivered, [], "twenty consecutive failed turns draw no Goal bump")
+    assert.equal(control.delivered.length, 20, "the control: without the fault, every new rest instant is a bump — the loop this guard closes")
+  } finally { faulted.close(); control.close() }
+})
 // THE GOAL NO LONGER BUMPS AN UNFIREABLE AWAITING FENCE, and two tests that pinned the opposite were
 // removed here (2026-08-17). It was not a rescue, it was a LOOP: the Goal's text is a generic "keep
 // going" that says nothing about fence grammar, so a worker whose fence could not be honoured re-wrote

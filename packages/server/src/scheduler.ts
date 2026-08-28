@@ -1662,8 +1662,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     }
   }
 
-  // Count a delivered nudge, anchored to the human's last word — the storage write decides reset vs
-  // increment by comparing that anchor against the row's own.
+  // Count a nudge against the consecutive cap. Called at SEND — the only path a wake to a live runtime
+  // takes — and again when the same item is confirmed later; the storage write is idempotent per
+  // anchor, so the second call for one item is a no-op rather than a double count.
   function settleSignoffNudge(item: WakeDelivery): void {
     if (!isSignoffFenceId(item.fenceId)) return
     // Anchored on the REST this nudge was for (the agent's own last word, which is the fence id), so a
@@ -1704,7 +1705,10 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       const spokeAt = tele.lastAssistantAt
       if (!spokeAt) continue
       if (tele.lastUserAt && Date.parse(tele.lastUserAt) >= Date.parse(spokeAt)) continue
-      if (tele.authFault) continue
+      // A failed turn is not a rest — the same guard as SOURCES 5 and 9, in both its forms. (In practice
+      // the error record's own text has already cleared `lastFence`, so this rarely binds; it is here so
+      // the four passes that read "the agent spoke last" agree on what a failed turn is.)
+      if (tele.authFault || tele.apiFault) continue
 
       const park = readAwaitingPark(tele.lastFence.hints)
       const live = liveActivityOf(
@@ -2193,8 +2197,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // one would land while the agent is still working — the noise this pass exists to avoid.
       if (tele.turn !== "idle") continue
       // A signed-out provider answers in milliseconds and every reply is a "rest", which makes it a
-      // perfect loop generator for anything that re-prompts. Same guard as SOURCES 5 and 9.
-      if (tele.authFault) continue
+      // perfect loop generator for anything that re-prompts. Same guard as SOURCES 5 and 9 — and its
+      // general form: ANY failed turn is written as an assistant record, so it reads as a rest here too.
+      if (tele.authFault || tele.apiFault) continue
       const restedAt = Date.parse(tele.lastAssistantAt ?? "")
       if (!Number.isFinite(restedAt)) continue
       for (const shell of tele.retiredShells ?? []) {
@@ -2513,6 +2518,18 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // has not done can change the outcome, so re-prompting is pure burn: the thread already cards its
       // auth fault and the sign-in recovery in the queue.
       if (tele.authFault) continue
+      // AND EVERY OTHER FAILED TURN, for the same reason — and here it matters MORE than for the sign-off
+      // reminder, because this trigger has no cap of its own. A synthetic API-error record of any kind
+      // (a 400 for a conversation that has outgrown the context window, a 500, a dropped connection) is
+      // an assistant record, so it advances `lastAssistantAt`: a fresh rest instant, a fresh
+      // `stopHookFenceId`, and the per-rest dedupe below never fires. Without this guard a thread with
+      // an armed Goal whose every turn fails is bumped once per tick indefinitely, and on a context-window
+      // 400 each bump is what keeps the conversation over the limit (the loop measured in the field on
+      // the reminder, 2026-08-27, is open here by the same mechanism). The cost is deliberate: a turn
+      // that failed TRANSIENTLY is no longer blind-retried by the Goal either — the operator bumps it, or
+      // the next real event on the thread does — because this trigger cannot tell the two apart and an
+      // unbounded retry of a terminal error is the worse failure.
+      if (tele.apiFault) continue
       // WHAT THIS DELIBERATELY DOES NOT CONSULT: live sub-agents and background shells. A hold on them
       // shipped briefly and was removed the same day (maintainer 2026-08-02: "the status of any
       // sub-agents or background shells is irrelevant"). The SCHEDULE trigger is the whole rate story — a

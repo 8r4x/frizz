@@ -11,7 +11,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createStorage, type SessionRow } from "./storage.ts"
-import type { SessionTelemetry, Tailer } from "./tailer.ts"
+import { applyRecord, newTailState, type SessionTelemetry, type Tailer } from "./tailer.ts"
 import { createScheduler } from "./scheduler.ts"
 
 // `runtime` is opt-in because it changes which delivery path the scheduler takes, and the difference is
@@ -329,18 +329,33 @@ test("a nudge to a LIVE runtime is counted against the cap, not just one to an u
 // The guard the cap should never have to be the last line of defence for. A thread failing every turn
 // cannot answer a reminder — nothing it writes reaches the model — and on a context-window 400 the
 // reminder is what keeps the conversation over the limit, so even the two the cap allows are two too
-// many. Both faults are pinned: the one frizz already classified, and the one it could not see at all.
-for (const [what, tele] of [
-  ["a terminal 400 the classifiers do not recognise", { apiFault: true }],
-  ["a rate limit, which also never reached the model", { apiFault: true, limitFault: { window: "5h", at: "2026-08-12T00:01:00.000Z" } }],
-] as Array<[string, Partial<SessionTelemetry>]>) {
+// many. Each row is a REAL synthetic error record folded through the tailer, so what reaches the stub is
+// what the fold actually raises — for the category frizz already classified (a rate limit) and for the
+// one it could not see at all (a 400). The fold → `telemetry()` projection is pinned in tailer.test.ts.
+for (const [what, rec] of [
+  ["a terminal 400 the classifiers do not recognise", {
+    error: "invalid_request", apiErrorStatus: 400,
+    text: 'API Error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"Prompt is too long"}}',
+  }],
+  ["a rate limit, which also never reached the model", {
+    error: "rate_limit", apiErrorStatus: 429, text: "You've hit your session limit",
+  }],
+] as const) {
   test(`${what} is a failed turn, not a rest, so nothing is injected`, async () => {
+    const fold = newTailState("resting", "sid", "/x")
+    applyRecord(fold, {
+      type: "assistant", isApiErrorMessage: true, error: rec.error, apiErrorStatus: rec.apiErrorStatus,
+      timestamp: "2026-08-12T00:01:00.000Z",
+      message: { model: "<synthetic>", content: [{ type: "text", text: rec.text }] },
+    })
+    assert.equal(fold.apiFault, true, "the fold raises the general fault off the record")
     let spokeAt = "2026-08-12T00:01:00.000Z"
     const h = nudger({
       lastUserAt: "2026-08-12T00:00:00.000Z",
       get lastAssistantAt() { return spokeAt },
       get lastActivityAt() { return spokeAt },
-      ...tele,
+      apiFault: fold.apiFault,
+      limitFault: fold.limitFault,
     } as Partial<SessionTelemetry>, { runtime: "alive" })
     try {
       // Every tick is a fresh failed turn, which is exactly what defeated the per-rest dedupe: the
@@ -349,7 +364,9 @@ for (const [what, tele] of [
         await h.s.tick()
         spokeAt = `2026-08-12T00:${String(i).padStart(2, "0")}:00.000Z`
       }
-      assert.deepEqual(h.delivered, [], "twenty consecutive failed turns produce no nudges at all")
+      // Asked of the reminder's own namespace: a standing limit fault legitimately draws the limit-resume
+      // wake from another source, and that is not what this test is about.
+      assert.deepEqual(h.nudges(), [], "twenty consecutive failed turns produce no nudges at all")
       assert.equal(h.storage.getSession(h.slug)?.signoff_nudges, 0)
     } finally { h.close() }
   })
