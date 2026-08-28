@@ -1183,19 +1183,25 @@ function VirtualizedThreadTranscript({
             data-transcript-row-key={stickyMessageRow.key}
             data-transcript-source-id={stickyMessageRow.message.sourceId}
             data-transcript-sticky="true"
-            className="group/ts pointer-events-none [&>*]:pointer-events-auto sticky top-0 z-[9] flex w-full flex-col px-6 pt-3 pb-1.5"
+            className="group/ts pointer-events-none [&>*]:pointer-events-auto sticky top-0 z-[9] flex w-full flex-col pt-3 pb-1.5"
           >
-            {/* The reading is `absolute top-full`, which resolves against its containing block's PADDING
-                box — so hanging it off the band directly put it 6px lower than every other row's, by
-                exactly this band's `pb-1.5`, and it read as belonging to the row BELOW (measured
-                2026-08-28: 1px under its own bubble and 3px over the next, against −5px/+3px on an
-                ordinary row). This wrapper ends where the message ends, like `MessageRow`'s own box,
-                so the one measured offset in MessageTimestamp is correct here without a second
-                constant to keep in sync. `!pointer-events-none` because the band's
-                `[&>*]:pointer-events-auto` would otherwise make this full-width wrapper swallow the
-                click-through the band exists to preserve; its own copy of that variant hands the
-                bubble back. */}
-            <div className="!pointer-events-none relative flex w-full flex-col [&>*]:pointer-events-auto">
+            {/* This wrapper is the reading's containing block, and it carries the `px-6` rather than the
+                band above it — because `MessageStamp` is positioned on BOTH axes (`top-full`,
+                `right-6`) and both resolve against the containing block's PADDING box. Whichever box
+                holds the reading has to match `MessageRow`'s on both, which this one does: it ends
+                where the message ends, and it is inset by the same 24px.
+
+                The band was the containing block once and got each axis wrong in turn (measured
+                2026-08-28, headless): with the band's `pb-1.5` below the reading it hung 6px lower
+                than every other row's and read as the row BELOW's; with `px-6` still on the band and
+                this wrapper nested inside it, `right-6` measured from an edge already 24px in and the
+                reading sat 48px from the transcript's edge instead of 24px. Both now read identically
+                to an ordinary row: −5px from its own message, 24px inset.
+
+                `!pointer-events-none` because the band's `[&>*]:pointer-events-auto` would otherwise
+                make this full-width wrapper swallow the click-through the band exists to preserve; its
+                own copy of that variant hands the bubble back. */}
+            <div className="!pointer-events-none relative flex w-full flex-col px-6 [&>*]:pointer-events-auto">
               <Message
                 m={stickyMessageRow.message}
                 answering={answeringForMessage(stickyMessageRow.message)}

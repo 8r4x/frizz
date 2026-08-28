@@ -12,7 +12,7 @@ import { messageStamp } from "../lib/activityTime.ts"
 // reading that is blank almost always, and a hairline rule borrows the wake dividers' chrome, which
 // elsewhere means "something happened here".
 //
-// TWO INVARIANTS, both load-bearing:
+// THREE INVARIANTS, all load-bearing:
 //
 //   1. IT MUST NOT CHANGE THE ROW'S HEIGHT. The transcript is virtualized and measures every row
 //      (`virtualizer.measureElement`), so a reveal that grew the row on hover would re-measure it and
@@ -30,6 +30,14 @@ import { messageStamp } from "../lib/activityTime.ts"
 //      text underneath, and it is `aria-hidden` — the same instant is already on the `<time>` element's
 //      machine-readable `dateTime`, and announcing a timestamp on every message would make the
 //      transcript unreadable to a screen reader for a reading sighted users only see on purpose.
+//
+//   3. ITS HOST MUST MATCH `MessageRow`'s BOX ON BOTH AXES — no padding below the message, and no
+//      horizontal inset. Every offset below is calibrated against `MessageRow`'s `relative flex
+//      flex-col px-6`, and `absolute` resolves `top-full` and `right-6` alike against the
+//      containing block's PADDING box: a host with bottom padding pushes the reading down by exactly
+//      that padding, and a host nested inside another `px-6` doubles the inset. The pinned band
+//      violated this once on each axis, one commit apart (2026-08-28), which is why it is written
+//      down rather than left as something the next host is expected to know.
 
 /**
  * The reading itself. Rendered by `MessageRow` for every ordinary row, and DIRECTLY by the pinned

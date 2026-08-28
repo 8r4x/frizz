@@ -95,12 +95,14 @@ function Sheet() {
           9 then covers the bubble and swallows its hover-to-expand. Reproduced here so the value on the
           rows is exercised against the band rather than asserted. */}
       <div className="relative overflow-y-auto rounded-lg border border-border/60 bg-bg" style={{ height: 260 }}>
-        <div className="group/ts pointer-events-none [&>*]:pointer-events-auto sticky top-0 z-[9] flex w-full flex-col px-6 pt-3 pb-1.5" data-verify-band>
+        <div className="group/ts pointer-events-none [&>*]:pointer-events-auto sticky top-0 z-[9] flex w-full flex-col pt-3 pb-1.5" data-verify-band>
           {/* The inner wrapper is not decoration — it is the reading's containing block, and it must
-              mirror ChatView exactly or this fixture measures a shape that does not ship. `top-full`
-              resolves against the PADDING box, so hanging the reading off the band itself put it a
-              further `pb-1.5` (6px) down and it read as the NEXT row's. */}
-          <div className="!pointer-events-none relative flex w-full flex-col [&>*]:pointer-events-auto">
+              mirror ChatView exactly (`px-6` down here, not on the band) or this fixture measures a
+              shape that does not ship. `top-full` and `right-6` both resolve against the PADDING
+              box: with the band as the containing block the reading hung a further `pb-1.5` (6px)
+              down and read as the NEXT row's, and with `px-6` left on the band it sat 48px from the
+              edge instead of 24px. */}
+          <div className="!pointer-events-none relative flex w-full flex-col px-6 [&>*]:pointer-events-auto">
             <div className="flex justify-end">
               <div className="max-w-[85%] rounded-xl rounded-br-sm bg-user-bubble px-3.5 py-3 text-[14px] text-bg" data-verify-bubble>
                 The pinned current ask — it must keep its own hover while a row below is hovered.
