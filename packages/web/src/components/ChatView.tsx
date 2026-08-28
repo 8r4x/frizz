@@ -1298,7 +1298,7 @@ function VirtualizedThreadTranscript({
                 paired={paired[stickyMessageRow.messageIndex]}
                 sticky
               />
-              <MessageStamp at={stickyMessageRow.message.at} />
+              <MessageStamp at={stickyMessageRow.message.at} host="bubble" />
             </div>
           </div>
         </>
@@ -1383,7 +1383,7 @@ function VirtualizedThreadTranscript({
                 )}
               </div>
             ) : row.kind === "message" ? (
-              <MessageRow at={row.stampAt} gap={row.gap}>
+              <MessageRow at={row.stampAt} host={row.message.role === "user" ? "bubble" : "prose"} gap={row.gap}>
                 <Message
                   m={row.message}
                   answering={answeringForMessage(row.message)}

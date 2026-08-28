@@ -108,7 +108,7 @@ function Sheet() {
                 The pinned current ask — it must keep its own hover while a row below is hovered.
               </div>
             </div>
-            <MessageStamp at={ROWS[0].at} />
+            <MessageStamp at={ROWS[0].at} host="bubble" />
           </div>
         </div>
         <div className="relative w-full" style={{ height: top + 56 }}>
@@ -119,7 +119,7 @@ function Sheet() {
             style={{ transform: `translateY(${r.y}px)` }}
             data-verify-row={i}
           >
-            <MessageRow at={r.at} gap={r.gap}>
+            <MessageRow at={r.at} host={r.kind === "user" ? "bubble" : "prose"} gap={r.gap}>
               <Body kind={r.kind} text={r.text} />
             </MessageRow>
           </div>

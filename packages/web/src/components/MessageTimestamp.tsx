@@ -53,24 +53,37 @@ import { messageStamp } from "../lib/activityTime.ts"
  * Renders nothing when the instant is missing or unparseable — the common path on legacy transcripts
  * recorded before `at` was on the wire.
  */
-export function MessageStamp({ at }: { at: string | undefined }) {
+/**
+ * What the reading hangs below. `prose` is agent text, whose ink ends inside its line box; `bubble` is
+ * the user's off-white bubble, whose BOX ends exactly where the row ends. The offset below is a
+ * measurement against the host's ink edge, and the two hosts do not share one.
+ */
+export type StampHost = "prose" | "bubble"
+
+export function MessageStamp({ at, host = "prose" }: { at: string | undefined; host?: StampHost }) {
   const stamp = messageStamp(at)
   if (!stamp || !at) return null
   return (
     <time
       dateTime={at}
       aria-hidden="true"
-      // `-mt-[5px]`, not the `-mt-0.5` (2px) this shipped with, and the 3px is a MEASUREMENT rather
-      // than taste. At -0.5 the reading's ink sat 6.66px below its own message and 4.67px above the
-      // next one — CLOSER TO THE MESSAGE IT DOES NOT BELONG TO, which is worse than no reading at all,
-      // because a timestamp that reads as the next message's is confidently wrong. At -5px it sits
-      // 3.65px below its own message and 7.66px above the next, so proximity says plainly which one it
-      // belongs to; that holds in the mono face too (3.04 / 7.96).
+      // Under PROSE, `-mt-[5px]` — not the `-mt-0.5` (2px) this shipped with, and the 3px is a
+      // MEASUREMENT rather than taste. At -0.5 the reading's ink sat 6.66px below its own message and
+      // 4.67px above the next one — CLOSER TO THE MESSAGE IT DOES NOT BELONG TO, which is worse than no
+      // reading at all, because a timestamp that reads as the next message's is confidently wrong. At
+      // -5px it sits 3.65px below its own message and 7.66px above the next, so proximity says plainly
+      // which one it belongs to; that holds in the mono face too (3.04 / 7.96).
+      //
+      // Under a BUBBLE, `-mt-[2px]`. The bubble's box ends where the row ends, with no line-box slack
+      // beneath its ink, so the prose offset pulled the reading's cap tops INTO the bubble — 0.4px in
+      // sans and 1.6px in mono by the probe, and visibly flattened at 6x — where `text-muted/70` on the
+      // off-white bubble simply vanishes. At -2px the caps clear the bubble by 2.6px / 1.4px, and the
+      // next row is 14px away at the least (`STEP`; +`USER_TAIL_EXTRA` before agent prose), so the
+      // reading still sits nearer its own bubble than anything below (measured 2026-08-28, on merge).
       //
       // Measured on the real component (`message-timestamp-verify-fixture.tsx`) at 13px prose in a 24px
       // line box, in BOTH fonts; re-measure if either type scale moves. The canvas probe runs ~1.5px
-      // tight against the rendered picture, so read the RATIO rather than the absolute — under a user
-      // bubble the reading tucks just beneath the bubble's own box edge.
+      // tight against the rendered picture, so read the RATIO rather than the absolute.
       //
       // `!pointer-events-none`, not the plain utility. On the PINNED band this element is a DIRECT
       // child of a wrapper carrying `[&>*]:pointer-events-auto` — the rule that re-enables the bubble's
@@ -78,21 +91,21 @@ export function MessageStamp({ at }: { at: string | undefined }) {
       // the plain utility lost and the reading took the pointer. Invisible at rest and `top-full`, it
       // would have been a transparent 16px strip eating clicks on whatever scrolled beneath it. Measured
       // in the fixture: elementFromPoint over the reading returned the reading itself before this.
-      className="!pointer-events-none absolute right-6 top-full z-10 -mt-[5px] select-none text-[11px] leading-4 [font-variant-numeric:tabular-nums] text-muted/70 opacity-0 transition-opacity group-hover/ts:opacity-100"
+      className={`!pointer-events-none absolute right-6 top-full z-10 ${host === "bubble" ? "-mt-[2px]" : "-mt-[5px]"} select-none text-[11px] leading-4 [font-variant-numeric:tabular-nums] text-muted/70 opacity-0 transition-opacity group-hover/ts:opacity-100`}
     >
       {stamp}
     </time>
   )
 }
 
-export function MessageRow({ at, gap, children }: { at: string | undefined; gap: number; children: ReactNode }) {
+export function MessageRow({ at, host, gap, children }: { at: string | undefined; host?: StampHost; gap: number; children: ReactNode }) {
   return (
     // A NAMED group (`group/ts`), not a bare one: the transcript nests plenty of its own `group`
     // hovers (the retractable bubble's unqueue control, the clickable dividers), and an unnamed group
     // here would be captured by whichever of them a variant happens to sit inside.
     <div className="group/ts relative flex flex-col px-6" style={{ paddingTop: gap }}>
       {children}
-      <MessageStamp at={at} />
+      <MessageStamp at={at} host={host} />
     </div>
   )
 }
