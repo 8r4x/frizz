@@ -83,6 +83,9 @@ function describeGithub(github: NonNullable<ThreadWatchView["github"]>): string 
   return parts.join(" · ") || "watching"
 }
 
+// The rail's width, in px — the side pane on /full is at least this wide while nothing covers it.
+export const RAIL_WIDTH = 300
+
 export function FocusRail({ thread }: { thread: ThreadView }) {
   const now = useNowMs()
   const base = useLocalPathBase()
@@ -95,7 +98,7 @@ export function FocusRail({ thread }: { thread: ThreadView }) {
   const relative = (path: string) => (base.dir && path.startsWith(`${base.dir}/`) ? path.slice(base.dir.length + 1) : path)
   const empty = subs.length + shells.length + files.length + watches.length === 0
   return (
-    <aside data-focus-rail aria-label="Thread activity" className="flex h-full w-[300px] shrink-0 flex-col justify-center gap-5 overflow-y-auto px-3 py-6">
+    <aside data-focus-rail aria-label="Thread activity" className="flex h-full shrink-0 flex-col justify-center gap-5 overflow-y-auto px-3 py-6" style={{ width: RAIL_WIDTH }}>
       {empty && <div className="px-2 text-[11.5px] text-muted/50">Nothing running, edited or watched yet.</div>}
       <Section label="Sub-agents" count={subs.length}>
         {subs.map((s) => (

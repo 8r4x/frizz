@@ -7,10 +7,11 @@ import { displayTitle } from "../groups.ts"
 import { resolveThreadRoute } from "../lib/threadRouteState.ts"
 import { projectHref } from "../lib/base-path.ts"
 import { standaloneThreadHref } from "../lib/standaloneThreadRoute.ts"
-import { ThreadView } from "./ChatView.tsx"
+import type { ThreadView } from "@frizz/shared"
+import { ThreadView as ThreadViewSurface } from "./ChatView.tsx"
 import { DrawerStack } from "./DrawerStack.tsx"
 import { FileViewerPanel } from "./FileViewerPanel.tsx"
-import { FocusRail } from "./FocusRail.tsx"
+import { FocusRail, RAIL_WIDTH } from "./FocusRail.tsx"
 import { TooltipProvider } from "./Tooltip.tsx"
 import { Toaster } from "./Toaster.tsx"
 import { useQuery } from "@tanstack/react-query"
@@ -76,15 +77,19 @@ export function StandaloneThreadPage({ slug }: { slug: string }) {
     <TooltipProvider>
       <div className="h-dvh min-h-0 bg-bg text-sm text-fg">
         {/* THE FULLSCREEN LAYOUT (maintainer 2026-08-28: "truly fullscreen"): the thread column sits
-            LEFT-ALIGNED against the viewport edge, the operational rail floats beside it, and the file
-            viewer takes whatever is left when a file is open — no centering, no outer gutters. The
-            column keeps a reading-width ceiling; the page background beyond the rail is the same
-            gutter the board draws beside its own centered pair. A phone-width window still gets the
-            old single column: the rail and the viewer need the width they hide under. */}
-        <div className="flex h-full w-full">
+            LEFT-ALIGNED against the viewport edge and everything right of it is ONE side pane — the
+            operational rail, with the file viewer sliding in OVER it (see SidePane). No centering, no
+            outer gutters. The column keeps a reading-width ceiling; the page background beyond the rail
+            is the same gutter the board draws beside its own centered pair. A phone-width window still
+            gets the old single column: the rail and the viewer need the width they hide under.
+
+            `flex-[3]` against the pane's `flex-1`: the column wins the free space (and caps at its
+            ceiling), so the pane closed is exactly the rail plus the leftover gutter, and the pane open
+            is at least the viewer's reading width, taking it from the column when the window is tight. */}
+        <div className="flex h-full w-full overflow-hidden">
           <main
             data-standalone-thread
-            className="flex h-full w-full min-w-0 flex-1 flex-col overflow-hidden border-border bg-panel sm:max-w-[960px] sm:border-r"
+            className="flex h-full w-full min-w-0 flex-[3] flex-col overflow-hidden border-border bg-panel sm:max-w-[960px] sm:border-r"
           >
             {route.kind === "loading" ? (
               <div className="flex flex-1 items-center justify-center" role="status" aria-label="Loading thread">
@@ -93,11 +98,10 @@ export function StandaloneThreadPage({ slug }: { slug: string }) {
             ) : route.kind === "missing" ? (
               <MissingThread slug={slug} />
             ) : (
-              <ThreadView slug={slug} virtualized showReturnToQueue />
+              <ThreadViewSurface slug={slug} virtualized showReturnToQueue />
             )}
           </main>
-          {thread && <div className="hidden h-full min-h-0 md:block"><FocusRail thread={thread} /></div>}
-          <FileViewerSlot slug={slug} />
+          {thread && <SidePane slug={slug} thread={thread} />}
         </div>
         {/* The SAME drawer stack the queue mounts. Without it every drill-in this page renders — a
             sub-agent row, a background-shell row, the frizz-doc button, a `[…](/thread/<slug>)` link —
@@ -111,16 +115,19 @@ export function StandaloneThreadPage({ slug }: { slug: string }) {
   )
 }
 
-// The panel's width, shared by the animated slot and its fixed-width inner content. The inner stays
-// at FULL width for the whole slide so the panel's content never reflows mid-animation — the slot's
-// overflow-hidden clip is what reveals it.
+// The viewer's READING width — the least the side pane is allowed to be while a file is open. Wider
+// windows give it the whole pane, which is everything right of the thread column.
 const FILE_PANEL_WIDTH = "min(52rem, 45vw)"
 
-// The width-animated slot the split file viewer lives in. Width 0 ⇄ panel width is the slide: the
-// flex pair recenters as it animates, which moves the thread column left exactly as the panel comes
-// in. The panel's CONTENT outlives the store entry by the ~200ms slide-out (`current`), so closing
-// animates the same edge instead of blanking the column and collapsing an empty gutter.
-function FileViewerSlot({ slug }: { slug: string }) {
+// THE SIDE PANE: the rail and the file viewer share the one region right of the thread column, and
+// the viewer SLIDES OVER the rail instead of opening beside it (maintainer 2026-08-28: "the right-side
+// pane should slide over … hide the artifact readout … then you have to press the X to see the
+// artifacts again"). Closed, the region is the rail plus whatever gutter is left; open, it is at
+// least the viewer's reading width (animated, so a tight window's thread column gives way as the pane
+// comes in). The rail stays MOUNTED under the pane — its live rows keep polling — but goes inert, so
+// nothing hidden can take focus or a click. The viewer's CONTENT outlives the store entry by the
+// ~200ms slide-out (`current`), so closing plays the same edge back instead of blanking the pane.
+function SidePane({ slug, thread }: { slug: string; thread: ThreadView }) {
   const snap = useSnapshot(store)
   const panel = snap.filePanel
   const [current, setCurrent] = useState<string | null>(null)
@@ -133,22 +140,28 @@ function FileViewerSlot({ slug }: { slug: string }) {
     return () => window.clearTimeout(timer)
   }, [panel?.path, panel?.openedAt, panel])
   return (
-    <aside
-      data-file-viewer-slot
-      aria-hidden={!panel}
-      className="h-full min-h-0 shrink-0 overflow-hidden transition-[width] duration-200 ease-out"
-      style={{ width: panel ? FILE_PANEL_WIDTH : 0 }}
+    <div
+      data-side-pane
+      className="relative hidden h-full min-h-0 min-w-0 flex-1 overflow-hidden transition-[min-width] duration-200 ease-out md:block"
+      style={{ minWidth: panel ? FILE_PANEL_WIDTH : RAIL_WIDTH }}
     >
-      {current && (
-        <div className="flex h-full min-h-0 flex-col" style={{ width: FILE_PANEL_WIDTH }}>
-          <div className="flex h-full min-h-0 flex-col overflow-hidden border-border bg-panel sm:border-l">
+      <div inert={panel ? true : undefined} className="h-full min-h-0">
+        <FocusRail thread={thread} />
+      </div>
+      <aside
+        data-file-viewer-slot
+        aria-hidden={!panel}
+        className={`absolute inset-0 transition-transform duration-200 ease-out ${panel ? "translate-x-0" : "translate-x-full"}`}
+      >
+        {current && (
+          <div className="flex h-full min-h-0 flex-col overflow-hidden border-l border-border bg-panel">
             {/* Keyed on the path so following a link inside the viewer resets the view toggle and
                 scroll to the new document's top. */}
             <FileViewerPanel key={current} slug={slug} path={current} />
           </div>
-        </div>
-      )}
-    </aside>
+        )}
+      </aside>
+    </div>
   )
 }
 
