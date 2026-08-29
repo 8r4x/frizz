@@ -221,7 +221,7 @@ function ensureSafeDirectDirectory(parent: string, name: string): string {
 // children clobbering the one file. A folder deletes that surface outright: each agent writes its OWN
 // file, so there is nothing to merge and nothing to clobber.
 //
-// What replaced the compaction injection is `mcp__frizz__recurring_prompt`'s POST-COMPACTION trigger
+// What replaced the compaction injection is `mcp__frizz__goal`'s POST-COMPACTION trigger
 // (scheduler SOURCE 7). The worker links whatever doc it wrote here and frizz hands that link back the
 // moment the context is summarized away. Durable in SQLite, and visible to the operator — which the hook
 // injection never was.
@@ -336,7 +336,7 @@ export function composePrompt(sessionId: string, prompt: string, kind: BackendKi
       ? "Native sub-agents share it — have each write its OWN file rather than all editing one."
       : "Name it in a sub-agent's prompt when you want its notes to land somewhere you can read; give each child its OWN file rather than having them all edit one."
   const scratch =
-    `Your scratch directory is \`.frizz/threads/${sessionId}/\` — yours to use however you like, for as many files as you like. It is EMPTY and nothing is expected in it: a single direct task usually needs nothing, and writing notes is never a substitute for doing the work. ${children} Nothing here is read automatically; if you ever want a note to come back after a compaction, \`mcp__frizz__recurring_prompt\` with \`post_compaction: true\` re-sends a prompt of your choosing — one that can link a file here — into the emptied window.`
+    `Your scratch directory is \`.frizz/threads/${sessionId}/\` — yours to use however you like, for as many files as you like. It is EMPTY and nothing is expected in it: a single direct task usually needs nothing, and writing notes is never a substitute for doing the work. ${children} Nothing here is read automatically; if you ever want a note to come back after a compaction, \`mcp__frizz__goal\` with \`post_compaction: true\` re-sends a prompt of your choosing — one that can link a file here — into the emptied window.`
   // The banner makes the system→human handoff unmistakable to the worker, and NOTHING of frizz's is
   // allowed below it: the framing note goes here, ABOVE, so everything past the banner is the
   // operator's prompt byte for byte. That is also what the transcript projectors cut on
@@ -357,7 +357,7 @@ export function scratchpadOrientation(sessionId: string, kind: BackendKind = "cl
     kind === "codex"
       ? "native sub-agents share it, so give each its own file"
       : "name it in a sub-agent's prompt when you want its notes back, and give each child its own file"
-  return `SCRATCH DIRECTORY: .frizz/threads/${sessionId}/ — yours, free-form, as many files as you like, and nothing is expected in it. A single direct task usually needs none; writing notes is never a substitute for doing the work (${children}). Nothing in this directory is read automatically; if you want a note back after a compaction, mcp__frizz__recurring_prompt with post_compaction: true re-sends a prompt of your choosing.`
+  return `SCRATCH DIRECTORY: .frizz/threads/${sessionId}/ — yours, free-form, as many files as you like, and nothing is expected in it. A single direct task usually needs none; writing notes is never a substitute for doing the work (${children}). Nothing in this directory is read automatically; if you want a note back after a compaction, mcp__frizz__goal with post_compaction: true re-sends a prompt of your choosing.`
 }
 
 // A project can ship a repo-committed `FRIZZ.md` at its root to steer frizz workers with its OWN
@@ -638,7 +638,7 @@ let missingPluginReported = false
  * IT SHOUTS WHEN IT CANNOT RESOLVE, because every consumer of this value FAILS OPEN and does so in
  * silence: `if (opts.pluginDir) argv.push(…)`, `if (!pluginDir) return undefined`, `return plugin ? … :
  * undefined`. A worker dispatched without it loses the worker-contract hooks, the `frizz:*` sub-agent
- * profiles, the frizz MCP tools (spawn_thread / recurring_prompt / timer), the on-demand skills AND the
+ * profiles, the frizz MCP tools (spawn_thread / goal / timer), the on-demand skills AND the
  * portable monitors — all five ride this one directory — and it still boots perfectly happily.
  * Measured against the real CLI on 2026-08-11: with the plugin dir a worker reports 16 `frizz:*` agent
  * types; with a path that does not exist it answers the prompt normally, exit 0, no error, no warning.

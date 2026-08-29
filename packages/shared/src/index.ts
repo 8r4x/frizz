@@ -2702,7 +2702,7 @@ export const SetThreadRecurringPromptInput = z.object({
 // z.input. Inferring the output here is what made the drift gate fire.
 export type SetThreadRecurringPromptInput = z.input<typeof SetThreadRecurringPromptInput>
 
-// The WORKER half, through `mcp__frizz__recurring_prompt` (which POSTs the same `/rpc/*` surface the
+// The WORKER half, through `mcp__frizz__goal` (which POSTs the same `/rpc/*` surface the
 // board uses). A worker has no other way to keep a long effort moving — Claude Code's own in-session
 // schedulers cannot fire in the runtime frizz spawns — so this is the counterpart to the operator's
 // control above, writing the same row.
@@ -2750,7 +2750,7 @@ export const SetOwnThreadRecurringPromptResult = z.object({
 }).strict()
 export type SetOwnThreadRecurringPromptResult = z.infer<typeof SetOwnThreadRecurringPromptResult>
 
-// The READ half, from `mcp__frizz__recurring_prompt` with `action: "get"`. Without it a worker can only
+// The READ half, from `mcp__frizz__goal` with `action: "get"`. Without it a worker can only
 // write: it cannot tell whether it is armed at all, what text it armed before its context was compacted
 // away, or whether the human has since edited it in the footer. Same caller rules as the write above —
 // keyed on the slug alone, and no thread parameter a model could aim at anyone else's row.

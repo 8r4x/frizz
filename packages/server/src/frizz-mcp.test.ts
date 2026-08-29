@@ -64,11 +64,11 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
     rpc.send({ jsonrpc: "2.0", method: "notifications/initialized" })
     rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/list" })
     const list = await rpc.next(2)
-    assert.deepEqual(list.result.tools.map((t: { name: string }) => t.name), ["spawn_thread", "recurring_prompt", "timer", "watch_pr", "watch", "unwatch", "ask", "unask", "done", "activity"])
+    assert.deepEqual(list.result.tools.map((t: { name: string }) => t.name), ["spawn_thread", "goal", "timer", "watch_pr", "watch", "unwatch", "ask", "unask", "done", "activity"])
     for (const required of ["prompt", "model", "effort"]) {
       assert.ok(list.result.tools[0].inputSchema.required.includes(required))
     }
-    // `recurring_prompt` requires only `action` — `prompt` and a valid `every_seconds` are required for
+    // `goal` requires only `action` — `prompt` and a valid `every_seconds` are required for
     // `start` alone, enforced in the handler so a lenient client cannot skip them either (asserted
     // below). It exposes NO THREAD parameter: the slug comes from the server's env, never from the
     // model, which is what stops one thread arming a loop on another.
@@ -338,7 +338,7 @@ test("with no stamp at all, the project is the one the worker is STANDING IN", a
 // learn from its env — so what this pins is the slug actually reaching the RPC body, over the real
 // stdio transport against a real HTTP server. A tool that armed a hook on the wrong thread (or on none)
 // would look identical to the worker, and would make some OTHER thread loop forever.
-test("`recurring_prompt` arms and disarms the CALLING thread, identified from its env", async () => {
+test("`goal` arms and disarms the CALLING thread, identified from its env", async () => {
   const seen: Array<{ url: string; body: any }> = []
   const http = createServer((req, res) => {
     let body = ""
@@ -360,7 +360,7 @@ test("`recurring_prompt` arms and disarms the CALLING thread, identified from it
 
     rpc.send({
       jsonrpc: "2.0", id: 2, method: "tools/call",
-      params: { name: "recurring_prompt", arguments: { action: "start", prompt: "keep the migration moving" } },
+      params: { name: "goal", arguments: { action: "start", prompt: "keep the migration moving" } },
     })
     const armed = await rpc.next(2)
     assert.equal(armed.result.isError, undefined)
@@ -380,7 +380,7 @@ test("`recurring_prompt` arms and disarms the CALLING thread, identified from it
     // BOTH triggers named on a schedule-only start, and the cadence carried through as seconds.
     rpc.send({
       jsonrpc: "2.0", id: 6, method: "tools/call",
-      params: { name: "recurring_prompt", arguments: { action: "start", prompt: "check the deploy", heartbeat_seconds: 600 } },
+      params: { name: "goal", arguments: { action: "start", prompt: "check the deploy", heartbeat_seconds: 600 } },
     })
     const scheduled = await rpc.next(6)
     assert.equal(scheduled.result.isError, undefined)
@@ -392,7 +392,7 @@ test("`recurring_prompt` arms and disarms the CALLING thread, identified from it
 
     rpc.send({
       jsonrpc: "2.0", id: 7, method: "tools/call",
-      params: { name: "recurring_prompt", arguments: { action: "start", prompt: "keep going", stop_hook: true, heartbeat_seconds: 900 } },
+      params: { name: "goal", arguments: { action: "start", prompt: "keep going", stop_hook: true, heartbeat_seconds: 900 } },
     })
     await rpc.next(7)
     assert.deepEqual(seen.at(-1), {
@@ -405,12 +405,12 @@ test("`recurring_prompt` arms and disarms the CALLING thread, identified from it
     // caller that still passes it is refused by the tool's own strict schema rather than silently ignored.
     rpc.send({
       jsonrpc: "2.0", id: 8, method: "tools/call",
-      params: { name: "recurring_prompt", arguments: { action: "start", prompt: "beat me anyway", heartbeat_seconds: 600 } },
+      params: { name: "goal", arguments: { action: "start", prompt: "beat me anyway", heartbeat_seconds: 600 } },
     })
     await rpc.next(8)
     assert.equal("pauseOnQuestions" in (seen.at(-1) as { body: Record<string, unknown> }).body, false)
 
-    rpc.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "recurring_prompt", arguments: { action: "stop" } } })
+    rpc.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "goal", arguments: { action: "stop" } } })
     const stopped = await rpc.next(3)
     assert.equal(stopped.result.isError, undefined)
     assert.deepEqual(seen.at(-1), {
@@ -420,14 +420,14 @@ test("`recurring_prompt` arms and disarms the CALLING thread, identified from it
 
     // A `start` with no prompt is refused in the HANDLER, not merely by the schema.
     const before = seen.length
-    rpc.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "recurring_prompt", arguments: { action: "start" } } })
+    rpc.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "goal", arguments: { action: "start" } } })
     const bare = await rpc.next(4)
     assert.equal(bare.result.isError, true)
     assert.match(bare.result.content[0].text, /`prompt` is required/)
     assert.equal(seen.length, before, "and nothing was sent to the server")
 
     // A bogus action likewise never reaches the RPC.
-    rpc.send({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "recurring_prompt", arguments: { action: "pause" } } })
+    rpc.send({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "goal", arguments: { action: "pause" } } })
     const bogus = await rpc.next(5)
     assert.equal(bogus.result.isError, true)
     assert.match(bogus.result.content[0].text, /`action` must be one of/)
@@ -438,11 +438,11 @@ test("`recurring_prompt` arms and disarms the CALLING thread, identified from it
   }
 })
 
-// The READ action. A worker that can only WRITE its recurring prompt overwrites the human's own edit
+// The READ action. A worker that can only WRITE its goal overwrites the human's own edit
 // without ever seeing it, and after a compaction cannot tell an armed thread from an unarmed one. What
 // this pins is that `get` reads the row back VERBATIM (a summary of your own instruction is as blind as
 // no read at all), that it mutates nothing, and that a `start` names the row it superseded.
-test("`recurring_prompt` reads back what is armed, and a `start` reports what it replaced", async () => {
+test("`goal` reads back what is armed, and a `start` reports what it replaced", async () => {
   const armed = {
     prompt: "the human's own words, edited in the footer",
     stopHook: true,
@@ -476,7 +476,7 @@ test("`recurring_prompt` reads back what is armed, and a `start` reports what it
     rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
     await rpc.next(1)
 
-    rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "recurring_prompt", arguments: { action: "get" } } })
+    rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "goal", arguments: { action: "get" } } })
     const got = await rpc.next(2)
     assert.equal(got.result.isError, undefined)
     assert.deepEqual(seen.at(-1), { url: "/_frizz/rpc/getOwnThreadRecurringPrompt", body: { slug: "owning-thread" } })
@@ -501,10 +501,10 @@ test("`recurring_prompt` reads back what is armed, and a `start` reports what it
     })
     await new Promise<void>((resolve) => empty.listen(0, "127.0.0.1", resolve))
     writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ port: (empty.address() as { port: number }).port }))
-    rpc.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "recurring_prompt", arguments: { action: "get" } } })
+    rpc.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "goal", arguments: { action: "get" } } })
     const none = await rpc.next(3)
     assert.equal(none.result.isError, undefined)
-    assert.match(none.result.content[0].text, /No recurring prompt is armed/)
+    assert.match(none.result.content[0].text, /No goal is armed/)
     empty.close()
 
     // …and a `start` over an existing row hands the superseded words back, so an overwrite the worker
@@ -512,11 +512,11 @@ test("`recurring_prompt` reads back what is armed, and a `start` reports what it
     writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ port }))
     rpc.send({
       jsonrpc: "2.0", id: 4, method: "tools/call",
-      params: { name: "recurring_prompt", arguments: { action: "start", prompt: "my own new text" } },
+      params: { name: "goal", arguments: { action: "start", prompt: "my own new text" } },
     })
     const replaced = await rpc.next(4)
     assert.equal(replaced.result.isError, undefined)
-    assert.match(replaced.result.content[0].text, /IT REPLACED an existing recurring prompt/)
+    assert.match(replaced.result.content[0].text, /IT REPLACED an existing goal/)
     assert.ok(replaced.result.content[0].text.includes(armed.prompt), replaced.result.content[0].text)
   } finally {
     rpc.kill()
@@ -526,7 +526,7 @@ test("`recurring_prompt` reads back what is armed, and a `start` reports what it
 
 // A frizz server older than this tool 404s the read procedure. A bare HTTP status would read to a worker
 // as "nothing is armed", which is the opposite of the truth — so the refusal has to say UNKNOWN.
-test("`recurring_prompt` get says the state is UNKNOWN against a server that predates the read", async () => {
+test("`goal` get says the state is UNKNOWN against a server that predates the read", async () => {
   const http = createServer((req, res) => {
     req.resume()
     req.on("end", () => {
@@ -541,7 +541,7 @@ test("`recurring_prompt` get says the state is UNKNOWN against a server that pre
   try {
     rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
     await rpc.next(1)
-    rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "recurring_prompt", arguments: { action: "get" } } })
+    rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "goal", arguments: { action: "get" } } })
     const stale = await rpc.next(2)
     assert.equal(stale.result.isError, true)
     assert.match(stale.result.content[0].text, /UNKNOWN/)
@@ -615,7 +615,7 @@ test("`timer` resolves in_seconds/at into one exact instant and POSTs the callin
     await rpc.next(5)
     assert.deepEqual(seen.at(-1), { url: "/_frizz/rpc/cancelOwnThreadTimer", body: { slug: "owning-thread", id: "tmr_abc" } })
 
-    // …and an invented thread argument never reaches the server, exactly as for `recurring_prompt`.
+    // …and an invented thread argument never reaches the server, exactly as for `goal`.
     rpc.send({
       jsonrpc: "2.0", id: 6, method: "tools/call",
       params: { name: "timer", arguments: { action: "list", slug: "someone-else", thread: "someone-else" } },
@@ -670,9 +670,9 @@ test("`timer` refuses a bad delay, a missing/doubled instant and a missing id wi
   }
 })
 
-// A model can choose the TEXT of a recurring prompt but never the THREAD. The tool takes no thread parameter,
+// A model can choose the TEXT of a goal but never the THREAD. The tool takes no thread parameter,
 // so the only way it could act on someone else's is if a supplied argument leaked into the body.
-test("`recurring_prompt` ignores any thread the caller tries to name — the slug comes from the env alone", async () => {
+test("`goal` ignores any thread the caller tries to name — the slug comes from the env alone", async () => {
   const seen: Array<{ url: string; body: any }> = []
   const http = createServer((req, res) => {
     let body = ""
@@ -693,7 +693,7 @@ test("`recurring_prompt` ignores any thread the caller tries to name — the slu
     await rpc.next(1)
     rpc.send({
       jsonrpc: "2.0", id: 2, method: "tools/call",
-      params: { name: "recurring_prompt", arguments: { action: "start", prompt: "p", slug: "someone-else", thread: "someone-else" } },
+      params: { name: "goal", arguments: { action: "start", prompt: "p", slug: "someone-else", thread: "someone-else" } },
     })
     await rpc.next(2)
     assert.equal(seen.at(-1)!.body.slug, "owning-thread", "an invented slug argument must not reach the server")
@@ -705,7 +705,7 @@ test("`recurring_prompt` ignores any thread the caller tries to name — the slu
 
 // Without a slug the tool must FAIL rather than guess — arming one on the wrong thread is worse than
 // not arming one, and a silent no-op would read to the worker as success.
-test("`recurring_prompt` refuses to act when its thread identity was never stamped into its env", async () => {
+test("`goal` refuses to act when its thread identity was never stamped into its env", async () => {
   const stateDir = mkdtempSync(join(tmpdir(), "frizz-mcp-"))
   writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ port: 1 }))
   // FRIZZ_THREAD is the documented fallback, so both vars have to be absent for this to hold.
@@ -713,7 +713,7 @@ test("`recurring_prompt` refuses to act when its thread identity was never stamp
   try {
     rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
     await rpc.next(1)
-    rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "recurring_prompt", arguments: { action: "stop" } } })
+    rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "goal", arguments: { action: "stop" } } })
     const failed = await rpc.next(2)
     assert.equal(failed.result.isError, true)
     assert.match(failed.result.content[0].text, /not told which thread it belongs to/)
@@ -726,7 +726,7 @@ test("`recurring_prompt` refuses to act when its thread identity was never stamp
 // this one covers the number, because a schedule out of range is the input a model is most likely to
 // invent — and it must be refused in the HANDLER, never merely by the schema, so a lenient client
 // cannot slip one past.
-test("`recurring_prompt` refuses a cadence out of range without contacting the server", async () => {
+test("`goal` refuses a cadence out of range without contacting the server", async () => {
   const seen: Array<{ url: string; body: any }> = []
   const http = createServer((req, res) => {
     let body = ""
@@ -748,7 +748,7 @@ test("`recurring_prompt` refuses a cadence out of range without contacting the s
 
     rpc.send({
       jsonrpc: "2.0", id: 2, method: "tools/call",
-      params: { name: "recurring_prompt", arguments: { action: "start", prompt: "x", heartbeat_seconds: 5 } },
+      params: { name: "goal", arguments: { action: "start", prompt: "x", heartbeat_seconds: 5 } },
     })
     const tooFast = await rpc.next(2)
     assert.equal(tooFast.result.isError, true)
@@ -756,7 +756,7 @@ test("`recurring_prompt` refuses a cadence out of range without contacting the s
 
     rpc.send({
       jsonrpc: "2.0", id: 3, method: "tools/call",
-      params: { name: "recurring_prompt", arguments: { action: "start", prompt: "x", heartbeat_seconds: 99999 } },
+      params: { name: "goal", arguments: { action: "start", prompt: "x", heartbeat_seconds: 99999 } },
     })
     const tooSlow = await rpc.next(3)
     assert.equal(tooSlow.result.isError, true)
@@ -766,7 +766,7 @@ test("`recurring_prompt` refuses a cadence out of range without contacting the s
     // be re-prompted by nothing. Refused, rather than silently writing a row that can never fire.
     rpc.send({
       jsonrpc: "2.0", id: 4, method: "tools/call",
-      params: { name: "recurring_prompt", arguments: { action: "start", prompt: "x", stop_hook: false } },
+      params: { name: "goal", arguments: { action: "start", prompt: "x", stop_hook: false } },
     })
     const noTrigger = await rpc.next(4)
     assert.equal(noTrigger.result.isError, true)
@@ -1167,7 +1167,7 @@ test("with no server up, a tool call says NOTHING WAS SAVED and to retry — not
     await rpc.next(1)
     rpc.send({
       jsonrpc: "2.0", id: 2, method: "tools/call",
-      params: { name: "recurring_prompt", arguments: { action: "start", stop_hook: true, prompt: "KEEP GOING." } },
+      params: { name: "goal", arguments: { action: "start", stop_hook: true, prompt: "KEEP GOING." } },
     })
     const failed = await rpc.next(2)
     assert.equal(failed.result.isError, true)

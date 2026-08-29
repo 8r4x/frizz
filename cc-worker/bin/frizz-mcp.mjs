@@ -6,7 +6,7 @@
  *
  *   spawn_thread     — dispatch a brand-new TOP-LEVEL frizz board thread (its own session + scratchpad +
  *                      independent drive — NOT an in-session Agent/Task helper).
- *   recurring_prompt — arm ONE piece of text frizz re-sends the caller, at every rest and/or on a clock
+ *   goal — arm ONE piece of text frizz re-sends the caller, at every rest and/or on a clock
  *                      and/or after every compaction; and READ BACK what is currently armed.
  *   timer            — arm a ONE-OFF prompt for a single instant; a thread may hold many at once.
  *
@@ -110,30 +110,29 @@ const SPAWN_THREAD = {
   },
 }
 
-const RECURRING_PROMPT = {
-  name: "recurring_prompt",
+const GOAL = {
+  name: "goal",
   description:
-    "Arm a RECURRING PROMPT on YOUR OWN thread: one piece of text that frizz re-sends you, on any or all " +
-    "of three triggers, for as long as it is armed.\n\n" +
+    "Arm a GOAL on YOUR OWN thread: one piece of text that frizz re-sends you, on any or all of three " +
+    "triggers, for as long as it is armed. The board shows it as the thread's Goal. (This tool was " +
+    "named `goal` until 2026-08-28 — a summary or note that says so means this one.)\n\n" +
     "  stop_hook          — every time you come to REST. Use it to keep a long autonomous effort moving " +
     "without the human driving every step, and to rescue yourself from a wait that may never resolve.\n" +
     "  heartbeat_seconds  — on a CLOCK, whatever you are doing. This one reaches you MID-TURN: it arrives as " +
     "a queued message you read at your next tool boundary rather than waiting for you to stop, and it " +
     "never aborts what you are running. Use it for something that must be revisited on a schedule no " +
     "matter what you happen to believe at the time.\n" +
-    "  post_compaction    — every time your CONTEXT IS COMPACTED, delivered into the emptied window. This " +
-    "is how you survive compaction: write a doc in your scratch directory as you work, LINK IT in this " +
-    "prompt, and the link comes back at the exact moment you have lost everything else. Also mid-turn — " +
-    "a compaction happens while you are working.\n\n" +
-    "Set at least one. The ordinary shape for a long effort is post_compaction plus stop_hook: you are " +
-    "re-grounded whenever your context is summarized away, and prompted again whenever you stop.\n\n" +
+    "  post_compaction    — every time your CONTEXT IS COMPACTED, delivered into the emptied window. If " +
+    "you keep notes in your scratch directory, a prompt that LINKS them comes back at the exact moment " +
+    "you have lost everything else. Also mid-turn — a compaction happens while you are working.\n\n" +
+    "Set at least one; any combination is fine.\n\n" +
     "USE THIS RATHER THAN `CronCreate` or `ScheduleWakeup`. Those are Claude Code's own in-session " +
     "schedulers and they CANNOT fire in the runtime frizz runs you in: their gate stays shut for as long " +
     "as ANY background task of yours is outstanding, so the moment you are parked behind a background " +
     "shell or a sub-agent — exactly when you most need waking — they go silent. This one is delivered by " +
     "frizz itself and is unaffected.\n\n" +
     "READ IT BACK WITH `action: \"get\"` — and do that BEFORE any `start` that is not a fresh arming. A " +
-    "thread has AT MOST ONE recurring prompt, so a `start` REPLACES whatever is there, triggers and all, " +
+    "thread has AT MOST ONE goal, so a `start` REPLACES whatever is there, triggers and all, " +
     "and the text you are about to destroy may not be yours: the HUMAN can edit it in the thread footer, " +
     "and a compaction can take your own memory of arming it. `get` answers with the exact text currently " +
     "armed, which triggers are on, the cadence, and when each trigger last fired. Reach for it whenever " +
@@ -156,7 +155,7 @@ const RECURRING_PROMPT = {
         type: "string",
         enum: ["start", "stop", "get"],
         description:
-          "`start` arms (or replaces) this thread's recurring prompt; `stop` disarms it; `get` reads back " +
+          "`start` arms (or replaces) this thread's goal; `stop` disarms it; `get` reads back " +
           "what is armed right now — the text, the triggers, the cadence and each trigger's last delivery " +
           "— without changing anything. `get` takes no other argument.",
       },
@@ -183,9 +182,8 @@ const RECURRING_PROMPT = {
       post_compaction: {
         type: "boolean",
         description:
-          "Also send it every time your context is compacted. Set this on any effort long enough to be " +
-          "summarized, and make the prompt LINK the doc you are keeping in your scratch directory — that " +
-          "link arriving in the emptied window is what lets you pick the work back up.",
+          "Also send it every time your context is compacted, into the emptied window — useful when the " +
+          "prompt links notes you keep in your scratch directory.",
       },
     },
     required: ["action"],
@@ -203,16 +201,16 @@ const TIMER = {
   description:
     "Set a ONE-OFF timer on YOUR OWN thread: a piece of text frizz hands back to you at ONE instant, " +
     "ONCE. Your own alarm clock.\n\n" +
-    "It is `recurring_prompt`'s heartbeat with the repetition taken out, and it shares the property that " +
+    "It is `goal`'s heartbeat with the repetition taken out, and it shares the property that " +
     "matters: the delivery reaches you MID-TURN — a queued message you read at your next tool boundary — " +
     "so it arrives when you asked for it whether or not you have stopped, and it never aborts what you " +
-    "are running. Unlike a recurring prompt it fires exactly once and then is gone, so there is nothing " +
+    "are running. Unlike a goal it fires exactly once and then is gone, so there is nothing " +
     "to switch off afterwards and nothing to sign off from.\n\n" +
     "You may have MANY armed at the same time, each with its own instant and its own text — they are " +
-    "independent, unlike the single recurring prompt this thread can hold.\n\n" +
+    "independent, unlike the single goal this thread can hold.\n\n" +
     "USE IT for anything you want to come back to at a specific time: re-check a deploy in ten minutes, " +
     "re-read a slow log at the top of the hour, revisit a decision after a build finishes. USE " +
-    "`recurring_prompt` instead when the thing must repeat, and remember that Claude Code's own " +
+    "`goal` instead when the thing must repeat, and remember that Claude Code's own " +
     "`CronCreate`/`ScheduleWakeup` cannot fire in the runtime frizz runs you in.\n\n" +
     "IT IS NOT A WAY TO POLL SOMETHING YOU COULD WAIT ON. If a background shell, a sub-agent or a " +
     "monitor can tell you the moment a thing happens, use that — an alarm every N seconds asking \"is it " +
@@ -627,12 +625,12 @@ const ACTIVITY = {
   inputSchema: { type: "object", properties: {}, required: [] },
 }
 
-const TOOLS = [SPAWN_THREAD, RECURRING_PROMPT, TIMER, WATCH_PR, WATCH, UNWATCH, ASK, UNASK, DONE, ACTIVITY]
+const TOOLS = [SPAWN_THREAD, GOAL, TIMER, WATCH_PR, WATCH, UNWATCH, ASK, UNASK, DONE, ACTIVITY]
 
 /** @type {Record<string, (args: Record<string, unknown>) => Promise<string>>} */
 const HANDLERS = {
   [SPAWN_THREAD.name]: spawnThread,
-  [RECURRING_PROMPT.name]: recurringPrompt,
+  [GOAL.name]: goal,
   [TIMER.name]: timer,
   [WATCH_PR.name]: watchPr,
   [WATCH.name]: watch,
@@ -961,14 +959,14 @@ async function callRpc(procedure, body) {
  * FRIZZ_THREAD is the fallback: every frizz worker process is tagged with it, so it is right
  * whenever the env is inherited — but it is not relied upon, hence the explicit var first.
  *
- * This is also the reason a model can never point `recurring_prompt` at someone else's thread: the slug is
+ * This is also the reason a model can never point `goal` at someone else's thread: the slug is
  * read from HERE, never from the tool arguments. */
 function threadSlug() {
   const slug = process.env.FRIZZ_THREAD_SLUG || process.env.FRIZZ_THREAD
   if (!slug) {
     throw new Error(
       "this frizz MCP server was not told which thread it belongs to (no FRIZZ_THREAD_SLUG), so it cannot " +
-      "arm a recurring prompt for it. This is a frizz bug — report it rather than working around it.",
+      "arm a goal for it. This is a frizz bug — report it rather than working around it.",
     )
   }
   return slug
@@ -982,13 +980,13 @@ function cadenceLabel(seconds) {
   return seconds % 60 === 0 ? `${seconds / 60} min` : `${seconds}s`
 }
 
-/** Render an armed recurring prompt for the worker to read: which triggers are live, the cadence, when
+/** Render an armed goal for the worker to read: which triggers are live, the cadence, when
  * each last fired, and the text VERBATIM (never truncated — reading back a summary of your own
  * instruction is exactly as blind as not reading it).
  * @param {{ prompt: string, stopHook: boolean, heartbeat: boolean, postCompaction: boolean,
  *           intervalSeconds?: number, armedAt: string, lastRestFiredAt?: string,
  *           lastScheduleFiredAt?: string, lastCompactFiredAt?: string }} rp */
-function recurringPromptReport(rp) {
+function goalReport(rp) {
   const fired = (/** @type {string|undefined} */ at) => (at ? `last fired ${at}` : "never fired yet")
   const triggers = [
     rp.stopHook ? `  stop_hook — every time you come to rest (${fired(rp.lastRestFiredAt)})` : null,
@@ -1007,9 +1005,9 @@ function recurringPromptReport(rp) {
   return `${head}\n\nThe text, verbatim:\n\n${rp.prompt}`
 }
 
-/** The `recurring_prompt` handler: arm, disarm, or READ BACK this thread's re-prompt.
+/** The `goal` handler: arm, disarm, or READ BACK this thread's re-prompt.
  * @param {Record<string, unknown>} args @returns {Promise<string>} */
-async function recurringPrompt(args) {
+async function goal(args) {
   const slug = threadSlug()
   const action = typeof args.action === "string" ? args.action.trim() : ""
   if (action !== "start" && action !== "stop" && action !== "get") {
@@ -1034,18 +1032,18 @@ async function recurringPrompt(args) {
       throw err
     }
     const rp = payload?.result?.recurringPrompt
-    if (!rp) return "No recurring prompt is armed on this thread. Nothing will re-prompt you."
-    return recurringPromptReport(rp)
+    if (!rp) return "No goal is armed on this thread. Nothing will re-prompt you."
+    return goalReport(rp)
   }
 
   if (action === "stop") {
     await callRpc("setOwnThreadRecurringPrompt", { slug, prompt: null, stopHook: false, heartbeat: false, postCompaction: false })
-    return "Recurring prompt disarmed and cleared. No trigger will fire — not the stop hook, not the heartbeat, not the post-compaction one — and the text is gone from the thread footer."
+    return "Goal disarmed and cleared. No trigger will fire — not the stop hook, not the heartbeat, not the post-compaction one — and the text is gone from the thread footer."
   }
 
   const prompt = typeof args.prompt === "string" ? args.prompt.trim() : ""
   if (!prompt) {
-    throw new Error("`prompt` is required to start a recurring prompt — it is the text you will be sent on every trigger")
+    throw new Error("`prompt` is required to start a goal — it is the text you will be sent on every trigger")
   }
 
   const hasHeartbeat = args.heartbeat_seconds !== undefined && args.heartbeat_seconds !== null
@@ -1094,15 +1092,15 @@ async function recurringPrompt(args) {
   // Spelled out in full, not summarized: if this overwrote the human's own edit, the words themselves
   // are the only way the worker can put them back.
   const superseded = replaced
-    ? `\n\nIT REPLACED an existing recurring prompt — check that discarding it was intended, and restore ` +
-      `it with another \`start\` if it was not:\n\n${recurringPromptReport(replaced)}\n`
+    ? `\n\nIT REPLACED an existing goal — check that discarding it was intended, and restore ` +
+      `it with another \`start\` if it was not:\n\n${goalReport(replaced)}\n`
     : ""
   // NO QUESTION HOLD ANY MORE (2026-08-16). Every trigger fires while you are waiting on the human, and
   // the at-rest one fires over your own unanswered ```question fence — the delivery says so, and expects
   // you to decide the question yourself rather than re-ask it. A ```done fence, and an ```awaiting on a
   // wait frizz itself will deliver, still stop the at-rest trigger.
   return (
-    `Recurring prompt armed — frizz will send you this ${when}.${superseded}\n\n` +
+    `Goal armed — frizz will send you this ${when}.${superseded}\n\n` +
     "Call this tool again with `action: \"stop\"` once the work it drives is finished — one left armed on " +
     "a finished thread wakes it forever. The human can also edit or switch it off in the thread footer. " +
     "Signing off with a ```done fence stops it too, but only when there is genuinely nothing left: it " +

@@ -13,7 +13,7 @@
 // what their worker would be told.
 //
 // The maintainer's replacement (chosen deliberately over keeping a canonical doc): the thread gets a
-// free-form scratch DIRECTORY, and compaction recovery moves to `mcp__frizz__recurring_prompt`'s
+// free-form scratch DIRECTORY, and compaction recovery moves to `mcp__frizz__goal`'s
 // post_compaction trigger — the worker writes whatever doc it likes and LINKS it in a prompt frizz
 // re-sends when the context is summarized away. Durable in SQLite, visible in the thread footer,
 // editable by the human. This hook's job is therefore reduced to two honest things:
@@ -246,7 +246,7 @@ if (mode === 'session-start') {
         '. You have files in your scratch directory `' + relPath + '`:\n' + describe(files) +
         '\n\nRead whichever of them bears on what you were doing BEFORE acting, and treat what you ' +
         'wrote there as authoritative over anything the summary implies. (A goal armed via ' +
-        'mcp__frizz__recurring_prompt with post_compaction: true can hand a link back at the next ' +
+        'mcp__frizz__goal with post_compaction: true can hand a link back at the next ' +
         'compaction without relying on this note.)' +
         compactedNote,
     );
@@ -260,7 +260,7 @@ if (mode === 'session-start') {
         '`.frizz/threads/*/` directories for a substitute, and do not broadly reload repo docs or ' +
         'skills merely to reconstruct context. Recover from the retained compaction summary and any ' +
         'task-specific handoff it directly names. The directory is still available if you want notes ' +
-        'this time, and a goal armed via mcp__frizz__recurring_prompt with post_compaction: true can ' +
+        'this time, and a goal armed via mcp__frizz__goal with post_compaction: true can ' +
         're-send a prompt linking them at the next compaction.' +
         compactedNote,
     );
@@ -270,7 +270,7 @@ if (mode === 'session-start') {
     parts.push(
       '⟦scratch directory⟧ `' + relPath + '` is yours: any files you like, no format expected, and ' +
         'nothing in it is read automatically. Use it if you want it. If you ever want a note to come ' +
-        'back after a compaction, a goal armed via mcp__frizz__recurring_prompt with ' +
+        'back after a compaction, a goal armed via mcp__frizz__goal with ' +
         'post_compaction: true re-sends a prompt of your choosing — one that can link a file here.',
     );
   }
@@ -407,7 +407,7 @@ if (mode === 'nudge') {
           'the human\'s instruction still has parts left.'
       : '⟦scratch directory empty⟧ This session is ~' + k + 'k tokens deep and `' + relPath + '` is ' +
           'empty. That is fine — notes are optional and writing them is not doing the work. The ' +
-          'directory is available if you want notes, and mcp__frizz__recurring_prompt with ' +
+          'directory is available if you want notes, and mcp__frizz__goal with ' +
           'post_compaction: true can re-send a prompt linking them after a compaction. This is a ' +
           'background note, NOT a task and NOT a reason to pause: keep going with what you were asked to do.',
     event,

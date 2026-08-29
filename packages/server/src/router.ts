@@ -2246,7 +2246,7 @@ export function createRouter(ctx: AppContext) {
       },
     }),
 
-    // The WORKER arming its own, from `mcp__frizz__recurring_prompt`. Same row the footer panel writes;
+    // The WORKER arming its own, from `mcp__frizz__goal`. Same row the footer panel writes;
     // different caller, and therefore a different guard.
     //
     // Unguarded on session/generation ON PURPOSE — see SetOwnThreadRecurringPromptInput. The MCP server

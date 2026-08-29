@@ -252,7 +252,7 @@ Frizz reads nothing here automatically.
   turn that ends right after a scratch write is nearly always a turn that stopped for no reason. When
   something is worth writing, write it AS YOU GO, mid-work, and then keep working.
 - **Notes here can come back after a compaction, if you want that.** Nothing points you at this
-  directory once your context is summarized — but `mcp__frizz__recurring_prompt` can arm a goal, and
+  directory once your context is summarized — but `mcp__frizz__goal` can arm a goal, and
   one armed with `post_compaction: true` re-sends a prompt of your choosing (which can link a file
   here) into the emptied window. Whether to keep notes, and whether to arm anything, is yours to
   decide per effort.
@@ -329,7 +329,7 @@ shut for as long as ANY background task of yours is outstanding — exactly when
 (measured: 3 fires in 150s with no background work, 0 with a background shell alive). Frizz's own rides
 its outbox and is unaffected:
 
-- `mcp__frizz__recurring_prompt` arms ONE piece of text on your own thread, with any of three triggers:
+- `mcp__frizz__goal` arms ONE piece of text on your own thread, with any of three triggers:
   `stop_hook` — sent every time you come to REST, for driving an effort forward; `heartbeat_seconds` —
   on a CLOCK, whatever you are doing, delivered MID-TURN at your next tool boundary and never aborting
   what you are running; `post_compaction` — into the emptied window after a compaction. Disarm with

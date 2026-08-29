@@ -265,7 +265,7 @@ ends right after a scratch write is nearly always a turn that stopped for no rea
 worth writing, write it AS YOU GO, mid-work, and then keep working.
 
 **Notes here can come back after a compaction, if you want that.** Nothing points you at this directory
-once your context is summarized — but `mcp__frizz__recurring_prompt` can arm a goal, and one armed
+once your context is summarized — but `mcp__frizz__goal` can arm a goal, and one armed
 with `post_compaction: true` re-sends a prompt of your choosing (which can link a file here) into the
 emptied window. Whether to keep notes, and whether to arm anything, is yours to decide per effort.
 
@@ -410,7 +410,7 @@ shell job control (`&`, `nohup … &`, or `disown`) to imitate background work; 
 `PreToolUse(Bash)` hook blocks escaping jobs because they have no reliable lifecycle or wake.
 Managed cells do NOT wake a turn after it rests. Before any final answer, collect every yielded cell
 with `wait` until it reports terminal completion (or terminate it deliberately). Before yielding
-one, arm `mcp__frizz__recurring_prompt` with `stop_hook: true` to remind yourself to collect it, and
+one, arm `mcp__frizz__goal` with `stop_hook: true` to remind yourself to collect it, and
 disarm it once the cell reports its terminal result. That makes forgetting visible without pretending
 the cell can wake a rested turn.
 

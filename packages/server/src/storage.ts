@@ -570,7 +570,7 @@ export interface Storage {
   // Session-guarded: this comes from a browser tab that may be looking at a thread which has since been
   // re-dispatched.
   setRecurringPromptIfCurrent(slug: string, sessionId: string, generation: number, write: RecurringWrite): boolean
-  // The WORKER's path to the same row, from `mcp__frizz__recurring_prompt`. Deliberately keyed on the
+  // The WORKER's path to the same row, from `mcp__frizz__goal`. Deliberately keyed on the
   // slug ALONE, with no session/generation guard, because the MCP server cannot satisfy one: it is
   // spawned with its thread's slug and keeps it across a resume, while the session id and generation
   // bump underneath it — so a guard here would fail exactly on the long-lived thread this exists for.

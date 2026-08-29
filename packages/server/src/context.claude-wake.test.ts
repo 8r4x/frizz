@@ -1,6 +1,6 @@
 // A SCHEDULED wake has to be able to start a process, not just talk to one.
 //
-// Every server-side thing that wakes a rested Claude thread — a fired `timer:`, a `recurring_prompt`,
+// Every server-side thing that wakes a rested Claude thread — a fired `timer:`, a `goal`,
 // a `watch_pr` event, a usage-limit auto-resume — arrives here, at `deliverClaudeBrokerWake`, and from
 // here at the bridge's `followUp`, which reconnects a live daemon OR cold-resumes a dead one. Since
 // hibernation (thread-hibernation.ts) the dead-daemon case is no longer rare: it is the NORMAL state of

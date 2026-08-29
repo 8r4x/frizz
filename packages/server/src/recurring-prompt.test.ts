@@ -126,7 +126,7 @@ test("storage: a null prompt clears the whole row, and a stale session/generatio
 })
 
 // ---- The worker's own path to the same row ------------------------------------------------------
-// `mcp__frizz__recurring_prompt` writes by SLUG ALONE, with no session/generation guard, because the MCP server
+// `mcp__frizz__goal` writes by SLUG ALONE, with no session/generation guard, because the MCP server
 // cannot satisfy one: it is spawned with its thread's slug and keeps it across every resume while the
 // session id bumps underneath. These pin that the unguarded path behaves identically to the operator's
 // on everything EXCEPT the guard — same generation semantics, same clear.

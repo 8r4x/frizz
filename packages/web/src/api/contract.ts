@@ -175,7 +175,7 @@ export interface Api {
   // THE RECURRING PROMPT, armed entirely from the footer panel: one text, and up to two triggers
   // (every rest, and/or every N minutes). Text, triggers and cadence travel together — they are one row.
   setThreadRecurringPrompt(input: SetThreadRecurringPromptInput): Promise<void>
-  // The WORKER-facing counterpart, called by `mcp__frizz__recurring_prompt` rather than by this client.
+  // The WORKER-facing counterpart, called by `mcp__frizz__goal` rather than by this client.
   // Declared here because rpc-contract.ts proves the two procedure NAME SETS are equal — an RPC the
   // client cannot name is one nothing checks the shape of. No browser call site uses it.
   setOwnThreadRecurringPrompt(input: SetOwnThreadRecurringPromptInput): Promise<SetOwnThreadRecurringPromptResult>

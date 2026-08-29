@@ -225,7 +225,7 @@ export interface BuiltCommand {
 }
 
 // The ONE unified frizz MCP server every worker gets: mounted under the name `frizz`, so its tools are
-// addressed as `mcp__frizz__<tool>` (`spawn_thread`, `recurring_prompt` and `timer` today — new
+// addressed as `mcp__frizz__<tool>` (`spawn_thread`, `goal` and `timer` today — new
 // worker-facing frizz capabilities join the same server's registry in cc-worker/bin/frizz-mcp.mjs rather
 // than mounting a second server). The dispatch layer pre-approves it at SERVER level (`mcp__frizz`), so a
 // tool added there needs no allow-list change here.
