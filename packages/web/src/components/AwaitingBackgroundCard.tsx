@@ -215,9 +215,43 @@ export const ON_CAP = "shrink-0 self-baseline translate-y-[calc(0.5em_-_0.5cap)]
  *  A RING, not lucide's Loader2: the row's other three marks are 12px circles, so a ring keeps ONE
  *  circular footprint down the mark column and the gutter does not jitter as a PR goes running → green.
  *  Same idiom as the inline ring ChatView already uses. `motion-safe:` because a continuous animation is
- *  exempt from the micro-interaction default only when the reader has not asked for stillness. */
+ *  exempt from the micro-interaction default only when the reader has not asked for stillness.
+ *
+ *  Since 2026-08-29 this is the SUB-AGENT row's spinner only; a running PR draws GitHub's own icon
+ *  (ChecksInProgress below). */
 function Spinner({ tone }: { tone: string }) {
   return <span aria-hidden className={`inline-block size-3 rounded-full border ${tone} border-t-transparent motion-safe:animate-spin ${ON_CAP}`} />
+}
+
+/** A RUNNING PR WEARS GITHUB'S OWN IN-PROGRESS CHECK ICON, traced from GitHub's DOM rather than evoked
+ *  (maintainer 2026-08-29, with a screenshot of the merge box: "mirror this more closely […] the exact
+ *  shape and style of the yellow spinner"). The plain ring above read as a generic loader; the human has
+ *  just come from GitHub, and the same mark for the same fact is one less thing to translate.
+ *
+ *  GitHub's icon is three parts on a 16-box (read off github.com/…/pull/N/checks on 2026-08-29): a filled
+ *  dot `r=4`; a full ring track `r=7`, `stroke-width=2`, at reduced opacity; and a bright QUARTER arc
+ *  (`M15 8A7 7 0 0 1 8 15`, butt caps) on the same ring, rotating once a second, linear. The track's
+ *  opacity is the one number the two GitHub surfaces disagree on: the Checks tab's SVG says `.5`, while
+ *  the merge box in the maintainer's screenshot measures rgb(53,42,19) over rgb(2,4,8) — the attention
+ *  colour at 0.25 — and the merge box is the surface this row mirrors, so 0.25 wins. The colour is
+ *  Primer's dark `--fgColor-attention` `#d29922` (the screenshot's dot samples rgb(211,154,33));
+ *  Tailwind's `amber-400` `#fbbf24` that this mark wore before was brighter and pinker than the thing
+ *  it evoked. Drawn at 12 through the 16 viewBox so it scales with the column's other 12px circles:
+ *  dot ⌀6, ring ⌀12 with a 1.5px pen.
+ *
+ *  Only the ring GROUP spins — the dot is concentric so spinning it would be invisible, but rotating the
+ *  whole svg would also rotate the cap-band translate it sits on. `origin-center` on an SVG `<g>` resolves
+ *  against the view-box (transform-box's SVG default), i.e. 8 8 — the ring's own centre. */
+function ChecksInProgress() {
+  return (
+    <svg aria-hidden viewBox="0 0 16 16" width={12} height={12} fill="none" stroke="currentColor" overflow="visible" className={`${ON_CAP} text-[#d29922]`}>
+      <circle cx="8" cy="8" r="4" fill="currentColor" stroke="none" />
+      <g strokeWidth="2" className="origin-center motion-safe:animate-spin">
+        <circle cx="8" cy="8" r="7" opacity="0.25" />
+        <path d="M15 8A7 7 0 0 1 8 15" />
+      </g>
+    </svg>
+  )
 }
 
 function ChecksGlyph({ status }: { status: GithubWatchStatus | undefined }) {
@@ -226,7 +260,7 @@ function ChecksGlyph({ status }: { status: GithubWatchStatus | undefined }) {
   if (status.state === "closed") return <GitPullRequestClosed size={12} className={`${ON_CAP} text-red-400`} />
   if (status.checks === "failing") return <CircleX size={12} className={`${ON_CAP} text-red-400`} />
   if (status.checks === "passing") return <CircleCheck size={12} className={`${ON_CAP} text-emerald-500`} />
-  if (status.checks === "running") return <Spinner tone="border-amber-400" />
+  if (status.checks === "running") return <ChecksInProgress />
   return <CircleDashed size={12} className={`${ON_CAP} text-muted/60`} />
 }
 
