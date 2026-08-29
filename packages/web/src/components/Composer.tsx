@@ -440,7 +440,18 @@ export function Composer({
   // the exact draft an Escape closed the menu over, so it stays closed until the draft CHANGES —
   // without it the menu would reopen on the very next render.
   const [skillItems, setSkillItems] = useState<ThreadSkill[] | null>(null)
-  const [suggestSel, setSuggestSel] = useState(0)
+  // The highlighted row, REMEMBERED WITH THE DRAFT IT WAS CHOSEN OVER: the filtered list under it
+  // changes with every keystroke, so a highlight belongs to one draft and reads as row 0 for any
+  // other. Derived, not reset by an effect — `useEffect(() => setSuggestSel(0), [prose])` looked free
+  // (same value, no re-render) but it was not: once the fiber carries any pending lane React skips
+  // the same-value bailout, so every keystroke's effect enqueued a DefaultLane update that a fast
+  // burst of keystrokes starved; the root then ended every sync commit with that lane still pending,
+  // React's nested-update counter climbed one per keystroke, and a 50-keystroke burst (a multi-line
+  // draft on /full, 2026-08-28) threw "Maximum update depth exceeded" twice per run.
+  const [suggestSelFor, setSuggestSelFor] = useState<{ prose: string; index: number }>({ prose: "", index: 0 })
+  const suggestSel = suggestSelFor.prose === prose ? suggestSelFor.index : 0
+  const setSuggestSel = (next: number | ((current: number) => number)) =>
+    setSuggestSelFor({ prose, index: typeof next === "function" ? next(suggestSel) : next })
   const [dismissedFor, setDismissedFor] = useState<string | null>(null)
   // Active while the draft is exactly one `/`-led token — the shape of a skill invocation still being
   // typed. A space (arguments have begun) or a newline closes it.
@@ -474,8 +485,6 @@ export function Composer({
     for (const s of suggestions) if (s.source) labels.add(SKILL_SOURCE_LABEL[s.source])
     return [...labels]
   }, [suggestions])
-  // Reset the highlight whenever the draft changes: the filtered list under it just changed too.
-  useEffect(() => { setSuggestSel(0) }, [prose])
   // Keep the highlighted row in view when arrowing through a list taller than the menu.
   const suggestListRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
