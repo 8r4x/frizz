@@ -67,7 +67,6 @@ export function ChildOpRow({
   onOpen,
   onDismiss,
   title,
-  indent,
 }: {
   kind: ChildOpKind
   label: string
@@ -98,10 +97,6 @@ export function ChildOpRow({
   // Drill-in marker: keeps an open ThreadSheet for this slug from self-dismissing on the pointer-down,
   // so the child transcript STACKS over its parent instead of replacing it (see ThreadSheet).
   parentSlug?: string
-  // The rail density's LEFT GUTTER, in px. It defaults to the 26 that clears a parent thread row's
-  // indicator column in the sidebar; the fullscreen page's rail (FocusRail) has no parent row above
-  // its child rows, so it sets the gutter its other rows use and the ⤷ column lines up with theirs.
-  indent?: number
   // Absent ⇒ a non-interactive row (never a dropped one).
   onOpen?: () => void
   // The dismiss ×, on EVERY density (maintainer 2026-07-30: "the X button to stop a sub-agent should
@@ -216,7 +211,7 @@ export function ChildOpRow({
   // The rail indents with PADDING, not margin: a margin would carve the row wrapper's full-width hover
   // highlight back on every nested row. The two prompt-box densities have no such highlight, so they
   // shift the whole LINE (on the wrapper, below), keeping the × and the duration in step with the label.
-  const identityStyle = rail && (nestIndent > 0 || indent !== undefined) ? { paddingLeft: (indent ?? 26) + nestIndent } : undefined
+  const identityStyle = rail && nestIndent > 0 ? { paddingLeft: 26 + nestIndent } : undefined
 
   const row = clickable ? (
     <button

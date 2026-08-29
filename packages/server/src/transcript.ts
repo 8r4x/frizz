@@ -29,6 +29,7 @@ import type { Project } from "./project.ts"
 import type { Storage } from "./storage.ts"
 import type { AgentBackend, NormalizedEvent } from "./backend/types.ts"
 import { parseDeliveryLedger, projectDeliveryLedger, suppressCancelledDeliveries, attachmentPromptText } from "./delivery-ledger.ts"
+import { editedFilesOf } from "./edited-files.ts"
 import { stripDeliveryMarkers } from "./delivery-marker.ts"
 import { RELAYED_MARKER, relayNotificationBlock } from "./completion-relay.ts"
 import { CODEX_FIRST_FINAL_TITLE_TRANSPORT, CODEX_LEGACY_FIRST_FINAL_TITLE_TRANSPORT, parseCodexLine, createCodexBackend, extractCodexFrizzTitle } from "./backend/codex.ts"
@@ -3975,6 +3976,7 @@ function emptyTranscriptPage(source?: TranscriptSourceBinding): TranscriptPage {
     hasEarlier: false,
     reachedTurnBoundary: true,
     transcriptKey: createHash("sha256").update(keySeed).digest("base64url").slice(0, 32),
+    editedFiles: [],
   }
 }
 
@@ -4028,6 +4030,8 @@ export function readLatestThreadTranscriptPage(
     hasEarlier: canonicalStart > 0,
     reachedTurnBoundary: true,
     transcriptKey: snapshot.transcriptKey,
+    // Over the WHOLE projection, not the window — see EditedFile in @frizz/shared.
+    editedFiles: editedFilesOf(projected),
   }
 }
 

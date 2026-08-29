@@ -4011,12 +4011,26 @@ export type TranscriptMessage = z.infer<typeof TranscriptMessage>
 export const TranscriptPageCursor = z.string().min(1).max(2048).regex(/^[A-Za-z0-9_-]+$/)
 export type TranscriptPageCursor = z.infer<typeof TranscriptPageCursor>
 
+// A file the thread's worker has WRITTEN — one row of the fullscreen rail's "Edited files", derived
+// server-side over the WHOLE projected transcript rather than the latest window the page carries.
+// The distinction is the whole reason it rides the page: a worker edits in the middle of an effort
+// and verifies at the end, so by the time anyone opens the thread every Edit sits hundreds of
+// messages above the window (this repo's own threads: last Edit at record 633 of 2113, 2026-08-28).
+export const EditedFile = z.object({
+  path: z.string().min(1),
+  edits: z.number().int().positive(),
+  lastEditedAt: z.string().optional(),
+}).strict()
+export type EditedFile = z.infer<typeof EditedFile>
+
 export const TranscriptPage = z.object({
   messages: z.array(TranscriptMessage),
   beforeCursor: TranscriptPageCursor.nullable(),
   hasEarlier: z.boolean(),
   reachedTurnBoundary: z.boolean(),
   transcriptKey: z.string().min(1).max(256),
+  // The LATEST page only (see EditedFile); an earlier page is settled history and carries none.
+  editedFiles: z.array(EditedFile).optional(),
 }).strict()
 export type TranscriptPage = z.infer<typeof TranscriptPage>
 

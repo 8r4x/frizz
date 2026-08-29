@@ -207,7 +207,7 @@ function mergeClause(status: GithubWatchStatus): string | null {
 // (scripts/ink-gaps.mjs, dsf 4, sans): glyph→ref 6.50px against ref→headline 6.27px, both on one
 // `gap-1.5`. A -1px trim "to be safe" made it WORSE (5.50 vs 6.27). 0.23px is inside the instrument's
 // own noise floor — leave it.
-const ON_CAP = "shrink-0 self-baseline translate-y-[calc(0.5em_-_0.5cap)]"
+export const ON_CAP = "shrink-0 self-baseline translate-y-[calc(0.5em_-_0.5cap)]"
 
 /** RUNNING CHECKS SPIN (maintainer 2026-08-14: "the yellow should be a spinner if the checks are still
  *  running. A yellow spinner"). A static amber dot claimed "in progress" without showing it.
@@ -323,7 +323,7 @@ function Chevron() {
   return <ChevronRight size={13} aria-hidden className={`${ON_CAP} ml-[3px] -mr-[4px] text-muted/35 transition-colors group-hover:text-muted/70`} />
 }
 
-function WaitRow({ mark, name, status, onOpen, href, ghRef, title, testKind, testId }: {
+export function WaitRow({ mark, name, status, onOpen, href, ghRef, title, testKind, testId }: {
   mark: ReactNode
   name: string
   status: ReactNode
@@ -335,7 +335,7 @@ function WaitRow({ mark, name, status, onOpen, href, ghRef, title, testKind, tes
    *  is right, because the whole row is the link. */
   ghRef?: string
   title?: string
-  testKind: "github" | "shell" | "agent" | "timer"
+  testKind: "github" | "shell" | "agent" | "timer" | "file"
   testId: string
 }) {
   const open = href
@@ -382,7 +382,7 @@ function WaitRow({ mark, name, status, onOpen, href, ghRef, title, testKind, tes
   )
 }
 
-function GithubWatchRow({ watch }: { watch: ThreadWatchView }) {
+export function GithubWatchRow({ watch }: { watch: ThreadWatchView }) {
   const status = watch.github
   const url = githubRefUrl(watch.target)
   // Queue the hovercard fetch at render time, the same contract prose keeps (useGithubHovercardRefs):
@@ -461,19 +461,42 @@ function ShellWatchRow({ watch, thread, slug, now }: {
   now: number
 }) {
   const shell = resolveShell(thread, watch.target)
-  const elapsed = compactElapsedSince(shell?.startedAt ?? watch.createdAt, now)
-  // A CODEX shell has an id (its processId) but no readable output — codex keeps that inside its own
-  // session — so the row states its wait and declines the drill-in rather than opening a drawer that
-  // could only report "unavailable". Same parting of the two affordances as the ops strip.
-  const openable = shell?.id && !shell.outputUnavailable
+  if (shell) return <BgShellRow shell={shell} slug={slug} now={now} testId={watch.target} />
+  const elapsed = compactElapsedSince(watch.createdAt, now)
   return (
     <WaitRow
       testKind="shell"
       testId={watch.target}
       mark={<TerminalSquare size={12} className={`${ON_CAP} text-shell`} />}
-      name={shell?.label ?? watch.target}
+      name={watch.target}
+      title={watch.target}
+      status={elapsed ? `running · ${elapsed}` : "running"}
+    />
+  )
+}
+
+/** A running background shell as a row — the declared-watch row above once its target resolved, and
+ *  the fullscreen rail's row for EVERY running shell, declared or not (a dev server the worker walked
+ *  away from is still what is going on in the thread). */
+export function BgShellRow({ shell, slug, now, testId }: {
+  shell: ThreadView["bgShells"][number]
+  slug: string
+  now: number
+  testId?: string
+}) {
+  const elapsed = compactElapsedSince(shell.startedAt, now)
+  // A CODEX shell has an id (its processId) but no readable output — codex keeps that inside its own
+  // session — so the row states its wait and declines the drill-in rather than opening a drawer that
+  // could only report "unavailable". Same parting of the two affordances as the ops strip.
+  const openable = shell.id && !shell.outputUnavailable
+  return (
+    <WaitRow
+      testKind="shell"
+      testId={testId ?? shell.id ?? shell.label}
+      mark={<TerminalSquare size={12} className={`${ON_CAP} text-shell`} />}
+      name={shell.label}
       onOpen={openable ? () => pushBackgroundShellDrawer(slug, shell.id!, { label: shell.label, startedAt: shell.startedAt }) : undefined}
-      title={openable ? `Read this shell's output — running for ${elapsed}` : shell?.label ?? watch.target}
+      title={openable ? `Read this shell's output — running for ${elapsed}` : shell.label}
       status={elapsed ? `running · ${elapsed}` : "running"}
     />
   )
@@ -489,7 +512,7 @@ function ShellWatchRow({ watch, thread, slug, now }: {
 // data attributes. NON-INTERACTIVE by ChildOpRow's settled policy: there is nothing to open — no output
 // drawer, no transcript, no external page — so it renders without a chevron, hover, or focus stop
 // rather than as a disabled control.
-function TimerRow({ watch, now }: { watch: ThreadWatchView; now: number }) {
+export function TimerRow({ watch, now }: { watch: ThreadWatchView; now: number }) {
   const fireMs = Date.parse(watch.timer?.fireAt ?? "")
   // "fires in 34m", counting down live off the card's shared clock. A due-but-undelivered timer (the
   // scheduler's tick is seconds behind the instant) says "firing…" rather than a 0s countdown or a
@@ -511,11 +534,11 @@ function TimerRow({ watch, now }: { watch: ThreadWatchView; now: number }) {
 // DIRECT children only. A descendant rides `subAgents` so other surfaces can nest the tree, but it was
 // dispatched by the child rather than by this thread's worker — and it has no retirement signal in this
 // thread's transcript, so a stale grandchild would sit on this card indefinitely.
-function liveAgents(thread: Pick<ThreadView, "subAgents">) {
+export function liveAgents(thread: Pick<ThreadView, "subAgents">) {
   return (thread.subAgents ?? []).filter((a) => isDirectSubAgent(a) && a.state === "running")
 }
 
-function AgentRow({ agent, slug, now }: { agent: ThreadView["subAgents"][number]; slug: string; now: number }) {
+export function AgentRow({ agent, slug, now }: { agent: ThreadView["subAgents"][number]; slug: string; now: number }) {
   const elapsed = compactElapsedSince(agent.startedAt, now)
   // The profile without its namespace: `frizz:opus-high` is how it is dispatched, `opus-high` is how the
   // maintainer says it, and the row has no width to spend on a prefix every row would repeat.
@@ -565,7 +588,7 @@ function awaitingWaitGroups(thread: Pick<ThreadView, "id" | "subAgents" | "bgShe
   ].filter((g) => g.rows.length > 0)
 }
 
-function WaitGrid({ groups, divider }: { groups: ReadonlyArray<{ head: string; rows: ReactNode[] }>; divider: boolean }) {
+export function WaitGrid({ groups, divider }: { groups: ReadonlyArray<{ head: string; rows: ReactNode[] }>; divider: boolean }) {
   if (groups.length === 0) return null
   return (
     <>
