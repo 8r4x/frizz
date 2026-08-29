@@ -58,15 +58,18 @@ const thread = (id: string, title: string, live: Partial<Pick<ThreadView, "runti
 // THE SHELL FENCE, MET MID-TURN — the screenshot of 2026-08-27 ("for shells, I keep on seeing this
 // fucking disgusting thing"). The worker parked on a shell and its human's follow-up landed in the same
 // second, so the thread never came to rest and the fence card drew instead of the resting card — with
-// the fence's machinery as one muted line, "shell b7w140a81   for 45m". The board synthesizes the shell's
-// watch row whether or not the thread is idle, so the thread behind THIS entry carries exactly what a
-// real one does: the running shell and its declared watch. The card must draw the resting card's own
-// "Background shells" row for it, and never the id.
+// the fence's machinery as one muted line, "shell b7w140a81   for 45m". The thread behind THIS entry
+// carries exactly what a real bumped one does: the running shell and NO watch row for it. The board
+// rows a declared shell only while the fence is the worker's last word, and the tailer clears that on the
+// user record that bumps the thread — the first cut of this entry stubbed the row in, which is how the
+// fence card shipped believing the rows survived the bump (maintainer 2026-08-28: "it hides the
+// background shell for some reason"). The card must draw the resting card's own "Background shells"
+// row off its own `shells:` hint, and never the id.
 const shellStartedAt = new Date(Date.now() - 4 * 60_000).toISOString()
 const midTurnShellThread: Partial<Pick<ThreadView, "runtime" | "subAgents" | "bgShells" | "watches">> = {
   runtime: "running",
   bgShells: [{ id: "toolu_shell1", taskId: "b7w140a81", label: "Compile matrix ×2 at 10 items, then the moltar bench", startedAt: shellStartedAt, state: "running" }],
-  watches: [{ id: "shell:g-shell-midturn:b7w140a81", kind: "shell", target: "b7w140a81", state: "armed", createdAt: shellStartedAt }],
+  watches: [],
 }
 
 const timerIso = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString()

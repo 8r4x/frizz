@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
-import { AwaitingBackgroundCard, AwaitingWaitTable, awaitingBackgroundSubject } from "./AwaitingBackgroundCard.tsx"
+import { AwaitingBackgroundCard, AwaitingWaitTable, awaitingBackgroundSubject, hasAwaitingWaitRows } from "./AwaitingBackgroundCard.tsx"
 import type { ThreadView } from "@frizz/shared"
 
 // One card, three surfaces, and since 2026-08-15 one TABLE: every kind of live work the thread declared
@@ -310,4 +310,70 @@ test("AwaitingWaitTable draws nothing for a thread with nothing live", () => {
   // watch row) and the worker is working on its result: the fence card keeps its prose and gets no grid.
   const spent = { ...thread([], []), watches: [] } as Parameters<typeof AwaitingWaitTable>[0]["thread"]
   assert.equal(renderToStaticMarkup(createElement(AwaitingWaitTable, { thread: spent, divider: true })), "")
+})
+
+// THE FENCE'S OWN `shells:` ROW OFF THE HINTS (2026-08-28). The board rows a declared shell only while
+// the fence is the worker's last word, and the tailer clears that on the very user record that bumps
+// the thread — so `thread.watches` keeps the PR and the timer (rows in their own registries) and drops
+// the shell, while the shell keeps running. The maintainer's screenshots: a three-row card at rest,
+// two rows the moment they replied ("it hides the background shell for some reason").
+test("a fence's shell hint rows the shell the board no longer lists", () => {
+  const bumped = {
+    ...thread([], [shell("running")]),
+    watches: [watcher(), timerWatch()],
+  } as Parameters<typeof AwaitingWaitTable>[0]["thread"]
+  const hints = [{ kind: "shell" as const, value: "bzvtnt3ig" }, { kind: "for" as const, value: "2h" }]
+  const html = renderToStaticMarkup(createElement(AwaitingWaitTable, { thread: bumped, divider: true, hints }))
+  const plain = html.replace(/<[^>]+>/g, "")
+  assert.match(html, /data-wait-row="bzvtnt3ig" data-wait-kind="shell"/, "the declared shell is a row again")
+  assert.match(plain, /vite dev/, "…named by the shell, not the handle")
+  for (const head of ["Background shells", "Pull requests", "Timers"]) assert.match(plain, new RegExp(head))
+  // Without the hints the same thread draws two rows — the exact bug.
+  assert.doesNotMatch(renderToStaticMarkup(createElement(AwaitingWaitTable, { thread: bumped, divider: true })), /data-wait-kind="shell"/)
+  // A hint naming nothing running is not a wait: the shell finished, or the worker mistyped it. No row,
+  // and never a row wearing the raw handle.
+  const spent = { ...thread([], []), watches: [] } as Parameters<typeof AwaitingWaitTable>[0]["thread"]
+  assert.equal(renderToStaticMarkup(createElement(AwaitingWaitTable, { thread: spent, divider: true, hints })), "")
+  // At rest the board rows it too — one row, never the same shell twice.
+  const atRest = { ...bumped, watches: [shellWatch("bzvtnt3ig"), watcher(), timerWatch()] } as Parameters<typeof AwaitingWaitTable>[0]["thread"]
+  assert.equal(renderToStaticMarkup(createElement(AwaitingWaitTable, { thread: atRest, divider: true, hints })).match(/data-wait-kind="shell"/g)?.length, 1)
+  // The resting card reads the same hints off the thread's own fence.
+  const rested = { ...bumped, lastFence: { kind: "awaiting", body: "", hints } } as Parameters<typeof AwaitingBackgroundCard>[0]["thread"]
+  assert.match(render(rested), /data-wait-row="bzvtnt3ig" data-wait-kind="shell"/)
+})
+
+// THE REST'S INSTANT CUTS THE ROWS. Drawn at a rest the thread has been bumped past, the table lists
+// what the worker RESTED ON: a sub-agent its reply dispatched a minute later is mid-turn work, listed
+// under the prompt box, and not something the rest was waiting for. The fence's own hints are exempt —
+// the worker named them, so they were there.
+test("notAfter drops the work that started after the rest", () => {
+  const restedAt = "2026-07-28T10:00:00.000Z"
+  const before = { ...agent("running"), startedAt: "2026-07-28T09:59:00.000Z" }
+  const after = { ...agent("running"), id: "toolu_late", label: "Re-check the flake", startedAt: "2026-07-28T10:00:30.000Z" }
+  const lateWatch = { ...watcher(), id: "github:t:acme/app#2", target: "acme/app#2", createdAt: "2026-07-28T10:01:00.000Z" }
+  const t = {
+    ...thread([before, after], [shell("running")]),
+    watches: [watcher(), lateWatch, timerWatch()],
+  } as Parameters<typeof AwaitingWaitTable>[0]["thread"]
+  const hints = [{ kind: "shell" as const, value: "bzvtnt3ig" }]
+  const html = renderToStaticMarkup(createElement(AwaitingWaitTable, { thread: t, divider: false, hints, notAfter: restedAt }))
+  assert.match(html, /data-wait-row="toolu_a" data-wait-kind="agent"/, "dispatched before the rest: kept")
+  assert.doesNotMatch(html, /toolu_late/, "dispatched after the rest: not what the worker rested on")
+  assert.match(html, /data-wait-row="acme\/app#1"/)
+  assert.doesNotMatch(html, /acme\/app#2/, "registered after the rest: dropped too")
+  assert.match(html, /data-wait-kind="timer"/)
+  assert.match(html, /data-wait-row="bzvtnt3ig"/, "the fence's own shell is exempt")
+  // No instant → no cut, which is every other surface.
+  assert.match(renderToStaticMarkup(createElement(AwaitingWaitTable, { thread: t, divider: false, hints })), /toolu_late/)
+})
+
+// THE GATE for drawing the card at a bumped rest: a card with a heading and no rows says less than
+// nothing, and a null pushed into the message's block list still spends a spacer — so the caller asks
+// first, off the same rows the table would draw.
+test("hasAwaitingWaitRows agrees with the table", () => {
+  const rows = { ...thread([], []), watches: [watcher()] } as Parameters<typeof AwaitingWaitTable>[0]["thread"]
+  assert.equal(hasAwaitingWaitRows(rows), true)
+  assert.equal(hasAwaitingWaitRows({ ...thread([], [shell("running")]), watches: [] } as Parameters<typeof AwaitingWaitTable>[0]["thread"]), false, "an undeclared shell is no row")
+  assert.equal(hasAwaitingWaitRows({ ...thread([], [shell("running")]), watches: [] } as Parameters<typeof AwaitingWaitTable>[0]["thread"], { hints: [{ kind: "shell", value: "vite dev" }] }), true, "…a declared one is")
+  assert.equal(hasAwaitingWaitRows(rows, { notAfter: "2026-07-28T08:00:00.000Z" }), false, "registered after the rest: nothing to draw")
 })

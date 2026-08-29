@@ -27,7 +27,7 @@
 // short as 0.13s. This card is what makes that alternation legible.)
 import { Fragment, useEffect, type ReactNode } from "react"
 import { Bot, ChevronRight, CircleCheck, CircleDashed, CircleX, Clock, GitMerge, GitPullRequestClosed, Hourglass, TerminalSquare } from "lucide-react"
-import type { GithubWatchStatus, ThreadView, ThreadWatchView } from "@frizz/shared"
+import type { AwaitingHint, GithubWatchStatus, ThreadView, ThreadWatchView } from "@frizz/shared"
 import { awaitingFenceTitle, isDirectSubAgent } from "@frizz/shared"
 import { githubRefUrl } from "../lib/githubRef.ts"
 import { noteGithubRefs } from "../lib/githubHovercards.ts"
@@ -563,19 +563,74 @@ export function AgentRow({ agent, slug, now }: { agent: ThreadView["subAgents"][
 // Every live wait the thread has out, grouped by kind — the resting card's real content, and since
 // 2026-08-28 the AWAITING FENCE CARD's too (ChatView.FenceCard). The two draw the SAME fence: the
 // resting card while the thread is at rest on it, the fence card whenever it is not — mid-turn on a
-// follow-up the human typed while the worker was still working, or after a wake, until the worker says
-// something else. The fence card used to print the fence's machinery there instead, one muted line of
+// follow-up the human typed while the worker was still working, or after a wake, until the worker rests
+// again. The fence card used to print the fence's machinery there instead, one muted line of
 // runtime ids ("shell b7w140a81   for 45m"), and the maintainer kept meeting it on SHELL waits precisely
 // because a shell wait is the one that resumes mid-turn — a PR fence at least carried its ref as a link
 // (2026-08-27: "for shells, I keep on seeing this fucking disgusting thing … I feel like we've had many
-// other times where I see it render a shell waiter much nicer than this"). The board synthesizes the
-// same watch rows whether or not the thread is idle (board.fenceWatchViews), so the fence card always
-// had this table's data; it only lacked the table.
-function awaitingWaitGroups(thread: Pick<ThreadView, "id" | "subAgents" | "bgShells" | "watches">, now: number): Array<{ head: string; rows: ReactNode[] }> {
-  const prs = (thread.watches ?? []).filter((w) => w.kind === "github" && w.state === "armed")
-  const shells = declaredShellWatches(thread)
-  const agents = liveAgents(thread)
-  const timers = armedTimerWatches(thread)
+// other times where I see it render a shell waiter much nicer than this").
+//
+// THE FENCE'S OWN `shells:` ARE ROWED HERE, off `hints`, and not only off `thread.watches`. The board
+// synthesizes a shell row from the fence only while that fence is the worker's last word
+// (board.fenceWatchViews reads `tele.lastFence`, and the tailer clears it on the very user record that
+// bumps the thread) — so the day this table moved onto the fence card it was written believing the rows
+// survived the bump, and they did not. A registered PR and an armed timer are rows in their own
+// registries and outlived it; a shell the worker had only DECLARED vanished from the card the moment the
+// human replied, while the shell kept running (maintainer 2026-08-28, with the screenshots: "it hides
+// one of the rows, one of the three specifically. It hides the background shell for some reason"). A
+// hint is resolved against the thread's live shells exactly as the board resolves it — a name matching
+// nothing running is not a wait and gets no row — so the fence card cannot claim a shell that finished.
+//
+// `notAfter` is the instant the thread RESTED, when the card is drawn at a rest the thread has since
+// been bumped past: a wait that started AFTER it — a sub-agent the reply dispatched, a watcher it
+// registered — is mid-turn work, listed under the prompt box, and not something the worker rested on.
+// The fence's own hints are exempt: the worker named them, so they were there.
+export interface AwaitingWaitOptions {
+  hints?: readonly AwaitingHint[]
+  notAfter?: string
+}
+
+/** A fence's `shells:` hints as watch rows, for the shells the thread still has running. Skips any the
+ *  board already rowed (the at-rest case, where `watches` carries the fence's shells too). */
+function hintedShellWatches(thread: Pick<ThreadView, "id" | "bgShells">, hints: readonly AwaitingHint[], rowed: readonly ThreadWatchView[]): ThreadWatchView[] {
+  const seen = new Set(rowed.map((w) => w.target))
+  const out: ThreadWatchView[] = []
+  for (const hint of hints) {
+    if (hint.kind !== "shell") continue
+    const target = hint.value.trim()
+    if (!target || seen.has(target)) continue
+    const shell = resolveShell(thread, target)
+    if (!shell || shell.state !== "running") continue
+    seen.add(target)
+    out.push({ id: `shell:${thread.id}:${target}`, kind: "shell", target, state: "armed", createdAt: shell.startedAt })
+  }
+  return out
+}
+
+/** The rows themselves, before they are drawn — one list per kind, already filtered to what is live
+ *  (and, given `notAfter`, to what was live at the rest). Exported through hasAwaitingWaitRows so a
+ *  caller can decide whether to spend a card on them without rendering one. */
+function awaitingWaitItems(thread: Pick<ThreadView, "id" | "subAgents" | "bgShells" | "watches">, opts: AwaitingWaitOptions = {}) {
+  const cutoff = Date.parse(opts.notAfter ?? "")
+  // Unknown start → kept: a row with no instant is never dropped on the strength of a guess.
+  const startedByRest = (iso: string | undefined) => !Number.isFinite(cutoff) || !iso || !(Date.parse(iso) > cutoff)
+  const prs = (thread.watches ?? []).filter((w) => w.kind === "github" && w.state === "armed" && startedByRest(w.createdAt))
+  const declared = declaredShellWatches(thread).filter((w) => startedByRest(resolveShell(thread, w.target)?.startedAt ?? w.createdAt))
+  const shells = [...declared, ...hintedShellWatches(thread, opts.hints ?? [], declared)]
+  const agents = liveAgents(thread).filter((a) => startedByRest(a.startedAt))
+  const timers = armedTimerWatches(thread).filter((w) => startedByRest(w.createdAt))
+  return { prs, shells, agents, timers }
+}
+
+/** Would the wait table draw at least one row for this thread? The gate for drawing a card at a rest
+ *  the thread has been bumped past: a card with a heading and no rows says less than nothing. */
+export function hasAwaitingWaitRows(thread: Pick<ThreadView, "id" | "subAgents" | "bgShells" | "watches">, opts: AwaitingWaitOptions = {}): boolean {
+  const items = awaitingWaitItems(thread, opts)
+  return items.prs.length + items.shells.length + items.agents.length + items.timers.length > 0
+}
+
+function awaitingWaitGroups(thread: Pick<ThreadView, "id" | "subAgents" | "bgShells" | "watches">, now: number, opts: AwaitingWaitOptions = {}): Array<{ head: string; rows: ReactNode[] }> {
+  const { prs, shells, agents, timers } = awaitingWaitItems(thread, opts)
   // GROUPED BY KIND (maintainer 2026-08-15: "Definitely group them by kind"), and the order is the one
   // the ops strip already settled, for the same reason: a sub-agent and a shell are running RIGHT NOW,
   // a watched PR is waiting on somebody else, and a timer is waiting on nothing but the clock. Read
@@ -624,13 +679,18 @@ export function WaitGrid({ groups, divider }: { groups: ReadonlyArray<{ head: st
 /** The table on its own, for the awaiting fence card. Live-ticking exactly as the resting card is, and
  *  NOTHING when the thread has no rows: a fence whose shell has since finished (the worker woke on it
  *  and is working) draws its prose alone rather than a heading over an empty grid — and never the raw
- *  ids the fence was written in. `divider` says whether there is prose above for the rule to separate. */
-export function AwaitingWaitTable({ thread, divider }: {
+ *  ids the fence was written in. `divider` says whether there is prose above for the rule to separate.
+ *  `hints` are the fence's own, so its `shells:` row whether or not the board still lists them; `notAfter`
+ *  is the rest's instant when the fence is drawn at a rest the thread has moved past (see
+ *  AwaitingWaitOptions). */
+export function AwaitingWaitTable({ thread, divider, hints, notAfter }: {
   thread: Pick<ThreadView, "id" | "subAgents" | "bgShells" | "watches">
   divider: boolean
+  hints?: readonly AwaitingHint[]
+  notAfter?: string
 }) {
   const now = useNowMs()
-  return <WaitGrid groups={awaitingWaitGroups(thread, now)} divider={divider} />
+  return <WaitGrid groups={awaitingWaitGroups(thread, now, { hints, notAfter })} divider={divider} />
 }
 
 /** Does the CHAT show the resting card at the bottom of this thread?
@@ -655,7 +715,7 @@ export function showsRestingCard(
   return thread?.awaitingBackground === true && thread.runtime === "turn-idle" && thread.bgSnoozed !== true
 }
 
-export function AwaitingBackgroundCard({ thread, actions }: {
+export function AwaitingBackgroundCard({ thread, actions, notAfter }: {
   // `id` joins the Pick because the rows OPEN things now: a shell's output drawer and a sub-agent's
   // transcript are both addressed by the parent thread's slug. `lastFence` joined on 2026-08-24: the
   // fence's prose is this card's opening stratum, so the card reads it directly off the thread.
@@ -664,6 +724,11 @@ export function AwaitingBackgroundCard({ thread, actions }: {
   // the shell-only rest and — since 2026-08-13 — the PR park, whose own fence card no longer
   // offers one. So this is the control for both.
   actions?: ReactNode
+  // Set when the card is drawn IN THE TRANSCRIPT at a rest the thread has been bumped past — the fourth
+  // surface, since 2026-08-28 (ChatView.Message): a rest on registered rows alone has no fence to leave a
+  // card behind, so the message the worker rested on draws this one until the worker rests again. The
+  // instant keeps the rows honest to that rest (AwaitingWaitOptions.notAfter).
+  notAfter?: string
 }) {
   const waiting = awaitsResults(thread)
   // THE WORKER'S OWN HANDOFF, opening the card (maintainer 2026-08-24: "the rendered message at the
@@ -678,7 +743,10 @@ export function AwaitingBackgroundCard({ thread, actions }: {
   // Live-ticking, so a shell's "running · 4m" keeps counting while the board sends nothing (a quiet
   // child pushes no delta). One clock read for the whole card rather than one per row.
   const now = useNowMs()
-  const groups = awaitingWaitGroups(thread, now)
+  // The fence's own `shells:` ride along at rest too. The board already rows them then, so this is
+  // idle in that case — it is what keeps the card whole at a rest the thread was bumped past, where the
+  // board has forgotten the fence (see AwaitingWaitOptions).
+  const groups = awaitingWaitGroups(thread, now, { hints: thread.lastFence?.kind === "awaiting" ? thread.lastFence.hints : undefined, notAfter })
   return (
     // The SAME shell as every transcript card (TranscriptCard). This card stacks directly under an
     // awaiting fence card on a queue card, and it used to be a visibly different object there —
