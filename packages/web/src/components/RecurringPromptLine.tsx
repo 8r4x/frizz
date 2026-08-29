@@ -26,7 +26,7 @@ import { WakeDivider } from "./WakeDivider.tsx"
 // text, and the armed text is already legible and editable in the footer panel — so repeating it inline
 // on every delivery adds nothing a reader cannot already get, which is the failure both earlier
 // renderings shared.
-export function RecurringPromptLine({ bump, sourceId }: { bump: RecurringPrompt; sourceId?: string }) {
+export function RecurringPromptLine({ bump, sourceId, at }: { bump: RecurringPrompt; sourceId?: string; at?: string }) {
   const scheduled = bump.kind === "schedule"
   // FRIZZ'S OWN SIGN-OFF REMINDER collapses hardest of all, because it is the only delivery here whose
   // body says nothing about this thread: it is the protocol, restated. Rendered in full it sat as a card
@@ -35,7 +35,7 @@ export function RecurringPromptLine({ bump, sourceId }: { bump: RecurringPrompt;
   if (bump.kind === "signoff") {
     const label = "Frizz asked for a sign-off"
     return (
-      <WakeDivider icon={Signpost} sourceId={sourceId} marker="rest" ariaLabel={label}>
+      <WakeDivider icon={Signpost} sourceId={sourceId} marker="rest" ariaLabel={label} at={at}>
         {label}
       </WakeDivider>
     )
@@ -64,6 +64,7 @@ export function RecurringPromptLine({ bump, sourceId }: { bump: RecurringPrompt;
       sourceId={sourceId}
       marker={scheduled ? "schedule" : "rest"}
       ariaLabel={label}
+      at={at}
     >
       {label}
     </WakeDivider>

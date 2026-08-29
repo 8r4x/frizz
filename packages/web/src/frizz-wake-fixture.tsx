@@ -24,7 +24,12 @@ if (font === "sans" || font === "mono") document.documentElement.dataset.font = 
 // No `wakeSteer` is served on any of these. That is the real wire state for a status wake (the server's
 // steer parser reads line 0, so a status line above one means no served field) and it exercises the
 // client's own fallback parse, which is the only parser the combined case has.
-const wake = (sourceId: string, text: string): ChatMessage => ({ sourceId, role: "user", wake: true, text, tools: [], parts: [] })
+// Every wake carries a DELIVERY instant, spread down the page so the ages on the tails read as a
+// sequence (`3h ago` … `2m ago`) rather than one repeated value — the real transcript's shape, and the
+// only way to see that the family's ages line up with one another and with the two that keep an instant
+// of their own (a review item dates by GitHub's clock, a timer by its own fire time).
+let deliveries = 0
+const wake = (sourceId: string, text: string): ChatMessage => ({ sourceId, role: "user", wake: true, text, tools: [], parts: [], at: new Date(Date.now() - (200 - deliveries++ * 9) * 60_000).toISOString() })
 
 const review = formatGithubWakeSteer({
   ref: "nubjs/nub#756",
@@ -58,7 +63,7 @@ const messages: ChatMessage[] = [
   // ChatView's own EventLine from the server's `backgroundWakeLabel`. The two must be pixel-identical.
   // Asserting that in a comment is how it silently stops being true; rendering them adjacent is how a
   // reader catches it.
-  { sourceId: "ctl", role: "assistant", kind: "event", boundary: "wake", text: "Background task «the churn suite» finished", tools: [], parts: [] },
+  { sourceId: "ctl", role: "assistant", kind: "event", boundary: "wake", text: "Background task «the churn suite» finished", tools: [], parts: [], at: new Date(Date.now() - 119 * 60_000).toISOString() },
   wake("w9", shellDoneMessage({ taskId: "bzvtnt3ig", label: "the churn suite", status: "completed" })),
   wake("w10", shellDoneMessage({ taskId: "b52kqwc13", label: "vite --port 5199 --strictPort", status: "failed" })),
   wake("w11", shellDoneMessage({ label: "Running the focused tests", status: "killed" })),

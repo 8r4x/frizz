@@ -2190,7 +2190,7 @@ export function ToolCardRouter({ t, startedAt }: { t: CollapsedTool; startedAt?:
   // (codex — it encrypts the dispatch message, so there is no prompt to show, but the child is still
   // tracked and drillable). Gating on the prompt alone left every codex sub-agent as a mute generic card.
   if (t.prompt || t.agentId) return <AgentBlock detail={t.detail} prompt={t.prompt} input={t.input} subagentType={t.subagentType} agentId={t.agentId} agentStatus={t.agentStatus} agentElapsedMs={t.agentElapsedMs} status={t.status} durationMs={t.durationMs} output={t.output} />
-  if (t.sendTo !== undefined || t.sendBody !== undefined) return <SendMessageBlock to={t.sendTo} summary={t.sendSummary} body={t.sendBody ?? ""} type={t.sendType} dispatchId={t.sendDispatchId} targetLabel={t.sendTargetLabel} status={t.status} durationMs={t.durationMs} />
+  if (t.sendTo !== undefined || t.sendBody !== undefined) return <SendMessageBlock to={t.sendTo} summary={t.sendSummary} body={t.sendBody ?? ""} type={t.sendType} dispatchId={t.sendDispatchId} targetLabel={t.sendTargetLabel} status={t.status} durationMs={t.durationMs} at={startedAt} />
   if (t.sentImages || t.sentFiles) return <SentFilesCard images={t.sentImages ?? []} files={t.sentFiles ?? []} caption={t.caption} status={t.status} durationMs={t.durationMs} />
   // The built-in to-do list, ahead of the generic input/output card (a codex plan's `explanation` rides
   // `input`, which that branch would claim first).
@@ -2957,9 +2957,9 @@ function sendMessageVerb(to: string | undefined, type: string | undefined): stri
 // would leave the message unreadable on every surface. `ThreadSlugContext` is set only on a real
 // thread's chat (the drawer deliberately provides ChildDrillSlugContext instead), so it is the honest
 // test for which surface this is.
-function SendMessageBlock({ to, summary, body, type, dispatchId, targetLabel, status, durationMs }: { to?: string; summary?: string; body: string; type?: string; dispatchId?: string; targetLabel?: string; status?: ToolStatus; durationMs?: number }) {
+function SendMessageBlock({ to, summary, body, type, dispatchId, targetLabel, status, durationMs, at }: { to?: string; summary?: string; body: string; type?: string; dispatchId?: string; targetLabel?: string; status?: ToolStatus; durationMs?: number; at?: string }) {
   const inThreadChat = useContext(ThreadSlugContext) !== null
-  if (inThreadChat) return <SendMessageLine to={to} type={type} dispatchId={dispatchId} targetLabel={targetLabel} />
+  if (inThreadChat) return <SendMessageLine to={to} type={type} dispatchId={dispatchId} targetLabel={targetLabel} at={at} />
   return <SendMessageCard to={to} summary={summary} body={body} type={type} status={status} durationMs={durationMs} />
 }
 
@@ -3321,7 +3321,7 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
   const [answerSheetOpen, setAnswerSheetOpen] = useState(false)
   // An event line (a sub-agent completion) is transcript PUNCTUATION — a quiet full-width line, not a
   // bubble or a tool band. Rendered before the role branches (its role field is nominal).
-  if (m.kind === "event") return <EventLine text={m.text} boundary={m.boundary} sourceId={m.sourceId} />
+  if (m.kind === "event") return <EventLine text={m.text} boundary={m.boundary} sourceId={m.sourceId} at={m.at} />
   // A model-reasoning summary (Codex) — quiet punctuation like an event line, but CLICKABLE to expand
   // the full reasoning. Rendered before the role branches (its role field is nominal, like an event).
   if (m.kind === "reasoning") return <ReasoningBlock text={m.text} sourceId={m.sourceId} />
@@ -3330,7 +3330,7 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
   // copy never renders as a second AgentBlock card. Ahead of `textOnly` for the same reason the event
   // line is: a queue card that hides tool bands still shows what came back underneath it.
   const completion = agentCompletionCall(m)
-  if (completion) return <AgentCompletionLine call={completion} sourceId={m.sourceId} />
+  if (completion) return <AgentCompletionLine call={completion} sourceId={m.sourceId} at={m.at} />
   // User messages: right-justified chat bubble; agent output stays left-aligned prose. A follow-up
   // that's been sent but not yet echoed by the transcript shows as a grayed-out bubble — the dimming
   // alone signals queued (a "queued" tag under the bubble caused layout shift when it cleared).
@@ -3354,14 +3354,14 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
     // beside the composer that writes it; a non-match falls through to the divider below, so no wake
     // can lose its text to this.
     const recurring = m.wake ? parseRecurringPrompt(text) : undefined
-    if (recurring) return <RecurringPromptLine bump={recurring} sourceId={m.sourceId} />
-    if (m.wake) return <FrizzWake steer={m.wakeSteer} text={text} sourceId={m.sourceId} wrap={dense} />
+    if (recurring) return <RecurringPromptLine bump={recurring} sourceId={m.sourceId} at={m.at} />
+    if (m.wake) return <FrizzWake steer={m.wakeSteer} text={text} sourceId={m.sourceId} at={m.at} wrap={dense} />
     // …and the same correction for the OTHER writer of a user turn the human didn't type: a background
     // sub-agent pushing a report up to its parent through `SendMessage({to:"main"})`. `m.peerFrom` is the
     // server's own tell (it parsed the <agent-message> wrapper and put the body in displayText, which
     // `text` above already carries), never a text guess made here. It renders as a wake divider rather
     // than any kind of bubble — see SubAgentReportLine.
-    if (m.peerFrom) return <SubAgentReportLine from={m.peerFrom} unnamed={m.peerUnnamed} dispatchId={m.peerDispatchId} sourceId={m.sourceId} />
+    if (m.peerFrom) return <SubAgentReportLine from={m.peerFrom} unnamed={m.peerUnnamed} dispatchId={m.peerDispatchId} sourceId={m.sourceId} at={m.at} />
     // `rawText` rides alongside the presentation text because the two differ: the bubble shows the
     // stripped/normalized copy, while the optimistic cache entry an unqueue has to evict is keyed on
     // the message's own raw text.
@@ -4384,13 +4384,15 @@ export function PendingAskCard({ ask, onTerminal }: { ask: PendingAsk; onTermina
 // The TITLE is a drill-in link into the child's run log wherever a slug resolves — the launch card up
 // thread is often hundreds of lines away, so this is usually the closest handle on the finished child.
 // With no resolvable slug it degrades to plain text rather than a dead button.
-function AgentCompletionLine({ call, sourceId }: { call: TranscriptToolCall; sourceId?: string }) {
+function AgentCompletionLine({ call, sourceId, at }: { call: TranscriptToolCall; sourceId?: string; at?: string }) {
   const slug = useChildDrillSlug()
   const title = call.detail ?? "sub-agent"
   const { tail } = subAgentCompletionOutcome(call)
   const canDrill = !!(slug && call.agentId)
+  // `at` is the instant the completion LANDED, and it sits after the run's own duration in `tail`
+  // ("finished · 35 min · 2h ago"): how long it ran, then how long ago it came back.
   return (
-    <WakeDivider icon={Bot} sourceId={sourceId} marker="agent" ariaLabel={canDrill ? undefined : `Sub-agent ${title} ${tail}`}>
+    <WakeDivider icon={Bot} sourceId={sourceId} marker="agent" ariaLabel={canDrill ? undefined : `Sub-agent ${title} ${tail}`} at={at}>
       <span className="shrink-0">Sub-agent</span>
       {/* The guillemets sit OUTSIDE the truncating element (and inside a gap-less nested flex) so a
           title clipped at a narrow width still closes its quote — `«a long title…` reads as broken
@@ -4436,7 +4438,7 @@ function AgentCompletionLine({ call, sourceId }: { call: TranscriptToolCall; sou
 // in a drawer."). A 30-character window onto a report is too little to act on and too much to ignore, so
 // the line states only THAT a child reported, and the TITLE is the affordance: it opens the child's own
 // drawer, where the message is rendered in full alongside the work it came out of.
-function SubAgentReportLine({ from, unnamed, dispatchId, sourceId }: { from: string; unnamed?: boolean; dispatchId?: string; sourceId?: string }) {
+function SubAgentReportLine({ from, unnamed, dispatchId, sourceId, at }: { from: string; unnamed?: boolean; dispatchId?: string; sourceId?: string; at?: string }) {
   const slug = useChildDrillSlug()
   // `dispatchId` is the child's Agent DISPATCH tool_use id, NOT its agentId — that is the only key
   // pushSubAgentDrawer/tailer.subAgent resolve against, and handing over the agentId (which is what the
@@ -4460,7 +4462,7 @@ function SubAgentReportLine({ from, unnamed, dispatchId, sourceId }: { from: str
   // measured on the real page that is the difference between a word space and an em of air.
   if (label === undefined) {
     return (
-      <WakeDivider icon={Bot} sourceId={sourceId} marker="agent-report" ariaLabel={canDrill ? undefined : "Sub-agent reported"}>
+      <WakeDivider icon={Bot} sourceId={sourceId} marker="agent-report" ariaLabel={canDrill ? undefined : "Sub-agent reported"} at={at}>
         {canDrill ? (
           <button
             type="button"
@@ -4480,7 +4482,7 @@ function SubAgentReportLine({ from, unnamed, dispatchId, sourceId }: { from: str
     )
   }
   return (
-    <WakeDivider icon={Bot} sourceId={sourceId} marker="agent-report" ariaLabel={canDrill ? undefined : `Sub-agent ${label} reported`}>
+    <WakeDivider icon={Bot} sourceId={sourceId} marker="agent-report" ariaLabel={canDrill ? undefined : `Sub-agent ${label} reported`} at={at}>
       <span className="shrink-0">Sub-agent</span>
       {/* Guillemets OUTSIDE the truncating element, per the completion line: a title clipped at a narrow
           width still closes its quote. The TITLE is the only part allowed to shrink (`min-w-0 truncate`
@@ -4534,7 +4536,7 @@ function SubAgentReportLine({ from, unnamed, dispatchId, sourceId }: { from: str
 // resolved server-side (sendTargetLabel/sendDispatchId), because the raw `to` is an agentId that reads
 // as a hash and resolves to nothing. Codex peer calls name a target that was never dispatch-acked here,
 // so they keep that target as plain text rather than becoming a dead link.
-function SendMessageLine({ to, type, dispatchId, targetLabel, sourceId }: { to?: string; type?: string; dispatchId?: string; targetLabel?: string; sourceId?: string }) {
+function SendMessageLine({ to, type, dispatchId, targetLabel, sourceId, at }: { to?: string; type?: string; dispatchId?: string; targetLabel?: string; sourceId?: string; at?: string }) {
   const slug = useChildDrillSlug()
   const verb = sendMessageVerb(to, type)
   // `to === "main"` is an upward report, whose recipient is the conversation itself — there is no title
@@ -4542,7 +4544,7 @@ function SendMessageLine({ to, type, dispatchId, targetLabel, sourceId }: { to?:
   const title = to === "main" ? undefined : (targetLabel ?? to)
   const canDrill = !!(slug && dispatchId)
   return (
-    <WakeDivider icon={Bot} sourceId={sourceId} marker="agent-steer" ariaLabel={canDrill ? undefined : `${verb}${title ? ` ${title}` : ""}`}>
+    <WakeDivider icon={Bot} sourceId={sourceId} marker="agent-steer" ariaLabel={canDrill ? undefined : `${verb}${title ? ` ${title}` : ""}`} at={at}>
       <span className="shrink-0">{verb}</span>
       {/* Guillemets OUTSIDE the truncating title, and the title the only shrinkable part — the same
           construction the completion and report lines use, so a long child description clips cleanly at
@@ -4575,7 +4577,7 @@ function SendMessageLine({ to, type, dispatchId, targetLabel, sourceId }: { to?:
 // A quiet transcript annotation (a context-compaction note, an "Agent … finished" line), or — with
 // `boundary` — the wake divider a background task/shell completion emits. Muted, no bubble, no icon
 // chrome, sitting at the same message rhythm as everything around it.
-function EventLine({ text, boundary, sourceId }: { text: string; boundary?: TranscriptMessage["boundary"]; sourceId?: string }) {
+function EventLine({ text, boundary, sourceId, at }: { text: string; boundary?: TranscriptMessage["boundary"]; sourceId?: string; at?: string }) {
   // A turn BOUNDARY: a centered divider rule carrying the cause label ON it, so two consecutive
   // assistant turns don't read as one bubble. This IS the section break the plain event line
   // deliberately avoids.
@@ -4597,8 +4599,16 @@ function EventLine({ text, boundary, sourceId }: { text: string; boundary?: Tran
         sourceId={sourceId}
         marker={boundary === "rest" ? "rest" : "event"}
         ariaLabel={text}
+        // The rest divider takes the age too, glyph-less as it is: the rests that survive
+        // lib/restDividers.ts sit above a human reply, and "how long did it sit there before they
+        // answered" is the one thing the bare rule could not say.
+        at={at}
       >
-        {text}
+        {/* TRUNCATES, like every sibling: as a bare text node the label was a wrapping flex item, and
+            once the age joined it the runtime-reported shell line broke onto two lines at 420px while
+            the frizz-reported twin beside it (ShellDoneDivider) clipped to one — the pair that must be
+            pixel-identical. The age stays outside this span so it survives the clip. */}
+        <span className="min-w-0 truncate">{text}</span>
       </WakeDivider>
     )
   }

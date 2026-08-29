@@ -16,6 +16,8 @@
 // see `onClick` below.
 import type { ReactNode } from "react"
 import type { LucideIcon } from "lucide-react"
+import { compactAge, exactStamp } from "../lib/activityTime.ts"
+import { useNowMs } from "../lib/liveClock.ts"
 
 // An INTERACTIVE divider — one whose whole row is the affordance, like the queue card's collapsed
 // intermediate run — renders its root as a `<button>` instead of a `<div>`, and it carries no
@@ -25,7 +27,12 @@ import type { LucideIcon } from "lucide-react"
 // body — the fired-timer wake, which is the one member of the family that keeps prose to reveal. The two
 // dividers that came before it expand ONE WAY and unmount, so a disclosure state would be a lie on them;
 // leaving the props optional is what keeps them honest without a second component.
-type WakeDividerProps = { icon?: LucideIcon; children: ReactNode; ariaLabel?: string; marker?: string } & (
+// `at` — the INSTANT of the event this line marks, and it puts a compact age on the line's tail
+// (`· 21m ago`) with the exact localized reading on hover (see DividerAge). Every hairline that stands
+// for a moment carries one (maintainer 2026-08-29, on the review-comment line that had it alone: "Most
+// hairlines should include a duration like this"); the one that stands for a SPAN — the collapsed
+// intermediate run — has no single instant and passes none.
+type WakeDividerProps = { icon?: LucideIcon; children: ReactNode; ariaLabel?: string; marker?: string; at?: string } & (
   | { onClick: () => void; sourceId?: never; ariaExpanded?: boolean; ariaControls?: string }
   | { onClick?: never; sourceId?: string; ariaExpanded?: never; ariaControls?: never }
 )
@@ -35,7 +42,7 @@ type WakeDividerProps = { icon?: LucideIcon; children: ReactNode; ariaLabel?: st
 // dividers wear one now (maintainer 2026-07-31, on the GitHub one: "I like it so much that I think we
 // should include a similar icon for the other hairline dividers"), and five hand-rolled copies of a
 // sub-pixel optical correction is exactly how a family drifts apart.
-export function WakeDivider({ icon: Icon, children, sourceId, ariaLabel, marker, onClick, ariaExpanded, ariaControls }: WakeDividerProps) {
+export function WakeDivider({ icon: Icon, children, sourceId, ariaLabel, marker, at, onClick, ariaExpanded, ariaControls }: WakeDividerProps) {
   // The chrome itself, identical in both roots. The `group-hover/wake:` variants are inert on the inert
   // form (nothing names that group there) and are what makes the clickable form respond as ONE row —
   // its hairlines brighten with its label, so the affordance is the whole rule rather than the words.
@@ -45,6 +52,7 @@ export function WakeDivider({ icon: Icon, children, sourceId, ariaLabel, marker,
       <span className="petite-caps flex min-w-0 items-center gap-1 break-words text-center text-[12px] text-muted/70 transition-colors group-hover/wake:text-fg">
         {Icon && <Icon aria-hidden="true" size={12} className={WAKE_DIVIDER_ICON} />}
         {children}
+        <DividerAge at={at} />
       </span>
       <span aria-hidden="true" className="h-px flex-1 bg-border/70 transition-colors group-hover/wake:bg-border" />
     </>
@@ -79,6 +87,37 @@ export function WakeDivider({ icon: Icon, children, sourceId, ariaLabel, marker,
     >
       {chrome}
     </div>
+  )
+}
+
+// THE AGE ON THE TAIL — `· 21m ago`, ticking on the app's one shared clock, with GitHub's exact
+// reading (`Aug 29, 2026, 10:44 AM PDT`) as its hover.
+//
+// It is rendered HERE, inside the label, and not by each caller, for the reason the icon is: nine
+// dividers wear it now, and the one that drew its own (the timer's, with `title={wake.at}`) had already
+// drifted from the GitHub line's (`· {age}` in one span, a word space where the others have the flex
+// gap) — two rhythms for one mark. The dot and the age are two flex items on the label's own `gap-1`,
+// so the dot sits the same 4px from the words before it as from the age after it, in every divider.
+//
+// LAST on the line, after any "Click to expand": the age is the one field that must survive the label's
+// truncation at queue-rail width, and `shrink-0` outside the caller's truncating span is what keeps it —
+// the review line established that, and the position is the family's now.
+//
+// The hover is a native `title`, not the app's Tooltip. Both age lines used `title` before this, GitHub's
+// own `<relative-time>` uses one, and Tooltip needs a Provider that the transcript fixtures which render
+// these dividers deliberately do not mount. What changed is the CONTENT: it was the raw ISO string.
+//
+// `aria-hidden` on the dot only. The age is real content a screen reader should get; the dot is
+// punctuation between two flex items and would be read as "middle dot".
+function DividerAge({ at }: { at?: string }) {
+  const now = useNowMs()
+  const age = compactAge(at, now)
+  if (!age) return null
+  return (
+    <>
+      <span aria-hidden="true" className="shrink-0 opacity-50">·</span>
+      <span title={exactStamp(at) ?? undefined} className="shrink-0 tabular-nums">{age}</span>
+    </>
   )
 }
 

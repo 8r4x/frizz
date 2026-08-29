@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { activityTimestamp, ageSpan, formatLastActive } from "./activityTime.ts"
+import { activityTimestamp, ageSpan, compactAge, exactStamp, formatLastActive } from "./activityTime.ts"
 
 const now = Date.parse("2026-07-13T12:00:00.000Z")
 const at = (offsetMs: number) => new Date(now - offsetMs).toISOString()
@@ -38,4 +38,32 @@ test("activityTimestamp prefers tailer activity and falls back to a valid launch
   assert.equal(activityTimestamp(undefined, spawned), spawned)
   assert.equal(activityTimestamp("not-a-date", spawned), spawned)
   assert.equal(activityTimestamp("not-a-date", "also-not-a-date"), undefined)
+})
+
+test("compactAge is a compact age, and refuses to invent one", () => {
+  const then = Date.parse("2026-07-29T16:00:00Z")
+  const ago = (ms: number) => compactAge(new Date(then - ms).toISOString(), then)
+  assert.equal(ago(0), "just now")
+  assert.equal(ago(59_000), "just now")
+  assert.equal(ago(60_000), "1m ago")
+  assert.equal(ago(59 * 60_000), "59m ago")
+  assert.equal(ago(60 * 60_000), "1h ago")
+  assert.equal(ago(23 * 3_600_000), "23h ago")
+  assert.equal(ago(3 * 86_400_000), "3d ago")
+  assert.equal(ago(14 * 86_400_000), "2w ago")
+  assert.equal(ago(60 * 86_400_000), "2mo ago")
+  assert.equal(ago(400 * 86_400_000), "1y ago")
+  // A future timestamp (clock skew between GitHub and this machine) reads as "just now", never as a
+  // negative age.
+  assert.equal(compactAge(new Date(then + 60_000).toISOString(), then), "just now")
+  assert.equal(compactAge(undefined, then), null)
+  assert.equal(compactAge("not a date", then), null)
+})
+
+test("exactStamp is GitHub's relative-time title, field for field", () => {
+  // The reference reading, copied off a real `<relative-time title>` on github.com (2026-08-29).
+  assert.equal(exactStamp("2026-08-29T17:44:50Z", { locale: "en-US", timeZone: "America/Los_Angeles" }), "Aug 29, 2026, 10:44 AM PDT")
+  assert.equal(exactStamp("2026-01-05T03:07:00Z", { locale: "en-US", timeZone: "America/New_York" }), "Jan 4, 2026, 10:07 PM EST")
+  assert.equal(exactStamp(undefined), null)
+  assert.equal(exactStamp("not a date"), null)
 })
