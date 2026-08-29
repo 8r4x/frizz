@@ -16,7 +16,7 @@ import { RestedCard, showsRestedCard } from "./RestedCard.tsx"
 import { collapseMiddleRuns, opensQueueSegment, queueCollapseSegments, segmentFolds, supersededAskIndices, survivesQueueCollapse } from "../lib/queueCollapse.ts"
 import { pairAllAnswers } from "../lib/answersMessage.ts"
 import { questionsByAnchor } from "../lib/questionAnchor.ts"
-import { allFencesShadowed, placeQuestions, registeredAtRest } from "../lib/questionShadow.ts"
+import { allFencesShadowed, placeQuestions, registeredStandingAt } from "../lib/questionShadow.ts"
 import { FenceCard, Message, PermPolicyDenialCard, PermPromptBanner, PendingAskCard, StickyUserBand, VSpace, STEP, messageTailIsMeta, messageHeadIsMeta, messageRendersNothing, messageHasRenderableText, lastAssistantIndex } from "./ChatView.tsx"
 import { BLOCK_RADIUS, BLOCK_RADIUS_TOP, CARD_ACTION_EXPLAINER, CARD_PRIMARY_ACTION } from "./TranscriptCard.tsx"
 import { AwaitingBackgroundCard, showsRestingCard } from "./AwaitingBackgroundCard.tsx"
@@ -985,9 +985,9 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
     }
     return { byAnchor, tail }
   }, [messages, questionPlacement, thread?.questions])
-  // The registered questions at each message's rest, so a fence restating one folds into its card
-  // (lib/questionShadow) — here exactly as on the thread page.
-  const shadowedByMessage = useMemo(() => registeredAtRest(messages, thread?.questions ?? []), [messages, thread?.questions])
+  // The registered questions standing at each message — its rest and every later one — so a fence
+  // restating or naming one folds into its card (lib/questionShadow), here exactly as on the thread page.
+  const shadowedByMessage = useMemo(() => registeredStandingAt(messages, thread?.questions ?? []), [messages, thread?.questions])
   const hasMore = visibleStart > 0 || q.data?.hasEarlier === true
 
   useLayoutEffect(() => {

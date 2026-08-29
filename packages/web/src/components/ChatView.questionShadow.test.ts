@@ -5,8 +5,8 @@ import test from "node:test"
 const chat = readFileSync(new URL("./ChatView.tsx", import.meta.url), "utf8")
 const queue = readFileSync(new URL("./TodosView.tsx", import.meta.url), "utf8")
 
-// A ```question fence restating a question REGISTERED at the same rest is folded into the registered
-// card (lib/questionShadow) — the 2026-08-28 "same question showing up twice in a row". The fold is a
+// A ```question fence restating or naming a question REGISTERED at that rest or an earlier one is folded
+// into the registered card (lib/questionShadow) — the 2026-08-28 "same question showing up twice in a row". The fold is a
 // prop on Message, so it works only where the transcript hands it over: these pin that every surface
 // that renders an answerable message does, and that the queue card's card-level Send answers stands
 // down when the standing ask has no card left of its own.
@@ -20,7 +20,7 @@ test("every answerable Message site hands the registered questions at its rest t
 })
 
 test("the map is built off the same messages and questions the anchors use, on all three surfaces", () => {
-  const build = /registeredAtRest\(messages, thread\?\.questions \?\? \[\]\), \[messages, thread\?\.questions\]\)/g
+  const build = /registeredStandingAt\(messages, thread\?\.questions \?\? \[\]\), \[messages, thread\?\.questions\]\)/g
   assert.equal((chat.match(build) ?? []).length, 2, "one per ChatView transcript path")
   assert.equal((queue.match(build) ?? []).length, 1, "the queue card")
 })

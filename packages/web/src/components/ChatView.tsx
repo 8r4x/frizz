@@ -27,7 +27,7 @@ import { showsRegisteredDoneCard } from "../lib/registeredDone.ts"
 import { RestedCard, showsRestedCard } from "./RestedCard.tsx"
 import { parseAnswersCard, pairAllAnswers, type PairedAnswer } from "../lib/answersMessage.ts"
 import { questionsByAnchor } from "../lib/questionAnchor.ts"
-import { fenceStandsFor, placeQuestions, registeredAtRest } from "../lib/questionShadow.ts"
+import { fenceStandsFor, placeQuestions, registeredStandingAt } from "../lib/questionShadow.ts"
 import { FrizzWake } from "./FrizzWake.tsx"
 import { RecurringPromptLine } from "./RecurringPromptLine.tsx"
 import { LinkifiedText } from "./LinkifiedText.tsx"
@@ -83,7 +83,8 @@ import { QuestionBlockCard } from "./QuestionBlockCard.tsx"
 import { FRAMED_IMAGE, ImageFrame } from "./ImageFrame.tsx"
 // The resting card, shared with the queue (TodosView passes it the event-Snooze; these two surfaces
 // deliberately pass no action — see the module header).
-import { AwaitingBackgroundCard, AwaitingWaitTable, showsRestingCard } from "./AwaitingBackgroundCard.tsx"
+import { AwaitingBackgroundCard, AwaitingWaitTable, hasAwaitingWaitRows, showsRestingCard } from "./AwaitingBackgroundCard.tsx"
+import { lastRest } from "../lib/restAnchor.ts"
 import { SnoozeCard, showsSnoozeCard } from "./SnoozeCard.tsx"
 // Re-exported from their new homes so existing importers (TodosView, the fixtures) keep one
 // import path while the definitions live where both question producers can reach them.
@@ -245,6 +246,12 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
   // Cut over presentationMessages, not messages: the coalesced entries below carry a messageIndex into
   // THIS list, and comparing the two index spaces is how a live fence gets marked settled.
   const lastAgentIdx = useMemo(() => lastAssistantIndex(presentationMessages), [presentationMessages])
+  // WHERE THE AWAITING CARD LIVES: at the last REST, not under the last message (lib/restAnchor). While
+  // the worker is running past a rest — the human bumped it, or the shell it named woke it — the fence
+  // it rested on stays live and a fenceless rest keeps its card, until it rests again. At rest the two
+  // cuts agree, and the message one is kept because the resting card at the tail keys on lastAgentIdx.
+  const rest = useMemo(() => (running ? lastRest(presentationMessages) : undefined), [running, presentationMessages])
+  const awaitingCut = rest ? rest.index : lastAgentIdx
   // Presentation-only coalescing: provider batching must not mint one loader per pure tool turn.
   // Original indices ride beside the display message so sticky asks and paired answers continue to
   // address server truth, never the compacted array.
@@ -269,8 +276,8 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
   const restingShown = showsRestingCard(thread)
   const activityMessages = useMemo(() => {
     const entries = running ? historicalToolActivityMessages(coalescedActivityMessages) : coalescedActivityMessages
-    return withoutRedundantRestDividers(entries, rendersNothingIn(entries, lastAgentIdx, restingShown))
-  }, [coalescedActivityMessages, running, lastAgentIdx, restingShown])
+    return withoutRedundantRestDividers(entries, rendersNothingIn(entries, awaitingCut, restingShown))
+  }, [coalescedActivityMessages, running, awaitingCut, restingShown])
   const showWorking = running
   // Question↔answer pairing for "Answers:" user messages, precomputed at the LIST level (the lookback
   // needs the whole list; Message renders per-message). null — a stable primitive — at every ordinary
@@ -293,10 +300,11 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
   // place. answeringForMessage wires each ask's chips AND its own bottom Send button (scoped to just
   // that message's blocks). The queue card runs the identical scope through the same controller.
   const { answeringForMessage } = useLiveAnswering(slug, messages)
-  // The registered questions at each message's rest, so a fence restating one folds into its card.
-  const shadowedByMessage = useMemo(() => registeredAtRest(messages, thread?.questions ?? []), [messages, thread?.questions])
-  // Where each rest's registered group renders: in the slot of the first fence that stands for it, or
-  // — when the handoff names none of them — at the rest's anchor, exactly as before (lib/questionShadow).
+  // The registered questions standing at each message — its rest and every later one — so a fence
+  // restating or naming one folds into its card.
+  const shadowedByMessage = useMemo(() => registeredStandingAt(messages, thread?.questions ?? []), [messages, thread?.questions])
+  // Where each registered group renders: in the slot of the first fence that stands for it at the
+  // newest rest that wrote one, or — when no handoff names it — at the rest's anchor (lib/questionShadow).
   const questionPlacement = useMemo(() => placeQuestions(messages, thread?.questions ?? []), [messages, thread?.questions])
 
   // (The SSE-mode lastActivityAt refetch effect that lived here moved into transcript-live.ts: the
@@ -504,8 +512,9 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
                     showSendButton
                     paired={paired[messageIndex]}
                     sticky={isSticky}
-                    staleAwaiting={lastAgentIdx >= 0 && messageIndex < lastAgentIdx}
+                    staleAwaiting={awaitingCut >= 0 && messageIndex < awaitingCut}
                     restingCardShown={messageIndex === lastAgentIdx && restingShown}
+                    restedAt={rest && messageIndex === rest.index ? rest.at ?? "" : undefined}
                     shadowedBy={shadowedByMessage.get(messageIndex)}
                     placedQuestions={questionPlacement.placed.get(messageIndex)}
                     thread={thread}
@@ -730,18 +739,21 @@ function VirtualizedThreadTranscript({
   const liveActivityLabel = liveToolActivity ? toolActivityLabel(liveToolActivity, projectDir) : undefined
   const liveRuntimeStart = running ? liveRuntimeStartedAt(coalescedActivityMessages) : undefined
   const lastAgentIdx = useMemo(() => lastAssistantIndex(messages), [messages])
+  // The rest the awaiting card belongs to — see the drawer's copy above.
+  const rest = useMemo(() => (running ? lastRest(messages) : undefined), [running, messages])
+  const awaitingCut = rest ? rest.index : lastAgentIdx
   // Redundant rest hairlines dropped exactly as in the drawer's copy above, with the same third
   // draws-nothing reason (the resting card stating the last message's fence).
   const restingShown = showsRestingCard(thread)
   const activityMessages = useMemo(() => {
     const entries = running ? historicalToolActivityMessages(coalescedActivityMessages) : coalescedActivityMessages
-    return withoutRedundantRestDividers(entries, rendersNothingIn(entries, lastAgentIdx, restingShown))
-  }, [coalescedActivityMessages, running, lastAgentIdx, restingShown])
+    return withoutRedundantRestDividers(entries, rendersNothingIn(entries, awaitingCut, restingShown))
+  }, [coalescedActivityMessages, running, awaitingCut, restingShown])
   const showWorking = running
   const messageRows = useMemo(() => {
     return buildVirtualTranscriptMessageRows(
       activityMessages.map((entry) => entry.message),
-      rendersNothingIn(activityMessages, lastAgentIdx, restingShown),
+      rendersNothingIn(activityMessages, awaitingCut, restingShown),
       messageGap,
     ).map((row) => {
       const entry = activityMessages[row.messageIndex]
@@ -779,8 +791,8 @@ function VirtualizedThreadTranscript({
       && thread?.runtime !== "perm-prompt"
     return workingWins ? workingIndicatorGap(activityMessages.map((entry) => entry.message)) : STEP
   }, [activityMessages, showWorking, thread])
-  // Where each rest's registered group renders: in the slot of the first fence that stands for it, or
-  // — when the handoff names none of them — at the rest's anchor, exactly as before (lib/questionShadow).
+  // Where each registered group renders: in the slot of the first fence that stands for it at the
+  // newest rest that wrote one, or — when no handoff names it — at the rest's anchor (lib/questionShadow).
   const questionPlacement = useMemo(() => placeQuestions(messages, thread?.questions ?? []), [messages, thread?.questions])
   // EVERY OPEN QUESTION THE HANDOFF DID NOT PLACE, at the rest it was asked at. `byRow` keys into
   // `messageRows` (the coalesced list actually rendered, which drops messages the transcript does not
@@ -807,9 +819,9 @@ function VirtualizedThreadTranscript({
     }
     return { byRow, tail }
   }, [messageRows, messages, questionPlacement, thread?.questions])
-  // The same rows, keyed by message index, for the fold: a fence restating a registration at its own
-  // rest draws nothing (lib/questionShadow).
-  const shadowedByMessage = useMemo(() => registeredAtRest(messages, thread?.questions ?? []), [messages, thread?.questions])
+  // The same rows, keyed by message index, for the fold: a fence restating or naming a registration
+  // standing at that message draws nothing of its own (lib/questionShadow).
+  const shadowedByMessage = useMemo(() => registeredStandingAt(messages, thread?.questions ?? []), [messages, thread?.questions])
 
   const rows = useMemo<VirtualThreadRow[]>(() => {
     const next: VirtualThreadRow[] = [{ key: "head-anchor", kind: "head-anchor" }]
@@ -1402,8 +1414,9 @@ function VirtualizedThreadTranscript({
                   answering={answeringForMessage(row.message)}
                   showSendButton
                   paired={paired[row.messageIndex]}
-                  staleAwaiting={lastAgentIdx >= 0 && row.messageIndex < lastAgentIdx}
+                  staleAwaiting={awaitingCut >= 0 && row.messageIndex < awaitingCut}
                   restingCardShown={row.messageIndex === lastAgentIdx && restingShown}
+                  restedAt={rest && row.messageIndex === rest.index ? rest.at ?? "" : undefined}
                   shadowedBy={shadowedByMessage.get(row.messageIndex)}
                   placedQuestions={questionPlacement.placed.get(row.messageIndex)}
                   thread={thread}
@@ -3429,12 +3442,12 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
         }
         qi.n += 1
         const bi = qi.n
-        // A fence STANDING FOR a question registered at this rest is folded into the registered card (see
-        // lib/questionShadow). The index still advances — the controller numbers every fence in the
+        // A fence STANDING FOR a registered question still open at this message — asked at this rest or
+        // an earlier one — is folded into the registered card (see lib/questionShadow). The index still advances — the controller numbers every fence in the
         // flat text — so the blocks that do render keep their answer state.
         if (shadowedBy && fenceStandsFor(seg, shadowedBy) !== undefined) {
-          // …and the FIRST such fence is where the registered stack goes. One slot per rest, never one
-          // per fence: the stack sends every answer in a single call, so a second mount would put a
+          // …and the FIRST such fence of the newest rest that wrote one is where the registered stack goes.
+          // One slot per rest, never one per fence: the stack sends every answer in a single call, so a second mount would put a
           // second Send button on the same batch.
           if (placedQuestions && placedQuestions.length > 0 && !placedSlot.taken) {
             placedSlot.taken = true

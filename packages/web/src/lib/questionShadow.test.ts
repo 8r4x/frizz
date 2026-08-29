@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { allFencesShadowed, fenceRestatesRegistered, fenceStandsFor, placeQuestions, registeredAtRest } from "./questionShadow.ts"
+import { allFencesShadowed, fenceRestatesRegistered, fenceStandsFor, placeQuestions, registeredStandingAt } from "./questionShadow.ts"
 import { type MessageSegment, splitQuestionBlocks } from "./questionBlocks.ts"
 
 // The pair from the 2026-08-28 report, verbatim: the registration (a plain string — the `ask` schema
@@ -67,22 +67,22 @@ const MESSAGES = [
 ]
 const QUESTION = { ...REGISTERED, id: "qst_6b9bdbe563fa", askedAt: at(10) }
 
-test("registeredAtRest maps every message of the asking rest to the registration, and no other", () => {
-  const map = registeredAtRest(MESSAGES, [QUESTION])
+test("registeredStandingAt maps every message of the asking rest to the registration, and none above it", () => {
+  const map = registeredStandingAt(MESSAGES, [QUESTION])
   assert.deepEqual([...map.keys()].sort(), [3, 4])
   assert.deepEqual(map.get(4), [QUESTION])
   assert.equal(map.get(1), undefined, "the first fence is one rest up; the wake closed that rest")
 })
 
-test("a question the human already replied past belongs to the rest it was asked at", () => {
+test("a question the human replied past still stands at every later message of the worker's — not at the human's turn", () => {
   const replied = [...MESSAGES, { role: "user", at: at(15) }, { role: "assistant", at: at(16) }]
-  const map = registeredAtRest(replied, [QUESTION])
-  assert.deepEqual([...map.keys()].sort(), [3, 4])
+  const map = registeredStandingAt(replied, [QUESTION])
+  assert.deepEqual([...map.keys()].sort(), [3, 4, 6])
 })
 
-test("a registration whose rest is above the loaded window maps to nothing", () => {
-  const map = registeredAtRest(MESSAGES.slice(2), [{ ...QUESTION, askedAt: at(1) }])
-  assert.equal(map.size, 0)
+test("a registration whose rest is above the loaded window stands at every loaded message of the worker's", () => {
+  const map = registeredStandingAt(MESSAGES.slice(2), [{ ...QUESTION, askedAt: at(1) }])
+  assert.deepEqual([...map.keys()].sort(), [1, 2])
 })
 
 // ---- PLACEMENT ----
@@ -134,7 +134,35 @@ test("a fence one rest ABOVE the registration never places it", () => {
   assert.equal(placeQuestions(messages, [QUESTION]).placed.size, 0)
 })
 
-test("a registration whose rest is above the loaded window places nothing", () => {
-  const messages = MESSAGES.slice(2).map((m) => ({ ...m, text: HANDOFF }))
+// THE 2026-08-28 SHAPE: the worker asked at one rest, the human replied "Well done" without answering,
+// the worker rested again with an EMPTY ```question qst_… marker in that final handoff — and the queue
+// card's window opens at the newest rest, so the asking rest is above it (anchor -1).
+const MARKER = `**Fixed** — nothing further to do.\n\nThe one card still open is yours to decide:\n\n${fenced("", QUESTION.id)}\n\nAnswer it either way and this thread is finished.`
+
+test("a marker in a LATER rest places the question there, and clears the anchor it would have fallen back to", () => {
+  const later = [...MESSAGES, { role: "user", at: at(15) }, { role: "assistant", at: at(16), text: MARKER }]
+    .map((m) => ("text" in m ? m : { ...m, text: "prose" }))
+  const { placed, placedAnchors } = placeQuestions(later, [QUESTION])
+  assert.deepEqual([...placed.keys()], [6])
+  assert.deepEqual(placed.get(6), [QUESTION])
+  assert.ok(placedAnchors.has(4), "the asking rest's anchor row must not draw it as well")
+})
+
+test("a registration whose rest is above the loaded window is placed by a marker inside the window — anchor -1 is cleared", () => {
+  const windowed = [{ role: "user", at: at(15) }, { role: "assistant", at: at(16), text: MARKER }]
+  const { placed, placedAnchors } = placeQuestions(windowed, [{ ...QUESTION, askedAt: at(10) }])
+  assert.deepEqual([...placed.keys()], [1])
+  assert.ok(placedAnchors.has(-1), "the head-of-window fallback must not draw it a second time")
+})
+
+test("when two rests both stand for it, the NEWEST rest's first fence wins — the older placement is history", () => {
+  const both = [...MESSAGES, { role: "user", at: at(15) }, { role: "assistant", at: at(16), text: MARKER }, { role: "assistant", at: at(17), text: MARKER }]
+    .map((m, i) => ("text" in m ? m : { ...m, text: i === 4 ? HANDOFF : "prose" }))
+  const { placed } = placeQuestions(both, [QUESTION])
+  assert.deepEqual([...placed.keys()], [6])
+})
+
+test("a registration whose rest is above the loaded window and that no loaded message names places nothing", () => {
+  const messages = MESSAGES.slice(2).map((m) => ({ ...m, text: "Landed it." }))
   assert.equal(placeQuestions(messages, [{ ...QUESTION, askedAt: at(1) }]).placed.size, 0)
 })

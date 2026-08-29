@@ -17,6 +17,12 @@ import "./styles.css"
 //   ?many=1     — three open questions at once, which is what the ONE shared "Send answers" is for.
 //   ?busy=1     — a question AND live background work, which is the case the memo calls out: the
 //                 question expands and the waits must not compete with it for the one glance.
+//   ?past=1     — THE 2026-08-28 SHAPE: the question was asked at an OLDER rest, the human replied past it
+//                 without answering, and the worker's newest handoff carries an empty ```question qst_…
+//                 marker for it. The card's window opens at the newest rest (hasEarlier), so the asking
+//                 rest is above the window. The card must render ONCE, in the marker's slot under the
+//                 human's message — not pinned above it at the head of the window — and the card-level
+//                 "Send answers" must stand down (the registered card carries its own).
 //   ?font=sans  — the other of the two fonts this app renders in; mono is the default and the wider.
 const params = new URLSearchParams(location.search)
 document.documentElement.dataset.font = params.get("font") === "sans" ? "sans" : "mono"
@@ -93,10 +99,18 @@ const questions = params.get("danger") === "1" ? [GATE]
   : [SETTINGS]
 
 const tail = "Both stores work. The choice is yours because it is the one thing here that is hard to reverse once there is data in it."
-const messages: TranscriptMessage[] = [
-  { role: "user", text: "Add a settings store.", tools: [], parts: [{ kind: "text", text: "Add a settings store." }] },
-  { role: "assistant", text: tail, tools: [], parts: [{ kind: "text", text: tail }] },
-]
+const past = params.get("past") === "1"
+const marker = `**Fixed** — nothing further to do on the store: \`c6c292e8\` is on local \`main\`.\n\nThe one card still on the board is yours to decide, and it is the reason this thread does not file itself away as done:\n\n\`\`\`question ${SETTINGS.id}\n\`\`\`\n\nAnswer it either way and this thread is finished.`
+const messages: TranscriptMessage[] = past
+  ? [
+      // The window opens at the human's reply; the rest the question was asked at is above it.
+      { role: "user", at: ago(2), text: "Well done, you did it.", tools: [], parts: [{ kind: "text", text: "Well done, you did it." }] },
+      { role: "assistant", at: ago(1), text: marker, tools: [], parts: [{ kind: "text", text: marker }] },
+    ]
+  : [
+      { role: "user", text: "Add a settings store.", tools: [], parts: [{ kind: "text", text: "Add a settings store." }] },
+      { role: "assistant", text: tail, tools: [], parts: [{ kind: "text", text: tail }] },
+    ]
 
 const thread = {
   id: "registered-question-demo",
@@ -138,7 +152,7 @@ const thread = {
 
 store.board = { projectDir: "/fixture/frizz", threads: [thread] } as BoardSnapshot
 
-const transcriptPage = { messages, transcriptKey: "fixture-key", hasEarlier: false, historyLoaded: false }
+const transcriptPage = { messages, transcriptKey: "fixture-key", hasEarlier: past, historyLoaded: false }
 const originalFetch = window.fetch
 window.fetch = async (input, init) => {
   const url = new URL(typeof input === "string" ? input : (input as Request).url ?? input.toString(), location.origin)

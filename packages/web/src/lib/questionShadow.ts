@@ -24,21 +24,39 @@ import type { RegisteredQuestionView } from "@frizz/shared"
 import { type AnchorMessage, questionsByAnchor } from "./questionAnchor.ts"
 import { type MessageSegment, parseQuestionBlock, splitQuestionBlocks } from "./questionBlocks.ts"
 
-/** The registered questions standing at the same rest as each message, keyed by message index — every
- *  message of a rest maps to that rest's group, so a fence anywhere in the rest can be checked against
- *  it. A rest is what lib/questionAnchor anchors a question to: the run of messages up to the next
- *  human turn. A group anchored above the loaded window (-1) maps to nothing; its rest is not on the page. */
-export function registeredAtRest<Q extends { askedAt: string }>(
+/** The rest a question's anchor closes: the index of its first message — the one after the previous
+ *  human turn — or 0 for an anchor above the loaded window, whose rest is off the page entirely. */
+function restStart(messages: readonly AnchorMessage[], anchor: number): number {
+  for (let i = anchor; i >= 0; i--) {
+    if (isTurn(messages[i])) return i + 1
+  }
+  return 0
+}
+
+/** Same turn test as questionAnchorIndex: a human turn closes a rest; punctuation does not. */
+function isTurn(m: AnchorMessage): boolean {
+  return m.role === "user" && m.kind !== "event" && m.kind !== "reasoning"
+}
+
+/** The registered questions STANDING at each message, keyed by message index: every message of the
+ *  rest a question was asked at AND of every rest after it, so a fence anywhere from the ask onward can
+ *  be checked against it. A question stands until it is answered or withdrawn, and the human can reply
+ *  past one without answering it (the composer is right there) — the worker's NEXT handoff then names
+ *  it again, and that fence must fold and place exactly as one at the asking rest does. Until
+ *  2026-08-28 only the asking rest saw it, so a placement marker in a later handoff drew nothing and the
+ *  card fell back to its anchor — a rest above the queue card's window, which pinned it at the very top
+ *  of the card while the handoff below spoke of it as if it sat right there (maintainer: "why is the
+ *  question showing up above my last message?"). A group anchored above the loaded window (-1) stands at
+ *  every loaded message: its rest is off the page, and everything on the page is later. Human turns map
+ *  to nothing — a wake carries no fence of the worker's. */
+export function registeredStandingAt<Q extends { askedAt: string }>(
   messages: readonly AnchorMessage[],
   questions: readonly Q[],
 ): Map<number, Q[]> {
   const byMessage = new Map<number, Q[]>()
   for (const [anchor, group] of questionsByAnchor(messages, questions)) {
-    if (anchor < 0) continue
-    // Same turn test as questionAnchorIndex: a human turn closes the rest; punctuation does not.
-    for (let i = anchor; i >= 0; i--) {
-      const m = messages[i]
-      if (m.role === "user" && m.kind !== "event" && m.kind !== "reasoning") break
+    for (let i = restStart(messages, anchor); i < messages.length; i++) {
+      if (isTurn(messages[i])) continue
       const at = byMessage.get(i)
       if (at) at.push(...group)
       else byMessage.set(i, [...group])
@@ -120,6 +138,11 @@ export function allFencesShadowed(
 // them at the anchor, exactly as before — the worker chooses the position, never whether the human sees
 // it. That is the difference between this and gating the render on the worker remembering to write
 // something, which would put an unanswerable question behind a `done` nobody can reach.
+//
+// AND THE PLACEMENT IS NOT CONFINED TO THE ASKING REST. The worker contract says the card is drawn "at
+// the rest you stopped at", and a worker that rests again after the human replied past the question
+// writes its empty ```question qst_… marker into THAT handoff. The marker has to take: the card belongs
+// where the prose that sets it up is, not nine hours up the transcript at the rest the row was minted.
 
 /** The registration a ```question fence STANDS FOR, if any: the one its info-string id names, else the
  *  one its prose restates. The id is exact and the prose is not, so a worker that writes
@@ -139,31 +162,35 @@ export interface QuestionPlacement<Q> {
   placedAnchors: Set<number>
 }
 
-/** Where each rest's registered questions render, given what its messages actually wrote. */
+/** Where each group of registered questions renders, given what the messages from its ask onward
+ *  actually wrote. Within one rest the FIRST standing fence takes the group (see above); across rests the
+ *  LAST rest with one wins — the newest handoff is the one the human is reading, and a placement in an
+ *  older sign-off is history. Two groups placed into the same message share the slot (they send as one
+ *  batch there regardless). */
 export function placeQuestions<Q extends Pick<RegisteredQuestionView, "id" | "spec"> & { askedAt: string }>(
   messages: readonly (AnchorMessage & { text?: string })[],
   questions: readonly Q[],
 ): QuestionPlacement<Q> {
   const placed = new Map<number, Q[]>()
   const placedAnchors = new Set<number>()
-  const isTurn = (m: AnchorMessage) => m.role === "user" && m.kind !== "event" && m.kind !== "reasoning"
   for (const [anchor, group] of questionsByAnchor(messages, questions)) {
-    // A rest above the loaded window has no message on the page to place anything in.
-    if (anchor < 0) continue
-    let start = 0
-    for (let i = anchor; i >= 0; i--) {
-      if (isTurn(messages[i])) { start = i + 1; break }
-    }
-    // Forward, so the FIRST fence of the rest wins — the worker's own reading order.
-    for (let i = start; i <= anchor; i++) {
+    let placedAt = -1
+    // Whether the rest being walked already holds the group's slot; a human turn opens the next rest.
+    let restTaken = false
+    for (let i = restStart(messages, anchor); i < messages.length; i++) {
       const m = messages[i]
-      if (isTurn(m) || !m.text) continue
+      if (isTurn(m)) { restTaken = false; continue }
+      if (restTaken || !m.text) continue
       const stands = splitQuestionBlocks(m.text).some((seg) => seg.kind === "question" && fenceStandsFor(seg, group) !== undefined)
       if (!stands) continue
-      placed.set(i, [...group])
-      placedAnchors.add(anchor)
-      break
+      placedAt = i
+      restTaken = true
     }
+    if (placedAt < 0) continue
+    const at = placed.get(placedAt)
+    if (at) at.push(...group)
+    else placed.set(placedAt, [...group])
+    placedAnchors.add(anchor)
   }
   return { placed, placedAnchors }
 }
