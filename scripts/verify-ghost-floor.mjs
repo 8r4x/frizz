@@ -66,7 +66,6 @@ const BUBBLES = `[...document.querySelectorAll('[class*="bg-user-bubble"]')].map
   surface: el.closest("[data-queue-card]") ? "queue-card"
     : el.closest("[data-thread-drawer]") ? "drawer"
     : el.closest("[data-standalone-thread]") ? "standalone" : "chat",
-  sticky: Boolean(el.closest('[data-transcript-sticky="true"]')),
 }))`
 
 const browser = await puppeteer.launch({ headless: "new", args: ["--no-sandbox", "--force-color-profile=srgb"] })
@@ -98,9 +97,7 @@ try {
     for (const b of all) {
       const entry = byText.get(b.text) ?? { text: b.text, opacity: 1, copies: 0 }
       entry.opacity = Math.min(entry.opacity, b.opacity)
-      // The most recent LANDED user message renders in ONE place — the natural flow, or (with the
-      // opt-in `stickyUserMessage` pref on) the pinned band instead. Count sticky and flow copies
-      // alike: "exactly one" means one bubble on screen, wherever it sits.
+      // "exactly one" means one bubble on screen for this text.
       entry.copies++
       byText.set(b.text, entry)
     }

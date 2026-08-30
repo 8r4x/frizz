@@ -155,22 +155,6 @@ test("scroll-anchor restoration applies the exact post-prepend top delta", () =>
   assert.equal(transcriptAnchorScrollDelta(240, 910), 670)
 })
 
-test("scroll-anchor skips the pinned (sticky) user message and anchors on a natural-flow node", () => {
-  // The pinned band comes first in DOM order and — being sticky — sits at the pane top with an
-  // invariant rect, which would otherwise win as the anchor and zero out every load-earlier delta.
-  const sticky = {
-    dataset: { transcriptSourceId: "u-pinned", transcriptSticky: "true" },
-    getBoundingClientRect: () => ({ top: 12, bottom: 60 }),
-  }
-  const flow = {
-    dataset: { transcriptSourceId: "a1" },
-    getBoundingClientRect: () => ({ top: 300, bottom: 360 }),
-  }
-  const root = { querySelectorAll: () => [sticky, flow] }
-  const anchor = captureTranscriptViewportAnchor(root as unknown as HTMLElement)
-  assert.deepEqual(anchor, { sourceId: "a1", top: 300 })
-})
-
 // ---- the load-earlier correction must always be able to STOP ----
 // "reserve" re-arms the layout effect that asks for it, so any geometry this function can never stop
 // reserving on is an infinite render loop. These pin the two guards that make that unreachable.

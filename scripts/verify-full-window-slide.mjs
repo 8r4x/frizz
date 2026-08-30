@@ -109,7 +109,7 @@ try {
     const el = document.querySelector("[data-drawer-transcript-scroll]")
     const boxEl = document.querySelector("[data-virtualized-transcript]")
     const top = el.getBoundingClientRect().top
-    const all = Array.from(boxEl.querySelectorAll("[data-transcript-row-key]:not([data-transcript-sticky])"))
+    const all = Array.from(boxEl.querySelectorAll("[data-transcript-row-key]"))
       .map((r) => ({ key: r.dataset.transcriptRowKey, y: r.getBoundingClientRect().top - top, h: r.getBoundingClientRect().height }))
       .sort((a, b) => a.y - b.y)
     const named = k ? all.find((r) => r.key === k) : undefined

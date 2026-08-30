@@ -16,8 +16,8 @@ import { RestedCard, showsRestedCard } from "./RestedCard.tsx"
 import { collapseMiddleRuns, opensQueueSegment, queueCollapseSegments, segmentFolds, supersededAskIndices, survivesQueueCollapse } from "../lib/queueCollapse.ts"
 import { pairAllAnswers } from "../lib/answersMessage.ts"
 import { questionsByAnchor } from "../lib/questionAnchor.ts"
-import { allFencesShadowed, placeQuestions, registeredStandingAt } from "../lib/questionShadow.ts"
-import { FenceCard, Message, PermPolicyDenialCard, PermPromptBanner, PendingAskCard, StickyUserBand, VSpace, STEP, messageTailIsMeta, messageHeadIsMeta, messageRendersNothing, messageHasRenderableText, lastAssistantIndex } from "./ChatView.tsx"
+import { allFencesShadowed, registeredStandingAt } from "../lib/questionShadow.ts"
+import { FenceCard, Message, PermPolicyDenialCard, PermPromptBanner, PendingAskCard, VSpace, STEP, messageTailIsMeta, messageHeadIsMeta, messageRendersNothing, messageHasRenderableText, lastAssistantIndex } from "./ChatView.tsx"
 import { BLOCK_RADIUS, BLOCK_RADIUS_TOP, CARD_ACTION_EXPLAINER, CARD_PRIMARY_ACTION } from "./TranscriptCard.tsx"
 import { AwaitingBackgroundCard, showsRestingCard } from "./AwaitingBackgroundCard.tsx"
 import { agentCompletionCall } from "../lib/subAgentCompletion.ts"
@@ -750,12 +750,6 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
   const [loadingEarlier, setLoadingEarlier] = useState(false)
   const [bottomScrollReserve, setBottomScrollReserve] = useState(0)
   const messageListRef = useRef<HTMLDivElement>(null)
-  // The card header is sticky at the page top; the pinned user message (StickyUserBand) must stick
-  // just BELOW it. Its height is dynamic (title + timestamp + optional status line), so measure it and
-  // feed the pixel offset into the band's sticky `top`. (The header's own top offset — 0, or 40px under
-  // 800px where a fixed nav bar sits — is added by the band's own responsive class.)
-  const headerRef = useRef<HTMLDivElement>(null)
-  const [headerH, setHeaderH] = useState(0)
   // `reserved` marks that this anchor already spent its ONE bottom-reserve growth (see the layout effect):
   // the reserve adds exactly the pixels the correction was short, so a second ask means it is not
   // converging — retrying instead of abandoning is what let a scroll-locked document loop forever.
@@ -767,20 +761,6 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
   const transcriptKeyRef = useRef<string | null>(null)
   const queryClient = useQueryClient()
   const copyTerminalCommand = useCopyTerminalCommand(thread.id)
-  // Client view pref: how (or whether) to pin the current ask to the pane top. `off` → plain flow.
-  const { stickyUserMessage } = useSnapshot(prefs)
-
-  // Track the sticky header's height so the pinned user message can stick directly beneath it.
-  useLayoutEffect(() => {
-    const el = headerRef.current
-    if (!el) return
-    const measure = () => setHeaderH(el.getBoundingClientRect().height)
-    measure()
-    const ro = new ResizeObserver(measure)
-    ro.observe(el)
-    return () => ro.disconnect()
-  }, [collapsed])
-
   // The queue card is a simplified thread: by default the most recent messages, with "View more"
   // revealing progressively older ones above. statusText is the fallback before any transcript exists.
   const q = useTranscript(thread.id, { poll: false })
@@ -842,10 +822,10 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
     }
     return 0
   }, [messages])
-  // Which message gets pinned to the pane top (StickyUserBand). The most recent LANDED user message —
-  // queued/optimistic follow-ups pin to the card bottom and aren't the "current ask", and are skipped
-  // by the first render pass anyway, so anchoring the band on one would drop it entirely. -1 → none.
-  const stickyUserIdx = useMemo(() => {
+  // The most recent LANDED user message — queued/optimistic follow-ups render at the card bottom and
+  // are skipped by the first render pass. Only the collapse gate below reads it: it answers "is there
+  // anything above the first fold to anchor it". -1 → none.
+  const landedUserIdx = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) if (messages[i].role === "user" && !messages[i].queued) return i
     return -1
   }, [messages])
@@ -861,7 +841,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
   // which message anchors the run.
   //
   // THE FIRST RUN STARTS AT THE HUMAN'S LAST ASK (lastUserIdx), which is the same message the window is
-  // anchored on. It used to start at the CURRENT TURN (`Math.max(stickyUserIdx + 1, restTurnStart)`),
+  // anchored on. It used to start at the CURRENT TURN (`Math.max(landedUserIdx + 1, restTurnStart)`),
   // from a build whose window was cut at the previous rest, so the two agreed. Once the window reached
   // back past every rest to the human's task (2026-08-12) they no longer did, and the gap between them
   // rendered RAW: a thread frizz had driven across seven rests painted all seven turns in full. Measured
@@ -937,9 +917,9 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
     return at
   }, [segments])
   // Collapse unless the reader has opted into the full log. Gated on there being something ABOVE the
-  // first fold to anchor it — a pinned ask, or a rest divider a wake-driven turn opens on.
+  // first fold to anchor it — the human's ask, or a rest divider a wake-driven turn opens on.
   const collapseIntermediate =
-    !intermediateExpanded && (stickyUserIdx >= 0 || restTurnStart > 0) && segments.length > 0
+    !intermediateExpanded && (landedUserIdx >= 0 || restTurnStart > 0) && segments.length > 0
   // THE HUMAN'S LAST MESSAGE WINS, even when the agent has rested since. It used to be capped at the
   // current turn (`Math.max` with `restTurnStart`) on the reasoning that a closed turn is history the
   // drawer already holds — but with frizz driving threads across many rests, "the current turn" is a
@@ -955,7 +935,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
   // calls and thinking like this"). Expanding this card's intermediate divider used to be exactly that
   // wall, because the card was the one transcript surface still rendering raw server order.
   // Each entry keeps its ORIGINAL index so every index-addressed prop below — paired answers, the
-  // sticky ask, the collapse span — keeps addressing server truth rather than the compacted array.
+  // collapse span — keeps addressing server truth rather than the compacted array.
   //
   // ONE pass, uncut. It used to be cut after the last agent prose, because a fold that stopped at that
   // message left the calls made AFTER it outside the span — absorbing them into a `textOnly` row would
@@ -969,22 +949,19 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
   )
   // WHERE EACH OPEN QUESTION SITS: at the rest it was asked at, keyed by index into the FULL message
   // list (the loop below carries that index as `globalIdx`). `tail` is the ordinary case — the worker
-  // asked and rested — and keeps the placement this card has always had, above the composer.
-  const questionPlacement = useMemo(() => placeQuestions(messages, thread?.questions ?? []), [messages, thread?.questions])
+  // asked and rested — above the composer. Mid-prose placement is retired (lib/questionShadow).
   const questionAnchors = useMemo(() => {
     const tail: RegisteredQuestionView[] = []
     const byAnchor = new Map<number, RegisteredQuestionView[]>()
     const tailAnchor = messages.length - 1
     for (const [anchor, group] of questionsByAnchor(messages, thread?.questions ?? [])) {
-      // Placed inside a message of its own rest — drawing it here too would card it twice.
-      if (questionPlacement.placedAnchors.has(anchor)) continue
       if (anchor >= tailAnchor) { tail.push(...group); continue }
       const at = byAnchor.get(anchor)
       if (at) at.push(...group)
       else byAnchor.set(anchor, [...group])
     }
     return { byAnchor, tail }
-  }, [messages, questionPlacement, thread?.questions])
+  }, [messages, thread?.questions])
   // The registered questions standing at each message — its rest and every later one — so a fence
   // restating or naming one folds into its card (lib/questionShadow), here exactly as on the thread page.
   const shadowedByMessage = useMemo(() => registeredStandingAt(messages, thread?.questions ?? []), [messages, thread?.questions])
@@ -1223,7 +1200,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
           collapsed with no footer (a foreign/archived card) the header IS the whole card and takes the full
           block radius; otherwise it is rounded-top-only + a border-b, the root's radius carrying the
           bottom corners (a rounded-top + border-b would read as squared/doubled edges inside the shell). */}
-      <div ref={headerRef} className={`sticky top-0 z-10 flex items-center gap-2 bg-panel px-5 py-3.5 max-[800px]:top-10 ${collapsed ? BLOCK_RADIUS : `${BLOCK_RADIUS_TOP} border-b border-border/60`}`}>
+      <div className={`sticky top-0 z-10 flex items-center gap-2 bg-panel px-5 py-3.5 max-[800px]:top-10 ${collapsed ? BLOCK_RADIUS : `${BLOCK_RADIUS_TOP} border-b border-border/60`}`}>
         <div className="min-w-0 flex-1">
           {/* The title row is the refresh mark's hover zone — `min-w-0 shrink` on the name rather than
               `flex-1`, so a short title does not push the mark to the far side of the card. */}
@@ -1481,7 +1458,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
                   const textKey = m.sourceId ?? `legacy-${globalIdx}`
                   out.push(
                     <div key={textKey} data-transcript-source-id={textKey} className="flex flex-col">
-                      <Message m={m} dense textOnly answering={answeringForMessage(m)} paired={paired[globalIdx]} staleAwaiting={isStaleAwaiting(globalIdx)} restingCardShown={globalIdx === lastAgentIdx && restingShown} shadowedBy={shadowedByMessage.get(globalIdx)} placedQuestions={questionPlacement.placed.get(globalIdx)} thread={thread} />
+                      <Message m={m} dense textOnly answering={answeringForMessage(m)} paired={paired[globalIdx]} staleAwaiting={isStaleAwaiting(globalIdx)} restingCardShown={globalIdx === lastAgentIdx && restingShown} shadowedBy={shadowedByMessage.get(globalIdx)} thread={thread} />
                     </div>,
                   )
                   // Text-only → the row ends in prose (tool band dropped), so the next gap is a full STEP.
@@ -1491,11 +1468,8 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
                 }
                 if (prevTailIsMeta !== null) out.push(<VSpace key={`s${i}`} h={prevTailIsMeta && messageHeadIsMeta(m) ? 6 : STEP} />)
                 const sourceKey = m.sourceId ?? `legacy-${globalIdx}`
-                // The most recent user message sticks just below the header (StickyUserBand carries the
-                // source-id + sticky marker itself) unless the pref is off, and collapses as a hover-to-
-                // expand bubble; everything else — and the ask when sticky is off — flows in a plain wrapper.
-                const isSticky = globalIdx === stickyUserIdx && stickyUserMessage
-                const msg = (
+                out.push(
+                  <div key={sourceKey} data-transcript-source-id={sourceKey} className="flex flex-col">
                   <Message
                     m={m}
                     dense
@@ -1503,22 +1477,10 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
                     restingCardShown={globalIdx === lastAgentIdx && restingShown}
                     answering={answeringForMessage(m)}
                     paired={paired[globalIdx]}
-                    sticky={isSticky}
                     shadowedBy={shadowedByMessage.get(globalIdx)}
-                    placedQuestions={questionPlacement.placed.get(globalIdx)}
                     thread={thread}
                   />
-                )
-                out.push(
-                  isSticky ? (
-                    <StickyUserBand key={sourceKey} sourceId={sourceKey} stickyTopPx={headerH}>
-                      {msg}
-                    </StickyUserBand>
-                  ) : (
-                    <div key={sourceKey} data-transcript-source-id={sourceKey} className="flex flex-col">
-                      {msg}
-                    </div>
-                  ),
+                  </div>,
                 )
                 prevTailIsMeta = messageTailIsMeta(m)
                 flushQuestions(globalIdx)

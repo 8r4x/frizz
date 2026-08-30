@@ -8,25 +8,12 @@ import { DEFAULT_SNOOZE_PRESET, isSnoozePreset, type SnoozePreset } from "./snoo
 // every change. Components read via useSnapshot(prefs).
 const KEY = "frizz.prefs.v1"
 
-// Coerce whatever's stored for `stickyUserMessage` to a boolean. Accepts the current boolean form and
-// the short-lived earlier enum ("off" → false; "compact"/"full" → true); anything else → the fallback.
-function coerceStickyUserMessage(v: unknown, fallback: boolean): boolean {
-  if (typeof v === "boolean") return v
-  if (v === "off") return false
-  if (v === "compact" || v === "full") return true
-  return fallback
-}
-
 export interface Prefs {
   // Collapse rendered diff blocks to just their header row (click a header to expand that one).
   compactDiffs: boolean
   // Queue-card split Snooze remembers the operator's last duration choice across every card/reload.
   // A custom date is deliberately one-off and never overwrites this reusable preset.
   snoozePreset: SnoozePreset
-  // Whether the most-recent user message sticks to the top of a thread's scroll pane (ChatView + queue
-  // card) as a collapsed, hover-to-expand bubble. OFF by default — the ask reads best in its natural
-  // place in the flow; pinning it is the opt-in, from Settings.
-  stickyUserMessage: boolean
   // Direction the Needs-you queue + the sidebar's rested band order by. FIFO (default) surfaces the
   // longest-waiting item first so the human cycles through everything; LIFO surfaces the most recently
   // active first. See groups.ts orderQueue.
@@ -43,18 +30,15 @@ function coerceQueueOrder(v: unknown, fallback: QueueDirection): QueueDirection 
 // toggle that browser just made.
 interface RedefaultMarkers {
   diffsRedefaulted?: boolean
-  stickyRedefaulted?: boolean
 }
 
 export function parseStoredPrefs(raw: string | null): Prefs {
-  // Compact diffs by DEFAULT — expanded diff bodies are the opt-in. Sticky user message OFF by default.
+  // Compact diffs by DEFAULT — expanded diff bodies are the opt-in.
   const fallback: Prefs & RedefaultMarkers = {
     compactDiffs: true,
     snoozePreset: DEFAULT_SNOOZE_PRESET,
-    stickyUserMessage: false,
     queueOrder: "fifo",
     diffsRedefaulted: true,
-    stickyRedefaulted: true,
   }
   try {
     if (!raw) return fallback
@@ -67,20 +51,10 @@ export function parseStoredPrefs(raw: string | null): Prefs {
       stored.compactDiffs = true
       stored.diffsRedefaulted = true
     }
-    // ONE-TIME migration (2026-08-01): sticky user messages are no longer the default. Every browser
-    // that has touched this app already has `stickyUserMessage: true` persisted from the OLD default
-    // (the whole blob is rewritten on any pref change), so a fallback flip alone would change nothing
-    // for anyone — that stored `true` was the old default, not a choice. Re-default it once; the
-    // marker makes a subsequent deliberate Settings-toggle ON stick forever.
-    if (!stored.stickyRedefaulted) {
-      stored.stickyUserMessage = false
-      stored.stickyRedefaulted = true
-    }
     return {
       ...fallback,
       ...stored,
       snoozePreset: isSnoozePreset(stored.snoozePreset) ? stored.snoozePreset : fallback.snoozePreset,
-      stickyUserMessage: coerceStickyUserMessage(stored.stickyUserMessage, fallback.stickyUserMessage),
       queueOrder: coerceQueueOrder(stored.queueOrder, fallback.queueOrder),
     }
   } catch {

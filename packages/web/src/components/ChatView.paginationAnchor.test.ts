@@ -14,25 +14,14 @@ const answersCard = () => readFileSync(new URL("./AnswersCard.tsx", import.meta.
 // The REGRESSION this pins: `data-transcript-source-id` is load-bearing for transcript pagination —
 // captureTranscriptViewportAnchor / restoreTranscriptViewportAnchor and the virtualized
 // requestEarlier anchor all query it and expect it on ROW wrappers (which also carry
-// data-transcript-row-key / data-transcript-sticky). Stamping the same attribute on each nested
-// MESSAGE root would put non-row nodes into those result sets — and, on a pinned band, would defeat
-// the `data-transcript-sticky` filter that stops a pinned band (invariant top, zero delta) from being
-// chosen as the scroll anchor. A message root's own handle is the SEPARATE `data-frizz-msg` attribute.
-// Three legitimate sites: the virtual row wrapper, the VIRTUALIZED drawer's own hoisted sticky band,
-// and the shared StickyUserBand (still used by the eager ChatView branch and the queue cards). Every
-// one of the three ALSO carries either data-transcript-row-key or data-transcript-sticky, so none is a
-// bare Message root.
+// data-transcript-row-key). Stamping the same attribute on each nested MESSAGE root would put non-row
+// nodes into those result sets. A message root's own handle is the SEPARATE `data-frizz-msg`
+// attribute. One legitimate site: the virtual row wrapper.
 test("a message root never joins the pagination-anchor attribute", () => {
   const source = chatView()
   const anchorSites = [...source.matchAll(/data-transcript-source-id=/g)]
-  assert.equal(anchorSites.length, 3, "only the virtual row wrapper, the hoisted sticky band, and StickyUserBand may carry the anchor attribute")
-  // 1) the virtual row wrapper
+  assert.equal(anchorSites.length, 1, "only the virtual row wrapper may carry the anchor attribute")
   assert.match(source, /data-transcript-source-id=\{row\.kind === "message" \? row\.message\.sourceId : undefined\}/)
-  // 2) the virtualized drawer's hoisted pinned current-ask — anchor immediately followed by the sticky
-  //    marker so requestEarlier's `:not([data-transcript-sticky])` filter skips it as a scroll anchor.
-  assert.match(source, /data-transcript-source-id=\{stickyMessageRow\.message\.sourceId\}\s*\n\s*data-transcript-sticky="true"/)
-  // 3) the shared StickyUserBand definition
-  assert.match(source, /data-transcript-source-id=\{sourceId\}\s*\n\s*data-transcript-sticky="true"/)
 })
 
 // `data-frizz-msg` outlived the hover-revealed debug-id chip it was introduced for (dropped 2026-08-01,

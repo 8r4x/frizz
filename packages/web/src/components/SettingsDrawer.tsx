@@ -23,7 +23,6 @@ export const SETTINGS_HELP = {
   font: "Changes the interface reading font for this browser.",
   localFileOpener: "Chooses how vetted local artifact links open. Markdown files open in Frizz's own reader (which carries an Open action that uses this setting), and image clicks always use the OS default viewer.",
   density: "How much of a diff shows before you ask for it, in this browser. Compact collapses every diff to its header row (click one to open it); Comfortable shows them in full. Applies immediately.",
-  stickyUserMessage: "Keeps your most recent message stuck to the top of a thread while the reply scrolls underneath. It stays collapsed to a small card (hover to expand it) so a long message never blocks much of the view. Applies immediately in this browser.",
   queueOrder: "Orders the Needs-you queue and the sidebar's rested threads by when each was last active. Oldest first (FIFO, default) surfaces the longest-waiting item first so you cycle through everything; Newest first (LIFO) keeps the most recently active on top. Applies immediately in this browser.",
   notifications: "Shows a desktop notification when work needs attention while this window is hidden.",
   projectRail: "Shows a permanent column of every project on this machine down the left edge. Off by default: Frizz's home is one board, and a standing list of the others is an easy way to leave the thread you were in. With it off, the home crumb in the status bar is the way back to the projects page.",
@@ -244,11 +243,6 @@ export function SettingsDrawer() {
                 the server at all, so it's wired straight to the prefs proxy rather than the draft. */}
             <SettingsField label="Density" help={SETTINGS_HELP.density}>
               <DensityToggle />
-            </SettingsField>
-
-            {/* Also a client-only VIEW preference (localStorage): applies immediately, wired to prefs. */}
-            <SettingsField label="Sticky message" help={SETTINGS_HELP.stickyUserMessage}>
-              <StickyMessageControl />
             </SettingsField>
 
             {/* Client-only VIEW preference (localStorage): applies immediately, wired to prefs. */}
@@ -606,13 +600,6 @@ function DensityToggle() {
       ))}
     </div>
   )
-}
-
-// Sticky most-recent-message preference: client-only (localStorage prefs proxy), applies live to every
-// thread/queue-card the instant it flips. On by default — a collapsed, hover-to-expand bubble.
-function StickyMessageControl() {
-  const { stickyUserMessage } = useSnapshot(prefs)
-  return <OnOffToggle value={stickyUserMessage} onChange={(v) => (prefs.stickyUserMessage = v)} />
 }
 
 // Queue/rested-band direction: client-only (localStorage prefs proxy), applies live to the Needs-you

@@ -123,7 +123,7 @@ try {
   const result = await page.evaluate(async ({ steps, step }) => {
     const scroller = document.querySelector("[data-drawer-transcript-scroll]")
     const scrollerTop = () => scroller.getBoundingClientRect().top
-    const liveRows = () => Array.from(scroller.querySelectorAll("[data-transcript-row-key]")).filter((r) => r.dataset.transcriptSticky !== "true")
+    const liveRows = () => Array.from(scroller.querySelectorAll("[data-transcript-row-key]"))
     const startedAt = scroller.scrollTop
     let key = null
     let frameTop = null
@@ -135,9 +135,9 @@ try {
     // Heights by row key as of the top of the frame, so a flash can name the row that grew.
     let heights = new Map()
     const allRows = () => Array.from(scroller.querySelectorAll("[data-transcript-row-key]"))
-    const snapshotHeights = () => new Map(allRows().map((r) => [(r.dataset.transcriptSticky === "true" ? "STICKY " : "") + r.dataset.transcriptRowKey, Math.round(r.getBoundingClientRect().height)]))
+    const snapshotHeights = () => new Map(allRows().map((r) => [r.dataset.transcriptRowKey, Math.round(r.getBoundingClientRect().height)]))
     const grownSince = (previous) => allRows().flatMap((r) => {
-      const k = (r.dataset.transcriptSticky === "true" ? "STICKY " : "") + r.dataset.transcriptRowKey
+      const k = r.dataset.transcriptRowKey
       const h = Math.round(r.getBoundingClientRect().height)
       const was = previous.get(k)
       return was === undefined ? [`${k.slice(0, 24)}:new ${h}`] : was !== h ? [`${k.slice(0, 24)}:${was}→${h}`] : []

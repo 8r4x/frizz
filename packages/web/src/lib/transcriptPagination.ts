@@ -132,11 +132,7 @@ export function captureTranscriptViewportAnchor(
   viewportTop = 0,
 ): TranscriptViewportAnchor | null {
   if (!root) return null
-  // Skip the sticky most-recent-user-message band: once pinned its top is INVARIANT (it stays at
-  // the pane top regardless of scroll), so anchoring on it would compute a zero delta and let
-  // prepended history shift the real content. Anchor only on natural-flow messages.
   const nodes = [...root.querySelectorAll<HTMLElement>("[data-transcript-source-id]")]
-    .filter((candidate) => candidate.dataset.transcriptSticky !== "true")
   const node = nodes.find((candidate) => candidate.getBoundingClientRect().bottom > viewportTop) ?? nodes[0]
   const sourceId = node?.dataset.transcriptSourceId
   return node && sourceId ? { sourceId, top: node.getBoundingClientRect().top } : null

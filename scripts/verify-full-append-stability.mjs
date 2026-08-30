@@ -108,7 +108,7 @@ try {
     const el = document.querySelector("[data-drawer-transcript-scroll]")
     const boxEl = document.querySelector("[data-virtualized-transcript]")
     const top = el.getBoundingClientRect().top
-    const rows = Array.from(boxEl.querySelectorAll("[data-transcript-row-key]:not([data-transcript-sticky])"))
+    const rows = Array.from(boxEl.querySelectorAll("[data-transcript-row-key]"))
       .map((r) => ({ key: r.dataset.transcriptRowKey, y: r.getBoundingClientRect().top - top, h: r.getBoundingClientRect().height }))
       .sort((a, b) => a.y - b.y)
     const anchor = rows.find((r) => r.y + r.h > 240) ?? rows[0]
@@ -135,7 +135,7 @@ try {
     const el = document.querySelector("[data-drawer-transcript-scroll]")
     const boxEl = document.querySelector("[data-virtualized-transcript]")
     const top = el.getBoundingClientRect().top
-    const row = Array.from(boxEl.querySelectorAll("[data-transcript-row-key]:not([data-transcript-sticky])")).find((r) => r.dataset.transcriptRowKey === k)
+    const row = Array.from(boxEl.querySelectorAll("[data-transcript-row-key]")).find((r) => r.dataset.transcriptRowKey === k)
     return row ? Math.round(row.getBoundingClientRect().top - top) : null
   }, key)
 

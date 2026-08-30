@@ -27,7 +27,7 @@ import { showsRegisteredDoneCard } from "../lib/registeredDone.ts"
 import { RestedCard, showsRestedCard } from "./RestedCard.tsx"
 import { parseAnswersCard, pairAllAnswers, type PairedAnswer } from "../lib/answersMessage.ts"
 import { questionsByAnchor } from "../lib/questionAnchor.ts"
-import { fenceStandsFor, placeQuestions, registeredStandingAt } from "../lib/questionShadow.ts"
+import { fenceStandsFor, registeredStandingAt } from "../lib/questionShadow.ts"
 import { FrizzWake } from "./FrizzWake.tsx"
 import { RecurringPromptLine } from "./RecurringPromptLine.tsx"
 import { LinkifiedText } from "./LinkifiedText.tsx"
@@ -256,7 +256,7 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
   const rest = useMemo(() => (running ? lastRest(presentationMessages) : undefined), [running, presentationMessages])
   const awaitingCut = rest && rest.index >= 0 ? rest.index : lastAgentIdx
   // Presentation-only coalescing: provider batching must not mint one loader per pure tool turn.
-  // Original indices ride beside the display message so sticky asks and paired answers continue to
+  // Original indices ride beside the display message so paired answers continue to
   // address server truth, never the compacted array.
   const coalescedActivityMessages = useMemo(() => coalesceToolActivityMessages(presentationMessages), [presentationMessages])
   // The run the shimmer stands for, and its newest call (the one it NAMES). The run is what expanding
@@ -287,8 +287,7 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
   // index, so the memoized Message only sees a `paired` prop change on actual answers-messages.
   const paired = useMemo(() => pairAllAnswers(messages), [messages])
   // The CURRENT ASK — the human's most recent landed turn (see lastAskIndex for what is excluded and
-  // why) — pinned to the top of the pane via StickyUserBand so it stays visible while the agent's reply
-  // scrolls under it. -1 when the transcript has no human turn yet.
+  // why); it supplies the retry text after a provider fault. -1 when the transcript has no human turn yet.
   const lastUserIdx = useMemo(() => lastAskIndex(messages), [messages])
   // A completion the worker REGISTERED rather than fenced: the last rung of the ladder below, drawn here
   // because no message carries it (lib/registeredDone). Keyed on the final assistant message so a worker
@@ -296,8 +295,6 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
   const registeredDone = showsRegisteredDoneCard(thread, lastAgentIdx >= 0 ? presentationMessages[lastAgentIdx]?.text : undefined)
   // The RESIDUAL rung: a rest that carries no other card at all (RestedCard). Same final-message key.
   const restedCard = showsRestedCard(thread, lastAgentIdx >= 0 ? presentationMessages[lastAgentIdx]?.text : undefined)
-  // Client view pref: how (or whether) to pin the current ask to the pane top. `off` → no pin.
-  const { stickyUserMessage } = useSnapshot(prefs)
   // Question-block interactivity in the thread view: EVERY ask stays answerable, wherever it sits —
   // scroll back to a question a sub-agent return / the agent's own continuation buried and answer it in
   // place. answeringForMessage wires each ask's chips AND its own bottom Send button (scoped to just
@@ -306,10 +303,6 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
   // The registered questions standing at each message — its rest and every later one — so a fence
   // restating or naming one folds into its card.
   const shadowedByMessage = useMemo(() => registeredStandingAt(messages, thread?.questions ?? []), [messages, thread?.questions])
-  // Where each registered group renders: in the slot of the first fence that stands for it at the
-  // newest rest that wrote one, or — when no handoff names it — at the rest's anchor (lib/questionShadow).
-  const questionPlacement = useMemo(() => placeQuestions(messages, thread?.questions ?? []), [messages, thread?.questions])
-
   // (The SSE-mode lastActivityAt refetch effect that lived here moved into transcript-live.ts: the
   // manager applies the same activity-edge pull to EVERY observed transcript that the push channel
   // doesn't cover, so no surface has to wire its own.)
@@ -408,7 +401,6 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
           thread={thread}
           running={running}
           copyTerminalCommand={copyTerminalCommand}
-          stickyUserMessage={stickyUserMessage}
           transportFallback={q.transportFallback}
           isFetching={q.isFetching}
           refresh={() => void q.refetch()}
@@ -504,26 +496,20 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
               activityMessages.map((entry) => entry.message),
               (m, i) => {
                 const messageIndex = activityMessages[i].messageIndex
-                // The current ask sticks to the pane top (unless the pref is off) as a collapsed,
-                // hover-to-expand bubble; every other message flows normally.
-                const isSticky = messageIndex === lastUserIdx && stickyUserMessage
-                const msg = (
+                return (
                   <Message
                     key={i}
                     m={m}
                     answering={answeringForMessage(m)}
                     showSendButton
                     paired={paired[messageIndex]}
-                    sticky={isSticky}
                     staleAwaiting={awaitingCut >= 0 && messageIndex < awaitingCut}
                     restingCardShown={messageIndex === lastAgentIdx && restingShown}
                     restedAt={rest && messageIndex === rest.index ? rest.at ?? "" : undefined}
                     shadowedBy={shadowedByMessage.get(messageIndex)}
-                    placedQuestions={questionPlacement.placed.get(messageIndex)}
                     thread={thread}
                   />
                 )
-                return isSticky ? <StickyUserBand key={i}>{msg}</StickyUserBand> : msg
               },
               // QUEUED (optimistic, not-yet-in-the-log) messages are pinned to the very BOTTOM
               // (rendered after the working/pending indicators, below) — not interleaved here.
@@ -701,7 +687,6 @@ function VirtualizedThreadTranscript({
   thread,
   running,
   copyTerminalCommand,
-  stickyUserMessage,
   transportFallback,
   isFetching,
   refresh,
@@ -722,7 +707,6 @@ function VirtualizedThreadTranscript({
   thread: ThreadViewData | undefined
   running: boolean
   copyTerminalCommand: () => void
-  stickyUserMessage: boolean
   transportFallback: TranscriptTransportFallback
   isFetching: boolean
   refresh: () => void
@@ -794,10 +778,8 @@ function VirtualizedThreadTranscript({
       && thread?.runtime !== "perm-prompt"
     return workingWins ? workingIndicatorGap(activityMessages.map((entry) => entry.message)) : STEP
   }, [activityMessages, showWorking, thread])
-  // Where each registered group renders: in the slot of the first fence that stands for it at the
-  // newest rest that wrote one, or — when no handoff names it — at the rest's anchor (lib/questionShadow).
-  const questionPlacement = useMemo(() => placeQuestions(messages, thread?.questions ?? []), [messages, thread?.questions])
-  // EVERY OPEN QUESTION THE HANDOFF DID NOT PLACE, at the rest it was asked at. `byRow` keys into
+  // EVERY OPEN QUESTION, at the rest it was asked at (mid-prose placement is retired — see
+  // lib/questionShadow). `byRow` keys into
   // `messageRows` (the coalesced list actually rendered, which drops messages the transcript does not
   // draw), so the group hangs off the last row at or before its anchor; -1 means the rest is older than
   // the loaded window and it goes above everything rather than back at the bottom, lying about being
@@ -808,8 +790,6 @@ function VirtualizedThreadTranscript({
     const byRow = new Map<number, RegisteredQuestionView[]>()
     const tailAnchor = messages.length - 1
     for (const [anchor, group] of questionsByAnchor(messages, thread?.questions ?? [])) {
-      // Placed inside a message of its own rest — the anchor row would draw it a second time.
-      if (questionPlacement.placedAnchors.has(anchor)) continue
       if (anchor >= tailAnchor) { tail.push(...group); continue }
       let rowIdx = -1
       for (let i = 0; i < messageRows.length; i++) {
@@ -821,7 +801,7 @@ function VirtualizedThreadTranscript({
       else byRow.set(rowIdx, [...group])
     }
     return { byRow, tail }
-  }, [messageRows, messages, questionPlacement, thread?.questions])
+  }, [messageRows, messages, thread?.questions])
   // The same rows, keyed by message index, for the fold: a fence restating or naming a registration
   // standing at that message draws nothing of its own (lib/questionShadow).
   const shadowedByMessage = useMemo(() => registeredStandingAt(messages, thread?.questions ?? []), [messages, thread?.questions])
@@ -855,14 +835,6 @@ function VirtualizedThreadTranscript({
     })
     return next
   }, [beforeCursor, earlierError, hasEarlier, hasRuntimeStatus, loadingEarlier, messageRows, messages, questionGroups, transportFallback])
-
-  // Which row carries the CURRENT ASK — the message the `stickyUserMessage` pref pins to the pane top.
-  // -1 when the pref is off or the transcript has no landed user message yet; then nothing is hoisted
-  // and every row renders in the absolute layer exactly as it did before.
-  const stickyRowIndex = useMemo(() => {
-    if (!stickyUserMessage || lastUserIdx < 0) return -1
-    return rows.findIndex((row) => row.kind === "message" && row.messageIndex === lastUserIdx)
-  }, [lastUserIdx, rows, stickyUserMessage])
 
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -922,11 +894,10 @@ function VirtualizedThreadTranscript({
   const nearTopLoadArmedRef = useRef(true)
   const pendingPrependAnchorRef = useRef<{ rowKey: string; viewportTop: number } | null>(null)
   const initialTranscriptKeyRef = useRef<string | undefined>(undefined)
-  // THE PIN MOVE (see the layout effect below). `readerAnchorRef` is refreshed at the END of every
+  // THE HEAD TRIM (see the layout effect below). `readerAnchorRef` is refreshed at the END of every
   // tail-follow pass, so a layout effect that runs BEFORE that pass still reads the PREVIOUS commit's
-  // position — which is exactly the place a pin move has to put the reader back.
+  // position — which is exactly the place a head trim has to put the reader back.
   const readerAnchorRef = useRef<{ rowKey: string; viewportTop: number } | null>(null)
-  const pinnedRowKeyRef = useRef<string | undefined>(undefined)
   const firstMessageKeyRef = useRef<string | undefined>(undefined)
   const anchorRestoreUntilRef = useRef(0)
 
@@ -934,11 +905,7 @@ function VirtualizedThreadTranscript({
     const scroller = transcriptRef.current
     if (scroller) {
       const scrollerTop = scroller.getBoundingClientRect().top
-      // `:not([data-transcript-sticky])` is load-bearing: the pinned current-ask band floats AT the
-      // scroll-pane top, so it is always the first element whose bottom clears `scrollerTop` — anchoring
-      // to it would capture an invariant top and restore a zero correction, silently losing the reader's
-      // place across a prepend. Same invariant captureTranscriptViewportAnchor enforces on the queue.
-      const firstVisible = Array.from(scroller.querySelectorAll<HTMLElement>("[data-transcript-source-id]:not([data-transcript-sticky])"))
+      const firstVisible = Array.from(scroller.querySelectorAll<HTMLElement>("[data-transcript-source-id]"))
         .find((element) => element.getBoundingClientRect().bottom > scrollerTop + 1)
       const rowKey = firstVisible?.dataset.transcriptRowKey
       if (firstVisible && rowKey) {
@@ -994,14 +961,12 @@ function VirtualizedThreadTranscript({
   }, [loadingEarlier, messageRows.length, transcriptRef])
 
   // Where the reader is actually looking: the first row whose box reaches the pane top, and the offset
-  // it sits at. `:not([data-transcript-sticky])` for the same reason requestEarlier needs it — the
-  // pinned band floats AT the pane top, so anchoring to it would capture an invariant top and restore a
-  // zero correction, silently losing the reader's place.
+  // it sits at.
   const captureReaderAnchor = useCallback((): { rowKey: string; viewportTop: number } | null => {
     const scroller = transcriptRef.current
     if (!scroller) return null
     const scrollerTop = scroller.getBoundingClientRect().top
-    const first = Array.from(scroller.querySelectorAll<HTMLElement>("[data-transcript-row-key]:not([data-transcript-sticky])"))
+    const first = Array.from(scroller.querySelectorAll<HTMLElement>("[data-transcript-row-key]"))
       .find((element) => element.getBoundingClientRect().bottom > scrollerTop + 1)
     const rowKey = first?.dataset.transcriptRowKey
     if (!first || !rowKey) return null
@@ -1015,61 +980,11 @@ function VirtualizedThreadTranscript({
     const scroller = transcriptRef.current
     if (!scroller) return
     const row = Array.from(scroller.querySelectorAll<HTMLElement>("[data-transcript-row-key]"))
-      .find((element) => element.dataset.transcriptRowKey === anchor.rowKey && element.dataset.transcriptSticky !== "true")
+      .find((element) => element.dataset.transcriptRowKey === anchor.rowKey)
     if (!row) return
     const nextTop = row.getBoundingClientRect().top - scroller.getBoundingClientRect().top
     scroller.scrollTop += nextTop - anchor.viewportTop
   }, [transcriptRef])
-
-  // THE PIN MOVE — the one transcript event that resizes a row ABOVE a reader parked mid-thread.
-  //
-  // A queued follow-up being DELIVERED is the only thing that moves the current ask: a queued bubble is
-  // excluded from lastUserIdx, so an enqueue can't move it and no assistant reply ever can. When it
-  // moves, the row that WAS pinned drops out of the hoisted flow layer back into the absolute one and
-  // re-renders FULL SIZE instead of the collapsed pinned card — measured at 218px → 366px on a real
-  // thread, and every row below it moved by exactly that 148px. A reader reading the agent's output
-  // sits BELOW the ask, so that growth is ABOVE them, and staying put depends entirely on the resize
-  // being compensated — which the virtualizer skips outright while the reader is scrolling up
-  // (virtual-core resizeItem: `!itemSizeCache.has(key) || scrollDirection !== "backward"`), and which
-  // the browser's own scroll anchoring used to duplicate. A fixed-size shove, only on a delivery,
-  // depending on what the reader happened to be doing — i.e. sporadic.
-  //
-  // So don't depend on the compensation. Remember where the reader was and put them back, across the
-  // next frames, because the re-expansion lands on a later ResizeObserver pass and not in this commit.
-  // The pinned row's KEY, not its index — an index shifts under every insert, so it would report a "pin
-  // move" on any append. (stickyMessageRow itself is derived further down, after the measure pass.)
-  const pinnedRowKey = stickyRowIndex >= 0 ? rows[stickyRowIndex]?.key : undefined
-  useLayoutEffect(() => {
-    const nextKey = pinnedRowKey
-    const previousKey = pinnedRowKeyRef.current
-    pinnedRowKeyRef.current = nextKey
-    // First commit establishes the baseline; a reader AT the tail is tail-follow's to move, not ours.
-    if (previousKey === undefined || previousKey === nextKey || followingTailRef.current) return
-    const anchor = readerAnchorRef.current
-    if (!anchor || pendingPrependAnchorRef.current) return
-    // Claim the scroller for this beat so the tail-follow pass leaves the offset alone while the row
-    // above settles (it reconciles against a scroll height that is mid-change until it does).
-    anchorRestoreUntilRef.current = performance.now() + ANCHOR_RESTORE_MS
-    alignToAnchor(anchor)
-    let secondFrame = 0
-    let thirdFrame = 0
-    const firstFrame = requestAnimationFrame(() => {
-      alignToAnchor(anchor)
-      secondFrame = requestAnimationFrame(() => {
-        alignToAnchor(anchor)
-        thirdFrame = requestAnimationFrame(() => {
-          alignToAnchor(anchor)
-          anchorRestoreUntilRef.current = 0
-        })
-      })
-    })
-    return () => {
-      cancelAnimationFrame(firstFrame)
-      cancelAnimationFrame(secondFrame)
-      cancelAnimationFrame(thirdFrame)
-      anchorRestoreUntilRef.current = 0
-    }
-  }, [alignToAnchor, pinnedRowKey])
 
   // THE HEAD TRIM — the other event that moves content ABOVE a reader parked mid-thread, and the one the
   // virtualizer is structurally unable to see.
@@ -1171,10 +1086,10 @@ function VirtualizedThreadTranscript({
     if (DEBUG_SCROLL && !next.following && performance.now() >= readerScrollUntilRef.current) {
       const previous = readerAnchorRef.current
       const row = previous && Array.from(scroller.querySelectorAll<HTMLElement>("[data-transcript-row-key]"))
-        .find((element) => element.dataset.transcriptRowKey === previous.rowKey && element.dataset.transcriptSticky !== "true")
+        .find((element) => element.dataset.transcriptRowKey === previous.rowKey)
       if (previous && row) {
         const drift = Math.round(row.getBoundingClientRect().top - scroller.getBoundingClientRect().top - previous.viewportTop)
-        if (Math.abs(drift) > 2) console.warn(`[frizz] transcript moved ${drift}px under a still reader — pin=${pinnedRowKeyRef.current ?? "none"} row=${previous.rowKey}`)
+        if (Math.abs(drift) > 2) console.warn(`[frizz] transcript moved ${drift}px under a still reader — row=${previous.rowKey}`)
       }
     }
     // LAST: refresh where the reader is looking. This runs on every commit, every settle and every
@@ -1252,20 +1167,6 @@ function VirtualizedThreadTranscript({
 
   const virtualItems = virtualizer.getVirtualItems()
   const totalSize = virtualizer.getTotalSize()
-  // THE PINNED CURRENT ASK, virtualized. CSS `position: sticky` is inert on a virtual row: every row is
-  // `position: absolute` + translateY, so its containing block is a zero-height point and there is no
-  // range to stick over. So that ONE row is HOISTED out of the absolute layer and rendered in NORMAL
-  // FLOW — a spacer of exactly its measured `start`, then the row itself — which gives it the
-  // full-height scroll container as its containing block, i.e. precisely what the eager path's
-  // StickyUserBand relies on. It is still `measureElement`-registered under its own `data-index`, so
-  // the virtualizer sizes it from the real DOM exactly like any other row; it is simply always
-  // mounted (one extra message, and it must be, since a pinned message stays visible while its slot
-  // is far off screen). The absolute layer skips it below so it never renders twice.
-  const stickyRow = stickyRowIndex >= 0 ? rows[stickyRowIndex] : undefined
-  const stickyMessageRow = stickyRow?.kind === "message" ? stickyRow : undefined
-  // `measurementsCache` is the PUBLIC field holding what the private getMeasurements() returns; reading
-  // it here is safe because getVirtualItems() above already forced the memoized measure pass this render.
-  const stickyStart = stickyMessageRow ? virtualizer.measurementsCache[stickyRowIndex]?.start ?? 0 : 0
 
   return (
     <div
@@ -1275,66 +1176,9 @@ function VirtualizedThreadTranscript({
       className="relative w-full"
       style={{ height: totalSize }}
     >
-      {stickyMessageRow && (
-        <>
-          {/* Flow spacer — parks the pinned row at the same offset its absolute twin would have had, so
-              the transcript reads identically until the reader scrolls past it and it lifts to the top. */}
-          <div aria-hidden style={{ height: stickyStart }} />
-          {/* The pinned row is a SINGLE sticky layer — this IS the StickyUserBand for the virtualized
-              path (its classes are inlined here). It must be a direct child of the height:totalSize
-              container so `sticky top-0` has the full transcript as its containing block and can pin
-              across the whole scroll range; wrapping it in a short flow div would give it a tiny
-              containing block and it could never stick. Do NOT also render a nested StickyUserBand —
-              two stacked `sticky top-0` layers push the card down by the inner band's box (the 121px
-              gap that let transcript content bleed above the "pinned" card). `[&>*]:pointer-events-auto`
-              re-enables the bubble (hover-to-expand) while the full-width band stays click-through.
-              `group/ts` is what lets the pinned ask carry its own hover reading: this row is hoisted out
-              of the absolute layer, so it never passes through MessageRow, and without it this would be
-              the ONE message with no timestamp — the ask the whole reply is answering. The reading's own
-              containing block is the wrapper below, not this band. It needs no `hover:z` lift of its
-              own; `z-[9]` already draws it over the scrolling rows. */}
-          <div
-            key={stickyMessageRow.key}
-            ref={virtualizer.measureElement}
-            data-index={stickyRowIndex}
-            data-transcript-row-key={stickyMessageRow.key}
-            data-transcript-source-id={stickyMessageRow.message.sourceId}
-            data-transcript-sticky="true"
-            className="group/ts pointer-events-none [&>*]:pointer-events-auto sticky top-0 z-[9] flex w-full flex-col pt-3 pb-1.5"
-          >
-            {/* This wrapper is the reading's containing block, and it carries the `px-6` rather than the
-                band above it — because `MessageStamp` is positioned on BOTH axes (`top-full`,
-                `right-6`) and both resolve against the containing block's PADDING box. Whichever box
-                holds the reading has to match `MessageRow`'s on both, which this one does: it ends
-                where the message ends, and it is inset by the same 24px.
-
-                The band was the containing block once and got each axis wrong in turn (measured
-                2026-08-28, headless): with the band's `pb-1.5` below the reading it hung 6px lower
-                than every other row's and read as the row BELOW's; with `px-6` still on the band and
-                this wrapper nested inside it, `right-6` measured from an edge already 24px in and the
-                reading sat 48px from the transcript's edge instead of 24px. Both now read identically
-                to an ordinary row: −5px from its own message, 24px inset.
-
-                `!pointer-events-none` because the band's `[&>*]:pointer-events-auto` would otherwise
-                make this full-width wrapper swallow the click-through the band exists to preserve; its
-                own copy of that variant hands the bubble back. */}
-            <div className="!pointer-events-none relative flex w-full flex-col px-6 [&>*]:pointer-events-auto">
-              <Message
-                m={stickyMessageRow.message}
-                answering={answeringForMessage(stickyMessageRow.message)}
-                showSendButton
-                paired={paired[stickyMessageRow.messageIndex]}
-                sticky
-              />
-              <MessageStamp at={stickyMessageRow.message.at} host="bubble" />
-            </div>
-          </div>
-        </>
-      )}
       {virtualItems.map((virtualRow) => {
         const row = rows[virtualRow.index]
         if (!row) return null
-        if (virtualRow.index === stickyRowIndex) return null
         return (
           <div
             key={row.key}
@@ -1421,7 +1265,6 @@ function VirtualizedThreadTranscript({
                   restingCardShown={row.messageIndex === lastAgentIdx && restingShown}
                   restedAt={rest && row.messageIndex === rest.index ? rest.at ?? "" : undefined}
                   shadowedBy={shadowedByMessage.get(row.messageIndex)}
-                  placedQuestions={questionPlacement.placed.get(row.messageIndex)}
                   thread={thread}
                 />
               </MessageRow>
@@ -3073,54 +2916,9 @@ function SendMessageCard({ to, summary, body, type, status, durationMs }: { to?:
   )
 }
 
-// The most-recent user message, PINNED to the top of the scroll pane — a persistent reminder of the
-// human's latest ask while the agent's (often long) reply scrolls beneath it. Both surfaces render
-// the SAME user bubble (Message, role="user") inside this so they match by construction.
-//   • The wrapper is TRANSPARENT — the bubble simply FLOATS at the top. Everything else in the scroll
-//     pane (agent prose, tool cards) passes BEHIND it and stays visible to the LEFT of the bubble and
-//     ABOVE it (in the `pt-3` gap). Only `z-[9]` keeps it above the scrolling content, never masking it.
-//   • `pt-3` keeps the rounded bubble off the pane's top edge (flush rounded corners read as broken)
-//     and leaves a gap the transcript scrolls through above the floating bubble.
-//   • `max-h` + `overflow-y-auto`: a user message taller than the pane scrolls WITHIN the bubble instead
-//     of swallowing the whole viewport.
-//   • `flex flex-col` re-establishes the column so Message's `self-end` bubble stays right-aligned; the
-//     full-width transparent wrapper leaves the left region clear for content to show through.
-//   • `pointer-events-none` on the wrapper + `pointer-events-auto` on the bubble: the transparent
-//     full-width strip must NOT eat clicks/wheel over the content it floats above (to its left), while
-//     the bubble stays selectable and a tall bubble scrolls internally.
-// `stickyTopPx` offsets the stick point below the queue card's OWN sticky header (measured, since the
-// header height is dynamic); the drawer omits it and sticks flush at the scroll container's top.
-// `sourceId` mirrors data-transcript-source-id onto THIS node (the queue card keys its pagination
-// anchors off it) while data-transcript-sticky tells captureTranscriptViewportAnchor to skip it — a
-// pinned band has an invariant top and must never be chosen as the load-earlier scroll anchor.
-// The positioning wrapper only: sticks the floating bubble to the pane top. The HEIGHT/collapse (the
-// ~200px cap, the bottom text-fade, and hover-to-expand) live on the bubble itself (UserBubble, driven
-// by the `sticky` prop on Message) so the collapsed card stays fully rounded — a wrapper clip can't.
-export function StickyUserBand({ children, stickyTopPx, sourceId }: { children: ReactNode; stickyTopPx?: number; sourceId?: string }) {
-  const offset = stickyTopPx !== undefined
-  return (
-    <div
-      data-transcript-source-id={sourceId}
-      data-transcript-sticky="true"
-      style={offset ? ({ "--sticky-user-top": `${stickyTopPx}px` } as CSSProperties) : undefined}
-      className={`pointer-events-none [&>*]:pointer-events-auto sticky z-[9] flex flex-col pt-3 pb-1.5 ${
-        offset
-          ? "top-[var(--sticky-user-top)] max-[800px]:top-[calc(var(--sticky-user-top)_+_2.5rem)]"
-          : "top-0"
-      }`}
-    >
-      {children}
-    </div>
-  )
-}
-
-// The user chat bubble, right-justified. When `sticky` (the pinned most-recent ask), it COLLAPSES: a
-// fully-rounded ~200px card whose text FADES into the bubble colour near the bottom (no hard clip, no
-// ellipsis) with a soft "there's more" cue; hovering expands it to the full message (up to 85vh, then
-// it scrolls) and leaving re-collapses. Non-sticky (every historical bubble) is the plain, uncapped
-// bubble, unchanged. Its own component so the sticky hover/measure hooks stay out of memoized Message.
-function UserBubble({ text, rawText, queued, sticky, deliveryUnconfirmed, deliveryId, sourceId }: { text: string; rawText?: string; queued?: boolean; sticky?: boolean; deliveryUnconfirmed?: boolean; deliveryId?: string; sourceId?: string }) {
-  const ref = useRef<HTMLDivElement>(null)
+// The user chat bubble, right-justified — plain and uncapped. Its own component so the unqueue /
+// deliver-now hooks stay out of memoized Message.
+function UserBubble({ text, rawText, queued, deliveryUnconfirmed, deliveryId, sourceId }: { text: string; rawText?: string; queued?: boolean; deliveryUnconfirmed?: boolean; deliveryId?: string; sourceId?: string }) {
   // TAKE IT BACK. A still-queued send is the one bubble in the transcript that isn't history yet, so
   // it alone is clickable: the click unqueues it at the provider and hands the words back to the
   // prompt box (see lib/unqueueFollowUp.ts). Three gates, all of them load-bearing:
@@ -3157,39 +2955,6 @@ function UserBubble({ text, rawText, queued, sticky, deliveryUnconfirmed, delive
   // splitProseAttachments, the agent-prose splitter) it never swallows a ::directive or mermaid line.
   // `text` itself stays whole for the unqueue payload below — restoreDraft must hand the paths back.
   const { prose, attachments } = useMemo(() => splitComposerValue(text), [text])
-  const [expanded, setExpanded] = useState(false)
-  const [overflows, setOverflows] = useState(false)
-  // Whether the FULL message is taller than the expanded cap (85vh) — the ONLY case that genuinely
-  // needs a scrollbar. Everything shorter expands to fit, so it stays `overflow-hidden` even when
-  // expanded: no scrollbar ever appears (not even transiently mid-animation), so no reflow. (A real
-  // scrollbar, in the exceeds-cap case, rides a reserved gutter — see scrollbar-gutter in styles.css.)
-  const [exceedsCap, setExceedsCap] = useState(false)
-  // Scrolling is enabled only AFTER the expand animation finishes. During the grow, the bubble stays
-  // `overflow-hidden` — otherwise it's a live scroll container whose content scrolls as it resizes
-  // (the reported "card contents scroll during expansion" bug). transitionend flips this on.
-  const [scrollReady, setScrollReady] = useState(false)
-  // Measure the real content height so max-height animates BOTH ways smoothly (a bare 200px↔85vh
-  // transition visibly lags on collapse) and so the fade shows ONLY when the text actually overflows.
-  const [maxH, setMaxH] = useState<string | null>(null)
-  const measure = useCallback(() => {
-    const el = ref.current
-    if (!sticky || !el) { setMaxH(null); setOverflows(false); setExceedsCap(false); return }
-    const cap = Math.round((typeof window === "undefined" ? 800 : window.innerHeight) * 0.85)
-    setOverflows(el.scrollHeight > 205)
-    setExceedsCap(el.scrollHeight > cap)
-    setMaxH(expanded ? `${Math.min(el.scrollHeight, cap)}px` : "200px")
-  }, [sticky, expanded])
-  useLayoutEffect(() => { measure() }, [measure, text])
-  // Re-measure on viewport resize so the 85vh cap / exceedsCap gate never go stale under a window resize.
-  useEffect(() => {
-    if (typeof window === "undefined") return
-    const onResize = () => measure()
-    window.addEventListener("resize", onResize)
-    return () => window.removeEventListener("resize", onResize)
-  }, [measure])
-  const collapsed = sticky === true && !expanded
-  // Scroll ONLY when expanded, over the cap, AND the expand animation has settled.
-  const scrollable = sticky === true && expanded && exceedsCap && scrollReady
   return (
     // `self-end` must stay on THIS node: the parent scroll container is a flex column and the bubble's
     // right-justification depends on being its direct child (see the group-container note above the
@@ -3206,7 +2971,6 @@ function UserBubble({ text, rawText, queued, sticky, deliveryUnconfirmed, delive
         // while its own control is under the cursor.
         <div className="group relative">
         <div
-          ref={ref}
           {...(unqueueable ? {
             role: "button",
             tabIndex: 0,
@@ -3220,17 +2984,6 @@ function UserBubble({ text, rawText, queued, sticky, deliveryUnconfirmed, delive
               unqueue({ deliveryId: deliveryId!, text, rawText: rawText ?? text, from: e.currentTarget })
             },
           } : {})}
-          onMouseEnter={sticky ? () => setExpanded(true) : undefined}
-          onMouseLeave={sticky ? () => { setExpanded(false); setScrollReady(false) } : undefined}
-          onTransitionEnd={sticky ? (e) => { if (e.propertyName === "max-height" && expanded && exceedsCap) setScrollReady(true) } : undefined}
-          // While NOT scrollable (collapsed, or expanding before it settles) the bubble is `overflow-hidden`
-          // and so lacks the scrollbar-gutter the scrollable state reserves — a 7px text shift when scroll
-          // turns on. Reserve the SAME width (`--sbw`, the app's scrollbar width) here so the text width is
-          // identical across every state: zero reflow even for over-cap messages.
-          style={{
-            ...(maxH ? { maxHeight: maxH } : {}),
-            ...(sticky && exceedsCap && !scrollable ? { paddingRight: "calc(0.875rem + var(--sbw))" } : {}),
-          }}
           // A retractable bubble LIFTS to FULL opacity under the pointer — so the one message in the
           // transcript that is still yours to change says so on hover instead of needing a permanent
           // control that would clutter every send. Opacity alone carries it, because opacity is already
@@ -3240,17 +2993,12 @@ function UserBubble({ text, rawText, queued, sticky, deliveryUnconfirmed, delive
           // in the app uses. A KEYBOARD focus ring still has to exist, so it keeps the accent — but
           // OFFSET onto the near-black page, which is the only place this yellow reads clean and is how
           // every other focus ring in the app is drawn.
-          className={`relative ${BLOCK_RADIUS} rounded-br-sm bg-user-bubble px-3.5 py-3 text-[14px] whitespace-pre-wrap [overflow-wrap:anywhere] text-bg ${queued ? "opacity-50" : ""} ${unqueueable ? "cursor-pointer transition-opacity group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg" : ""} ${unqueuePending ? "!opacity-30" : ""} ${sticky ? `transition-[max-height] duration-200 ease-out ${scrollable ? "overflow-y-auto" : "overflow-hidden"}` : ""}`}
+          className={`relative ${BLOCK_RADIUS} rounded-br-sm bg-user-bubble px-3.5 py-3 text-[14px] whitespace-pre-wrap [overflow-wrap:anywhere] text-bg ${queued ? "opacity-50" : ""} ${unqueueable ? "cursor-pointer transition-opacity group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg" : ""} ${unqueuePending ? "!opacity-30" : ""}`}
         >
           {/* Verbatim bytes, but link-shaped runs (a pasted URL, `#123`, a commit hash) render as the
               anchors they would be in agent prose — see LinkifiedText. The anchors stop their own
               click/keydown propagation, so a link inside a QUEUED bubble opens instead of unqueueing. */}
           <LinkifiedText text={prose} />
-          {/* Fade the last ~2.5rem of text into the bubble colour — keeps the box fully rounded + opaque
-              (no hard cut, no ellipsis). Only while collapsed AND actually overflowing. */}
-          {collapsed && overflows && (
-            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-user-bubble to-transparent" />
-          )}
         </div>
         {/* SEND IT NOW — icon only, no fill until the pointer is on it, and ABSOLUTE so it costs the
             bubble no width. Laying it out as a flex sibling would narrow every queued bubble by 36px
@@ -3334,10 +3082,6 @@ function UserBubble({ text, rawText, queued, sticky, deliveryUnconfirmed, delive
 // ```question fence that merely restates one of them never draws its own card — the REGISTERED card is
 // the one the human answers, because answering it settles the row. Undefined for every message at a rest
 // with no registration, which keeps the memo boundary intact.
-// `placedQuestions` is that rest's group when THIS message is the one that places it: the registered
-// stack renders in the slot the first standing fence occupied, so the worker's setup paragraph still
-// points at the ask instead of at whatever the card jumped over. Absent → the group renders at the rest's
-// anchor as before, which is what a handoff that names none of its registrations still gets.
 // `restingCardShown` — the resting card at the transcript's tail is stating THIS message's ```awaiting
 // fence (showsRestingCard on the owning thread), so the fence block is skipped here exactly as a settled
 // one is. It has to be a skip at this level and not a null from FenceCard: the block list is interleaved
@@ -3351,7 +3095,7 @@ function UserBubble({ text, rawText, queued, sticky, deliveryUnconfirmed, delive
 // fence and rested on registered rows alone — the resting card itself, drawn here because a rest with
 // no fence left NOTHING behind once the tail moved on (maintainer 2026-08-28: the hairline stayed and
 // the card was gone). Only that one message ever carries it, so the memo boundary holds.
-export const Message = memo(function Message({ m, answering, dense, paired, sticky, textOnly, showSendButton, staleAwaiting, shadowedBy, placedQuestions, thread, restingCardShown, restedAt }: { m: ChatMessage; answering?: MessageAnswering; dense?: boolean; paired?: PairedAnswer[] | null; sticky?: boolean; textOnly?: boolean; showSendButton?: boolean; staleAwaiting?: boolean; shadowedBy?: readonly RegisteredQuestionView[]; placedQuestions?: readonly RegisteredQuestionView[]; thread?: ThreadViewData; restingCardShown?: boolean; restedAt?: string }) {
+export const Message = memo(function Message({ m, answering, dense, paired, textOnly, showSendButton, staleAwaiting, shadowedBy, thread, restingCardShown, restedAt }: { m: ChatMessage; answering?: MessageAnswering; dense?: boolean; paired?: PairedAnswer[] | null; textOnly?: boolean; showSendButton?: boolean; staleAwaiting?: boolean; shadowedBy?: readonly RegisteredQuestionView[]; thread?: ThreadViewData; restingCardShown?: boolean; restedAt?: string }) {
   // ANSWERING ON A PHONE happens in a sheet, one question at a time (MobileAnswerSheet) — the cards in
   // the transcript stay READ-ONLY there, so the questions are still visible in the context that
   // produced them but a 44pt-thumb answer never has to land on a 24pt chip inside a scrolling message.
@@ -3403,7 +3147,7 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
     // `rawText` rides alongside the presentation text because the two differ: the bubble shows the
     // stripped/normalized copy, while the optimistic cache entry an unqueue has to evict is keyed on
     // the message's own raw text.
-    return <UserBubble text={text} rawText={m.text} queued={m.queued} sticky={sticky} deliveryUnconfirmed={m.deliveryState === "unconfirmed"} deliveryId={m.deliveryId} sourceId={m.sourceId} />
+    return <UserBubble text={text} rawText={m.text} queued={m.queued} deliveryUnconfirmed={m.deliveryState === "unconfirmed"} deliveryId={m.deliveryId} sourceId={m.sourceId} />
   }
 
   // Build ONE ordered list of block-level children, then interleave with explicit spacers. The
@@ -3427,8 +3171,6 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
     pictureEdges.push(edges)
   }
   const qi = { n: -1 }
-  // One placement slot per message: set the first time a standing fence claims it (see placedQuestions).
-  const placedSlot = { taken: false }
   // Whether one of this message's ```awaiting fences drew its card — the card that already states the
   // rest's waits, so the rested-on card below (see `restedAt`) is not drawn beside it.
   const liveAwaitingFence = { drawn: false }
@@ -3498,21 +3240,13 @@ export const Message = memo(function Message({ m, answering, dense, paired, stic
         qi.n += 1
         const bi = qi.n
         // A fence STANDING FOR a registered question still open at this message — asked at this rest or
-        // an earlier one — is folded into the registered card (see lib/questionShadow). The index still advances — the controller numbers every fence in the
-        // flat text — so the blocks that do render keep their answer state.
-        if (shadowedBy && fenceStandsFor(seg, shadowedBy) !== undefined) {
-          // …and the FIRST such fence of the newest rest that wrote one is where the registered stack goes.
-          // One slot per rest, never one per fence: the stack sends every answer in a single call, so a second mount would put a
-          // second Send button on the same batch.
-          if (placedQuestions && placedQuestions.length > 0 && !placedSlot.taken) {
-            placedSlot.taken = true
-            push(<RegisteredQuestionStack key={`${keyBase}-${fi}-placed${si}`} thread={thread} questions={placedQuestions} showInFlight={false} />)
-          }
-          continue
-        }
-        // A PLACEMENT MARKER whose row is not standing here — answered, withdrawn, or a mistyped id —
-        // has nothing to draw, and its body is empty by construction. Skip it: the registered question,
-        // if there still is one, renders at its rest's anchor instead.
+        // an earlier one — draws NOTHING: the registered card at the rest is the one the human answers,
+        // and mid-prose placement is retired (lib/questionShadow), so the fence no longer moves that card
+        // into its own slot. The index still advances — the controller numbers every fence in the flat
+        // text — so the blocks that do render keep their answer state.
+        if (shadowedBy && fenceStandsFor(seg, shadowedBy) !== undefined) continue
+        // A LEGACY placement marker whose row is not standing here — answered, withdrawn, or a mistyped
+        // id — has nothing to draw either: its body is empty by construction.
         if (seg.registeredId && seg.text.trim() === "") continue
         if (answering) askBlocks.push({ raw: seg.text, kind: seg.questionKind, danger: seg.danger, bi })
         // On a phone the card is a READING surface and the sheet is the answering one, so it renders

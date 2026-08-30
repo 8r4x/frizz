@@ -5,9 +5,7 @@
 //
 // It drives the REAL pipeline — JSONL → tailer → transcript → ChatView — with a simulated worker, because
 // a fixture can't: the frizz server mounts Vite with appType "custom", so every *.html falls back to
-// index.html and only the real thread route renders a real transcript. Both surfaces that draw a user
-// bubble are covered: the historical bubbles in the column and the PINNED most-recent ask (StickyUserBand
-// renders the same component, so a padding change that missed one would show as a mismatch here).
+// index.html and only the real thread route renders a real transcript.
 //
 // Usage: nub scripts/verify-user-bubble-padding.mjs --port=4930 --home=/abs/temp-home
 import { execFileSync } from "node:child_process"
@@ -73,12 +71,6 @@ try {
   page.on("pageerror", (e) => pageErrors.push(String(e)))
   page.on("console", (m) => { if (m.type() === "error") pageErrors.push(m.text()) })
   await page.setViewport({ width: 1400, height: 1000, deviceScaleFactor: 2 })
-  // Sticky pinning is OFF by default since 2026-08-01, but StickyUserBand draws the SAME bubble — turn
-  // it on so the pinned surface is measured too, not assumed. Seeded before first paint: prefs hydrate
-  // from localStorage synchronously so the initial render already reflects it.
-  await page.evaluateOnNewDocument(() => {
-    localStorage.setItem("frizz.prefs.v1", JSON.stringify({ stickyUserMessage: true, stickyRedefaulted: true }))
-  })
   await page.goto(`http://127.0.0.1:${port}/thread/${SLUG}`, { waitUntil: "networkidle0" })
   await page.waitForSelector(".bg-user-bubble", { timeout: 20_000 })
   // The transcript loads TAIL-FIRST, so the earlier bubbles live behind "Load earlier messages".
@@ -103,7 +95,6 @@ try {
       range.detach?.()
       return {
         text: b.textContent.trim().slice(0, 32),
-        pinned: Boolean(b.closest("[data-transcript-sticky]")),
         top: px(cs.paddingTop),
         bottom: px(cs.paddingBottom),
         left: px(cs.paddingLeft),
@@ -118,7 +109,6 @@ try {
   console.log(JSON.stringify(measured, null, 2))
 
   check(measured.length === 4, "all four user bubbles rendered", `saw ${measured.length}`)
-  check(measured.filter((m) => m.pinned).length === 1, "the most-recent ask is pinned (the sticky surface is under test too)", JSON.stringify(measured.map((m) => m.pinned)))
   check(measured.every((m) => m.top === 12 && m.bottom === 12), "every bubble carries 12px above and below", JSON.stringify(measured.map((m) => [m.top, m.bottom])))
   check(measured.every((m) => m.left === 14 && m.right === 14), "horizontal padding is UNCHANGED at 14px", JSON.stringify(measured.map((m) => [m.left, m.right])))
   // Half-leading splits evenly around the line box, so the INK gap is padding + ~1.5px on each side and

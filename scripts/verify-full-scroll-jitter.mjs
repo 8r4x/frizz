@@ -130,7 +130,7 @@ try {
   const result = await page.evaluate(async ({ steps, step }) => {
     const scroller = document.querySelector("[data-drawer-transcript-scroll]")
     const scrollerTop = () => scroller.getBoundingClientRect().top
-    const liveRows = () => Array.from(scroller.querySelectorAll("[data-transcript-row-key]")).filter((r) => r.dataset.transcriptSticky !== "true")
+    const liveRows = () => Array.from(scroller.querySelectorAll("[data-transcript-row-key]"))
     const startedAt = scroller.scrollTop
     const samples = []
     let key = null
