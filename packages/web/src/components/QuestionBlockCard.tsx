@@ -273,8 +273,9 @@ export function QuestionBlockCard({
       )}
       {/* The SETTLED answer, when it named no option (free text, or a label the parse could not match):
           the AnswersCard's quiet recessed chip — a past choice, never the awaiting-you accent. */}
+      {/* pl-[11px] matches the settled chips above: 11 + the 2px rule = the plain chips' 12 + 1. */}
       {settled?.text && (
-        <div className="mt-2 whitespace-pre-wrap [overflow-wrap:anywhere] rounded-md border border-border-strong border-l-2 border-l-accent/40 bg-bg/50 px-2.5 py-1.5 text-[12px] leading-snug text-fg">
+        <div className="mt-2 whitespace-pre-wrap [overflow-wrap:anywhere] rounded-md border border-border-strong border-l-2 border-l-accent/40 bg-bg/50 py-1.5 pl-[11px] pr-3 text-[12px] leading-snug text-fg">
           {settled.text}
         </div>
       )}
@@ -384,7 +385,9 @@ function Chip({
         selected
           ? "border-accent bg-accent/10 text-fg"
           : settledPick
-            ? "border-border-strong border-l-2 border-l-accent/40 bg-bg/50 text-fg"
+            // pl-[11px]: the 2px left rule is 1px thicker than the siblings' 1px border, so the text
+            // starts 1px right of theirs on the shared px-3 — measured 14px vs 13px inset. 11+2 = 12+1.
+            ? "border-border-strong border-l-2 border-l-accent/40 bg-bg/50 pl-[11px] text-fg"
             : disabled
               ? "border-border text-muted/80"
               // hover lands on `elevated`, one step above the card's own panel-2 fill — hovering to
