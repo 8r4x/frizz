@@ -79,6 +79,51 @@ test("pressing L twice mints a second link rather than re-showing the first", ()
   pane.dispose();
 });
 
+test("L while the pane is open mints a fresh link in place instead of closing", () => {
+  // "Press L for a fresh sign-in link" / "Press L for another" — pressed while the pane is already
+  // showing, L must honour that copy, not act as a toggle that takes the QR away.
+  const tty = fakeTty();
+  const codes = ["one", "two", "three"];
+  let n = 0;
+  const pane = installAccessPane({
+    issue: () => link({ code: codes[n]!, url: `https://x/?frizz_code=${codes[n++]}` }),
+    input: tty.input,
+    output: tty.output,
+    now: () => 0,
+  });
+  assert.ok(pane);
+  tty.input.emit("data", "l");
+  tty.written.length = 0;
+  tty.input.emit("data", "l");
+  assert.doesNotMatch(tty.all(), /\x1b\[\?1049l/, "the pane stays up");
+  assert.match(tty.all(), /frizz_code=two/, "and shows a freshly minted code");
+  tty.written.length = 0;
+  tty.input.emit("data", "L");
+  assert.match(tty.all(), /frizz_code=three/, "uppercase L re-mints too");
+  tty.input.emit("data", "x");
+  assert.match(tty.all(), /\x1b\[\?1049l/, "any other key still closes");
+  pane.dispose();
+});
+
+test("L while the pane is open closes it when the origin has dropped mid-view", () => {
+  // The R pane can clear the remote setup while the QR is up; with nothing left to mint, keeping a
+  // dead link on screen would be worse than closing.
+  const tty = fakeTty();
+  let minted = 0;
+  const pane = installAccessPane({
+    issue: () => (minted++ === 0 ? link() : null),
+    input: tty.input,
+    output: tty.output,
+    now: () => 0,
+  });
+  assert.ok(pane);
+  tty.input.emit("data", "l");
+  tty.written.length = 0;
+  tty.input.emit("data", "l");
+  assert.match(tty.all(), /\x1b\[\?1049l/, "the pane comes down rather than re-offering a link it cannot mint");
+  pane.dispose();
+});
+
 test("Ctrl-C still stops the board, because raw mode stopped the TTY doing it", () => {
   // The failure this prevents is severe and silent: the operator's own terminal can no longer kill the
   // server it started, and nothing on screen explains why.

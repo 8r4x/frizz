@@ -83,7 +83,20 @@ export function createAccessPane(options: AccessPaneOptions): AccessPane {
       ticker.unref?.();
       return true;
     },
-    key() {
+    key(key) {
+      // The readout footer and this pane's own expired/consumed lines all say "press L for a fresh
+      // link" — so L while the pane is open must mint one in place. Before this, every key closed the
+      // pane, which made L a toggle: the exact keystroke the copy invited took the QR away instead.
+      if (key === "l" || key === "L") {
+        const link = options.issue();
+        // The origin can drop while the pane is up (the R pane clearing the remote setup); with
+        // nothing left to mint, close rather than keep showing a link that no longer works.
+        if (!link) return "close";
+        shown = link;
+        consumed = false;
+        paint();
+        return "keep";
+      }
       return "close";
     },
     close() {
