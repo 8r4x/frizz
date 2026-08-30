@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { allFencesShadowed, fenceRestatesRegistered, fenceStandsFor, placeQuestions, registeredStandingAt } from "./questionShadow.ts"
+import { allFencesShadowed, fenceRestatesRegistered, fenceStandsFor, registeredStandingAt } from "./questionShadow.ts"
 import { type MessageSegment, splitQuestionBlocks } from "./questionBlocks.ts"
 
 // The pair from the 2026-08-28 report, verbatim: the registration (a plain string — the `ask` schema
@@ -106,63 +106,3 @@ test("fenceStandsFor falls back to the prose when the worker wrote no id", () =>
   assert.equal(fenceStandsFor(questionSeg("Which npm dist-tag?\n\n- A. latest\n- B. next"), [QUESTION]), undefined)
 })
 
-const HANDOFF = `Here is what landed, and one thing is still open.\n\n${fenced(FENCE)}\n\nThe rest of the write-up follows.`
-
-test("placeQuestions puts the rest's group in the message that stands for it, and clears its anchor", () => {
-  const messages = MESSAGES.map((m, i) => ({ ...m, text: i === 4 ? HANDOFF : "prose" }))
-  const { placed, placedAnchors } = placeQuestions(messages, [QUESTION])
-  assert.deepEqual([...placed.keys()], [4])
-  assert.deepEqual(placed.get(4), [QUESTION])
-  assert.ok(placedAnchors.has(4), "the anchor row must not draw it a second time")
-})
-
-test("the FIRST standing fence of the rest wins — one slot, because the stack sends as one batch", () => {
-  const messages = MESSAGES.map((m, i) => ({ ...m, text: i === 3 || i === 4 ? HANDOFF : "prose" }))
-  const { placed } = placeQuestions(messages, [QUESTION])
-  assert.deepEqual([...placed.keys()], [3])
-})
-
-test("a handoff that names none of its registrations places nothing — the anchor still draws them", () => {
-  const messages = MESSAGES.map((m) => ({ ...m, text: "Landed it. Nothing else to say." }))
-  const { placed, placedAnchors } = placeQuestions(messages, [QUESTION])
-  assert.equal(placed.size, 0)
-  assert.equal(placedAnchors.size, 0)
-})
-
-test("a fence one rest ABOVE the registration never places it", () => {
-  const messages = MESSAGES.map((m, i) => ({ ...m, text: i === 1 ? HANDOFF : "prose" }))
-  assert.equal(placeQuestions(messages, [QUESTION]).placed.size, 0)
-})
-
-// THE 2026-08-28 SHAPE: the worker asked at one rest, the human replied "Well done" without answering,
-// the worker rested again with an EMPTY ```question qst_… marker in that final handoff — and the queue
-// card's window opens at the newest rest, so the asking rest is above it (anchor -1).
-const MARKER = `**Fixed** — nothing further to do.\n\nThe one card still open is yours to decide:\n\n${fenced("", QUESTION.id)}\n\nAnswer it either way and this thread is finished.`
-
-test("a marker in a LATER rest places the question there, and clears the anchor it would have fallen back to", () => {
-  const later = [...MESSAGES, { role: "user", at: at(15) }, { role: "assistant", at: at(16), text: MARKER }]
-    .map((m) => ("text" in m ? m : { ...m, text: "prose" }))
-  const { placed, placedAnchors } = placeQuestions(later, [QUESTION])
-  assert.deepEqual([...placed.keys()], [6])
-  assert.deepEqual(placed.get(6), [QUESTION])
-  assert.ok(placedAnchors.has(4), "the asking rest's anchor row must not draw it as well")
-})
-
-test("a registration whose rest is above the loaded window is placed by a marker inside the window — anchor -1 is cleared", () => {
-  const windowed = [{ role: "user", at: at(15) }, { role: "assistant", at: at(16), text: MARKER }]
-  const { placed, placedAnchors } = placeQuestions(windowed, [{ ...QUESTION, askedAt: at(10) }])
-  assert.deepEqual([...placed.keys()], [1])
-  assert.ok(placedAnchors.has(-1), "the head-of-window fallback must not draw it a second time")
-})
-
-test("when two rests both stand for it, the NEWEST rest's first fence wins — the older placement is history", () => {
-  const both = [...MESSAGES, { role: "user", at: at(15) }, { role: "assistant", at: at(16), text: MARKER }, { role: "assistant", at: at(17), text: MARKER }]
-    .map((m, i) => ("text" in m ? m : { ...m, text: i === 4 ? HANDOFF : "prose" }))
-  const { placed } = placeQuestions(both, [QUESTION])
-  assert.deepEqual([...placed.keys()], [6])
-})
-
-test("a registration whose rest is above the loaded window and that no loaded message names places nothing", () => {
-  const messages = MESSAGES.slice(2).map((m) => ({ ...m, text: "Landed it." }))
-  assert.equal(placeQuestions(messages, [{ ...QUESTION, askedAt: at(1) }]).placed.size, 0)
-})

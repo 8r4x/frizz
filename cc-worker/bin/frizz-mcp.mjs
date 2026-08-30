@@ -513,10 +513,9 @@ const ASK = {
     "the question at the moment you find it rather than saving it for the end.\n\n" +
     "AND WHEN YOU DO STOP, THE OPEN QUESTION IS YOUR SIGN-OFF — rest normally. Frizz draws every open " +
     "question at the rest you stopped at whether you mention it or not, so nothing you write can hide " +
-    "one. What your handoff chooses is WHERE: put the id this call returns in an EMPTY question fence " +
-    "at the point your write-up has earned the ask — an opening ```question <id> line and a closing " +
-    "``` line, nothing between them — and the registered card is drawn there instead of at the end. " +
-    "A fence that restates the question in its body is matched on the text instead.\n\n" +
+    "one. The card draws itself at the rest the question was asked — never write the question into " +
+    "your handoff, because a fence that names or restates a registered question draws nothing (one " +
+    "question, one card).\n\n" +
     "SEVERAL AT ONCE IS ONE CALL. The card sends every answer as a unit, so a second `ask` for a second " +
     "question just makes the human send twice. Register them together.\n\n" +
     "The answer comes back to you as its own wake, restating what was asked. Withdraw one you no longer " +
@@ -652,9 +651,9 @@ async function activity() {
   const askedBlock = questions.length === 0 ? "" : (
     `\n\n${questions.length} question${questions.length === 1 ? "" : "s"} still owed an answer:\n\n` +
     questions.map((q) => `  question: ${q.id}\n    ${String(q?.spec?.question ?? "").replace(/\s+/g, " ").slice(0, 160)}`).join("\n") +
-    "\n\nEach one blocks `done` until it is answered or withdrawn. Place it in your handoff with an " +
-    "EMPTY question fence naming its id — an opening ```question <id> line and a closing ``` line — or " +
-    "`unask` the ones you have since decided yourself. A question is never named in an ```awaiting fence."
+    "\n\nEach one blocks `done` until it is answered or withdrawn, and draws its own card at the rest " +
+    "it was asked — never write it into a handoff. `unask` the ones since decided. A question is never " +
+    "named in an ```awaiting fence."
   )
   if (!items.length) {
     if (questions.length > 0) {

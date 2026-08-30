@@ -1755,8 +1755,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           ...openQuestions.map((q) => `- \`${q.id}\` — ${questionLine(q.spec)}`),
           "",
           "Never fence ```awaiting while a question stands. Rewrite your sign-off WITHOUT the fence: your",
-          "handoff prose, with each question placed by an empty two-line marker — ```question <its id> on",
-          "one line and ``` on the next. Your running work is watched and listed either way: a shell, a",
+          "handoff prose — each open question draws its own card at that rest, so write the reasoning",
+          "around the ask, never the ask again. Your running work is watched and listed either way: a shell, a",
           "sub-agent, a timer or a registered PR wakes you fence or no fence. A question you no longer need",
           "answered is one you withdraw with `mcp__frizz__unask` — only then can a park take.",
         ].join("\n")

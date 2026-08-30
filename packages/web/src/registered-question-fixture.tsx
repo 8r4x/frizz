@@ -17,12 +17,12 @@ import "./styles.css"
 //   ?many=1     — three open questions at once, which is what the ONE shared "Send answers" is for.
 //   ?busy=1     — a question AND live background work, which is the case the memo calls out: the
 //                 question expands and the waits must not compete with it for the one glance.
-//   ?past=1     — THE 2026-08-28 SHAPE: the question was asked at an OLDER rest, the human replied past it
-//                 without answering, and the worker's newest handoff carries an empty ```question qst_…
-//                 marker for it. The card's window opens at the newest rest (hasEarlier), so the asking
-//                 rest is above the window. The card must render ONCE, in the marker's slot under the
-//                 human's message — not pinned above it at the head of the window — and the card-level
-//                 "Send answers" must stand down (the registered card carries its own).
+//   ?past=1     — the question was asked at an OLDER rest, the human replied past it without answering,
+//                 and the worker's newest handoff still carries a LEGACY empty ```question qst_… marker
+//                 (mid-prose placement is retired 2026-08-30). The card's window opens at the newest rest
+//                 (hasEarlier), so the asking rest is above the window. The marker must draw NOTHING, the
+//                 card must render ONCE at the head of the window, and the card-level "Send answers" must
+//                 stand down (the registered card carries its own).
 //   ?font=sans  — the other of the two fonts this app renders in; mono is the default and the wider.
 const params = new URLSearchParams(location.search)
 document.documentElement.dataset.font = params.get("font") === "sans" ? "sans" : "mono"

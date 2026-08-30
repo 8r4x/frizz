@@ -694,7 +694,7 @@ test("a park beside an OPEN registered question is refused, even when everything
     // would not tell it which question is meant.
     assert.match(rows[0].message, /qst_6506c36d2f28.*Electron 34/s)
     assert.match(rows[0].message, /mcp__frizz__unask/, "…and says how to clear the way for a park it actually wants")
-    assert.match(rows[0].message, /```question <its id>/, "…and how to place the question instead")
+    assert.match(rows[0].message, /draws its own card/, "…and that the question needs no restating")
     assert.doesNotMatch(rows[0].message, /NOT RUNNING|still running/, "the live shell is not the news")
     // The transcript reads this delivery as a correction, so the refused fence stops drawing.
     assert.equal(isParkCorrection(rows[0].message), true)

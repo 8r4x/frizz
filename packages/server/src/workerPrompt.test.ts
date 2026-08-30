@@ -36,24 +36,26 @@ test("the contract bounds the work to the task, not only the stopping", () => {
   }
 })
 
-// A question asked on BOTH surfaces at one rest drew two cards (2026-08-28, "Same question showing up
-// twice in a row"): the worker registered it — the right move — and then re-fenced it at sign-off,
-// because the contract called the fence the handback and never said "not both". For half a day the rule
-// was "never also fence it"; the maintainer reversed that the same afternoon ("it kind of makes sense to
-// me for the agent to decide where questions render in its own rest message"), so the fence is now the
-// PLACEMENT and lib/questionShadow renders the registered card in its slot. One card either way — what
-// the fence decides is where. The contract must teach the placement AND the withdrawal, because a
-// question left out of the write-up is still open and still gates `done`.
-test("the contract teaches a worker to PLACE its registered questions, or unask them", () => {
+// The placement rule's whole arc, because the contract has now taught three different things here and a
+// stale assertion would resurrect the wrong one. (1) 2026-08-28 morning, "Same question showing up twice
+// in a row": register-then-refence drew two cards, so the rule was "never also fence it". (2) The same
+// afternoon the maintainer reversed it ("it kind of makes sense to me for the agent to decide where
+// questions render in its own rest message"), and the fence became the PLACEMENT. (3) 2026-08-30 the
+// maintainer retired placement ("Retire mid-prose placement" — measured: 15 of 17 real markers sat at
+// the tail where the card lands anyway, 2 of 3,005 transcripts couched one mid-prose). The card now
+// draws itself at its rest, a fence naming or restating a registration draws nothing, and the contract
+// must teach the withdrawal — a question left out of the write-up is still open and still gates `done`.
+test("the contract teaches that a registered question draws itself, and how to unask one", () => {
   for (const backend of ["claude", "codex"] as const) {
     const prompt = buildWorkerPrompt(backend)
-    assert.match(prompt, /PLACE EVERY OPEN QUESTION IN YOUR HANDOFF, OR `unask` IT/)
-    // The exact form, or a worker cannot write it: the id rides the fence's info string.
-    assert.match(prompt, /```question qst_ab12cd34/)
-    assert.match(prompt, /ONE card renders, and it is the\s+registered one/)
+    assert.match(prompt, /EVERY OPEN QUESTION DRAWS ITS OWN CARD AT ITS REST/)
+    assert.match(prompt, /draws NOTHING: one question, one card/)
     // Leaving one out is not how a worker drops it — that is what `unask` is for.
-    assert.match(prompt, /it is\s+one you `unask`/)
-    // And the old rule must be GONE, not merely contradicted somewhere further down.
+    assert.match(prompt, /it is one you\s+`unask`/)
+    // And the retired grammar must be GONE, not merely contradicted somewhere further down: the empty
+    // placement fence taught by example is exactly what a worker would keep writing.
+    assert.doesNotMatch(prompt, /PLACE EVERY OPEN QUESTION/)
+    assert.doesNotMatch(prompt, /```question qst_ab12cd34\n\s*```/)
     assert.doesNotMatch(prompt, /A REGISTERED QUESTION IS NEVER ALSO FENCED/)
   }
 })

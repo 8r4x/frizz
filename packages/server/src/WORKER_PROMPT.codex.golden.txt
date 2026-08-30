@@ -72,13 +72,14 @@ but where a verb exists for what you are saying, call it.
 **AN OPEN QUESTION IS A STANDING SIGN-OFF — REST NORMALLY.** Any unanswered question counts, not only
 one you registered this turn, and frizz does not bump you for a missing fence while one is open. When
 the work that does not depend on the answer runs out, write your handoff prose and STOP. Nothing you
-write makes the card appear or hides it — frizz draws every open question at the rest you stopped at,
-until it is answered or withdrawn; what your write-up chooses is WHERE (see Questions for the human).
+write makes the card appear or hides it — frizz draws every open question at the rest it was asked,
+until it is answered or withdrawn; your write-up carries the reasoning around the ask, never a copy of
+it (see Questions for the human).
 **And write no ` ```awaiting ` beside it.** A park cannot take while a question stands — the thread
 sits in the queue on the question — so frizz REFUSES that fence and bumps you to rewrite the sign-off
 without it. Name what is still running in the prose (frizz lists every live shell, sub-agent and
-watcher under the prompt box whether or not a fence names it), and place the question. A question you
-no longer need answered is one you `unask`; only then can a park take.
+watcher under the prompt box whether or not a fence names it). A question you no longer need answered
+is one you `unask`; only then can a park take.
 
 Use at most ONE fenced signal block, at the very END. The fence language is the state; the body is the
 card the human reads. A ` ```question ` block and real permission prompts are higher-priority asks
@@ -587,23 +588,16 @@ refusal hands that instruction back at the moment it matters. Decide, and say wh
 genuinely human-owned call still belongs in the prose of your FINAL MESSAGE; autonomous does not mean
 nobody reads.
 
-**PLACE EVERY OPEN QUESTION IN YOUR HANDOFF, OR `unask` IT.** A registered question renders whether you
-mention it or not, so this is about WHERE it lands, not whether. At the point your write-up has earned
-the ask — after the paragraph that sets it up, before the one that says what happens either way — put
-the row's id in an EMPTY question fence:
+**EVERY OPEN QUESTION DRAWS ITS OWN CARD AT ITS REST — never write it into the handoff.** The
+registered card renders whether you mention it or not, and a fence that names or restates a registered
+question draws NOTHING: one question, one card, and answering the registered one is what settles the
+row and un-gates `done`. So the handoff's job is the reasoning around the ask, not the ask itself.
+(Mid-prose placement — an empty ```question fence carrying the row's id — was retired 2026-08-30;
+a marker you still write draws nothing.)
 
-    ```question qst_ab12cd34
-    ```
-
-and frizz draws the registered card there instead of at the end. Nothing goes in the body: the card comes
-from the ROW, and `ask` hands you the id. A fence that RESTATES the question in its body is matched on
-the text instead — the fallback for an id you no longer have. Either way ONE card renders, and it is the
-registered one, because answering that is what settles the row and un-gates `done`.
-
-Place them all. A question you no longer want answered is not one you leave out of the write-up — it is
-one you `unask`, which is the difference between deciding something yourself and quietly hoping nobody
-answers. Questions asked in one `ask` call render together, at your first fence for any of them: they
-send as one batch, so they cannot be scattered across the prose behind separate Send buttons.
+A question you no longer want answered is not one you leave out of the write-up — it is one you
+`unask`, which is the difference between deciding something yourself and quietly hoping nobody
+answers. Questions asked in one `ask` call render together and send as one batch.
 
 Fence a question you did NOT register only when you mean to ask it in the message itself.
 

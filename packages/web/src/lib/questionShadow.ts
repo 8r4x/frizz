@@ -119,30 +119,17 @@ export function allFencesShadowed(
   return fences.length > 0 && fences.every((seg) => seg.kind === "question" && fenceStandsFor(seg, registered) !== undefined)
 }
 
-// ---- PLACEMENT: the fence says WHERE the registered card renders ----
+// ---- PLACEMENT IS RETIRED (2026-08-30) ----
 //
-// The fold above deletes a shadowing fence and lets the registered card land at the end of the rest.
-// That is right about which card survives and wrong about where it goes: a worker writes the question
-// INTO its handoff — a paragraph of setup, the ask, then what happens either way — and a card that
-// jumps to the bottom leaves the setup pointing at nothing (maintainer 2026-08-28: "it's kind of nice
-// that they can couch a registered question within some copy"). So the fence's POSITION is the
-// placement, and the registered card renders in its slot instead of being dropped.
-//
-// PLACEMENT IS PER REST, NOT PER QUESTION, and that is a constraint rather than a simplification: the
-// stack submits every answer in ONE call (RegisteredQuestionStack — a per-question send half-wakes the
-// turn, and the memo settled it as policy 7B), so one rest's questions cannot be scattered across the
-// prose behind separate Send buttons. The FIRST fence of the rest that stands for any of them places
-// the whole group.
-//
-// NOTHING IS EVER LOST BY OMISSION. A rest whose message names none of its registrations still renders
-// them at the anchor, exactly as before — the worker chooses the position, never whether the human sees
-// it. That is the difference between this and gating the render on the worker remembering to write
-// something, which would put an unanswerable question behind a `done` nobody can reach.
-//
-// AND THE PLACEMENT IS NOT CONFINED TO THE ASKING REST. The worker contract says the card is drawn "at
-// the rest you stopped at", and a worker that rests again after the human replied past the question
-// writes its empty ```question qst_… marker into THAT handoff. The marker has to take: the card belongs
-// where the prose that sets it up is, not nine hours up the transcript at the rest the row was minted.
+// The fence used to say WHERE the registered card renders: an empty ```question qst_… marker took the
+// rest's whole group into its own slot (`placeQuestions`), so a worker could couch the ask inside its
+// handoff. Measured before retiring it: across the 3,005 transcripts on this machine, 15 of 17 real
+// markers sat at the TAIL of their message — where the card lands with no marker at all — and 2 were
+// genuinely couched mid-prose (maintainer 2026-08-30, choosing "Retire mid-prose placement"). Questions
+// now always render at the tail of their rest; one asked above the loaded window renders at the window
+// head, as the no-marker fallback always did. The FOLD above survives the retirement — a fence that
+// names or restates a registration still draws nothing — so a legacy marker is inert rather than a
+// second card, and fenceStandsFor below is the fold's matcher.
 
 /** The registration a ```question fence STANDS FOR, if any: the one its info-string id names, else the
  *  one its prose restates. The id is exact and the prose is not, so a worker that writes
@@ -155,42 +142,3 @@ export function fenceStandsFor<Q extends Pick<RegisteredQuestionView, "id" | "sp
   return registered.find((q) => fenceRestatesRegistered(seg.text, [q]))
 }
 
-export interface QuestionPlacement<Q> {
-  /** The rest's whole registered group, keyed by the index of the message that PLACES it. */
-  placed: Map<number, Q[]>
-  /** The anchors those groups would otherwise have rendered at, so the anchor path skips them. */
-  placedAnchors: Set<number>
-}
-
-/** Where each group of registered questions renders, given what the messages from its ask onward
- *  actually wrote. Within one rest the FIRST standing fence takes the group (see above); across rests the
- *  LAST rest with one wins — the newest handoff is the one the human is reading, and a placement in an
- *  older sign-off is history. Two groups placed into the same message share the slot (they send as one
- *  batch there regardless). */
-export function placeQuestions<Q extends Pick<RegisteredQuestionView, "id" | "spec"> & { askedAt: string }>(
-  messages: readonly (AnchorMessage & { text?: string })[],
-  questions: readonly Q[],
-): QuestionPlacement<Q> {
-  const placed = new Map<number, Q[]>()
-  const placedAnchors = new Set<number>()
-  for (const [anchor, group] of questionsByAnchor(messages, questions)) {
-    let placedAt = -1
-    // Whether the rest being walked already holds the group's slot; a human turn opens the next rest.
-    let restTaken = false
-    for (let i = restStart(messages, anchor); i < messages.length; i++) {
-      const m = messages[i]
-      if (isTurn(m)) { restTaken = false; continue }
-      if (restTaken || !m.text) continue
-      const stands = splitQuestionBlocks(m.text).some((seg) => seg.kind === "question" && fenceStandsFor(seg, group) !== undefined)
-      if (!stands) continue
-      placedAt = i
-      restTaken = true
-    }
-    if (placedAt < 0) continue
-    const at = placed.get(placedAt)
-    if (at) at.push(...group)
-    else placed.set(placedAt, [...group])
-    placedAnchors.add(anchor)
-  }
-  return { placed, placedAnchors }
-}
