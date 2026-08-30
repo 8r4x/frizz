@@ -14,6 +14,8 @@ import {
   isParkCorrection,
   isWakeDelivery,
   parseAgentMessage,
+  parseAskUserQuestionAnswers,
+  parseAskUserQuestionInput,
   parseGithubWakeSteer,
   splitWakeDeliveries,
   stripHumanGapNote,
@@ -1559,6 +1561,15 @@ function attachToolResults(
       call.status = status
       if (durationMs !== undefined) call.durationMs = durationMs
       if (outputImage) call.outputImage = outputImage
+      // An AskUserQuestion's structured result carries the human's answers keyed by question text —
+      // lift them onto the card so the settled question renders answered. The prose result ("Your
+      // questions have been answered: …", or the withdrawal boilerplate on a deny) restates what the
+      // card already draws, so an ask call never grows an output pane.
+      if (call.ask) {
+        const answers = b.is_error === true ? null : parseAskUserQuestionAnswers(rec.toolUseResult, call.ask)
+        if (answers) call.askAnswers = answers.map((a) => (a === null ? null : redactToolPayload(a)))
+        continue
+      }
       if (!text) continue
       if (entry.name === "Read") call.read = capRead(text)
       else if (!call.edit || status !== "completed") call.output = capRead(text)
@@ -1670,6 +1681,23 @@ function toolCalls(block: any, turn: { turnModel?: string; turnEffort?: string }
           caption,
         }]
       }
+    }
+    // A native AskUserQuestion carries its structured questions onto the card, so the SETTLED call
+    // renders as a read-only question card at its place in the transcript. This is the durable record
+    // of a question the human saw: a follow-up sent instead of an answer retires the pending
+    // interaction card (the broker denies the parked call), and without this the ask vanished into a
+    // generic tool line inside a "Ran N tool calls" disclosure.
+    if (name === "AskUserQuestion") {
+      const ask = parseAskUserQuestionInput(input).map((q) => ({
+        question: redactToolPayload(q.question),
+        header: q.header === undefined ? undefined : redactToolPayload(q.header),
+        multiSelect: q.multiSelect,
+        options: q.options.map((o) => ({
+          label: redactToolPayload(o.label),
+          description: o.description === undefined ? undefined : redactToolPayload(o.description),
+        })),
+      }))
+      if (ask.length) return [{ name, detail: ask[0].header ?? ask[0].question.slice(0, 80), ask }]
     }
     // A Monitor is ALWAYS a detached background watcher (Claude Code runs it detached; its launch
     // result is only an ack). Mark it background so it registers in backgroundShells and its card

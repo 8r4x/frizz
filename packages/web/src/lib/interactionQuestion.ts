@@ -16,6 +16,7 @@
 // answer as freeform prose instead of a pick.
 import {
   NOTES_FIELD_SUFFIX,
+  type AskQuestion,
   type InteractionField,
   type InteractionRecord,
   type InteractionValue,
@@ -98,6 +99,48 @@ export function interactionQuestions(record: Pick<InteractionRecord, "payload">)
     }
   }
   return out.length > 0 ? out : null
+}
+
+// PRODUCER 4 of the shared question model: a SETTLED native AskUserQuestion read back out of the
+// transcript (TranscriptToolCall.ask/askAnswers). The pending copy of the same call rendered through
+// producer 2 above while it was answerable; this is its durable, read-only afterlife — the record that
+// keeps a question on screen after the operator steered past it instead of answering (or answered it,
+// in which case the choice renders settled). Options are lettered exactly as producer 2 letters them,
+// and the option's one-line description rides the line the way a fence option carries its trade-off.
+export interface SettledAskView {
+  /** The neutral model the shared card renders. */
+  question: ParsedQuestion
+  /** The options the recorded answer names (empty when it named none). */
+  chosenIdxs: number[]
+  /** The recorded answer when it is NOT one of the options — free text, or a label the parse could not
+   *  match. Undefined for an unanswered ask, which the card renders as "Not answered". */
+  text?: string
+}
+
+export function settledAskView(q: AskQuestion, answer: string | null | undefined): SettledAskView {
+  const chosenIdxs: number[] = []
+  let text: string | undefined
+  if (answer) {
+    // A single-select answer is the chosen option's label verbatim; a multi-select answer is the chosen
+    // labels joined ", " (the server's normalization of the structured result). Match labels first and
+    // fall back to free text — an answer that names no option is the human typing their own.
+    const parts = q.multiSelect ? answer.split(", ") : [answer]
+    q.options.forEach((option, index) => {
+      if (parts.includes(option.label)) chosenIdxs.push(index)
+    })
+    if (chosenIdxs.length === 0) text = answer
+  }
+  return {
+    question: {
+      kind: q.multiSelect ? "multi" : "question",
+      danger: false,
+      contextMd: q.question,
+      options: q.options.map((option, index) => `${optionLetter(index)} ${option.label}${option.description ? ` — ${option.description}` : ""}`),
+      recommendedIdx: null,
+    },
+    chosenIdxs,
+    text,
+  }
 }
 
 /** Map the card's staged answers back to typed interaction field values, using EXACTLY the fence

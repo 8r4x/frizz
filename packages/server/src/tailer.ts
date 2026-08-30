@@ -2,8 +2,8 @@ import { statSync, openSync, readSync, closeSync, readdirSync, realpathSync, mkd
 import { execFileSync } from "node:child_process"
 import { basename, join } from "node:path"
 import { homedir, tmpdir } from "node:os"
-import type { AwaitingHint } from "@frizz/shared"
-import { insideFence, isAllInjectedNoise, isInterruptMarker, PermissionMode, saysAllDone, splitAwaitingFrontmatter } from "@frizz/shared"
+import type { AskQuestion, AwaitingHint } from "@frizz/shared"
+import { insideFence, isAllInjectedNoise, isInterruptMarker, parseAskUserQuestionInput, PermissionMode, saysAllDone, splitAwaitingFrontmatter } from "@frizz/shared"
 import type { Bus } from "./bus.ts"
 import { permMarkerPath, type Project } from "./project.ts"
 import { isBrokerClaudeRow, isHeadlessRow } from "./storage.ts"
@@ -379,19 +379,9 @@ export interface RetiredShellView {
 
 // A pending native AskUserQuestion (structured, capped). Mirrors @frizz/shared PendingAsk; `id` is
 // the tool_use id used to clear it when its tool_result lands.
-interface AskOptionData {
-  label: string
-  description?: string
-}
-interface AskQuestionData {
-  question: string
-  header?: string
-  multiSelect?: boolean
-  options: AskOptionData[]
-}
 export interface PendingAskData {
   id: string
-  questions: AskQuestionData[]
+  questions: AskQuestion[]
 }
 
 // A COMPLETED sub-agent retained for post-hoc review (reviewing a finished child is the main reason to
@@ -1587,39 +1577,9 @@ function trackStops(state: TailState, rec: Record): void {
   }
 }
 
-// Cap a foreign string defensively (AskUserQuestion is an UNTRUSTED tool payload — never let it
-// fatten the snapshot). Caps chosen so the read-only render stays a compact card.
-function capAsk(s: string, n: number): string {
-  return s.length > n ? `${s.slice(0, n - 1)}…` : s
-}
-// Parse an AskUserQuestion tool_use `input.questions` into the capped structured shape. Defensive at
-// every level: a missing/misshaped field is skipped, never thrown. Empty result → treat as "no ask".
-function parseAskInput(input: unknown): AskQuestionData[] {
-  const qs = (input as { questions?: unknown } | null)?.questions
-  if (!Array.isArray(qs)) return []
-  const out: AskQuestionData[] = []
-  for (const q of qs.slice(0, 8)) {
-    if (!q || typeof q !== "object") continue
-    const qq = q as { question?: unknown; header?: unknown; multiSelect?: unknown; options?: unknown }
-    const question = typeof qq.question === "string" && qq.question.trim() ? capAsk(qq.question.trim(), 400) : ""
-    if (!question) continue
-    const header = typeof qq.header === "string" && qq.header.trim() ? capAsk(qq.header.trim(), 60) : undefined
-    const multiSelect = qq.multiSelect === true ? true : undefined
-    const options: AskOptionData[] = []
-    if (Array.isArray(qq.options)) {
-      for (const o of qq.options.slice(0, 12)) {
-        if (!o || typeof o !== "object") continue
-        const oo = o as { label?: unknown; description?: unknown }
-        const label = typeof oo.label === "string" && oo.label.trim() ? capAsk(oo.label.trim(), 160) : undefined
-        if (!label) continue
-        const description = typeof oo.description === "string" && oo.description.trim() ? capAsk(oo.description.trim(), 300) : undefined
-        options.push({ label, description })
-      }
-    }
-    out.push({ question, header, multiSelect, options })
-  }
-  return out
-}
+// The defensive parse of the untrusted `input.questions` payload lives in @frizz/shared
+// (parseAskUserQuestionInput), so this safety net and the transcript projector's read-only question
+// card can never cap or shape the same tool call differently.
 // Capture a PENDING native AskUserQuestion: an AskUserQuestion tool_use whose tool_result hasn't landed
 // yet freezes the session at a TUI dialog. Same correlation pattern as sub-agent tracking (keyed by
 // tool_use id). Cleared by clearAskOnResult when the matching tool_result arrives.
@@ -1632,7 +1592,7 @@ function trackAsk(state: TailState, rec: Record): void {
     if (b.type !== "tool_use" || b.name !== "AskUserQuestion") continue
     const id = typeof b.id === "string" ? b.id : undefined
     if (!id) continue
-    const questions = parseAskInput(b.input)
+    const questions = parseAskUserQuestionInput(b.input)
     if (questions.length) state.pendingAsk = { id, questions }
   }
 }

@@ -328,7 +328,66 @@ export const AskQuestion = z.object({
 export const PendingAsk = z.object({
   questions: z.array(AskQuestion),
 })
+export type AskOption = z.infer<typeof AskOption>
+export type AskQuestion = z.infer<typeof AskQuestion>
 export type PendingAsk = z.infer<typeof PendingAsk>
+
+// Cap a foreign string defensively (AskUserQuestion is an UNTRUSTED tool payload — never let it
+// fatten a snapshot or a projected transcript). Caps chosen so the read-only render stays a compact card.
+function capAsk(s: string, n: number): string {
+  return s.length > n ? `${s.slice(0, n - 1)}…` : s
+}
+
+/** Parse an AskUserQuestion tool_use `input.questions` into the capped structured shape. Defensive at
+ *  every level: a missing/misshaped field is skipped, never thrown. Empty result → treat as "no ask".
+ *  Shared by the tailer (the pending-ask safety net) and the transcript projector (the settled call's
+ *  read-only question card), so the two can never cap or shape the same payload differently. */
+export function parseAskUserQuestionInput(input: unknown): AskQuestion[] {
+  const qs = (input as { questions?: unknown } | null)?.questions
+  if (!Array.isArray(qs)) return []
+  const out: AskQuestion[] = []
+  for (const q of qs.slice(0, 8)) {
+    if (!q || typeof q !== "object") continue
+    const qq = q as { question?: unknown; header?: unknown; multiSelect?: unknown; options?: unknown }
+    const question = typeof qq.question === "string" && qq.question.trim() ? capAsk(qq.question.trim(), 400) : ""
+    if (!question) continue
+    const header = typeof qq.header === "string" && qq.header.trim() ? capAsk(qq.header.trim(), 60) : undefined
+    const multiSelect = qq.multiSelect === true ? true : undefined
+    const options: AskOption[] = []
+    if (Array.isArray(qq.options)) {
+      for (const o of qq.options.slice(0, 12)) {
+        if (!o || typeof o !== "object") continue
+        const oo = o as { label?: unknown; description?: unknown }
+        const label = typeof oo.label === "string" && oo.label.trim() ? capAsk(oo.label.trim(), 160) : undefined
+        if (!label) continue
+        const description = typeof oo.description === "string" && oo.description.trim() ? capAsk(oo.description.trim(), 300) : undefined
+        options.push({ label, description })
+      }
+    }
+    out.push({ question, header, multiSelect, options })
+  }
+  return out
+}
+
+/** Parse an answered AskUserQuestion's structured tool result (`toolUseResult.answers` — a record
+ *  keyed by question text) into the per-question answer list, parallel to `questions`. Null when the
+ *  result carries no readable answers at all (the withdrawn / denied case). */
+export function parseAskUserQuestionAnswers(result: unknown, questions: readonly AskQuestion[]): (string | null)[] | null {
+  const answers = (result as { answers?: unknown } | null)?.answers
+  if (!answers || typeof answers !== "object" || Array.isArray(answers)) return null
+  const byQuestion = answers as Record<string, unknown>
+  let any = false
+  const out = questions.map((q) => {
+    // The result keys carry the UNCAPPED question text; a capped `q.question` still matches by prefix.
+    const key = Object.keys(byQuestion).find((k) => k === q.question || capAsk(k.trim(), 400) === q.question)
+    const raw = key === undefined ? undefined : byQuestion[key]
+    const text = typeof raw === "string" ? raw : Array.isArray(raw) ? raw.filter((v) => typeof v === "string").join(", ") : ""
+    if (!text.trim()) return null
+    any = true
+    return capAsk(text.trim(), 600)
+  })
+  return any ? out : null
+}
 
 // ---- THE AWAITING FENCE ---------------------------------------------------------------------------
 // A worker ends every turn in ONE terminal state: it needs the human, it is waiting on work that is
@@ -3846,6 +3905,18 @@ export const TranscriptToolCall = z.object({
   // call into a TodoBlock — a checklist card, one row per task with its status. Optional, so a
   // pre-restart server / older transcript falls back to the generic card.
   todos: z.array(TranscriptTodo).optional(),
+  // ---- Native question (AskUserQuestion) block ----
+  // The structured questions an `AskUserQuestion` tool_use asked, so a SETTLED call renders as a
+  // read-only question card at its place in the transcript instead of a generic tool line buried in a
+  // disclosure. This is what keeps a question the human saw from vanishing: a follow-up sent instead
+  // of an answer retires the pending interaction card (the broker denies the parked call), and without
+  // this field nothing in the transcript ever said what was asked. Optional, so a pre-restart server /
+  // older transcript falls back to the generic card.
+  ask: z.array(AskQuestion).optional(),
+  // The human's answers, parallel to `ask` (null = that question got no answer), parsed from the
+  // call's structured tool result. Absent entirely when the call settled unanswered — the withdrawn /
+  // denied case — which the client renders as "Not answered".
+  askAnswers: z.array(z.string().nullable()).optional(),
 })
 export type TranscriptToolCall = z.infer<typeof TranscriptToolCall>
 

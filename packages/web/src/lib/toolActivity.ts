@@ -62,6 +62,13 @@ function normalizedToolName(name: string): string {
  *     Click to expand` with both shots hidden behind it (maintainer 2026-08-02: "the screenshots should
  *     just be rendered in the chat automatically").
  *
+ *   • A SETTLED native ask (`AskUserQuestion` carrying its structured questions, with a result). The
+ *     question was ON SCREEN as an answerable card until it settled; folding it into `Ran N tool calls`
+ *     is how an unanswered question vanished from the transcript the moment the operator steered past
+ *     it (maintainer 2026-08-30: "the questions should continue to render as they were from earlier in
+ *     the transcript, even if they weren't answered"). A PENDING ask stays foldable: while it is live,
+ *     the interaction stack owns the answerable copy, and history must not draw it twice.
+ *
  * Deliberately NOT here: codex's `list_agents` ("Agents · list live agents"), which is a plain READ of
  * the roster — it starts nothing, addresses nobody, and its whole body is a one-line count, so a model
  * that polls it mid-burst was splitting one batch into `Ran 1 tool call` / a standalone Agents card /
@@ -71,7 +78,7 @@ function normalizedToolName(name: string): string {
  */
 export function isToolActivityException(tool: Pick<
   TranscriptToolCall,
-  "name" | "prompt" | "agentId" | "sendTo" | "sendBody" | "backgroundState" | "outputImage" | "sentImages"
+  "name" | "prompt" | "agentId" | "sendTo" | "sendBody" | "backgroundState" | "outputImage" | "sentImages" | "ask" | "status"
 >): boolean {
   return tool.prompt !== undefined
     || tool.agentId !== undefined
@@ -79,7 +86,15 @@ export function isToolActivityException(tool: Pick<
     || tool.sendBody !== undefined
     || (tool.backgroundState !== undefined && !orphanedPoll(tool))
     || isPictureTool(tool)
+    || isSettledAsk(tool)
     || SUB_AGENT_TOOL_NAMES.has(normalizedToolName(tool.name))
+}
+
+/** A native AskUserQuestion that has SETTLED — its result landed, answered or not. This is the copy the
+ *  transcript renders as a read-only question card; a pending one is drawn by the interaction stack
+ *  (broker path) or the frozen-ask banner instead, never from history. */
+export function isSettledAsk(tool: Pick<TranscriptToolCall, "ask" | "status">): boolean {
+  return tool.ask !== undefined && tool.ask.length > 0 && tool.status !== undefined && tool.status !== "pending"
 }
 
 /**

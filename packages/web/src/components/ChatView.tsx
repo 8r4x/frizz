@@ -5,7 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUp, Bot, Check, ChevronRight, FileText, HelpCircle, Hourglass, KeyRound, ListChecks, Loader2, Radar, TerminalSquare, X, type LucideIcon } from "lucide-react"
 import { awaitingFenceTitle, parseRecurringPrompt } from "@frizz/shared"
-import type { AwaitingHint, BgShellView, PendingAsk, RegisteredQuestionView, SubAgentView, ThreadView as ThreadViewData, TranscriptEdit, TranscriptMessage, TranscriptPart, TranscriptTodo, TranscriptToolCall } from "@frizz/shared"
+import type { AskQuestion, AwaitingHint, BgShellView, PendingAsk, RegisteredQuestionView, SubAgentView, ThreadView as ThreadViewData, TranscriptEdit, TranscriptMessage, TranscriptPart, TranscriptTodo, TranscriptToolCall } from "@frizz/shared"
 import { store, threadBySlug, pushDrawer, pushSubAgentDrawer, pushBackgroundShellDrawer, showToast } from "../store.ts"
 import { useBackgroundShellLines, useBoard, useProjectDir, useTranscript, type ChatMessage, type TranscriptData } from "../hooks.ts"
 import { rpc } from "../api/rpc.ts"
@@ -78,6 +78,7 @@ import { RegisteredQuestionStack } from "./RegisteredQuestionCards.tsx"
 // a file THIS one imports, so the card could not have stayed here without a module cycle.
 import { BLOCK_RADIUS, CARD_ACTION_EXPLAINER, CARD_ACTION_RADIUS, CARD_BODY, CARD_LINK, CARD_PRIMARY_ACTION, CARD_PRIMARY_BUTTON, CardActions, CardContent, CardHead, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
 import { QuestionBlockCard } from "./QuestionBlockCard.tsx"
+import { settledAskView } from "../lib/interactionQuestion.ts"
 // ONE frame for every image the chat renders — border, inset mat, centered picture. See its module
 // header for why it spans the message width rather than shrink-wrapping each picture.
 import { FRAMED_IMAGE, ImageFrame } from "./ImageFrame.tsx"
@@ -100,7 +101,7 @@ import { spaNavigate } from "../lib/router.ts"
 import { prependEarlierPage } from "../lib/transcriptPagination.ts"
 import { buildVirtualTranscriptMessageRows, earlierLoadGate, nextTailFollow, TAIL_FOLLOW_PX, type VirtualTranscriptMessageRow } from "../lib/virtualTranscript.ts"
 import { withoutRedundantRestDividers } from "../lib/restDividers.ts"
-import { coalesceToolActivityMessages, editedFileCount, historicalToolActivityMessages, isPictureTool, isToolActivityException, liveRuntimeStartedAt, liveToolActivityRun, liveToolActivityTail, settledToolActivityLabel, thinkingToolActivityLabel, toolActivityLabel, toolActivityStampAt } from "../lib/toolActivity.ts"
+import { coalesceToolActivityMessages, editedFileCount, historicalToolActivityMessages, isPictureTool, isSettledAsk, isToolActivityException, liveRuntimeStartedAt, liveToolActivityRun, liveToolActivityTail, settledToolActivityLabel, thinkingToolActivityLabel, toolActivityLabel, toolActivityStampAt } from "../lib/toolActivity.ts"
 import { CodexDirectiveCard, MermaidDiagram } from "./CodexRichOutput.tsx"
 import { META_CARD_STEP, PICTURE_STEP, STEP, USER_TAIL_EXTRA, VSpace } from "./rhythm.tsx"
 
@@ -2014,6 +2015,12 @@ export interface CollapsedTool {
   // like the prompt/read/command entries, stands alone — two consecutive lists are two different list
   // states and must never fold into a ×2 count.
   todos?: TranscriptTodo[]
+  // Set for a native AskUserQuestion carrying its structured questions (see TranscriptToolCall.ask).
+  // A SETTLED ask renders as read-only question cards — the durable record of a question the human saw,
+  // answered or not — and stands alone; a pending one folds like any generic call (the interaction
+  // stack owns the answerable copy while it is live).
+  ask?: AskQuestion[]
+  askAnswers?: (string | null)[]
   count: number
 }
 
@@ -2056,6 +2063,11 @@ function collapseTools(tools: TranscriptMessage["tools"]): CollapsedTool[] {
       // input/output branch below, which would otherwise claim a codex plan (its `explanation` rides
       // `input`) and render it as a generic card.
       out.push({ name: t.name, detail: t.detail, todos: t.todos, input: t.input, status: t.status, durationMs: t.durationMs, count: 1 })
+    } else if (isSettledAsk(t)) {
+      // A settled native ask renders as its own read-only question card(s) — never folds into a ×N
+      // run. A PENDING ask deliberately falls through to the generic branches: while it is live the
+      // interaction stack draws the answerable copy, and history must not draw it twice.
+      out.push({ name: t.name, detail: t.detail, ask: t.ask, askAnswers: t.askAnswers, status: t.status, durationMs: t.durationMs, count: 1 })
     } else if (t.sentImages || t.sentFiles) {
       // A SendUserFile delivery renders as its own SentFilesCard (images inline + caption) — never folds.
       out.push({ name: t.name, detail: t.detail, sentImages: t.sentImages, sentFiles: t.sentFiles, caption: t.caption, status: t.status, durationMs: t.durationMs, count: 1 })
@@ -2195,10 +2207,36 @@ export function ToolCardRouter({ t, startedAt }: { t: CollapsedTool; startedAt?:
   // The built-in to-do list, ahead of the generic input/output card (a codex plan's `explanation` rides
   // `input`, which that branch would claim first).
   if (t.todos) return <TodoBlock todos={t.todos} note={t.input} meta={<ToolStatusMeta status={t.status} durationMs={t.durationMs} />} />
+  // A settled native ask: the read-only question card(s), answered or not — see SettledAskBlock.
+  if (isSettledAsk(t)) return <SettledAskBlock ask={t.ask ?? []} askAnswers={t.askAnswers} />
   if (t.input || t.output) {
     return <BashBlock name={t.name} command={t.input ?? ""} desc={t.detail} output={t.output} status={t.status} backgroundState={t.backgroundState} liveBackgroundState={liveBackgroundState} exitCode={t.exitCode} sessionId={t.sessionId} durationMs={t.durationMs} inputLabel="input" startedAt={startedAt} />
   }
   return <ToolCard name={t.name} detail={t.detail} count={t.count} status={t.status} backgroundState={t.backgroundState} liveBackgroundState={liveBackgroundState} exitCode={t.exitCode} cwd={t.cwd} sessionId={t.sessionId} durationMs={t.durationMs} startedAt={startedAt} />
+}
+
+// A SETTLED native AskUserQuestion, read back out of the transcript: the same question card the
+// interaction stack drew while the ask was answerable, now read-only at the place the call happened.
+// This is what keeps a question the human saw from vanishing — a follow-up sent instead of an answer
+// retires the pending card, and until 2026-08-30 the transcript then held only a generic tool line
+// inside a "Ran N tool calls" disclosure (maintainer: "the questions should continue to render as they
+// were from earlier in the transcript, even if they weren't answered"). An answered ask renders its
+// recorded choice in the AnswersCard's quiet settled treatment; an unanswered one says "Not answered".
+function SettledAskBlock({ ask, askAnswers }: { ask: AskQuestion[]; askAnswers?: (string | null)[] }) {
+  return (
+    <div data-settled-ask className="flex flex-col gap-1.5">
+      {ask.map((q, i) => {
+        const view = settledAskView(q, askAnswers?.[i])
+        return (
+          <QuestionBlockCard
+            key={i}
+            question={view.question}
+            settled={{ chosenIdxs: view.chosenIdxs, text: view.text }}
+          />
+        )
+      })}
+    </div>
+  )
 }
 
 type ToolStatus = NonNullable<TranscriptToolCall["status"]>

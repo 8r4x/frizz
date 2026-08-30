@@ -58,6 +58,7 @@ export function QuestionBlockCard({
   wrap,
   aside,
   label,
+  settled,
 }: {
   /** Producer 1: the raw body of a ```question fence, parsed here. */
   raw?: string
@@ -76,6 +77,12 @@ export function QuestionBlockCard({
    *  a branch's cards are siblings in the DOM, and three cards all titled "Question" read as three
    *  unrelated asks however far the second two are indented. Absent ⇒ the kind's own word. */
   label?: string
+  /** Producer 4: the SETTLED state of a native ask read back out of the transcript. Read-only by
+   *  definition (never combined with `interactive`): `chosenIdxs` are the options the recorded answer
+   *  named (rendered in the AnswersCard's quiet settled treatment, never the awaiting-you accent),
+   *  `text` an answer that named none, and neither ⇒ the ask ended unanswered, which renders a muted
+   *  "Not answered" note. */
+  settled?: { chosenIdxs: number[]; text?: string }
 }) {
   const parsed = useMemo(
     () => question ?? parseQuestionBlock(raw ?? "", questionKind ?? "question", danger),
@@ -175,6 +182,7 @@ export function QuestionBlockCard({
               // MULTI: selected == toggled in the set (coexists with freetext). SINGLE: selected only
               // while it's the effective answer — a freetext override clears it.
               selected={isMulti ? chosenSet.includes(i) : chosen === i && !freetext.trim()}
+              settledPick={settled?.chosenIdxs.includes(i) ?? false}
               disabled={!interactive}
               onClick={() => {
                 interactive?.onChip(i, opt)
@@ -263,6 +271,19 @@ export function QuestionBlockCard({
           )}
         </div>
       )}
+      {/* The SETTLED answer, when it named no option (free text, or a label the parse could not match):
+          the AnswersCard's quiet recessed chip — a past choice, never the awaiting-you accent. */}
+      {settled?.text && (
+        <div className="mt-2 whitespace-pre-wrap [overflow-wrap:anywhere] rounded-md border border-border-strong border-l-2 border-l-accent/40 bg-bg/50 px-2.5 py-1.5 text-[12px] leading-snug text-fg">
+          {settled.text}
+        </div>
+      )}
+      {/* A settled ask nobody answered — the operator steered past it, or the session moved on. The
+          note is what keeps the read-only card honest: the chips above are dim and unclickable, and
+          without a word saying so the card reads as merely waiting. */}
+      {settled && settled.chosenIdxs.length === 0 && !settled.text && (
+        <div className="mt-2 text-[11px] text-muted/70">Not answered</div>
+      )}
       {/* A "Note: …" footnote the worker wrote AFTER the options — rendered below the chips (muted) so
           the choices stay answerable instead of swallowing them (the old parser dropped the chips). */}
       {parsed.trailingMd && (
@@ -333,6 +354,7 @@ function nextOptionId(options: string[]): string {
 function Chip({
   label,
   selected,
+  settledPick,
   disabled,
   multi,
   recommended,
@@ -341,6 +363,9 @@ function Chip({
 }: {
   label: string
   selected: boolean
+  /** The recorded answer of a SETTLED ask named this option: the AnswersCard's quiet recessed
+   *  treatment (inset panel, soft left rule) — a past choice, never the awaiting-you accent. */
+  settledPick?: boolean
   disabled: boolean
   multi?: boolean
   recommended?: boolean
@@ -358,11 +383,13 @@ function Chip({
       className={`relative flex items-start gap-2 rounded-md border px-3 py-1.5 text-[12px] leading-snug transition-colors ${
         selected
           ? "border-accent bg-accent/10 text-fg"
-          : disabled
-            ? "border-border text-muted/80"
-            // hover lands on `elevated`, one step above the card's own panel-2 fill — hovering to
-            // panel-2 was invisible once every card standardized on that fill.
-            : "border-border text-fg/90 hover:bg-elevated hover:border-border-strong"
+          : settledPick
+            ? "border-border-strong border-l-2 border-l-accent/40 bg-bg/50 text-fg"
+            : disabled
+              ? "border-border text-muted/80"
+              // hover lands on `elevated`, one step above the card's own panel-2 fill — hovering to
+              // panel-2 was invisible once every card standardized on that fill.
+              : "border-border text-fg/90 hover:bg-elevated hover:border-border-strong"
       }`}
     >
       <button
@@ -377,10 +404,10 @@ function Chip({
         <span
           aria-hidden
           className={`mt-px flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[3px] border ${
-            selected ? "border-accent bg-accent text-bg" : "border-border-strong"
+            selected ? "border-accent bg-accent text-bg" : settledPick ? "border-border-strong text-fg" : "border-border-strong"
           }`}
         >
-          {selected && <Check size={10} strokeWidth={3} />}
+          {(selected || settledPick) && <Check size={10} strokeWidth={3} />}
         </span>
       )}
       {/* The "Recommended" badge FLOATS to the top-right so the option text flows around it and reclaims
