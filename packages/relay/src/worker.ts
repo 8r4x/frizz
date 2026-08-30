@@ -1,4 +1,10 @@
-import { importClaimPublicKey, relayHandshakeInput, type RelayHandshake } from "@frizz/shared"
+import {
+  importClaimPublicKey,
+  RELAY_KEEPALIVE_PING,
+  RELAY_KEEPALIVE_PONG,
+  relayHandshakeInput,
+  type RelayHandshake,
+} from "@frizz/shared"
 import { BoardSocket } from "./board-socket.ts"
 
 /**
@@ -115,7 +121,12 @@ export class Board {
   private readonly adapters = new WeakMap<WorkerWebSocket, { send: (data: string) => void; close: (code?: number, reason?: string) => void }>()
   private restored = false
 
-  constructor(private readonly state: DurableObjectState) {}
+  constructor(private readonly state: DurableObjectState) {
+    // The board's keep-alive is answered by the RUNTIME, not by this object: an exact-match
+    // auto-response works while the object is hibernated and does not wake it. Answering in
+    // webSocketMessage instead would bill a wake per beat — thousands a day per idle board.
+    state.setWebSocketAutoResponse(new WebSocketRequestResponsePair(RELAY_KEEPALIVE_PING, RELAY_KEEPALIVE_PONG))
+  }
 
   private adapterFor(ws: WorkerWebSocket) {
     const existing = this.adapters.get(ws)
@@ -237,6 +248,11 @@ export class Board {
     // which for the board's event feed is never.
     const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>()
     const writer = writable.getWriter()
+    // A visitor that hangs up cancels the readable, and the write after that rejects. The chunk
+    // AFTER that one then throws, which BoardSocket reads as "drop this request and tell the board
+    // to abort" — the only signal there is, because a TransformStream reports a gone reader no
+    // earlier than the next write.
+    let visitorGone = false
 
     try {
       const response = await this.relay.request(
@@ -247,7 +263,12 @@ export class Board {
           ...(body && body.byteLength > 0 ? { body } : {}),
         },
         {
-          push: (chunk) => void writer.write(chunk),
+          push: (chunk) => {
+            if (visitorGone) throw new Error("the visitor hung up")
+            void writer.write(chunk).catch(() => {
+              visitorGone = true
+            })
+          },
           end: () => void writer.close().catch(() => {}),
         }
       )

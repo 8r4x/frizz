@@ -57,6 +57,18 @@ export interface BoardSocketOptions {
  */
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000
 
+/**
+ * How long a STARTED stream may sit with no chunks before it is ended.
+ *
+ * An open streamed response is what keeps the Durable Object awake — and billed — so a stream nobody
+ * is feeding must not be allowed to hold it open forever. This is an inactivity bound, not a lifetime
+ * cap: a live SSE feed re-arms it on every chunk and is never cut, while a stream orphaned by a
+ * vanished board or visitor dies within minutes instead of pinning the object for days (measured:
+ * ~30 object-hours per day of pure idle burn, which blew the free tier's daily cap with zero
+ * traffic). A visitor cut mid-stream is an EventSource, and an EventSource reconnects by itself.
+ */
+const STREAM_IDLE_TIMEOUT_MS = 2 * 60_000
+
 export class BoardSocket {
   private socket: SocketLike | null = null
   private readonly pending = new Map<string, Pending>()
@@ -108,6 +120,11 @@ export class BoardSocket {
       this.pending.delete(id)
       this.clear(id)
       entry.fail(reason)
+      // A settled head cannot be failed — the promise already resolved — so a streaming response has
+      // to be ENDED here or it stays open with nothing left to feed it. Before this line, a board
+      // that disconnected left every visitor's SSE response open indefinitely, and those orphaned
+      // streams held the Durable Object awake (and billed) for days.
+      entry.stream?.end()
     }
     // A terminal is useless once the board it was typing into has gone. Closing tells the browser at
     // once, instead of leaving a dead pane that looks live until someone types into it.
@@ -129,6 +146,21 @@ export class BoardSocket {
       this.timers.delete(id)
       this.options.clearTimer?.(handle)
     }
+  }
+
+  /** (Re)arm the inactivity bound on a started stream. Every chunk pushes it back; see STREAM_IDLE_TIMEOUT_MS. */
+  private armIdleTimer(id: string, entry: Pending): void {
+    if (!this.options.setTimer) return
+    this.timers.set(
+      id,
+      this.options.setTimer(() => {
+        if (!this.pending.delete(id)) return
+        this.timers.delete(id)
+        entry.stream?.end()
+        // The board's local request is still producing. Abort it, or it streams into the void forever.
+        this.send({ t: "req-cancel", id })
+      }, STREAM_IDLE_TIMEOUT_MS)
+    )
   }
 
   private send(frame: RelayDownFrame): boolean {
@@ -257,6 +289,7 @@ export class BoardSocket {
         // The head is settled here, but the entry STAYS while a body streams — res-chunk and res-end
         // still need somewhere to land. Removing it now is what would drop an SSE body on the floor.
         if (frame.end) this.pending.delete(frame.id)
+        else this.armIdleTimer(frame.id, entry)
         entry.settle({
           status: frame.status,
           headers: stripHopByHop(frame.headers),
@@ -265,12 +298,25 @@ export class BoardSocket {
         return
       }
       case "res-chunk": {
-        entry?.stream?.push(decodeBody(frame.data))
+        if (!entry) return
+        this.clear(frame.id)
+        this.armIdleTimer(frame.id, entry)
+        try {
+          entry.stream?.push(decodeBody(frame.data))
+        } catch {
+          // The visitor hung up. Drop the entry and abort the board's local request, or an SSE feed
+          // keeps producing chunks for a reader that no longer exists — each one waking this object.
+          this.pending.delete(frame.id)
+          this.clear(frame.id)
+          entry.stream?.end()
+          this.send({ t: "req-cancel", id: frame.id })
+        }
         return
       }
       case "res-end": {
         if (!entry) return
         this.pending.delete(frame.id)
+        this.clear(frame.id)
         entry.stream?.end()
         return
       }

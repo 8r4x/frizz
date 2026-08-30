@@ -51,19 +51,38 @@ function shouldStream(headers: Array<[string, string]>): boolean {
   return false;
 }
 
+/** A relayed request in flight, and the handle that aborts it when its visitor is gone. */
+export interface RelayedRequest {
+  /** Resolves when the response is fully handed over, or the request is cancelled. */
+  done: Promise<void>;
+  /**
+   * Abort the local request and go quiet. The relay sends this when the visitor hung up or the
+   * stream idled out — without it an SSE feed keeps producing for a reader that no longer exists,
+   * and every chunk sent up the socket wakes (and bills) the relay's Durable Object.
+   */
+  cancel: () => void;
+}
+
 /**
  * Answer one relayed request from the local board.
  *
- * Resolves when the response is fully handed over — immediately for an ordinary body, or when the
- * stream ends for one that streams. An SSE body never ends, so this promise is expected to stay
+ * `done` resolves when the response is fully handed over — immediately for an ordinary body, or when
+ * the stream ends for one that streams. An SSE body never ends, so that promise is expected to stay
  * pending for as long as the visitor keeps the connection open.
  */
-export function serveRelayRequest(frame: Extract<RelayDownFrame, { t: "req" }>, options: ServeOptions): Promise<void> {
+export function serveRelayRequest(frame: Extract<RelayDownFrame, { t: "req" }>, options: ServeOptions): RelayedRequest {
   const target = new URL(frame.url);
   const local = new URL(options.origin);
   const publicUrl = new URL(options.publicOrigin);
 
-  return new Promise((resolve) => {
+  let cancelled = false;
+  let abort: (() => void) | undefined;
+  const done = new Promise<void>((resolve) => {
+    // After a cancel nothing may go up the socket: the relay has already dropped the entry, so a
+    // frame would only wake its Durable Object to be ignored.
+    const send = (upFrame: RelayUpFrame) => {
+      if (!cancelled) options.send(upFrame);
+    };
     const headers: Record<string, string> = {};
     for (const [name, value] of stripHopByHop(frame.headers)) headers[name] = value;
     // Present the request as the visitor's, not as loopback. See ServeOptions.publicOrigin.
@@ -85,12 +104,12 @@ export function serveRelayRequest(frame: Extract<RelayDownFrame, { t: "req" }>, 
         const streaming = shouldStream(outHeaders);
 
         if (streaming) {
-          options.send({ t: "res", id: frame.id, status: res.statusCode ?? 502, headers: outHeaders, end: false });
+          send({ t: "res", id: frame.id, status: res.statusCode ?? 502, headers: outHeaders, end: false });
           res.on("data", (chunk: Buffer) => {
             // Chunked on the way out too: one oversized frame would be dropped by the relay rather
             // than delivered, and a silently truncated event stream is very hard to diagnose.
             for (let at = 0; at < chunk.length; at += RELAY_MAX_FRAME_BODY) {
-              options.send({
+              send({
                 t: "res-chunk",
                 id: frame.id,
                 data: encodeBody(new Uint8Array(chunk.subarray(at, at + RELAY_MAX_FRAME_BODY))),
@@ -98,11 +117,11 @@ export function serveRelayRequest(frame: Extract<RelayDownFrame, { t: "req" }>, 
             }
           });
           res.on("end", () => {
-            options.send({ t: "res-end", id: frame.id });
+            send({ t: "res-end", id: frame.id });
             resolve();
           });
           res.on("error", () => {
-            options.send({ t: "res-end", id: frame.id });
+            send({ t: "res-end", id: frame.id });
             resolve();
           });
           return;
@@ -113,7 +132,7 @@ export function serveRelayRequest(frame: Extract<RelayDownFrame, { t: "req" }>, 
         res.on("end", () => {
           const body = Buffer.concat(chunks);
           if (body.byteLength <= RELAY_MAX_FRAME_BODY) {
-            options.send({
+            send({
               t: "res",
               id: frame.id,
               status: res.statusCode ?? 502,
@@ -126,19 +145,19 @@ export function serveRelayRequest(frame: Extract<RelayDownFrame, { t: "req" }>, 
           }
           // Too big for one frame, so it takes the streaming path instead of being dropped. This is
           // why there is one streaming implementation rather than a separate one for large bodies.
-          options.send({ t: "res", id: frame.id, status: res.statusCode ?? 502, headers: outHeaders, end: false });
+          send({ t: "res", id: frame.id, status: res.statusCode ?? 502, headers: outHeaders, end: false });
           for (let at = 0; at < body.byteLength; at += RELAY_MAX_FRAME_BODY) {
-            options.send({
+            send({
               t: "res-chunk",
               id: frame.id,
               data: encodeBody(new Uint8Array(body.subarray(at, at + RELAY_MAX_FRAME_BODY))),
             });
           }
-          options.send({ t: "res-end", id: frame.id });
+          send({ t: "res-end", id: frame.id });
           resolve();
         });
         res.on("error", () => {
-          options.send({ t: "res", id: frame.id, status: 502, headers: [], end: true });
+          send({ t: "res", id: frame.id, status: 502, headers: [], end: true });
           resolve();
         });
       },
@@ -147,7 +166,7 @@ export function serveRelayRequest(frame: Extract<RelayDownFrame, { t: "req" }>, 
     req.on("error", (error) => {
       // The board is on the same machine, so this is almost always "it just went down". Answer rather
       // than leaving the visitor to time out, and say something they can act on.
-      options.send({
+      send({
         t: "res",
         id: frame.id,
         status: 502,
@@ -160,7 +179,24 @@ export function serveRelayRequest(frame: Extract<RelayDownFrame, { t: "req" }>, 
 
     if (frame.body) req.write(Buffer.from(decodeBody(frame.body)));
     req.end();
+
+    // Destroying the request destroys its response stream too, so a streaming SSE body stops being
+    // read the moment the visitor is known to be gone. The error events that follow are silenced by
+    // the `cancelled` flag the caller sets before invoking this.
+    abort = () => {
+      req.destroy();
+      resolve();
+    };
   });
+
+  return {
+    done,
+    cancel: () => {
+      if (cancelled) return;
+      cancelled = true;
+      abort?.();
+    },
+  };
 }
 
 /**

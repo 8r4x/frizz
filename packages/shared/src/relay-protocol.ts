@@ -28,6 +28,14 @@ export type RelayDownFrame =
   | { t: "ws-close"; id: string; code?: number }
   /** Keep-alive. The board answers with `pong` so a dead socket is noticed rather than assumed live. */
   | { t: "ping"; id: string }
+  /**
+   * The visitor gave up on a streamed response. The board aborts its local request, because otherwise
+   * an SSE feed keeps producing chunks for a reader that no longer exists — and every chunk wakes the
+   * relay's Durable Object, which is billed for the time it is awake.
+   */
+  | { t: "req-cancel"; id: string }
+  /** The relay's answer to a board keep-alive; see RELAY_KEEPALIVE_PING. */
+  | { t: "pong"; id: string }
 
 /** Frames the board sends UP to the relay. */
 export type RelayUpFrame =
@@ -49,6 +57,8 @@ export type RelayUpFrame =
   | { t: "ws-msg"; id: string; data: string; binary?: boolean; more?: boolean }
   | { t: "ws-close"; id: string; code?: number }
   | { t: "pong"; id: string }
+  /** The board's keep-alive; see RELAY_KEEPALIVE_PING. */
+  | { t: "ping"; id: string }
 
 export type RelayFrame = RelayDownFrame | RelayUpFrame
 
@@ -193,6 +203,18 @@ export function parseFrame(raw: string): RelayFrame | null {
 }
 
 export const serializeFrame = (frame: RelayFrame): string => JSON.stringify(frame)
+
+/**
+ * The board's keep-alive, byte-for-byte.
+ *
+ * These are CONSTANT STRINGS rather than frames built at the call site because the relay registers
+ * them with workerd's WebSocket auto-response, which matches the request EXACTLY and answers without
+ * waking the Durable Object. A ping serialized with different key order would wake the object on
+ * every beat — the precise cost the auto-response exists to avoid — so both ends must send these
+ * bytes, not their own serialization of an equivalent frame.
+ */
+export const RELAY_KEEPALIVE_PING = serializeFrame({ t: "ping", id: "keepalive" })
+export const RELAY_KEEPALIVE_PONG = serializeFrame({ t: "pong", id: "keepalive" })
 
 /**
  * The handshake a board presents when it dials in.

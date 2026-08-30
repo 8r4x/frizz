@@ -30,6 +30,16 @@ interface DurableObjectState {
   acceptWebSocket(ws: WorkerWebSocket, tags?: string[]): void
   /** Every hibernatable socket this object still holds, optionally filtered by tag. */
   getWebSockets(tag?: string): WorkerWebSocket[]
+  /**
+   * An exact-match request the RUNTIME answers on any of this object's hibernatable sockets, without
+   * waking the object. What makes a keep-alive affordable: a ping answered in webSocketMessage would
+   * bill a wake per beat.
+   */
+  setWebSocketAutoResponse(pair: WebSocketRequestResponsePair): void
+}
+
+declare class WebSocketRequestResponsePair {
+  constructor(request: string, response: string)
 }
 
 /** A message event as workerd delivers it: `data` is a string for a text frame. */

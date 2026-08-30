@@ -354,3 +354,117 @@ test("a peer that never finishes a message is dropped rather than buffered forev
   relay.handleFrame(serializeFrame({ t: "ws-msg", id, data: "after" }))
   assert.deepEqual(visitor.received, ["after"])
 })
+
+test("a board that disconnects ENDS every started stream, not just the pending heads", async () => {
+  // The head's promise settled long ago, so failAll's reject is a no-op for a streaming response —
+  // ending the stream is the ONLY way the visitor's response ever terminates. Before this, a dead
+  // board left every relayed SSE response open indefinitely, and those orphans held the Durable
+  // Object awake (and billed) for days.
+  const board = fakeSocket()
+  const relay = new BoardSocket()
+  relay.attach(board.socket)
+
+  let ended = false
+  const pending = relay.request(
+    { method: "GET", url: "https://ada.frizz.sh/events", headers: [] },
+    { push: () => {}, end: () => { ended = true } }
+  )
+  relay.handleFrame(serializeFrame({ t: "res", id: board.lastId(), status: 200, headers: [], end: false }))
+  await pending
+
+  relay.detach(board.socket)
+  assert.equal(ended, true, "the board disconnected and the stream was left open")
+})
+
+test("a stream nobody feeds is ended, and the board is told to stop producing", async () => {
+  const fire: Array<() => void> = []
+  const board = fakeSocket()
+  const relay = new BoardSocket({ setTimer: (fn) => { fire.push(fn); return fire.length }, clearTimer: () => {} })
+  relay.attach(board.socket)
+
+  let ended = false
+  const pending = relay.request(
+    { method: "GET", url: "https://ada.frizz.sh/events", headers: [] },
+    { push: () => {}, end: () => { ended = true } }
+  )
+  const id = board.lastId()
+  relay.handleFrame(serializeFrame({ t: "res", id, status: 200, headers: [], end: false }))
+  await pending
+
+  // The idle timer is the LAST one armed: the head's own timeout precedes it.
+  fire[fire.length - 1]!()
+  assert.equal(ended, true, "an idle stream was not ended")
+  const cancel = parseFrame(board.sent[board.sent.length - 1]!)
+  assert.deepEqual(cancel, { t: "req-cancel", id }, "the board was left producing for nobody")
+
+  // And a late chunk for the abandoned id is ignored, not delivered to a closed stream.
+  relay.handleFrame(serializeFrame({ t: "res-chunk", id, data: encodeBody(text("late")) }))
+})
+
+test("a chunk re-arms the idle bound, so a LIVE stream is never cut", async () => {
+  // A cancelling fake, because the code counts on clearTimer the way the real runtime honors it: the
+  // superseded timer must never fire at all.
+  const armed = new Map<number, () => void>()
+  let handles = 0
+  const board = fakeSocket()
+  const relay = new BoardSocket({
+    setTimer: (fn) => { armed.set(++handles, fn); return handles },
+    clearTimer: (handle) => void armed.delete(handle as number),
+  })
+  relay.attach(board.socket)
+
+  let ended = false
+  const chunks: string[] = []
+  const pending = relay.request(
+    { method: "GET", url: "https://ada.frizz.sh/events", headers: [] },
+    { push: (c) => chunks.push(new TextDecoder().decode(c)), end: () => { ended = true } }
+  )
+  const id = board.lastId()
+  relay.handleFrame(serializeFrame({ t: "res", id, status: 200, headers: [], end: false }))
+  await pending
+
+  const before = handles
+  relay.handleFrame(serializeFrame({ t: "res-chunk", id, data: encodeBody(text("beat")) }))
+  assert.ok(handles > before, "a chunk did not re-arm the idle bound")
+  assert.equal(armed.has(before), false, "the superseded idle timer was left armed")
+
+  // Only the LIVE timer exists; firing everything still armed must not touch the live stream until
+  // the stream actually idles out.
+  assert.equal(ended, false)
+  assert.deepEqual(chunks, ["beat"])
+
+  // And when it does idle out, the live timer ends it.
+  for (const fn of [...armed.values()]) fn()
+  assert.equal(ended, true, "the idle bound never fired")
+})
+
+test("a visitor who hung up stops the board's request instead of being streamed to forever", async () => {
+  const board = fakeSocket()
+  const relay = new BoardSocket()
+  relay.attach(board.socket)
+
+  let pushes = 0
+  let ended = false
+  const pending = relay.request(
+    { method: "GET", url: "https://ada.frizz.sh/events", headers: [] },
+    {
+      push: () => {
+        pushes++
+        throw new Error("the visitor hung up")
+      },
+      end: () => { ended = true },
+    }
+  )
+  const id = board.lastId()
+  relay.handleFrame(serializeFrame({ t: "res", id, status: 200, headers: [], end: false }))
+  await pending
+
+  relay.handleFrame(serializeFrame({ t: "res-chunk", id, data: encodeBody(text("one")) }))
+  assert.equal(ended, true, "a dead visitor's stream was not ended")
+  const cancel = parseFrame(board.sent[board.sent.length - 1]!)
+  assert.deepEqual(cancel, { t: "req-cancel", id }, "the board was not told to abort")
+
+  // The entry is gone: later chunks are ignored rather than pushed to a visitor who is not there.
+  relay.handleFrame(serializeFrame({ t: "res-chunk", id, data: encodeBody(text("two")) }))
+  assert.equal(pushes, 1)
+})

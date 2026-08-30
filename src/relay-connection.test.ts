@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { generateClaimIdentity, parseFrame, serializeFrame } from "@frizz/shared";
+import { once } from "node:events";
+import { createServer } from "node:http";
+import { generateClaimIdentity, parseFrame, RELAY_KEEPALIVE_PING, serializeFrame } from "@frizz/shared";
 import { connectRelay, defaultBackoff, signRelayHandshake, type RelaySocket } from "./relay-connection.ts";
 
 /** A socket a test drives by hand: it records what was sent and fires events on demand. */
@@ -114,9 +116,10 @@ test("a dropped connection comes back by itself", async () => {
     h.sockets[0]!.fire("close");
     assert.ok(h.status.some((s) => s.startsWith("disconnected")));
     assert.ok(h.status.some((s) => s.startsWith("retrying")));
-    // Two timers are armed by now: the settle timer that `open` schedules (which resets the backoff
-    // only once a connection has LASTED) and the retry. The retry is the later of the two.
-    assert.equal(h.timers.length, 2, "the settle timer and the retry were not both scheduled");
+    // Three timers are armed by now: the keepalive beat and the settle timer that `open` schedules
+    // (the settle is what resets the backoff only once a connection has LASTED), then the retry.
+    // The retry is the latest of the three.
+    assert.equal(h.timers.length, 3, "the keepalive, the settle timer and the retry were not all scheduled");
 
     h.timers[h.timers.length - 1]!();
     for (let i = 0; i < 50 && h.sockets.length < 2; i++) await new Promise((r) => setImmediate(r));
@@ -206,4 +209,83 @@ test("a connection that HOLDS resets the backoff, so a long-lived board starts f
     h.timers.pop()?.();
     assert.deepEqual(delays, [0, 0], `a connection that lasted did not reset the backoff: ${JSON.stringify(delays)}`);
   } finally { conn.stop(); }
+});
+
+test("the board beats a keepalive in the relay's exact auto-response bytes", async () => {
+  const identity = await generateClaimIdentity();
+  const h = harness();
+  const conn = await h.start(identity);
+  try {
+    h.sockets[0]!.fire("open");
+    // The keepalive is the FIRST timer `open` arms; the settle timer follows it.
+    h.timers[h.timers.length - 2]!();
+    assert.equal(h.sockets[0]!.sent[0], RELAY_KEEPALIVE_PING,
+      "the ping must be the exact bytes the relay's auto-response matches, or every beat wakes the Durable Object");
+  } finally { conn.stop(); }
+});
+
+test("a socket that stops answering pings is treated as dead, not believed forever", async () => {
+  // A slept laptop or a changed network kills the TCP without a FIN. Nothing ever arrives to say so —
+  // the beat going unanswered is the only signal there is, and before it existed a half-dead socket
+  // lingered for hours while every visitor timed out.
+  const identity = await generateClaimIdentity();
+  const h = harness();
+  const conn = await h.start(identity);
+  try {
+    h.sockets[0]!.fire("open");
+    const beat = h.timers[h.timers.length - 2]!;
+    beat(); // sends the ping, arms the next beat
+    h.timers[h.timers.length - 1]!(); // no pong arrived in a whole interval
+    assert.ok(h.status.some((s) => s.startsWith("disconnected")), "a silent socket was not dropped");
+    assert.ok(h.status.some((s) => s.startsWith("retrying")), "no reconnect was scheduled");
+    assert.equal(h.sockets[0]!.closed, true);
+  } finally { conn.stop(); }
+});
+
+test("a pong keeps the connection alive: the next beat pings again instead of dropping", async () => {
+  const identity = await generateClaimIdentity();
+  const h = harness();
+  const conn = await h.start(identity);
+  try {
+    h.sockets[0]!.fire("open");
+    const first = h.timers[h.timers.length - 2]!;
+    first();
+    h.sockets[0]!.fire("message", { data: serializeFrame({ t: "pong", id: "keepalive" }) });
+    h.timers[h.timers.length - 1]!(); // the next beat
+    assert.ok(!h.status.some((s) => s.startsWith("disconnected")), "an answered ping was treated as a miss");
+    assert.equal(h.sockets[0]!.sent.filter((m) => m === RELAY_KEEPALIVE_PING).length, 2);
+  } finally { conn.stop(); }
+});
+
+test("req-cancel aborts the request the relay named, and only that one", async () => {
+  // Driven with a REAL local server: the request must actually die at the socket level, or the SSE
+  // feed keeps producing chunks that ride up the relay socket and wake the Durable Object each time.
+  const closes: string[] = [];
+  const server = createServer((req, res) => {
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.write(`data: ${req.url}\n\n`);
+    req.on("close", () => void closes.push(req.url ?? ""));
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const { port } = server.address() as { port: number };
+
+  const identity = await generateClaimIdentity();
+  const h = harness({ boardOrigin: `http://127.0.0.1:${port}` });
+  const conn = await h.start(identity);
+  try {
+    h.sockets[0]!.fire("open");
+    h.sockets[0]!.fire("message", { data: serializeFrame({ t: "req", id: "keep", method: "GET", url: `http://127.0.0.1:${port}/keep`, headers: [] }) });
+    h.sockets[0]!.fire("message", { data: serializeFrame({ t: "req", id: "drop", method: "GET", url: `http://127.0.0.1:${port}/drop`, headers: [] }) });
+    const deadline = Date.now() + 5_000;
+    while (h.sockets[0]!.sent.length < 2 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 1));
+
+    h.sockets[0]!.fire("message", { data: serializeFrame({ t: "req-cancel", id: "drop" }) });
+    while (closes.length === 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 1));
+    assert.deepEqual(closes, ["/drop"], "the cancelled request did not die (or the wrong one did)");
+  } finally {
+    conn.stop();
+    server.close();
+    await once(server, "close");
+  }
 });

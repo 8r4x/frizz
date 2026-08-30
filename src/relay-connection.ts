@@ -1,13 +1,14 @@
 import {
   exportClaimPublicKey,
   parseFrame,
+  RELAY_KEEPALIVE_PING,
   relayHandshakeInput,
   serializeFrame,
   type RelayDownFrame,
   type RelayHandshake,
   type RelayUpFrame,
 } from "@frizz/shared";
-import { serveRelayRequest, serveRelayWebSocket, type NestedSession } from "./relay-agent.ts";
+import { serveRelayRequest, serveRelayWebSocket, type NestedSession, type RelayedRequest } from "./relay-agent.ts";
 
 /**
  * The board's connection to the relay: dial out, prove who we are, then serve whatever arrives.
@@ -78,6 +79,16 @@ export function defaultBackoff(attempt: number, random: () => number = Math.rand
   return Math.round(base / 2 + random() * (base / 2));
 }
 
+/**
+ * How often the board pings the relay, and therefore how long a dead socket can masquerade as live.
+ *
+ * The relay answers with a runtime auto-response, so a beat costs nothing on the far side — it does
+ * not even wake the Durable Object. What the beat buys is TCP liveness in both directions: a NAT
+ * hole that stays open, and a socket that died without a FIN (a slept laptop, a changed network)
+ * detected within two beats instead of lingering half-dead for hours while every visitor times out.
+ */
+export const RELAY_KEEPALIVE_INTERVAL_MS = 45_000;
+
 export async function signRelayHandshake(name: string, identity: CryptoKeyPair, issuedAt: number): Promise<RelayHandshake> {
   const pubkey = await exportClaimPublicKey(identity.publicKey);
   const signature = await crypto.subtle.sign(
@@ -104,9 +115,29 @@ export function connectRelay(options: RelayConnectionOptions): RelayConnection {
   let socket: RelaySocket | null = null;
   /** Local terminals, one per visitor session the relay has opened. */
   const nested = new Map<string, NestedSession>();
+  /** Relayed requests in flight, so a visitor who hung up stops being served. */
+  const requests = new Map<string, RelayedRequest>();
   let attempt = 0;
   let stopped = false;
   let retryHandle: unknown;
+  let keepaliveHandle: unknown;
+  let awaitingPong = false;
+
+  const clearKeepalive = () => {
+    if (keepaliveHandle !== undefined) {
+      clearTimer(keepaliveHandle);
+      keepaliveHandle = undefined;
+    }
+  };
+
+  const cancelRequests = () => {
+    // The relay can no longer deliver these responses — or has already dropped them — so the local
+    // requests producing them must stop. Left running, an SSE feed streams into the void forever,
+    // and after a reconnect its frames would ride the NEW socket with ids the relay no longer
+    // knows, waking the Durable Object once per event to be ignored.
+    for (const request of requests.values()) request.cancel();
+    requests.clear();
+  };
 
   const send = (frame: RelayUpFrame) => {
     try {
@@ -142,6 +173,31 @@ export function connectRelay(options: RelayConnectionOptions): RelayConnection {
     socket = next;
 
     let settled: unknown;
+    const beat = () => {
+      if (stopped || socket !== next) return;
+      if (awaitingPong) {
+        // The last ping went unanswered for a whole interval: the TCP under this socket is dead
+        // even though nobody sent a FIN. Treat it as dropped now rather than serving nobody for
+        // hours while every visitor times out.
+        dropped();
+        try {
+          next.close();
+        } catch {
+          // Already gone.
+        }
+        return;
+      }
+      awaitingPong = true;
+      try {
+        // The CONSTANT, not a locally built frame: the relay's auto-response matches these exact
+        // bytes, which is what lets it answer without waking the Durable Object.
+        next.send(RELAY_KEEPALIVE_PING);
+      } catch {
+        // The close event will follow and reconnect from there.
+      }
+      keepaliveHandle = setTimer(beat, RELAY_KEEPALIVE_INTERVAL_MS);
+    };
+
     next.addEventListener("open", () => {
       // THE COUNTER RESETS ON A CONNECTION THAT LASTS, not on one that merely opens.
       //
@@ -149,6 +205,8 @@ export function connectRelay(options: RelayConnectionOptions): RelayConnection {
       // it immediately: every attempt "succeeded", so every retry waited backoff(0) — measured at ~2
       // reconnects per second, indefinitely, against our own edge. A board that cannot stay connected
       // must back off like one that cannot connect at all.
+      awaitingPong = false;
+      keepaliveHandle = setTimer(beat, RELAY_KEEPALIVE_INTERVAL_MS);
       settled = setTimer(() => { attempt = 0; }, SETTLED_MS);
       options.onStatus?.("connected");
     });
@@ -161,12 +219,25 @@ export function connectRelay(options: RelayConnectionOptions): RelayConnection {
         send({ t: "pong", id: frame.id });
         return;
       }
+      if (frame.t === "pong") {
+        awaitingPong = false;
+        return;
+      }
       if (frame.t === "req") {
-        void serveRelayRequest(frame, {
+        const handle = serveRelayRequest(frame, {
           origin: options.boardOrigin,
           publicOrigin: options.publicOrigin,
           send,
         });
+        requests.set(frame.id, handle);
+        void handle.done.then(() => {
+          if (requests.get(frame.id) === handle) requests.delete(frame.id);
+        });
+        return;
+      }
+      if (frame.t === "req-cancel") {
+        requests.get(frame.id)?.cancel();
+        requests.delete(frame.id);
         return;
       }
       if (frame.t === "ws-open") {
@@ -193,11 +264,13 @@ export function connectRelay(options: RelayConnectionOptions): RelayConnection {
     const dropped = () => {
       if (socket !== next) return; // a socket we already replaced
       if (settled !== undefined) { clearTimer(settled); settled = undefined; }
+      clearKeepalive();
       socket = null;
       // The relay is gone, so every terminal riding on it is too. Closing the local ends stops a pty
       // from being held open by a session nothing can reach any more.
       for (const session of nested.values()) session.close();
       nested.clear();
+      cancelRequests();
       options.onStatus?.("disconnected");
       scheduleRetry("the relay connection closed");
     };
@@ -211,6 +284,7 @@ export function connectRelay(options: RelayConnectionOptions): RelayConnection {
     stop() {
       stopped = true;
       if (retryHandle !== undefined) clearTimer(retryHandle);
+      clearKeepalive();
       try {
         socket?.close();
       } catch {
@@ -218,6 +292,7 @@ export function connectRelay(options: RelayConnectionOptions): RelayConnection {
       }
       for (const session of nested.values()) session.close();
       nested.clear();
+      cancelRequests();
       socket = null;
     },
     get connected() {

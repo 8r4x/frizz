@@ -3,7 +3,11 @@ import test from "node:test";
 import { createServer, type Server } from "node:http";
 import { once } from "node:events";
 import { decodeBody, encodeBody, RELAY_MAX_FRAME_BODY, type RelayUpFrame } from "@frizz/shared";
-import { serveRelayRequest, serveRelayWebSocket } from "./relay-agent.ts";
+import { serveRelayRequest, serveRelayWebSocket, type ServeOptions } from "./relay-agent.ts";
+
+/** Serve one request to completion — what every test here means by "serve". */
+const serveToEnd = (frame: Parameters<typeof serveRelayRequest>[0], options: ServeOptions) =>
+  serveRelayRequest(frame, options).done;
 
 /** A stand-in board, so the agent is driven against a REAL local server rather than a mock. */
 async function board(handler: (req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse) => void) {
@@ -37,7 +41,7 @@ test("a response of known length comes back in ONE frame", async () => {
   });
   const out = collect();
   try {
-    await serveRelayRequest(
+    await serveToEnd(
       { t: "req", id: "1", method: "GET", url: `${b.origin}/x`, headers: [] },
       { origin: b.origin, send: out.send, publicOrigin: "https://ada.frizz.sh" },
     );
@@ -56,7 +60,7 @@ test("the board sees the PUBLIC host, not loopback — without this it refuses e
   const b = await board((req, res) => { seen = req.headers.host ?? ""; res.writeHead(200); res.end("ok"); });
   const out = collect();
   try {
-    await serveRelayRequest(
+    await serveToEnd(
       { t: "req", id: "1", method: "GET", url: `${b.origin}/`, headers: [["host", "127.0.0.1:1"]] },
       { origin: b.origin, send: out.send, publicOrigin: "https://ada.frizz.sh" },
     );
@@ -68,7 +72,7 @@ test("a CHUNKED response streams, because its length is unknowable up front", as
   const b = await board((_, res) => { res.writeHead(200, { "content-type": "text/plain" }); res.end("hi"); });
   const out = collect();
   try {
-    await serveRelayRequest(
+    await serveToEnd(
       { t: "req", id: "1", method: "GET", url: `${b.origin}/`, headers: [] },
       { origin: b.origin, send: out.send, publicOrigin: "https://ada.frizz.sh" },
     );
@@ -87,7 +91,7 @@ test("an SSE body streams instead of being buffered until it ends — which it n
   });
   const out = collect();
   try {
-    await serveRelayRequest(
+    await serveToEnd(
       { t: "req", id: "1", method: "GET", url: `${b.origin}/events`, headers: [] },
       { origin: b.origin, send: out.send, publicOrigin: "https://ada.frizz.sh" },
     );
@@ -105,7 +109,7 @@ test("a body too large for one frame is chunked, not dropped", async () => {
   const b = await board((_, res) => { res.writeHead(200, { "content-type": "text/plain" }); res.end(big); });
   const out = collect();
   try {
-    await serveRelayRequest(
+    await serveToEnd(
       { t: "req", id: "1", method: "GET", url: `${b.origin}/big`, headers: [] },
       { origin: b.origin, send: out.send, publicOrigin: "https://ada.frizz.sh" },
     );
@@ -125,7 +129,7 @@ test("a request body reaches the board", async () => {
   });
   const out = collect();
   try {
-    await serveRelayRequest(
+    await serveToEnd(
       {
         t: "req", id: "1", method: "POST", url: `${b.origin}/rpc`,
         headers: [["content-type", "application/json"]],
@@ -139,7 +143,7 @@ test("a request body reaches the board", async () => {
 
 test("a board that is down answers 502 rather than leaving the visitor to time out", async () => {
   const out = collect();
-  await serveRelayRequest(
+  await serveToEnd(
     { t: "req", id: "1", method: "GET", url: "http://127.0.0.1:1/", headers: [] },
     { origin: "http://127.0.0.1:1", send: out.send, publicOrigin: "https://ada.frizz.sh" },
   );
@@ -153,7 +157,7 @@ test("hop-by-hop headers are not replayed onto the local connection", async () =
   const b = await board((req, res) => { seen = Object.keys(req.headers); res.writeHead(200); res.end(); });
   const out = collect();
   try {
-    await serveRelayRequest(
+    await serveToEnd(
       {
         t: "req", id: "1", method: "GET", url: `${b.origin}/`,
         headers: [["connection", "keep-alive"], ["transfer-encoding", "chunked"], ["x-keep", "1"]],
@@ -369,4 +373,36 @@ test("a chunked message from the relay is rebuilt before it reaches the local so
     while (t.seen.length === 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 5));
     assert.deepEqual(t.seen, ["one two three"], "the pieces reached the board separately");
   } finally { session.close(); await t.close(); }
+});
+
+test("cancel() aborts a stream mid-flight and goes quiet", async () => {
+  // The relay sends req-cancel when the visitor hangs up or the stream idles out. The local request
+  // must actually die — an SSE feed left running streams into the void forever, and every chunk it
+  // sends wakes the relay's Durable Object to be ignored.
+  let stopped: Promise<void> | null = null;
+  const b = await board((req, res) => {
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.write("data: one\n\n");
+    stopped = new Promise((resolve) => req.on("close", resolve));
+  });
+  const out = collect();
+  try {
+    const served = serveRelayRequest(
+      { t: "req", id: "c1", method: "GET", url: `${b.origin}/events`, headers: [] },
+      { origin: b.origin, send: out.send, publicOrigin: "https://ada.frizz.sh" },
+    );
+    const deadline = Date.now() + 5_000;
+    while (out.frames.length < 2 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 1));
+    assert.equal(out.frames[0]!.t, "res");
+
+    served.cancel();
+    await served.done;
+    // The board's end sees the connection close — the feed stops being produced, not just relayed.
+    await stopped;
+
+    const after = out.frames.length;
+    await new Promise((r) => setTimeout(r, 50));
+    assert.equal(out.frames.length, after, "frames were still sent after the cancel");
+    assert.ok(!out.frames.some((f) => f.t === "res-end"), "a cancelled stream sent res-end anyway");
+  } finally { await b.close(); }
 });
