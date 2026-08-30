@@ -23,7 +23,7 @@ if (font === "sans" || font === "mono") document.documentElement.dataset.font = 
 const slug = "settled-ask-thread"
 const thread: ThreadView = {
   id: slug, title: "Pick the banner treatment", status: "active", mechanism: null, humanBlocked: false,
-  ready: false, dependsOn: [], externalDeps: [], agents: [], errors: [], warnings: [], runtime: "idle",
+  ready: false, dependsOn: [], externalDeps: [], agents: [], errors: [], warnings: [], runtime: "turn-idle",
   unread: false, archived: false, hasPlan: false, pendingQuestion: false, kind: "session", foreign: false,
   backend: "claude", permissionMode: "default", subAgents: [], bgShells: [], watches: [], questions: [],
 }

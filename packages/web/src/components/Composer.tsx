@@ -359,12 +359,28 @@ export function Composer({
       } else {
         const label = chips[0].querySelector<HTMLElement>("[data-context-label]")
         if (label) {
-          // Both baselines from the LINE top: the prose's straight from its probe; the label's as its
-          // centred offset into the pill plus its own probe. Their difference IS the pill's top.
+          // TWO constraints, solved together (maintainer 2026-08-30: "the content needs to be
+          // vertically aligned internally to the chip, and the chip itself … optically with the other
+          // plain text"): the PILL BOX centres on the label's INK, and the label's BASELINE lands on
+          // the prose's. One placement cannot do both — a pill placed so the naturally-centred label
+          // hits the baseline wears its ink ~1.3px high (measured, sans, dsf 6) — so the pill takes
+          // the first rule and the label is nudged inside it by a computed var the chip consumes
+          // (`--ctx-ink-shift`, a transform, so it never feeds back into these very measurements —
+          // which still zero it first, because getBoundingClientRect reads transforms).
+          overlay.style.setProperty("--ctx-ink-shift", "0px")
           const proseBaseline = baselineOffset(overlay, cs)
+          const lcs = getComputedStyle(label)
           const labelBaselineInChip = (label.getBoundingClientRect().top - chips[0].getBoundingClientRect().top)
-            + baselineOffset(overlay, getComputedStyle(label))
-          overlay.style.top = `${(padTop + proseBaseline - labelBaselineInChip).toFixed(2)}px`
+            + baselineOffset(overlay, lcs)
+          const probe = document.createElement("canvas").getContext("2d")
+          let capAscent = 8
+          if (probe) {
+            probe.font = lcs.font
+            capAscent = probe.measureText("H").actualBoundingBoxAscent
+          }
+          const top = padTop + proseBaseline - capAscent / 2 - CONTEXT_CHIP_HEIGHT / 2
+          overlay.style.top = `${top.toFixed(2)}px`
+          overlay.style.setProperty("--ctx-ink-shift", `${(padTop + proseBaseline - top - labelBaselineInChip).toFixed(2)}px`)
         }
         const box = overlay.getBoundingClientRect()
         el.style.textIndent = `${Math.round(last.getBoundingClientRect().right - box.left + CONTEXT_TEXT_GAP)}px`

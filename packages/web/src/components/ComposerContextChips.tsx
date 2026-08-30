@@ -20,10 +20,29 @@ export function ComposerContextChips({ slug }: { slug: string }): ReactElement |
   const projectDir = useProjectDir()
   const items = snap.composerContext[slug]
   const [openId, setOpenId] = useState<number | null>(null)
+  const firstChipRef = useRef<HTMLSpanElement | null>(null)
+  // BACKSPACE AT THE TEXT'S START EATS THE LAST CHIP (maintainer 2026-08-30) — the editor convention
+  // for inline tokens: with the caret at 0 and nothing selected there is no character left of it, so
+  // the key's meaning falls through to the pill row. Bound to the textarea BESIDE this row (the
+  // overlay and the textarea are siblings inside the composer box), never to the window: two
+  // composers for two threads can be on screen at once, and each row owns only its own box.
+  useEffect(() => {
+    const ta = firstChipRef.current?.closest("[data-composer-context]")?.parentElement?.querySelector("textarea")
+    if (!ta || !items?.length) return
+    const last = items[items.length - 1]
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Backspace" || event.metaKey || event.ctrlKey || event.altKey) return
+      if (ta.selectionStart !== 0 || ta.selectionEnd !== 0) return
+      event.preventDefault()
+      removeContextItem(slug, last.id)
+    }
+    ta.addEventListener("keydown", onKey)
+    return () => ta.removeEventListener("keydown", onKey)
+  }, [slug, items])
   if (!items?.length) return null
   return (
     <>
-      {items.map((item) => {
+      {items.map((item, index) => {
         const base = item.path.split("/").filter(Boolean).pop() || item.path
         const lines = item.startLine !== undefined && item.endLine !== undefined
           ? item.startLine === item.endLine ? `:${item.startLine}` : `:${item.startLine}-${item.endLine}`
@@ -32,6 +51,7 @@ export function ComposerContextChips({ slug }: { slug: string }): ReactElement |
         return (
           <span
             key={item.id}
+            ref={index === 0 ? firstChipRef : undefined}
             data-context-chip
             style={{ height: CONTEXT_CHIP_HEIGHT }}
             className={`group/ctx pointer-events-auto relative flex items-center gap-1 rounded-md border px-1.5 text-[11px] leading-none transition-colors ${
@@ -46,10 +66,12 @@ export function ComposerContextChips({ slug }: { slug: string }): ReactElement |
               title={contextDisplayPath(item.path, projectDir)}
               className="flex min-w-0 items-center gap-1 outline-none"
             >
-              <span data-context-label className="max-w-48 truncate font-mono-keep">{base}{lines}</span>
-              {/* The comment marker: only once a note exists, so a bare quote stays a bare chip. Same
-                  ink placement as the ✕ below — on the label's lowercase body. */}
-              {item.comment?.trim() && <MessageSquare size={10} aria-hidden="true" className="shrink-0 translate-y-[0.045em] text-muted" />}
+              <span data-context-label style={{ transform: "translateY(var(--ctx-ink-shift, 0px))" }} className="max-w-48 truncate font-mono-keep">{base}{lines}</span>
+              {/* The comment marker: only once a note exists, so a bare quote stays a bare chip. Like
+                  the ✕ below it sits on its flex centre: the pill box is CENTRED ON INK now (Composer's
+                  --ctx-ink-shift placement, 2026-08-30), so a symmetric glyph's box centre IS the
+                  label's ink mid and the old per-glyph nudges came off with the placement they fitted. */}
+              {item.comment?.trim() && <MessageSquare size={10} aria-hidden="true" className="shrink-0 text-muted" />}
             </button>
             <button
               type="button"
@@ -75,7 +97,7 @@ export function ComposerContextChips({ slug }: { slug: string }): ReactElement |
                   is the +0.5px that lands it on the body at dsf 2 in both fonts (residual 0.00px);
                   dsf 1 can only snap to ±0.5px and reads +0.5. Sweep: scan-dsf2.mjs in the thread's
                   scratch dir. */}
-              <X size={10} strokeWidth={2.5} className="translate-y-[0.045em]" />
+              <X size={10} strokeWidth={2.5} />
             </button>
             {isOpen && (
               <ContextCard

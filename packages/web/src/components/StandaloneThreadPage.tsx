@@ -30,6 +30,8 @@ function standaloneHrefIn(projectSlug: string, slug: string): string {
 }
 
 export function StandaloneThreadPage({ slug }: { slug: string }) {
+  const snap = useSnapshot(store)
+  const fileOpen = Boolean(snap.filePanel)
   const board = useBoard()
   const route = resolveThreadRoute(board, slug)
   const thread = route.kind === "found" ? route.thread : undefined
@@ -91,10 +93,15 @@ export function StandaloneThreadPage({ slug }: { slug: string }) {
             A phone-width window still gets the old single column — the rail and the viewer need the
             width they hide under. */}
         <div className="flex h-full w-full overflow-hidden">
-          <div className="hidden flex-1 md:block" aria-hidden="true" />
+          {/* The gutters collapse while a file is open: the reading is DETERMINISTIC then — the thread
+              column at half the viewport (still under its ceiling) and the file on the other half,
+              full bleed ("600px of content, and then the file takes up 600px" on a 1200px screen,
+              maintainer 2026-08-30) — rather than whatever the gutters happened to leave. */}
+          <div className="hidden md:block transition-[flex-grow] duration-200 ease-out" style={{ flexGrow: fileOpen ? 0 : 1 }} aria-hidden="true" />
           <main
             data-standalone-thread
-            className="flex h-full w-full min-w-0 flex-col overflow-hidden border-border bg-panel sm:w-[960px] sm:border-x"
+            className="flex h-full w-full min-w-0 flex-col overflow-hidden border-border bg-panel transition-[width] duration-200 ease-out sm:border-x"
+            style={{ width: fileOpen ? "min(960px, 50vw)" : "min(960px, 100%)", flexShrink: fileOpen ? 0 : 1 }}
           >
             {route.kind === "loading" ? (
               <div className="flex flex-1 items-center justify-center" role="status" aria-label="Loading thread">
@@ -107,7 +114,7 @@ export function StandaloneThreadPage({ slug }: { slug: string }) {
             )}
           </main>
           {thread && <SidePane slug={slug} thread={thread} />}
-          <div className="hidden flex-1 md:block" aria-hidden="true" />
+          <div className="hidden md:block transition-[flex-grow] duration-200 ease-out" style={{ flexGrow: fileOpen ? 0 : 1 }} aria-hidden="true" />
         </div>
         {/* The SAME drawer stack the queue mounts. Without it every drill-in this page renders — a
             sub-agent row, a background-shell row, the frizz-doc button, a `[…](/thread/<slug>)` link —
@@ -121,15 +128,12 @@ export function StandaloneThreadPage({ slug }: { slug: string }) {
   )
 }
 
-// The viewer's READING width — the side pane's width while a file is open.
-const FILE_PANEL_WIDTH = "min(52rem, 45vw)"
-
 // THE SIDE PANE: the rail and the file viewer share the one region right of the thread column, and
 // the viewer FADES AND SLIDES IN OVER the rail instead of opening beside it (maintainer 2026-08-28:
 // "the right-side pane should slide over … hide the artifact readout … press the X to see the
 // artifacts again", then: "fade in and slide left over top of the artifact rail"). Closed, the pane
-// IS the rail; open, it is the viewer's reading width, animated — the layout's gutters and then the
-// thread column supply the difference (see the layout comment above). The rail stays MOUNTED under
+// IS the rail; open, it is everything right of the half-viewport thread column — the gutters collapse
+// and the split is deterministic (see the layout comment above). The rail stays MOUNTED under
 // the pane — its live rows keep polling — but goes inert, so nothing hidden can take focus or a
 // click. The viewer's CONTENT outlives the store entry by the ~200ms slide-out (`current`), so
 // closing plays the same edge back instead of blanking the pane.
@@ -148,8 +152,11 @@ function SidePane({ slug, thread }: { slug: string; thread: ThreadView }) {
   return (
     <div
       data-side-pane
-      className="relative hidden h-full min-h-0 shrink-0 overflow-hidden transition-[width] duration-200 ease-out md:block"
-      style={{ width: panel ? FILE_PANEL_WIDTH : RAIL_WIDTH }}
+      className="relative hidden h-full min-h-0 min-w-0 shrink-0 grow-0 overflow-hidden transition-[flex-basis] duration-200 ease-out md:block"
+      // Open, the pane is EXACTLY the remainder of the 50/50 law the thread column states (its width
+      // is min(960px, 50vw) and it stops shrinking), so the two always sum to the viewport — 600+600
+      // on a 1200px screen. Both states are lengths, so the basis animates the slide.
+      style={{ flexBasis: panel ? "calc(100% - min(960px, 50vw))" : RAIL_WIDTH }}
     >
       <div inert={panel ? true : undefined} className="h-full min-h-0">
         <FocusRail thread={thread} />

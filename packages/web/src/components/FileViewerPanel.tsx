@@ -1,8 +1,10 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { closeFilePanel, addContextItem } from "../store.ts"
 import { rpc } from "../api/rpc.ts"
 import { useInnerHtml } from "../lib/innerHtml.ts"
+import { renderCodeBody } from "../lib/codeBody.ts"
+import { resolveFileLanguage } from "../lib/syntaxHighlight.ts"
 import { useLocalFileCodeLinks } from "../lib/localFileCode.ts"
 import { useMarkdownHtml } from "../lib/useMarkdown.ts"
 import { splitFrontmatter } from "../lib/frontmatter.ts"
@@ -73,6 +75,7 @@ export function FileViewerPanel({ slug, path }: { slug: string; path: string }) 
   const [view, setView] = useState<"rendered" | "source">(markdown ? "rendered" : "source")
   const html = useMarkdownHtml(source, { baseDir: localFileDir(resolved), asDocument: true })
   const inner = useInnerHtml(html)
+  const sourceHtml = useInnerHtml(useMemo(() => renderCodeBody(raw, resolveFileLanguage(resolved)), [raw, resolved]))
   const renderedRef = useRef<HTMLDivElement>(null)
   const sourceRef = useRef<HTMLPreElement>(null)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -147,7 +150,16 @@ export function FileViewerPanel({ slug, path }: { slug: string; path: string }) 
           <div className="text-[13px] text-red-400/90">Couldn’t read this file: {(body.error as Error).message}</div>
         ) : view === "source" ? (
           raw ? (
-            <pre ref={sourceRef} className="whitespace-pre-wrap break-words font-mono-keep text-[12px] leading-5 text-fg/90" style={{ tabSize: 2 }}>{raw}</pre>
+            // Highlighted through the same hljs pipeline as every transcript code body (lib/codeBody);
+            // the grammar comes from the filename. The invariant codeBody.test pins — highlighted
+            // markup carries the SAME TEXT — is what keeps the ⌘I char-offset walk exact over the
+            // added spans. `hljs` on the element is what the palette hangs off (styles.css).
+            <pre
+              ref={sourceRef}
+              className="hljs whitespace-pre-wrap break-words bg-transparent font-mono-keep text-[12px] leading-5 text-fg/90"
+              style={{ tabSize: 2 }}
+              dangerouslySetInnerHTML={sourceHtml}
+            />
           ) : (
             <div className="text-[13px] text-muted">This file is empty.</div>
           )
