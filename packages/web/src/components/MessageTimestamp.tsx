@@ -74,12 +74,15 @@ export function MessageStamp({ at, host = "prose" }: { at: string | undefined; h
       // -5px it sits 3.65px below its own message and 7.66px above the next, so proximity says plainly
       // which one it belongs to; that holds in the mono face too (3.04 / 7.96).
       //
-      // Under a BUBBLE, `-mt-[2px]`. The bubble's box ends where the row ends, with no line-box slack
-      // beneath its ink, so the prose offset pulled the reading's cap tops INTO the bubble — 0.4px in
-      // sans and 1.6px in mono by the probe, and visibly flattened at 6x — where `text-muted/70` on the
-      // off-white bubble simply vanishes. At -2px the caps clear the bubble by 2.6px / 1.4px, and the
-      // next row is 14px away at the least (`STEP`; +`USER_TAIL_EXTRA` before agent prose), so the
-      // reading still sits nearer its own bubble than anything below (measured 2026-08-28, on merge).
+      // Under a BUBBLE, `mt-[2px]`. The bubble's box ends where the row ends, with no line-box slack
+      // beneath its ink — and unlike prose it ends on a HARD FILLED EDGE, which needs more clearance
+      // than a ragged text edge before the eye reads "separate". This shipped at -2px, where the caps
+      // cleared the bubble by 2.25px / 0.98px (sans / mono) against ~12px of air below — glued to the
+      // box (maintainer 2026-08-31: "there's no gap between the time stamp and the bottom of the
+      // bubble. it needs optical balance"). At +2px the caps clear by 6.25px / 4.98px with 7.8px /
+      // 8.45px left below — real air on both sides, matching the ~5–6px ink rhythm the divider ages
+      // keep, and still nearer its own bubble than the next row (14px away at the least — `STEP`;
+      // +`USER_TAIL_EXTRA` before agent prose).
       //
       // Measured on the real component (`message-timestamp-verify-fixture.tsx`) at 13px prose in a 24px
       // line box, in BOTH fonts; re-measure if either type scale moves. The canvas probe runs ~1.5px
@@ -91,7 +94,7 @@ export function MessageStamp({ at, host = "prose" }: { at: string | undefined; h
       // the plain utility lost and the reading took the pointer. Invisible at rest and `top-full`, it
       // would have been a transparent 16px strip eating clicks on whatever scrolled beneath it. Measured
       // in the fixture: elementFromPoint over the reading returned the reading itself before this.
-      className={`!pointer-events-none absolute right-6 top-full z-10 ${host === "bubble" ? "-mt-[2px]" : "-mt-[5px]"} select-none text-[11px] leading-4 [font-variant-numeric:tabular-nums] text-muted/70 opacity-0 transition-opacity group-hover/ts:opacity-100`}
+      className={`!pointer-events-none absolute right-6 top-full z-10 ${host === "bubble" ? "mt-[2px]" : "-mt-[5px]"} select-none text-[11px] leading-4 [font-variant-numeric:tabular-nums] text-muted/70 opacity-0 transition-opacity group-hover/ts:opacity-100`}
     >
       {stamp}
     </time>
