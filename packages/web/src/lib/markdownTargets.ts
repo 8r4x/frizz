@@ -4,7 +4,8 @@ import { apiBase, innerPath, projectSlug, APP_ROUTE_SEGMENTS } from "./base-path
 // POSIX absolute path as a same-origin URL path, which both navigates away from Frizz and produces a
 // deceptive localhost URL. Identify those targets before DOM sanitization so they can never become
 // navigable anchors. This module deliberately does not decide filesystem authorization: the server's
-// `/local-image` route realpath-checks the requested image against its narrow trusted-root allowlist.
+// origin-gated `/local-image` route serves any absolute path that realpath-resolves to a regular image
+// file (packages/server/src/local-image.ts, deliberately path-unconfined).
 
 export interface LocalMarkdownTarget {
   // Metadata for a local-looking destination. The renderer keeps this out of normal prose unless

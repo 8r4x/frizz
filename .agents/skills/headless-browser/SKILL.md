@@ -107,12 +107,7 @@ Embed the **decisive** screenshots (not bulk) with **markdown image syntax** —
 `![meaningful alt](/abs/path.png)` — NOT `SendUserFile` (that pushes a file as a deliverable; it is not
 inline handoff evidence).
 
-Frizz renders a local image only when its real path sits under a `/local-image` **trusted root**:
-`ctx.project.dir`, `os.tmpdir()`, `~/Screenshots`, or the project's `attachments/` dir. `.adhoc-shots/`
-(where `shot.mjs` writes by default) is gitignored and under NONE of those, so `![](.adhoc-shots/…)`
-403s and renders broken. So `--out` the shot to — or `cp` the decisive one into — `os.tmpdir()` and embed
-THAT absolute path. Keep a concise textual finding beside it; the handoff must still read when images
-are unavailable.
+Frizz serves a local image through its origin-gated `/local-image` route, and the route is deliberately path-unconfined (`packages/server/src/local-image.ts`): any absolute path that realpath-resolves to a regular `.png`/`.jpg`/`.jpeg`/`.gif`/`.webp` file renders — `.adhoc-shots/` included. The trap is **durability**, not authorization: `/tmp` and `os.tmpdir()` are emptied at boot, and a handoff card is read hours or days later. Three shots embedded from `/tmp` on 2026-08-29 had become gray path labels by the time the maintainer read them, because the machine rebooted in between (`BlockImage` deliberately falls back to the plain path text on a load error). Embed from a path that outlives a reboot: `.adhoc-shots/` right where `shot.mjs` wrote it, or your thread's scratch directory. Keep a concise textual finding beside it; the handoff must still read when images are unavailable.
 
 If a check was skipped (MCP unavailable, a state you couldn't reach), say so plainly — don't imply
 coverage you didn't have.
