@@ -15,7 +15,7 @@
 // surface (InteractionCards.tsx) is imported BY ChatView, so a question card defined inside ChatView
 // could only have been shared through a module cycle.
 import { Fragment, type ReactNode, useId, useLayoutEffect, useMemo, useRef } from "react"
-import { AlertTriangle, Check, HelpCircle, ListChecks } from "lucide-react"
+import { AlertTriangle, Check } from "lucide-react"
 import { useInlineMarkdownHtml, useMarkdownHtml } from "../lib/useMarkdown.ts"
 import { shouldSubmitStagedEnter } from "../lib/composerKeyboard.ts"
 import { parseQuestionBlock, type BlockAnswer, type ParsedQuestion, type QuestionKind } from "../lib/questionBlocks.ts"
@@ -34,10 +34,10 @@ export interface BlockInteractive {
 }
 
 // A ```question block, set off from the surrounding prose: rounded neutral border + slightly elevated
-// bg + a muted label (NOT yellow — that's the focus motif). The label + icon track the kind: a plain
-// question shows a help glyph, a `multi` block shows a checklist. A `danger` block (the destructive
-// gate — force-merge, deletion, rollback) layers the app's red risk language (the same text-red-400
-// family the bypass permission mode uses) with a warning glyph.
+// bg + a muted label (NOT yellow — that's the focus motif). The label tracks the kind — "Question" for
+// a plain ask, "Select multiple" for `multi` — with no corner glyph (see KindIcon below for why it was
+// dropped). A `danger` block (the destructive gate — force-merge, deletion, rollback) layers the app's
+// red risk language (the same text-red-400 family the bypass permission mode uses) with a warning glyph.
 // The context renders as markdown; the convention-parsed trailing options render as choice chips (radio
 // feel for single-select, toggleable checkboxes for `multi`) and the "Recommendation:" line as a muted
 // note. When `interactive` is present (the live message), chips are clickable and a freetext textarea
@@ -68,10 +68,10 @@ export function QuestionBlockCard({
   danger?: boolean
   interactive?: BlockInteractive
   wrap?: boolean
-  /** A control for the card's TITLE ROW, immediately left of the kind glyph — the shared chrome's own
-   *  `aside` slot. Producer 3's × for dismissing a registered question rides here rather than being
-   *  absolutely positioned over the card, which put it on top of that glyph and half outside the
-   *  border. Absent for the two producers that have nothing to put there. */
+  /** A control for the card's TITLE ROW, at its far right — the shared chrome's own `aside` slot.
+   *  Producer 3's × for dismissing a registered question rides here rather than being absolutely
+   *  positioned over the card, which put it half outside the border. Absent for the two producers
+   *  that have nothing to put there. */
   aside?: ReactNode
   /** Overrides the card's kind title. Producer 3 heads a FOLLOW-UP "Follow-up" rather than "Question":
    *  a branch's cards are siblings in the DOM, and three cards all titled "Question" read as three
@@ -114,7 +114,13 @@ export function QuestionBlockCard({
     // hidden). `offsetHeight - clientHeight` is the vertical border delta measured at height:auto.
     ta.style.height = `${ta.scrollHeight + ta.offsetHeight - ta.clientHeight}px`
   }, [freetext])
-  const KindIcon = isDanger ? AlertTriangle : isMulti ? ListChecks : HelpCircle
+  // NO corner glyph on an answerable question (dropped 2026-08-31). The registered-question × rides
+  // the same corner, and beside it a full-strength HelpCircle/ListChecks read as the actionable thing
+  // while the actual control read as chrome (maintainer: "the actionable thing is gray and light,
+  // whereas the not actionable thing is a very bold white color"). The title word already names the
+  // kind. The `danger` warning glyph stays: it is a real warning, not decoration, and a danger card
+  // never offers the × (see RegisteredQuestionCards), so the collision cannot arise there.
+  const KindIcon = isDanger ? AlertTriangle : undefined
   // Sentence case, because the shared chrome renders this as a real TITLE now rather than as an
   // uppercased eyebrow — a lowercase "question" beside the card's glyph reads as a typo.
   const kindLabel = label ?? (isMulti ? "Select multiple" : "Question")

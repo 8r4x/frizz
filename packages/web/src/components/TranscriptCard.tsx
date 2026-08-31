@@ -130,7 +130,11 @@ export function CardHead({
   head = CARD_TONES.neutral.head,
   aside,
 }: {
-  icon: LucideIcon
+  /** Optional since 2026-08-31: the question card dropped its corner glyph, because a full-strength
+   *  decorative mark parked beside the muted × read as the actionable thing while the actual control
+   *  read as chrome (maintainer: "the actionable thing is gray and light, whereas the not actionable
+   *  thing is a very bold white color"). A card with no icon just ends its title row at the aside. */
+  icon?: LucideIcon
   label: ReactNode
   head?: string
   aside?: ReactNode
@@ -152,7 +156,7 @@ export function CardHead({
       {/* `leading-6` matches the title's line box so a smaller aside still reads as sitting ON the
           title's line rather than floating above it. */}
       {aside && <span className="shrink-0 leading-6">{aside}</span>}
-      <Icon aria-hidden="true" size={16} className={`shrink-0 ${CARD_ICON_OFFSET} ${head}`} />
+      {Icon && <Icon aria-hidden="true" size={16} className={`shrink-0 ${CARD_ICON_OFFSET} ${head}`} />}
     </div>
   )
 }
@@ -202,12 +206,13 @@ export function TranscriptCard({
   ...rest
 }: {
   tone?: CardTone
-  icon: LucideIcon
+  /** Optional — see CardHead. A question card carries no corner glyph; every other kind still does. */
+  icon?: LucideIcon
   label: ReactNode
-  // Optional trailing slot on the title row, immediately LEFT of the glyph: the one thing the card is
-  // ABOUT, when that is a short reference rather than prose (the wake card's `owner/repo#N` link). It
-  // rides the title instead of taking a body line of its own, which keeps the body for the card's
-  // actual content.
+  // Optional trailing slot on the title row, immediately LEFT of the glyph (the row's far right, on a
+  // card with no glyph): the one thing the card is ABOUT, when that is a short reference rather than
+  // prose (the wake card's `owner/repo#N` link). It rides the title instead of taking a body line of
+  // its own, which keeps the body for the card's actual content.
   aside?: ReactNode
   // Optional, because one card is legitimately its own headline: the GitHub wake card for a SINGLE
   // item says everything it has in the title row ("New comment from @pullfrog[bot]"), and an empty

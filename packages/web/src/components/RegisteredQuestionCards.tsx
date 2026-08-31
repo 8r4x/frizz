@@ -156,11 +156,13 @@ export function RegisteredQuestionStack({
                     onClick={() => dismiss.mutate(q.id)}
                     // PLACED BY CONSTRUCTION, not by a fitted constant. `p-1 -m-1` cancels exactly, so
                     // the button's layout box is the bare 16px svg while its hit area stays 24px; at
-                    // 16px lucide's X paints 8px of ink centred in its box, exactly as HelpCircle
-                    // paints 13.33px centred in its own — so sharing `card-icon-offset` puts the two
-                    // ink centres on one line in BOTH fonts, with nothing to re-measure when the
-                    // setting flips. Hand-placed at `-my-1` with a 13px glyph first: the x rode 2.40px
-                    // ABOVE the card glyph and drew a 16.58px ink gap where `gap-2` claimed 8.
+                    // 16px lucide's X paints 8px of ink centred in its box, and `card-icon-offset`
+                    // centres that ink on the title's cap block in BOTH fonts, with nothing to
+                    // re-measure when the setting flips. Hand-placed at `-my-1` with a 13px glyph
+                    // first: the x rode 2.40px above where the offset now puts it. (It shared the
+                    // corner with the card's HelpCircle kind glyph until 2026-08-31, when the glyph
+                    // was dropped — a full-strength decoration beside the muted control read as the
+                    // actionable thing — so the × is the corner mark now.)
                     //
                     // `flex` is load-bearing: a button is inline-block by default, so inside the head's
                     // `leading-6` aside span it sits on that span's BASELINE — which moves with the font
@@ -169,9 +171,8 @@ export function RegisteredQuestionStack({
                     //
                     // HORIZONTALLY the trim is DEEPER than the padding, because lucide's X paints only
                     // 8 of its 16 box px: `-mx-2` collapses the padding AND that inset, so the layout
-                    // box IS the ink box and `gap-2` means 8px of ink. That lands 9.33px of ink to the
-                    // kind glyph — the same distance the card family's only other aside, a plain text
-                    // link, already draws — rather than the 13.33px a padding-only trim left.
+                    // box IS the ink box — which now lands the ×'s ink flush on the card's right
+                    // content edge (the p-4 inset), where the dropped glyph's ink sat 1.33px shy of it.
                     className="card-icon-offset -mx-2 -my-1 flex rounded-md p-1 text-muted/70 outline-none transition-colors hover:bg-elevated hover:text-fg disabled:opacity-40"
                   >
                     <X size={16} />
