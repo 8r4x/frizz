@@ -67,6 +67,14 @@ test("needsAction: a chat question at rest cards; mid-turn it does not", () => {
   assert.equal(needsAction(thread({ pendingQuestion: true, runtime: "running" })), false)
 })
 
+test("needsAction: a REGISTERED question at rest cards; mid-turn it does not (the worker keeps working)", () => {
+  assert.equal(needsAction(thread({ questions: regQuestion, runtime: "turn-idle" })), true)
+  // The registry outlives the process — an exited worker's open row still cards (unlike pendingQuestion
+  // it needs no transcript heuristics, the row IS the ask).
+  assert.equal(needsAction(thread({ questions: regQuestion, runtime: "exited" })), true)
+  assert.equal(needsAction(thread({ questions: regQuestion, runtime: "running" })), false)
+})
+
 test("needsAction: `unread` no longer drives carding (unread is dead)", () => {
   // A completed turn on a still-live thread badged unread — pure progress, never a card.
   assert.equal(needsAction(thread({ unread: true, runtime: "turn-idle" })), false)
@@ -171,6 +179,22 @@ test("sessionIndicatorKind: a rested QUEUED thread is at rest even with live sub
   assert.equal(sessionIndicatorKind(thread({ ...restedInQueue, needsYou: false, subAgents: [], lastFence: awaitingShell })), "snoozed")
   // • an EXITED parent with children still reading "running" is a stall, not a rest
   assert.equal(sessionIndicatorKind(thread({ ...restedInQueue, runtime: "exited" })), "stalled")
+})
+
+// A REGISTERED question (mcp__frizz__ask) queues its thread server-side (deriveNeedsYou's
+// openQuestions) and the card renders the ask — the rail must agree. Found 2026-08-31: a queued thread
+// resting on nothing but an open registered row wore the bare-rest ellipsis beside its own question card.
+test("sessionIndicatorKind: a REGISTERED question wears the ? at rest, never the ellipsis", () => {
+  const asked = thread({ kind: "session", state: "open", needsYou: true, runtime: "turn-idle", questions: regQuestion })
+  assert.equal(sessionIndicatorKind(asked), "needs-input")
+  // The ask survives the worker's exit — same rule as pendingQuestion: a real human ask stays a
+  // question after the process is gone, never [!].
+  assert.equal(sessionIndicatorKind(thread({ ...asked, runtime: "exited" })), "needs-input")
+  // …but never stops the spinner: a worker that registers a question KEEPS WORKING (the board keeps
+  // these rows out of degradeIfAwaitingAnswer for the same reason).
+  assert.equal(sessionIndicatorKind(thread({ ...asked, needsYou: false, runtime: "running" })), "working")
+  // A queued rest with live children AND an open row is the ask, not the 2026-07-27 ellipsis.
+  assert.equal(sessionIndicatorKind(thread({ ...asked, subAgents: liveSub })), "needs-input")
 })
 
 // THE SHELL-ONLY REST — maintainer 2026-08-01: "if a thread has rested but it still has background work
@@ -569,6 +593,8 @@ const awaitingPrWatch = { kind: "awaiting" as const, body: "", hints: [{ kind: "
 const awaitingTimer = { kind: "awaiting" as const, body: "", hints: [{ kind: "timer" as const, value: "tmr_a1b2c3" }, { kind: "for" as const, value: "2h" }] }
 const awaitingPr = { kind: "awaiting" as const, body: "", hints: [{ kind: "pr" as const, value: "owner/repo#12" }, { kind: "for" as const, value: "2h" }] }
 const liveSub = [{ label: "x", startedAt: "2026-07-10T00:00:00.000Z", state: "running" as const, id: "a1" }]
+/** One open registered question (mcp__frizz__ask), as the board emits it on `questions`. */
+const regQuestion = [{ id: "qst_ab12cd34", spec: { question: "Merge it?", kind: "question" as const }, askedAt: "2026-08-31T00:00:00.000Z" }]
 const liveShell = [{ label: "Watch CI", startedAt: "2026-07-10T00:00:00.000Z", state: "running" as const }]
 // HELD IS THE SERVER'S VERDICT, and this pins that the client reads it rather than re-deriving it.
 //

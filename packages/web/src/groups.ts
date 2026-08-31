@@ -136,6 +136,11 @@ export function needsAction(t: ThreadView): boolean {
   // needs-human — the board would otherwise see {active, humanBlocked:false, turn-idle} and show
   // nothing. Same rest-gate: only once the agent is off-turn (else the ask text hasn't landed).
   if (t.pendingQuestion && t.runtime !== "running" && t.runtime !== "spawning") return true
+  // A REGISTERED question (open thread_question rows on the view) is the same ask through the durable
+  // channel — the server queues it once at rest (deriveNeedsYou's openQuestions), and this predicate
+  // must agree so the mobile asks-first ordering and the attention sort count it. Same rest-gate as the
+  // fence net above: the worker keeps working after registering, and the card lands at its rest.
+  if ((t.questions?.length ?? 0) > 0 && t.runtime !== "running" && t.runtime !== "spawning") return true
   // CRASH / STALL net (replaces the old `unread`-gated clause — `unread` no longer drives anything).
   // A thread whose status still claims WORK IN FLIGHT (active or planning) but whose backing agent
   // PROCESS is gone — `exited` (session row present, worker process dead) or `none` (registry lost the row)
@@ -634,6 +639,15 @@ export function sessionIndicatorKind(t: ThreadView): SessionIndicatorKind {
   // see restedQueueHandoff. A shell-only rest is carved out because it is never motion at all; the dot
   // below is its mark, and without this clause an event-snoozed one would still spin.
   if (activelyRunning && !restedQueueHandoff(t) && !restingOnBackgroundWork(t)) return "working"
+  // A REGISTERED question (an open thread_question row, arriving as `questions`) is as concrete an ask
+  // as any of the explicit flags above, but it deliberately sits BELOW the working branch: a worker
+  // that registers a question keeps working, and the ask must not stop its spinner (the same reason
+  // board.ts keeps these rows out of degradeIfAwaitingAnswer). Once the thread is at rest the server
+  // queues it (deriveNeedsYou's openQuestions) and the card renders the ask — so the rail must say "?"
+  // rather than the bare-rest ellipsis it wore before this branch existed (maintainer 2026-08-31: a
+  // queue card showing a question beside a row marked […]). Above "snoozed" and "stalled" on purpose:
+  // an ask outranks a park, and a real human ask stays a question after the worker exits.
+  if ((t.questions?.length ?? 0) > 0) return "needs-input"
 
   if (isSnoozed(t)) return "snoozed"
   if (t.lastFence?.kind === "done" && atRest(t)) return "done"
