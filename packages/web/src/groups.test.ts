@@ -331,18 +331,23 @@ const RETRY_CONTRACT: { name: string; over: Partial<ThreadView>; kind: string; r
   { name: "archived", over: { state: "archived", needsYou: true, crashed: true, runtime: "exited" }, kind: "archived", retry: false },
   { name: "foreign (read-only — nothing frizz can restart)", over: { foreign: true, crashed: true, needsYou: true, runtime: "exited" }, kind: "rest", retry: false },
   { name: "registry lost the row (runtime none — not reattachable)", over: { needsYou: true, crashed: true, runtime: "none" }, kind: "rest", retry: false },
-  // ── HELD by a usage limit frizz will auto-resume: keeps the hourglass mark, but ALSO offers Retry ──
-  // (maintainer 2026-07-23) — the one-click continue is a faster door to the in-drawer "Continue now".
-  { name: "held on a session limit (auto-resume) — retry without the [!]", over: { runtime: "exited", limitPause: { backend: "claude", window: "session", at: "2026-07-23T00:00:00.000Z", autoResume: true } }, kind: "snoozed", retry: true },
-  { name: "held on a weekly limit (auto-resume) — same one-click continue", over: { runtime: "exited", limitPause: { backend: "codex", window: "weekly", at: "2026-07-23T00:00:00.000Z", autoResume: true } }, kind: "snoozed", retry: true },
-  // A limit pause frizz will NOT auto-resume is not held — it fell through to the ordinary handoff, and
-  // with its process exited it is a plain stall, already carrying Retry via the stalled branch.
-  { name: "limit pause without auto-resume — plain stall, not a held park", over: { needsYou: true, runtime: "exited", limitPause: { backend: "claude", window: "session", at: "2026-07-23T00:00:00.000Z", autoResume: false } }, kind: "stalled", retry: true },
-  // A FOREIGN read-only session parked on a limit still reads as held, but is nothing frizz can restart.
-  { name: "foreign held on a limit — read-only, no retry", over: { foreign: true, runtime: "exited", limitPause: { backend: "claude", window: "session", at: "2026-07-23T00:00:00.000Z", autoResume: true } }, kind: "snoozed", retry: false },
+  // ── KILLED BY A USAGE LIMIT frizz will auto-resume: the rail's OTHER yellow mark, with Retry ──
+  // Snoozed until 2026-08-31 (maintainer: killed threads "showed up and fucking snoozed … they should
+  // have shown up in the queue, as threads that had failed in some way"); the server now queues them.
+  { name: "killed by a session limit (auto-resume) — yellow hourglass, retry", over: { needsYou: true, runtime: "exited", limitPause: { backend: "claude", window: "session", at: "2026-07-23T00:00:00.000Z", autoResume: true } }, kind: "limit", retry: true },
+  { name: "killed by a weekly limit (auto-resume) — same one-click continue", over: { needsYou: true, runtime: "exited", limitPause: { backend: "codex", window: "weekly", at: "2026-07-23T00:00:00.000Z", autoResume: true } }, kind: "limit", retry: true },
+  // The mark must not hinge on needsYou arriving: a stale snapshot still reads as a limit kill.
+  { name: "killed by a limit, needsYou not yet set — still the limit mark", over: { runtime: "exited", limitPause: { backend: "claude", window: "session", at: "2026-07-23T00:00:00.000Z", autoResume: true } }, kind: "limit", retry: true },
+  // The OPERATOR's own snooze outranks the kill: they parked it, so it parks (and Retry stands down).
+  { name: "limit-killed but user-snoozed — the human's park wins", over: { runtime: "exited", snoozedUntil: "2999-01-01T00:00:00.000Z", limitPause: { backend: "claude", window: "session", at: "2026-07-23T00:00:00.000Z", autoResume: true } }, kind: "snoozed", retry: false },
+  // A limit pause frizz will NOT auto-resume never takes the limit mark — no promise is left, and with
+  // its process exited it is a plain stall, already carrying Retry via the stalled branch.
+  { name: "limit pause without auto-resume — plain stall, not a limit mark", over: { needsYou: true, runtime: "exited", limitPause: { backend: "claude", window: "session", at: "2026-07-23T00:00:00.000Z", autoResume: false } }, kind: "stalled", retry: true },
+  // A FOREIGN read-only session is nothing frizz can restart, so it takes neither yellow mark.
+  { name: "foreign killed on a limit — read-only, no retry", over: { foreign: true, runtime: "exited", limitPause: { backend: "claude", window: "session", at: "2026-07-23T00:00:00.000Z", autoResume: true } }, kind: "rest", retry: false },
 ]
 
-test("offersRetry: the retry gate is the stalled state PLUS the auto-resume usage-limit park", () => {
+test("offersRetry: the retry gate is the stalled state PLUS the auto-resume limit kill", () => {
   for (const { name, over, kind, retry } of RETRY_CONTRACT) {
     const t = thread({ kind: "session", ...over })
     assert.equal(sessionIndicatorKind(t), kind, `${name}: sidebar indicator`)
@@ -351,20 +356,19 @@ test("offersRetry: the retry gate is the stalled state PLUS the auto-resume usag
   assert.equal(offersRetry(thread({ kind: "legacy", crashed: true, runtime: "exited" })), false, "legacy: no provider runtime")
 })
 
-test("every surface shares the ONE offersRetry derivation — the retry verb is stalled OR limit-held", () => {
+test("every surface shares the ONE offersRetry derivation — the retry verb is stalled OR limit-killed", () => {
   // The load-bearing invariant is that the sidebar row, queue card, and drawer header ALL read
   // offersRetry, so no two can disagree about a thread (the drift bug, maintainer 2026-07-23, twice).
-  // The verb is DELIBERATELY broader than the yellow [!]: a usage-limit park keeps its hourglass mark
-  // yet still offers the one-click continue. So the pairing to pin is retry ⇔ (stalled OR limit-held),
-  // NOT retry ⇔ stalled — and a held row that offers retry must be a limit park, never a snooze/timer.
+  // Since 2026-08-31 the pairing is also the maintainer's rail invariant: retry ⇔ YELLOW — the stalled
+  // [!] and the limit kill's yellow hourglass are exactly the rows that carry the hover Retry, and a
+  // snoozed/timer park never does.
   for (const { name, over } of RETRY_CONTRACT) {
     const t = thread({ kind: "session", ...over })
     const kind = sessionIndicatorKind(t)
-    const limitHeld = kind === "snoozed" && t.foreign !== true && Boolean(t.limitPause?.autoResume)
     assert.equal(
       offersRetry(t),
-      kind === "stalled" || limitHeld,
-      `${name}: Retry is offered on exactly the stalled and auto-resume-limit-held rows`,
+      kind === "stalled" || kind === "limit",
+      `${name}: Retry is offered on exactly the yellow rows (stalled or limit-killed)`,
     )
   }
   // A held row parked by something OTHER than a limit frizz will auto-resume (a user snooze, a timer

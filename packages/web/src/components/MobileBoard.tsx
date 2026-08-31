@@ -118,6 +118,15 @@ function ThreadMark({ kind }: { kind: SessionIndicatorKind }) {
     )
   }
   if (kind === "working" || kind === "background") return <PlayMark />
+  // Killed by a usage limit, auto-resume promised: the rail's yellow hourglass (see Sidebar), the
+  // phone's drawing — accent like the stalled [!] above, hourglass because a wake is coming.
+  if (kind === "limit") {
+    return (
+      <StatusBox tone="border-accent/90">
+        <Hourglass size={12} className="text-accent" />
+      </StatusBox>
+    )
+  }
   if (kind === "snoozed") return <SnoozedMark />
   if (kind === "done" || kind === "archived") return <DoneMark />
   return <StatusBox />

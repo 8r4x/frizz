@@ -7,7 +7,7 @@ import { store, openThread, scrollToQueueCard, queueCardTargetY, pushSubAgentDra
 import { useBoard, asThreads } from "../hooks.ts"
 import { prefs } from "../lib/prefs.ts"
 import { sectionThreads, externalThreads, orderByInteraction, partitionActive, needsAction, displayTitle, titleIsProvisional, isSnoozed, parkedAwaitingHint, sessionIndicatorKind, offersRetry, futureSnoozedUntil, lastActiveLabelAt } from "../groups.ts"
-import { ageSpan, relativeAge } from "../lib/activityTime.ts"
+import { ageSpan, relativeAge, limitResumeClock } from "../lib/activityTime.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { BoxSpinner, STATUS_BOX } from "./BoxSpinner.tsx"
 import { ChildOpRow } from "./ChildOpRow.tsx"
@@ -417,9 +417,9 @@ export const ThreadRow = memo(function ThreadRow({
   const dimLabel = !legacy && titleIsProvisional(t)
   // The rows with an obvious single next action carry that verb INLINE, instead of making you open the
   // thread to find it. offersRetry (groups.ts) picks them: a STALLED row (the [!] mark — process
-  // exited) AND a row HELD on a usage limit frizz will auto-resume (the hourglass — a faster door to the
-  // in-drawer "Continue now" than waiting for the window). The queue card and drawer header read the
-  // SAME helper, so no surface can disagree with the rail about which threads offer Retry.
+  // exited) AND a row KILLED by a usage limit frizz will auto-resume (the yellow hourglass — a faster
+  // door to the in-drawer "Continue now" than waiting for the window). The queue card and drawer header
+  // read the SAME helper, so no surface can disagree with the rail about which threads offer Retry.
   const canRestart = !legacy && offersRetry(t)
   // A ROW IS ITS TITLE, AND NOTHING ELSE (maintainer 2026-08-19: "there should never ever be any fucking
   // thing in the sidebar except for the fucking title"). There is no subtitle line on any row, in any
@@ -512,7 +512,7 @@ export const ThreadRow = memo(function ThreadRow({
           <MarkAsButton slug={t.id} size="sm" />
         </div>
       )}
-      {/* ONE-CLICK RECOVERY on a stalled OR usage-limit-held row (offersRetry). Hover-revealed and
+      {/* ONE-CLICK RECOVERY on a stalled OR limit-killed row (offersRetry). Hover-revealed and
           pinned to the row's right edge, over the title's first line (it OVERLAYS rather than taking
           layout, so pointing at a row never reflows its wrapped title). `group-focus-within` keeps it
           reachable from the keyboard: focus the row button and the next Tab lands here. */}
@@ -798,6 +798,22 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
     const tip = t.crashed === true ? "Stalled — the agent exited mid-turn" : "Stalled — the agent's process exited"
     return { node: <StatusBox accent><Glyph ch="!" /></StatusBox>, tip }
   }
+  if (kind === "limit") {
+    // KILLED BY A USAGE LIMIT, auto-resume promised — the rail's OTHER yellow mark (2026-08-31). Accent
+    // like the stalled [!] because both are dead threads carrying the same one-click Retry (offersRetry;
+    // maintainer: every yellow row gets the hover Retry), but the glyph stays the hourglass because this
+    // one has a wake frizz itself delivers. Until 2026-08-31 it wore the MUTED hourglass in the Snoozed
+    // band, which read as a calm intentional park over a whole limit-killed fleet (maintainer: "they
+    // showed up and fucking snoozed"). The tip mirrors the drawer's LimitPauseCard word for word, so the
+    // rail and the card can never tell two stories about one thread.
+    const p = t.limitPause
+    const which = p?.window === "weekly" ? "weekly limit" : p?.window === "session" ? "session limit" : "usage limit"
+    const resume = p?.resumesAt ? `continuing automatically at ${limitResumeClock(p.resumesAt)}` : "continuing automatically once the window resets"
+    return {
+      node: <StatusBox accent><Hourglass size={9} className="text-accent" /></StatusBox>,
+      tip: `Paused by the ${p?.backend === "codex" ? "Codex" : "Claude"} ${which} — ${resume}`,
+    }
+  }
   if (kind === "snoozed") {
     const hourglass = <StatusBox><Hourglass size={9} className="text-muted/70" /></StatusBox>
     const github = <StatusBox><Github size={9} className="text-muted/70" /></StatusBox>
@@ -827,13 +843,9 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
     if (snoozedUntil) {
       return { node: parkMark, tip: popover(t, formatUserSnooze(snoozedUntil, t.snoozePrompt) ?? "Snoozed until a scheduled check") }
     }
-    // A usage-limit park is the third member of that same "held on the clock" family — frizz resolves
-    // this one too, so it reads as an auto-snooze, named by what actually stopped the work.
-    if (t.limitPause?.autoResume) {
-      const which = t.limitPause.window === "weekly" ? "weekly limit" : "session limit"
-      const at = t.limitPause.resumesAt ? formatAutoSnoozedUntil(new Date(t.limitPause.resumesAt * 1000).toISOString()) : null
-      return { node: hourglass, tip: at ? `${at} — ${which} reached` : `Auto-snoozed until the ${which} resets` }
-    }
+    // A usage-limit park is NOT in this family any more (2026-08-31): a limit kill queues as a failed
+    // thread and wears the yellow "limit" mark above. What still reaches this arm with a limitPause set
+    // is only a row the OPERATOR also snoozed, and their park is the story the row tells.
     // THE RESTING CARD'S EVENT-SNOOZE (isSnoozed, 2026-08-28). No instant to name: it expires by itself
     // the moment the thread next comes to rest, which is when the work it hid has reported back — so
     // the state reads the way the card's own toast did when it was clicked. A fence, when there is
@@ -900,7 +912,15 @@ function StatusBox({ accent, children }: { accent?: boolean; children?: ReactNod
 // gray as every other rail glyph (the "?" needs-you mark — the ⚖ queue already carries the emphasis).
 function Glyph({ ch, muted }: { ch: string; muted?: boolean }) {
   return (
-    <span aria-hidden className={`font-bold leading-none ${muted ? "text-muted/70" : "text-accent"}`} style={{ fontSize: 10 }}>
+    <span
+      aria-hidden
+      className={`font-bold leading-none ${muted ? "text-muted/70" : "text-accent"}`}
+      // MEASURED 2026-08-31, scripts/verify-rail-status-glyphs.mjs at dsf 8: a text glyph's ink rides
+      // ~0.94px HIGH of the lucide family's centre band ("down +1.438px" = must move down, where the
+      // family reads +0.5px — the instrument's dy is positive-above-centre). +0.09em tracks the 10px
+      // font (≈0.9px down); re-run the verifier rather than re-guessing if the size or font moves.
+      style={{ fontSize: 10, transform: "translateY(0.09em)" }}
+    >
       {ch}
     </span>
   )

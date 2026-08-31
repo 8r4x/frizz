@@ -1867,6 +1867,39 @@ test("a registered park excuses the thread from the queue and still states itsel
   assert.equal(deriveNeedsYou(row(), live, "turn-idle", false, NOW, undefined, true, false, {}, new Set(), new Set(), []), true)
 })
 
+// ---- LIMIT FAULTS QUEUE (2026-08-31) ----
+//
+// A usage-limit kill is a HARD queue member, like the crash net: it was a queue EXCUSAL until a quota
+// limit killed a whole fleet and every thread showed up calmly Snoozed (maintainer: "they should have
+// shown up in the queue, right, as blocked threads, as threads that had failed in some way").
+const LIMIT_PAUSE = { backend: "claude", window: "session", at: new Date(NOW - 60_000).toISOString(), autoResume: true } as const
+
+test("deriveNeedsYou: a limit fault queues — auto-resume promised or not", () => {
+  assert.equal(deriveNeedsYou(row(), tele({ turn: "idle" }), "turn-idle", false, NOW, LIMIT_PAUSE), true)
+  // A STALE pause (autoResume false) queues too — it always did, via the bare-rest handoff.
+  assert.equal(deriveNeedsYou(row(), tele({ turn: "idle" }), "exited", false, NOW, { ...LIMIT_PAUSE, autoResume: false }), true)
+})
+
+test("deriveNeedsYou: a limit fault outranks the stale park the worker declared BEFORE the kill", () => {
+  // Same registered-park shape that excuses a healthy rest above — the limit must queue it anyway,
+  // because the fence/registration predates the kill and the shell is not what stopped this thread.
+  const live = tele({ turn: "idle", bgShells: [LIVE_SHELL], lastAssistantAt: FENCE_AT })
+  const watches = [registeredWatch()]
+  assert.equal(deriveNeedsYou(row(), live, "turn-idle", false, NOW, LIMIT_PAUSE, true, false, {}, new Set(), new Set(), watches), true)
+})
+
+test("deriveNeedsYou: the operator's own snooze still parks a limit-killed thread", () => {
+  assert.equal(deriveNeedsYou(row({ snoozed_until: new Date(NOW + 60 * 60_000).toISOString() }), tele({ turn: "idle" }), "turn-idle", false, NOW, LIMIT_PAUSE), false)
+})
+
+test("deriveAwaitingBackground: a limit fault silences the declared-wait card — the limit card is the story", () => {
+  // Without the explicit stop, the 2026-08-31 queue flip would have made this TRUE (the flag ends on
+  // deriveNeedsYou) and hasLiveOps would spin a dead thread client-side.
+  const live = tele({ turn: "idle", bgShells: [LIVE_SHELL], lastAssistantAt: FENCE_AT })
+  const watches = [registeredWatch()]
+  assert.equal(deriveAwaitingBackground(row(), live, "turn-idle", false, NOW, LIMIT_PAUSE, false, {}, new Set(), new Set(), watches), false)
+})
+
 // ---- REGISTERED QUESTIONS (2026-08-26) ----
 //
 // The queue half of the question registry. What it must NOT do is as important as what it does: a

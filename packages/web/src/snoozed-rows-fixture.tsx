@@ -67,15 +67,18 @@ const snoozeThread = {
   snoozedUntil: snoozeAt,
 } as unknown as ThreadView
 
-// Row C — a worker whose turn was cut off by the subscription SESSION limit; frizz will auto-resume it
-// when the window resets. It keeps the held hourglass, but (unlike A and B) it carries the same
-// hover-revealed Retry as a stalled row, so an operator with capacity elsewhere can continue it now.
+// Row C — a worker whose turn was CUT OFF by the subscription SESSION limit; frizz will auto-resume it
+// when the window resets. NOT a snoozed row any more (2026-08-31): it queues as a failed thread and
+// wears the YELLOW hourglass — the counter-example this fixture keeps so the two hourglasses can be
+// compared side by side. Like a stalled row it carries the hover-revealed Retry, so an operator with
+// capacity elsewhere can continue it now.
 const limitAt = Math.floor((Date.now() + 42 * 60_000) / 1000) // "resets in ~42 min"
 const limitThread = {
   ...base,
   id: "refactor-usage-endpoint",
   title: "Refactor the usage-limit endpoint",
   runtime: "exited",
+  needsYou: true,
   limitPause: { backend: "claude", window: "session", at: "2026-07-23T00:00:00.000Z", resumesAt: limitAt, autoResume: true },
 } as unknown as ThreadView
 
@@ -128,15 +131,29 @@ function ActiveBand() {
 
 function HeldBand() {
   // Mirrors the real Sidebar HELD section markup (hr + label + count) so the visual context matches;
-  // the ROWS are the real ThreadRow component under test.
+  // the ROWS are the real ThreadRow component under test. The limit-killed row sits OUTSIDE this band
+  // on purpose (see RestedBand): since 2026-08-31 a limit kill queues instead of snoozing.
   return (
     <section aria-label="Snoozed">
       <hr className="my-3 border-border/50" />
-      <SectionHeader label="Snoozed" count={4} />
+      <SectionHeader label="Snoozed" count={3} />
       <ThreadRow t={timerThread} />
       <ThreadRow t={snoozeThread} />
       <ThreadRow t={watchThread} />
-      <ThreadRow t={limitThread} />
+    </section>
+  )
+}
+
+function RestedBand() {
+  // The limit-killed row's real home: THE QUEUE — the cue band the real rail draws at the TOP, one row
+  // per queue card (this is not a new band; the fixture mocks the existing one). Undimmed, accent
+  // hourglass — rendered on the same page as the muted Snoozed hourglasses precisely so the two can be
+  // told apart at a glance.
+  return (
+    <section aria-label="Rested">
+      <SectionHeader label="Rested" count={1} />
+      <ThreadRow t={limitThread} restedAge />
+      <hr className="my-3 border-border/50" />
     </section>
   )
 }
@@ -150,6 +167,7 @@ createRoot(document.getElementById("root")!).render(
     <TooltipProvider>
       <main className="min-h-screen bg-bg px-10 py-10 text-fg">
         <div data-sidebar-rail className="w-[clamp(320px,34vw,680px)]">
+          <RestedBand />
           <ActiveBand />
           <HeldBand />
         </div>

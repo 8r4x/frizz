@@ -51,6 +51,9 @@ const STATES: { kind: string; t: ThreadView }[] = [
   { kind: "rest", t: { ...base, id: "rest", runtime: "turn-idle", needsYou: true } as unknown as ThreadView },
   { kind: "needs-input", t: { ...base, id: "needs-input", runtime: "turn-idle", needsYou: true, pendingQuestion: true } as unknown as ThreadView },
   { kind: "stalled", t: { ...base, id: "stalled", runtime: "exited", needsYou: true, sessionId: "s" } as unknown as ThreadView },
+  // Killed by a usage limit, auto-resume promised: the accent hourglass (2026-08-31) — same box weight
+  // family as the [!] beside it, same hourglass ink as the muted snoozed mark two over.
+  { kind: "limit", t: { ...base, id: "limit", runtime: "exited", needsYou: true, sessionId: "s", limitPause: { backend: "claude", window: "session", at: "2026-08-01T00:00:00.000Z", autoResume: true } } as unknown as ThreadView },
   { kind: "done", t: { ...base, id: "done", runtime: "turn-idle", needsYou: true, lastFence: { kind: "done", body: "shipped", hints: [] } } as unknown as ThreadView },
   { kind: "snoozed", t: { ...base, id: "snoozed", runtime: "turn-idle", needsYou: false, lastFence: { kind: "awaiting", body: "", hints: [{ kind: "shell", value: "maintainer must approve" }] } } as unknown as ThreadView },
   { kind: "archived", t: { ...base, id: "archived", state: "archived", runtime: "exited", needsYou: false } as unknown as ThreadView },

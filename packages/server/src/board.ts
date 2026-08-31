@@ -791,8 +791,8 @@ export function deriveNeedsYou(
   runtime: RuntimeState,
   hasActionableInteraction = false,
   nowMs = Date.now(),
-  // The RESOLVED pause for this row (resolveLimitPause), not the raw setting — its `autoResume` bit
-  // already folds in staleness, so the queue excusal and the card can never disagree.
+  // The RESOLVED pause for this row (resolveLimitPause), not the raw setting, so the queue rule and
+  // the card can never disagree about whether a fault stands.
   limitPause: ThreadView["limitPause"] = undefined,
   // deriveAwaitingBackground passes false. The live-own-work excusal below is a QUEUE rule; the card
   // states a FACT about the thread that has to survive it, or the drawer and the full-screen page blank
@@ -858,16 +858,22 @@ export function deriveNeedsYou(
   // wrong for a row: a worker that registers a question KEEPS WORKING, and pinning it to turn-idle
   // would stop its shimmer for as long as the question stood.
   if (openQuestions > 0) return true
-  // Declared/limit parks are STRONGER excusals than the awaiting-background card below, so they are
-  // checked first: a worker that declared an awaiting-human fence, or is limit-paused with auto-resume
-  // promised, stays held even if a child of its is still live (it explicitly said what it is waiting on).
+  // A LIMIT PAUSE IS A HARD QUEUE MEMBER, exactly like the crash net above: the provider cut this
+  // thread off mid-work, so it queues as a failed thread the human must see. This REVERSES the
+  // excusal that lived here until 2026-08-31 ("keeps a limit event from dumping the entire running
+  // fleet into the queue at once") — a fleet the limit killed showed up as calmly Snoozed hourglasses
+  // instead, which is the opposite of what a mass kill should look like (maintainer 2026-08-31: "they
+  // should have shown up in the queue, right, as blocked threads, as threads that had failed in some
+  // way"). Auto-resume still fires on the window reset (the scheduler reads the fault, not the queue),
+  // and delivering that continue — or any human follow-up — clears the fault (tailer), which is what
+  // dequeues the card; merely viewing it never does. Ahead of hasParkedExternalWait on purpose: a
+  // stale ```awaiting fence from the rest BEFORE the kill must not bury it. The operator's own snooze
+  // still wins (futureSnooze, checked first), so a card can be parked deliberately.
+  if (limitPause) return true
+  // Declared parks are STRONGER excusals than the awaiting-background card below, so they are checked
+  // first: a worker that declared an awaiting-human fence stays held even if a child of its is still
+  // live (it explicitly said what it is waiting on).
   if (hasParkedExternalWait(tele, nowMs)) return false
-  // A thread parked by an exhausted subscription window is waiting on the clock, not on the human —
-  // exactly like a timer wait — SO LONG AS frizz is actually going to continue it. Excusing it keeps a
-  // limit event from dumping the entire running fleet into the queue at once. When auto-resume is off
-  // (or the pause aged out), the promise is gone and it falls through to the ordinary handoff below,
-  // which is the honest place for work only the human will restart.
-  if (limitPause?.autoResume) return false
   // A top-level turn that came to rest while a dispatched SUB-AGENT is still running is EXCUSED from
   // the queue for exactly as long as that holds. The rail already shows it in the ACTIVE band (the
   // spinning rows above the rule — see ARCHITECTURE.md § Board nomenclature), and the two surfaces must
@@ -996,6 +1002,12 @@ export function deriveAwaitingBackground(
   // how it came to announce a wait on a dev server nobody tore down. It now states what the worker said
   // it is waiting on, and says nothing when the worker said nothing.
   if (runtime !== "turn-idle" || !hasDeclaredWait(tele, nowMs, armedTimerIds, registeredPrWatches, armedWatches)) return false
+  // A LIMIT FAULT OUTRANKS EVERY DECLARED WAIT: the provider cut the thread off, so its story is the
+  // limit card, never "waiting on background work". Until 2026-08-31 this fell out of the final
+  // deriveNeedsYou call for free (a limit pause was a queue EXCUSAL, so it returned false); now that a
+  // limit fault is a hard queue MEMBER there, it would flip this fact-flag true — and with it
+  // hasLiveOps client-side, spinning a dead thread — unless stopped here explicitly.
+  if (limitPause) return false
   // Any hard human gate or completion signal outranks this reason → the thread cards as THAT, not here.
   // A REGISTERED question outranks this card for the same reason a fenced one does: at rest with both
   // outstanding the human should be looking at the QUESTION, which is the actionable thing, and two
@@ -1033,7 +1045,7 @@ export function deriveAwaitingBackground(
     !hasParkedTimerWatch(tele, armedTimerIds)
   ) return false
   // Every OTHER excusal deriveNeedsYou applies still outranks the card (a user wall-clock snooze, a
-  // limit pause, a delivered-but-unobserved follow-up); only the queue-owned event-snooze is dropped,
+  // delivered-but-unobserved follow-up); only the queue-owned event-snooze is dropped,
   // and the queue's live-OWN-WORK excusal is opted out of (excuseLiveOwnWork: false). That opt-out is
   // what keeps this flag meaningful at all: the very threads it describes are precisely the ones that
   // excusal removes from the queue, so inheriting it would make this function always false and blank the

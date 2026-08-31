@@ -463,16 +463,18 @@ export function isSnoozed(t: ThreadView, nowMs = Date.now()): boolean {
   // snooze merely parks their presentation until then. Mid-turn work keeps spinning in the Active band,
   // while a provider permission prompt is itself parked and may therefore move to Snoozed.
   if (userSnooze) return t.runtime !== "running" && t.runtime !== "spawning"
+  // A LIMIT KILL OUTRANKS EVERY PARK BELOW (2026-08-31). The fault postdates any ```awaiting fence the
+  // worker left at its LAST rest, so letting `declaredWait` below claim the row would park a killed
+  // thread on a stale story. The server already queues it (needsYou, next line), but the mark and the
+  // band must not hinge on that flag arriving: a limit-killed thread is never Snoozed unless the
+  // OPERATOR snoozed it (userSnooze above, which wins by design).
+  if (t.limitPause?.autoResume && t.foreign !== true) return false
   // Without an explicit user snooze, higher-priority attention states render ?, !, or a native
   // prompt—not a wait glyph—so a stale awaiting fence cannot demote them out of Queue.
   if (t.needsYou || t.pendingAsk || t.runtime === "perm-prompt") return false
   if (!atRest(t)) return false
-  // A thread a usage limit cut off, which frizz is going to continue itself, has the same shape as an
-  // ```awaiting timer: park — parked on the clock with a wake already armed. It belongs in the dimmed
-  // Snoozed band, not sitting among the rested rows as though the human could pick it up. Without that
-  // auto-resume promise there is no armed wake, so it is NOT snoozed: it falls through to the queue as
-  // work only the human will restart.
-  if (t.limitPause?.autoResume) return true
+  // (A limit pause used to return true here — "parked on the clock with a wake already armed" — until
+  // 2026-08-31. It is now the hard NON-snooze gate above, and the queue's problem: see deriveNeedsYou.)
   // The event-snooze needs no fence behind it: a shell-only rest cards without one and its snooze is the
   // same click. It expires by itself at the thread's next rest, which is the wake the human asked for.
   if (eventSnooze) return true
@@ -605,7 +607,7 @@ function restingOnLiveBackgroundWork(t: ThreadView): boolean {
 // an archived row at rest stays archived even if stale attention metadata lingers; a real human ask
 // stays a question after the worker exits; live work stays working; and a completed handoff stays a
 // check instead of being mislabelled as a crash merely because `needsYou` also puts it in the queue.
-export type SessionIndicatorKind = "archived" | "needs-input" | "working" | "background" | "done" | "stalled" | "snoozed" | "rest"
+export type SessionIndicatorKind = "archived" | "needs-input" | "working" | "background" | "done" | "stalled" | "limit" | "snoozed" | "rest"
 
 // NO RAIL MARK FOR AN ARMED STOP HOOK, and the reason is worth keeping because one shipped briefly
 // (2026-08-02, removed the same day — maintainer: "the whole point of a stop hook is that it means the
@@ -650,6 +652,16 @@ export function sessionIndicatorKind(t: ThreadView): SessionIndicatorKind {
   if ((t.questions?.length ?? 0) > 0) return "needs-input"
 
   if (isSnoozed(t)) return "snoozed"
+  // KILLED BY A USAGE LIMIT, auto-resume promised. Its own attention mark — the yellow hourglass —
+  // because it is BOTH things at once: dead like a stall (hence yellow, and the same one-click Retry),
+  // and parked on a wake frizz itself delivers (hence the hourglass, not the [!]). It wore the muted
+  // Snoozed hourglass until 2026-08-31 (maintainer: killed threads "showed up and fucking snoozed …
+  // they're not showing up as yellow in the sidebar"). Below isSnoozed so the operator's own wall-clock
+  // snooze still parks the row; above the done fence and the background dot, both of which would be a
+  // STALE story from before the kill (the fault postdates any fence, and nothing of the thread's is
+  // coming back until the window resets). A STALE pause (autoResume false) deliberately skips this: no
+  // promise is left, so it falls through to canRetry below and wears the honest [!].
+  if (t.limitPause?.autoResume && t.foreign !== true) return "limit"
   if (t.lastFence?.kind === "done" && atRest(t)) return "done"
   // Below the two DECLARED states on purpose. A worker that fenced ```done while a server it never
   // killed keeps running is a one-click dismissal, not live work (FRIZZ.md: "name it in the body and
@@ -684,15 +696,16 @@ export function sessionIndicatorKind(t: ThreadView): SessionIndicatorKind {
 //
 // Two states earn Retry, and they wear DIFFERENT sidebar marks — the verb is shared, the glyph is not:
 //   • STALLED — the process is gone with the work unfinished (yellow [!]). The classic case.
-//   • HELD by a usage limit frizz will auto-resume (the hourglass, NOT [!]). A limit park is a genuine
-//     wait — frizz continues it itself once the window resets — so it keeps its held glyph and its
-//     dimmed Snoozed band. But the operator with capacity elsewhere shouldn't have to wait, so it ALSO
-//     gets the one-click Retry: the same verb, message and RPC as a stall (retrySession sends the very
-//     "Continue exactly where you left off." the in-drawer LimitPauseCard already offers), just a
-//     faster door to it from the rail (maintainer 2026-07-23: held-on-a-limit rows want the same
-//     one-click retry as stalled rows). This is why offersRetry is NOT simply `kind === "stalled"`.
-// A non-auto-resume limit pause is not held at all: if its process exited it is already "stalled"
-// above, so it already carries Retry — only the auto-resume-HELD case needed widening here.
+//   • KILLED BY A USAGE LIMIT frizz will auto-resume (the yellow hourglass — the "limit" kind). It
+//     queues as a failed thread (deriveNeedsYou, 2026-08-31) and frizz continues it itself once the
+//     window resets, but the operator with capacity elsewhere shouldn't have to wait, so it gets the
+//     same one-click Retry: the same verb, message and RPC as a stall (retrySession sends the very
+//     "Continue exactly where you left off." the in-drawer LimitPauseCard already offers) — a faster
+//     door from the rail (maintainer 2026-07-23: limit-killed rows want the same one-click retry as
+//     stalled rows). This is why offersRetry is NOT simply `kind === "stalled"`. The invariant the
+//     maintainer reads the rail by (2026-08-31): EVERY YELLOW ROW carries the hover Retry.
+// A non-auto-resume limit pause never takes the "limit" kind: no promise is left, so if its process
+// exited it is already "stalled" above and carries Retry that way.
 //
 // The drawer used to be deliberately broader — raw `canRetry` (ANY exited owned session) — on the
 // theory that the full view should show every recovery option. That was wrong twice over, and it is
@@ -703,12 +716,10 @@ export function sessionIndicatorKind(t: ThreadView): SessionIndicatorKind {
 // an archived or done thread a message is already how you reopen it (see StateButton).
 export function offersRetry(t: ThreadView): boolean {
   const kind = sessionIndicatorKind(t)
-  if (kind === "stalled") return true
-  // A usage-limit park frizz will auto-resume — the ONE held state with an obvious manual shortcut.
-  // Gated on the RESOLVED "snoozed" kind (not raw isSnoozed) so a higher-priority state that stole the row
-  // — a fresh ask, live work — never sprouts a Retry, and on non-foreign so it stays a session frizz
-  // can actually restart.
-  return kind === "snoozed" && t.foreign !== true && Boolean(t.limitPause?.autoResume)
+  // Gated on the RESOLVED kinds (never raw limitPause/canRetry) so a higher-priority state that stole
+  // the row — a fresh ask, live work, the operator's own snooze — never sprouts a Retry. Both kinds
+  // are non-foreign by construction, so each stays a session frizz can actually restart.
+  return kind === "stalled" || kind === "limit"
 }
 
 export function sectionOf(t: ThreadView): SectionKey | null {

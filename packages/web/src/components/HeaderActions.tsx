@@ -19,8 +19,8 @@ export { STALLED_RETRY_MESSAGE } from "../lib/retrySession.ts"
 // header so the two can never drift. Order left→right runs least→most important, so the primary verb
 // sits at the far RIGHT. The verbs SPLIT on kind:
 //   • SESSION (non-foreign): doc/open navigation, plus Retry on exactly the threads `offersRetry`
-//     picks — the STALLED ones (the rail's yellow [!]) and the ones HELD on a usage limit frizz will
-//     auto-resume (the hourglass, offered the same one-click continue). Every surface that renders this
+//     picks — the STALLED ones (the rail's yellow [!]) and the ones KILLED by a usage limit frizz will
+//     auto-resume (the yellow hourglass, offered the same one-click continue). Every surface that renders this
 //     component reads that same derivation, so the verb can never disagree between the card, the header
 //     and the rail. It also carries the two live-process MAINTENANCE verbs — Reload plugins and Restart
 //     worker — which sat in the lifecycle footer until 2026-08-26 (maintainer: "the restart worker
@@ -79,7 +79,7 @@ export function HeaderActions({
           tab" arrow on 2026-08-28; the drawer header (ChatView) mounts the same component. */}
       {expand && <ExpandThreadLink slug={thread.id} />}
       {isSession ? (
-        // A STALLED session (process gone, work unfinished) or one HELD on an auto-resume usage limit
+        // A STALLED session (process gone, work unfinished) or one KILLED by an auto-resume usage limit
         // leads with recovery — Retry is the only exit/wait-state verb here; clearing a finished row is
         // the footer's job (Mark as done / Snooze). offersRetry already excludes foreign (read-only)
         // sessions, and — the point of the 2026-07-23 fix — archived and done-fenced ones, which are at

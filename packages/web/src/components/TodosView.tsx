@@ -17,7 +17,7 @@ import { collapseMiddleRuns, opensQueueSegment, queueCollapseSegments, segmentFo
 import { pairAllAnswers } from "../lib/answersMessage.ts"
 import { questionsByAnchor } from "../lib/questionAnchor.ts"
 import { allFencesShadowed, registeredStandingAt } from "../lib/questionShadow.ts"
-import { FenceCard, Message, PermPolicyDenialCard, PermPromptBanner, PendingAskCard, VSpace, STEP, messageTailIsMeta, messageHeadIsMeta, messageRendersNothing, messageHasRenderableText, lastAssistantIndex } from "./ChatView.tsx"
+import { FenceCard, LimitPauseCard, Message, PermPolicyDenialCard, PermPromptBanner, PendingAskCard, VSpace, STEP, messageTailIsMeta, messageHeadIsMeta, messageRendersNothing, messageHasRenderableText, lastAssistantIndex } from "./ChatView.tsx"
 import { BLOCK_RADIUS, BLOCK_RADIUS_TOP, CARD_ACTION_EXPLAINER, CARD_PRIMARY_ACTION } from "./TranscriptCard.tsx"
 import { AwaitingBackgroundCard, showsRestingCard } from "./AwaitingBackgroundCard.tsx"
 import { agentCompletionCall } from "../lib/subAgentCompletion.ts"
@@ -1221,9 +1221,9 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
           )}
         </div>
         {/* SHARED navigation actions: collapse and open-in-new-tab, plus Retry — which HeaderActions
-            itself now gates on `offersRetry` (stalled OR usage-limit-held; groups.ts). Queue cards only
-            ever exist for needsYou threads, and a usage-limit park is NOT needsYou, so the only
-            offersRetry case that cards here is a STALL — its sidebar row wears the yellow [!]. Sharing
+            itself now gates on `offersRetry` (stalled OR limit-killed; groups.ts). Both card here: a
+            stall's row wears the yellow [!], a limit kill's the yellow hourglass (a limit fault is a
+            hard queue member since 2026-08-31). Sharing
             that ONE predicate across every surface is load-bearing: each time a surface kept its own
             gate, a thread ended up carrying a Retry button while reading as calm at-rest elsewhere
             (maintainer 2026-07-23, twice). A card that stalled out is the one queue state with an obvious
@@ -1532,6 +1532,16 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
             <VSpace />
             <FenceCard fenceKind="done" body={thread.lastFence!.body} hints={[]} wrap />
           </>
+        )}
+        {/* KILLED BY A USAGE LIMIT — the reason this card is in the queue at all (a limit fault is a
+            hard queue member, deriveNeedsYou, 2026-08-31), so the tail says so in the drawer's own
+            card: which window blew, when frizz continues it, and the manual "Continue now" for the
+            operator who won't wait. The transcript's last line above it is the provider's own limit
+            message, so this sits exactly where the drawer puts it. */}
+        {!q.isLoading && thread.limitPause && thread.foreign !== true && (
+          <div className="mt-4">
+            <LimitPauseCard slug={thread.id} sessionId={thread.sessionId} pause={thread.limitPause} />
+          </div>
         )}
         {/* The residual rung, same as the thread view: a rest with no other card still states itself. */}
         {!q.isLoading && showsRestedCard(thread, lastAgentIdx >= 0 ? messages[lastAgentIdx]?.text : undefined) && (

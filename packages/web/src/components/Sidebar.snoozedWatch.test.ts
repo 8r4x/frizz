@@ -102,9 +102,11 @@ test("each park wears its own shape, and none of them borrows GitHub's mark", ()
   }
 })
 
-test("a usage-limit park keeps the hourglass even when the fence carries a watch", () => {
-  // The limit is what is holding this row — frizz auto-resumes it when the window resets — so the mark
-  // names THAT, not the PR it happened to be watching when the window ran out.
+test("a usage-limit kill wears the YELLOW hourglass even when the fence carries a watch", () => {
+  // The limit is what stopped this row — the fence's PR watch is a stale story from the rest BEFORE the
+  // kill — so the mark names THAT: the "limit" kind's accent hourglass (2026-08-31; it was the muted
+  // Snoozed hourglass before, which read as a calm park over a killed thread). The row is NOT dimmed
+  // (isSnoozed refuses a limit kill) and carries the hover Retry beside the fullscreen door.
   const html = row({
     runtime: "exited",
     limitPause: { backend: "claude", window: "session", at: "2026-08-01T00:00:00.000Z", resumesAt: 32503680000, autoResume: true },
@@ -112,6 +114,10 @@ test("a usage-limit park keeps the hourglass even when the fence carries a watch
   } as unknown as Partial<ThreadView>)
   assert.match(html, HOURGLASS)
   assert.doesNotMatch(html, GITHUB)
+  assert.match(html, /data-rail-glyph="limit"/, "the resolved kind is the limit mark, not snoozed")
+  assert.match(html, /lucide-hourglass[^>]*text-accent/, "the hourglass wears the accent yellow")
+  assert.doesNotMatch(html, /opacity-65/, "a limit kill is not dimmed like a snoozed row")
+  assert.match(html, /data-sidebar-retry/, "the hover Retry rides the row")
 })
 
 // THE RESTING CARD'S EVENT-SNOOZE reaches Snoozed too (groups.ts isSnoozed, 2026-08-28), and it has no

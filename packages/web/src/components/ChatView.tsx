@@ -37,6 +37,7 @@ import { useLiveAnswering, type LiveAnswering } from "../lib/answering.ts"
 import { useIsMobile } from "../lib/mobile.ts"
 import { MobileAnswerSheet } from "./MobileAnswerSheet.tsx"
 import { sendEagerFollowUp } from "../lib/eagerComposerSubmission.ts"
+import { limitResumeClock } from "../lib/activityTime.ts"
 import { useUnqueueFollowUp, useUnqueueSupported } from "../lib/unqueueFollowUp.ts"
 import { useDeliverQueuedNow, useDeliverQueuedNowSupported } from "../lib/deliverQueuedNow.ts"
 import { useInnerHtml } from "../lib/innerHtml.ts"
@@ -3845,15 +3846,6 @@ export function ProviderFaultCard({
   )
 }
 
-// Format a unix-seconds instant as a bare local wall clock ("5:50 PM"), or with the weekday when it
-// is not today — a limit that resets tomorrow afternoon must not read as if it comes back this hour.
-function limitResumeClock(unixSeconds: number): string {
-  const when = new Date(unixSeconds * 1000)
-  const sameDay = when.toDateString() === new Date().toDateString()
-  const time = when.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
-  return sameDay ? time : `${when.toLocaleDateString([], { weekday: "short" })} ${time}`
-}
-
 // The usage-limit pause card. Rendered ONLY from the server's TYPED limitPause — the same trust rule
 // as ProviderFaultCard, so an agent quoting a limit message into its own transcript can never
 // fabricate a "paused, resuming later" affordance.
@@ -3868,7 +3860,7 @@ export function LimitPauseCard({ slug, sessionId, pause }: { slug: string; sessi
   const [continuing, setContinuing] = useState(false)
   const queryClient = useQueryClient()
   // "Continue now" is a manual override of the auto-resume — a turn-starting action exactly like a
-  // steer, so it takes the same eager path: the row leaves the Snoozed band for Active and its bubble
+  // steer, so it takes the same eager path: the row leaves the queue for the Active band and its bubble
   // appears the instant it's clicked, rather than after the injection round-trip. `continuing` disables
   // only this button.
   const continueNow = () => {

@@ -136,3 +136,13 @@ export function exactStamp(at: string | undefined, opts: { locale?: string; time
     timeZone: opts.timeZone,
   }).format(ms)
 }
+
+/** Format a unix-seconds instant as a bare local wall clock ("5:50 PM"), or with the weekday when it
+ *  is not today — a limit that resets tomorrow afternoon must not read as if it comes back this hour.
+ *  Shared by the drawer's LimitPauseCard and the rail's limit mark, so the two name one instant alike. */
+export function limitResumeClock(unixSeconds: number): string {
+  const when = new Date(unixSeconds * 1000)
+  const sameDay = when.toDateString() === new Date().toDateString()
+  const time = when.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
+  return sameDay ? time : `${when.toLocaleDateString([], { weekday: "short" })} ${time}`
+}

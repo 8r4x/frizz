@@ -10,7 +10,7 @@ type RecoveryThread = Pick<ThreadView, "kind" | "foreign" | "runtime">
 //
 // This is a CAPABILITY, not the affordance. It deliberately ignores lifecycle (`state`/fences), so it
 // is NOT what any surface should gate a Retry button on: every visible Retry comes from
-// groups.ts `offersRetry` (the STALLED rows PLUS the ones held on an auto-resume usage limit), which
+// groups.ts `offersRetry` (the STALLED rows PLUS the ones killed by an auto-resume usage limit), which
 // consults this and then lets archived / done-fenced / answered / snooze-or-timer-held threads keep
 // their own mark and affordance. Gating a surface on this directly is exactly how the drawer ended up
 // offering Retry on 158 archived threads whose rail rows showed a muted [✓] (maintainer 2026-07-23).

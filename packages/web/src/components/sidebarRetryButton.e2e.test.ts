@@ -21,30 +21,28 @@ test("hovering a stalled sidebar row reveals a Retry button that restarts the se
   page.on("pageerror", (error) => errors.push(String(error)))
 
   const retry = '[data-sidebar-retry="stalled-migration"]'
-  const visible = (sel: string) => page.$eval(sel, (el) => {
-    const style = getComputedStyle(el)
-    return style.display !== "none" && style.visibility !== "hidden"
-  }).catch(() => false)
+  // getClientRects, NOT getComputedStyle: the hover reveal's `hidden` class sits on the ACTIONS CLUSTER
+  // wrapper (Sidebar's group-hover div), and a descendant of a display:none ancestor still reports its
+  // OWN computed display — so a style probe on the button reads "visible" while nothing paints. Zero
+  // client rects is what "hidden by any ancestor" actually measures.
+  const visible = (sel: string) => page.$eval(sel, (el) => el.getClientRects().length > 0).catch(() => false)
 
   try {
     await page.setViewport({ width: 1100, height: 900, deviceScaleFactor: 1 })
     await page.goto(`${baseUrl}/sidebar-retry-fixture.html`, { waitUntil: "networkidle0" })
     await page.waitForSelector('[data-sidebar-item="stalled-migration"]')
 
-    // The two STOPPED rows (a [!] crash and a […] exited-at-rest) AND the usage-limit-HELD row carry a
+    // The two STOPPED rows (a [!] crash and a […] exited-at-rest) AND the limit-KILLED row carry a
     // retry control; the live working row and the live turn-idle resting row must not.
     const retryCount = await page.$$eval("[data-sidebar-retry]", (els) => els.map((e) => e.getAttribute("data-sidebar-retry")))
-    assert.deepEqual(retryCount, ["stalled-migration", "exited-at-rest", "limit-held"], "the two stopped rows and the limit-held row carry Retry")
+    assert.deepEqual(retryCount, ["stalled-migration", "exited-at-rest", "limit-killed"], "the two stopped rows and the limit-killed row carry Retry")
 
     // Hidden at rest…
     assert.equal(await visible(retry), false, "the Retry button is hidden until the row is hovered")
 
     // …revealed on hover.
     await page.hover('[data-sidebar-item="stalled-migration"]')
-    await page.waitForFunction((sel) => {
-      const el = document.querySelector(sel)
-      return el ? getComputedStyle(el).display !== "none" : false
-    }, { timeout: 5_000 }, retry)
+    await page.waitForFunction((sel) => (document.querySelector(sel)?.getClientRects().length ?? 0) > 0, { timeout: 5_000 }, retry)
     assert.equal(await visible(retry), true, "hovering the row reveals Retry")
 
     // It sits at the row's RIGHT edge (right-justified), past the row's horizontal midpoint.
@@ -77,21 +75,25 @@ test("hovering a stalled sidebar row reveals a Retry button that restarts the se
     // The retry toast confirms it to the user.
     await page.waitForFunction(() => /Retrying/.test(document.body.innerText), { timeout: 5_000 })
 
-    // ── The usage-limit-HELD row: same one-click Retry, but it must NOT wear the yellow [!] stall mark.
-    const limitRetry = '[data-sidebar-retry="limit-held"]'
-    // It is HELD, not stalled: its indicator is the hourglass, so the accent [!] must be absent from the row.
-    const limitHasStallMark = await page.$eval('[data-sidebar-item="limit-held"]', (row) =>
-      Boolean(row.querySelector(".border-accent\\/90")) && /(?:^|>)!(?:<|$)/.test(row.innerHTML))
-    assert.equal(limitHasStallMark, false, "the limit-held row keeps its held glyph — no yellow [!] stall mark")
+    // ── The limit-KILLED row: same one-click Retry, and since 2026-08-31 it is YELLOW too — the
+    // accent-boxed hourglass, not the [!] (the glyphs differ, the color and the verb do not).
+    const limitRetry = '[data-sidebar-retry="limit-killed"]'
+    const limitMark = await page.$eval('[data-sidebar-item="limit-killed"]', (row) => ({
+      kind: row.querySelector("[data-rail-glyph]")?.getAttribute("data-rail-glyph"),
+      accentBox: Boolean(row.querySelector('[data-rail-glyph] .border-accent\\/90')),
+      accentHourglass: Boolean(row.querySelector("svg.lucide-hourglass.text-accent")),
+      stallBang: /(?:^|>)!(?:<|$)/.test(row.querySelector("[data-rail-glyph]")?.innerHTML ?? ""),
+    }))
+    assert.equal(limitMark.kind, "limit", "the resolved kind is the limit mark")
+    assert.equal(limitMark.accentBox, true, "the limit-killed row's box wears the accent yellow")
+    assert.equal(limitMark.accentHourglass, true, "…around a yellow hourglass")
+    assert.equal(limitMark.stallBang, false, "…and never the [!] — that mark stays the crash's")
 
     // Hidden until hover, revealed on hover — exactly like a stalled row.
-    assert.equal(await visible(limitRetry), false, "the limit-held Retry is hidden until its row is hovered")
-    await page.hover('[data-sidebar-item="limit-held"]')
-    await page.waitForFunction((sel) => {
-      const el = document.querySelector(sel)
-      return el ? getComputedStyle(el).display !== "none" : false
-    }, { timeout: 5_000 }, limitRetry)
-    assert.equal(await visible(limitRetry), true, "hovering the limit-held row reveals Retry")
+    assert.equal(await visible(limitRetry), false, "the limit-killed Retry is hidden until its row is hovered")
+    await page.hover('[data-sidebar-item="limit-killed"]')
+    await page.waitForFunction((sel) => (document.querySelector(sel)?.getClientRects().length ?? 0) > 0, { timeout: 5_000 }, limitRetry)
+    assert.equal(await visible(limitRetry), true, "hovering the limit-killed row reveals Retry")
 
     // Clicking it fires the SAME recovery follow-up (the shared continue message) — a second RPC call.
     await page.click(limitRetry)
@@ -105,10 +107,10 @@ test("hovering a stalled sidebar row reveals a Retry button that restarts the se
     // set, so the whole suite reported `skipped` and counted as green. It has thrown
     // `ReferenceError: stable is not defined` on its last assertion ever since (2026-08-24).
     const [, limitCall] = allCalls
-    assert.equal(limitCall.slug, "limit-held")
+    assert.equal(limitCall.slug, "limit-killed")
     assert.equal(limitCall.sessionId, "")
     assert.equal(limitCall.message, "Continue exactly where you left off.")
-    assert.equal(typeof limitCall.deliveryId, "string", "the limit-held retry goes through the same eager path")
+    assert.equal(typeof limitCall.deliveryId, "string", "the limit-killed retry goes through the same eager path")
     assert.ok(limitCall.deliveryId.length > 0, "…and carries its own ledger handle")
 
     assert.deepEqual(errors, [])
