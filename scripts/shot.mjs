@@ -17,7 +17,10 @@ import puppeteer from "puppeteer"
 
 const args = process.argv.slice(2)
 const pos = args.filter((a) => !a.startsWith("--"))
-const flags = Object.fromEntries(args.filter((a) => a.startsWith("--")).map((a) => a.replace(/^--/, "").split("=")))
+// Split on the FIRST "=" only. A --clip selector ([data-x="y"]) and an inline --before expression both
+// carry their own "=", and a naive split("=") silently truncated the value to everything before it —
+// so the flag became a no-op and the run produced a confident, wrong screenshot rather than an error.
+const flags = Object.fromEntries(args.filter((a) => a.startsWith("--")).map((a) => { const s = a.replace(/^--/, ""); const i = s.indexOf("="); return i < 0 ? [s, true] : [s.slice(0, i), s.slice(i + 1)] }))
 const [url, out, evalArg] = pos
 const W = Number(flags.w) || 1440
 const H = Number(flags.h) || 900
