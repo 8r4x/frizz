@@ -18,8 +18,12 @@ const agent = (state: "running" | "stale") => ({ id: "toolu_a", label: "Audit th
 // A live sub-agent OF a sub-agent (depth 2 = a grandchild, 3 = a great-grandchild).
 const nested = (depth: number) => ({ id: `toolu_d${depth}`, label: "Trace the cache key", startedAt: "2026-07-28T09:00:00.000Z", state: "running" as const, depth })
 const shell = (state: "running") => ({ id: "toolu_s", taskId: "bzvtnt3ig", label: "vite dev", startedAt: "2026-07-28T09:00:00.000Z", state })
+// An OWNED SESSION thread, because the card decides its own Snooze off exactly that
+// (threadLifecycleAvailability) as of 2026-08-31 — a bare `{id, subAgents, bgShells}` is not a thread
+// anyone can act on, and a fixture that omitted the ownership fields would silently pin the card's
+// no-verb branch while claiming to test the ordinary one.
 const thread = (subAgents: unknown[], bgShells: unknown[]) =>
-  ({ id: "demo-thread", subAgents, bgShells } as unknown as Pick<ThreadView, "id" | "subAgents" | "bgShells">)
+  ({ id: "demo-thread", sessionId: "sess-demo", kind: "session", subAgents, bgShells } as unknown as Parameters<typeof AwaitingBackgroundCard>[0]["thread"])
 
 // A DECLARED shell wait — what a worker's `watch: <handle>` fence hint becomes server-side.
 const shellWatch = (target: string) => ({ id: `shell:demo:${target}`, kind: "shell" as const, target, state: "armed" as const, createdAt: "2026-07-28T09:00:00.000Z" })
@@ -57,25 +61,39 @@ test("awaitingBackgroundSubject names exactly the work that is RUNNING", () => {
   assert.equal(awaitingBackgroundSubject(thread([agent("running"), nested(2), nested(3)], [])), "1 sub-agent")
 })
 
-test("the card carries the snooze ONLY when a surface passes one", () => {
-  const withAction = renderToStaticMarkup(
-    createElement(AwaitingBackgroundCard, {
-      thread: thread([agent("running")], []),
-      actions: createElement("button", { type: "button" }, "Snooze"),
-    }),
-  )
-  assert.match(withAction, /Snooze/)
-  assert.match(withAction, /<button/)
-
-  // The drawer and the full-screen page pass no action — and must then render no SNOOZE at all, not a
-  // disabled or hidden one (maintainer 2026-07-25). They still carry the rows, whose openable ones are
-  // themselves buttons, so the assertion is on the verb rather than on the tag.
+// THE SNOOZE IS THE CARD'S OWN VERB, ON EVERY SURFACE (2026-08-31). It was injected by the QUEUE alone
+// as an `actions` node until then — "you opened the thread deliberately and have nothing to dismiss"
+// (maintainer 2026-07-25) — and the hole that opened is the reason this reversed: a thread whose
+// ```awaiting fence still resolves live is EXCUSED from the queue outright (board.deriveNeedsYou →
+// hasDeclaredBackgroundPark), so the one surface carrying the control was the one surface that thread
+// never reached. The better the fence, the more certainly the human lost the button (maintainer
+// 2026-08-31: "There are very few cases where an awaiting block should lock a snooze button").
+test("the card carries its own snooze, and no surface has to hand it one", () => {
   const bare = render(thread([agent("running")], []))
-  assert.doesNotMatch(bare, /Snooze/)
+  assert.match(bare, /Snooze/, "the drawer and the full-screen page draw the verb too")
+  assert.match(bare, /Hides card until new activity is detected/, "…with its caption, since an event wake is unguessable from the verb")
   // …while still saying the same thing, on the same card chrome, with the same kind header.
   assert.match(bare, /Awaiting/)
   assert.match(bare, /data-awaiting-background/)
   assert.match(bare, /data-wait-kind="agent"/)
+})
+
+// The three exclusions, and they are about the THREAD rather than about the surface it drew on.
+test("a thread nobody can park draws no snooze — foreign, archived, or a rest already bumped past", () => {
+  const rows = [agent("running")]
+  // A FOREIGN session is read-only; router.snoozeAwaitingBackground refuses it, so offering the verb
+  // would be an affordance that cannot work.
+  const foreign = { ...thread(rows, []), foreign: true } as Parameters<typeof AwaitingBackgroundCard>[0]["thread"]
+  assert.doesNotMatch(render(foreign), /Snooze/)
+  // An ARCHIVED thread has no lifecycle verbs at all — the same rule the footer's strip applies.
+  const archived = { ...thread(rows, []), state: "archived" } as Parameters<typeof AwaitingBackgroundCard>[0]["thread"]
+  assert.doesNotMatch(render(archived), /Snooze/)
+  // A HISTORICAL rest: this card is drawn in the transcript at a rest the thread has been bumped past,
+  // so there is no current rest to park and the mutation would refuse it.
+  const past = renderToStaticMarkup(
+    createElement(AwaitingBackgroundCard, { thread: thread(rows, []), notAfter: "2099-01-01T00:00:00.000Z" }),
+  )
+  assert.doesNotMatch(past, /Snooze/)
 })
 
 // THE TITLE NAMES THE SHAPE, and there are two of them (maintainer 2026-08-04: 'the card that says
@@ -146,9 +164,9 @@ test("an armed timer gets a row: named by its prompt, counting down, non-interac
   assert.match(body, /Timers/)
   assert.match(body, /Re-check: tip quiet, install green/)
   assert.match(body, /fires in 3[34]m/)
-  const html = render(t)
-  assert.doesNotMatch(html, /lucide-chevron-right/, "nothing to open, so no chevron")
-  assert.doesNotMatch(html, /<a |<button/, "no dead link and no disabled control either")
+  const rows = renderToStaticMarkup(createElement(AwaitingWaitTable, { thread: t, divider: false }))
+  assert.doesNotMatch(rows, /lucide-chevron-right/, "nothing to open, so no chevron")
+  assert.doesNotMatch(rows, /<a |<button/, "no dead link and no disabled control either")
   // A DUE-BUT-UNDELIVERED timer (the scheduler's tick runs seconds behind the instant) says so in the
   // present progressive rather than counting to zero or negative.
   assert.match(text({ ...thread([], []), watches: [timerWatch(-1)] } as Parameters<typeof AwaitingBackgroundCard>[0]["thread"]), /firing…/)
@@ -210,8 +228,9 @@ test("a row with nothing to open is non-interactive — no chevron, never a disa
   assert.match(openable, /lucide-chevron-right/)
   // No id ⇒ nothing to drill into. ChildOpRow's settled policy, applied here.
   const idless = thread([{ label: "Audit the parser", startedAt: "2026-07-28T09:00:00.000Z", state: "running" }], [])
-  assert.doesNotMatch(render(idless), /lucide-chevron-right/)
-  assert.doesNotMatch(render(idless), /disabled/)
+  const idlessRows = renderToStaticMarkup(createElement(AwaitingWaitTable, { thread: idless, divider: false }))
+  assert.doesNotMatch(idlessRows, /lucide-chevron-right/)
+  assert.doesNotMatch(idlessRows, /disabled/)
   assert.match(text(idless), /Audit the parser/, "…and the row is still there")
 })
 
@@ -265,15 +284,15 @@ test("no prose, no divider — and non-prose fences contribute nothing", () => {
 })
 
 test("the snooze renders in a recessed footer band, flush with the card's bottom", () => {
-  const t = { ...thread([agent("running")], []) } as Parameters<typeof AwaitingBackgroundCard>[0]["thread"]
-  const withAction = renderToStaticMarkup(
-    createElement(AwaitingBackgroundCard, { thread: t, actions: createElement("button", { type: "button" }, "Snooze") }),
+  const t = thread([agent("running")], [])
+  const withBand = render(t)
+  assert.match(withBand, /-mx-4 mt-3 flex[^"]*border-t border-border bg-fg/, "the band runs edge to edge under a rule")
+  assert.match(withBand, /pb-0/, "the shell yields its bottom padding to the band")
+  // No verb => no band, and the shell keeps its own padding (a historical rest).
+  const past = renderToStaticMarkup(
+    createElement(AwaitingBackgroundCard, { thread: t, notAfter: "2099-01-01T00:00:00.000Z" }),
   )
-  assert.match(withAction, /-mx-4 mt-3 flex[^"]*border-t border-border bg-fg/, "the band runs edge to edge under a rule")
-  assert.match(withAction, /pb-0/, "the shell yields its bottom padding to the band")
-  // No actions => no band and the shell keeps its own padding (the drawer / full-screen shape).
-  const bare = render(t)
-  assert.doesNotMatch(bare, /pb-0/)
+  assert.doesNotMatch(past, /pb-0/)
 })
 
 // THE TABLE AS A PIECE (2026-08-28). The awaiting FENCE card draws it whenever the thread is NOT at rest

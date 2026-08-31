@@ -13,7 +13,12 @@ export interface ThreadLifecycleAvailability {
 // One ownership/lifecycle decision shared by queue cards and full thread surfaces. The controls are
 // deliberately not message actions: a done fence, transcript hydration, or selected tab can never
 // move or duplicate them.
-export function threadLifecycleAvailability(thread: ThreadView): ThreadLifecycleAvailability {
+export function threadLifecycleAvailability(
+  // A PICK, not the whole view: the resting card asks this same question off its own narrow slice of a
+  // thread (AwaitingBackgroundCard), and widening it there just to satisfy a parameter would have made
+  // the card claim to read fields it never touches.
+  thread: Pick<ThreadView, "kind" | "foreign" | "state" | "archived">,
+): ThreadLifecycleAvailability {
   const owned = thread.kind === "session" && thread.foreign !== true
   // `archived` mirrors the pre-state-column protocol; honor it during a rolling server/client reload.
   const archived = owned && (thread.state === "archived" || thread.archived === true)
