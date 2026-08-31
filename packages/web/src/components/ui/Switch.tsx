@@ -59,8 +59,10 @@ export function Switch({ checked, onChange, disabled, label, size = "sm", testId
       data-switch={testId}
       data-state={checked ? "checked" : "unchecked"}
       // `onMouseDown` preventDefault: a switch in a popover beside a textarea would otherwise steal
-      // focus on press, firing the textarea's blur-persist a beat before this one's own write and
-      // sending two round-trips for one click.
+      // focus on press, blurring the operator's caret out of the text they are editing for a control
+      // that never needs focus to be clicked. (It also used to fire the Goal panel's blur-persist and
+      // double the round-trips; that panel batches behind a Save button now, but the focus theft alone
+      // keeps this here.)
       onMouseDown={(e) => e.preventDefault()}
       onClick={() => onChange(!checked)}
       // ON THE CAP BAND, not on the flex line's centre. A switch is a filled pill, so its ink IS its

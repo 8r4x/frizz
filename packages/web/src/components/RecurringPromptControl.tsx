@@ -206,7 +206,7 @@ export function RecurringPromptControl({ thread }: { thread: ThreadView }) {
           // ring sitting on "Off" reads as the toggle being SET to off by the act of opening the panel.
           onOpenAutoFocus={(e) => e.preventDefault()}
         >
-          <PromptPanel thread={thread} armed={armed} />
+          <PromptPanel thread={thread} armed={armed} close={() => setMode("closed")} />
         </PopoverContent>
       )}
     </Popover>
@@ -275,10 +275,11 @@ interface Draft {
 }
 
 /** The cadence a draft actually carries, resolved from the STRING in the minutes field rather than from
- *  the last committed number. The field commits on blur, and dismissing the panel does not always blur it
- *  — Escape removes the input from the DOM before any blur fires — so reading the committed value alone
- *  silently discarded a cadence the operator had typed and could plainly see. Measured on the running app:
- *  type 55 over a 25-minute schedule, press Escape, reopen ⇒ still 25.
+ *  the last committed number. The field commits on blur, and the draft is read at instants that do not
+ *  blur it — Enter in the textarea saves with the minutes field untouched, and Escape removes the input
+ *  from the DOM before any blur fires — so reading the committed value alone silently discarded a cadence
+ *  the operator had typed and could plainly see. Measured on the running app (under the old
+ *  save-on-dismiss regime): type 55 over a 25-minute schedule, press Escape, reopen ⇒ still 25.
  *
  *  Out of range, empty or unparseable falls back to what is already stored, which is what makes this safe
  *  to resolve on every draft rather than only on commit. So does the first clause: a cadence the field can
@@ -292,12 +293,13 @@ export function draftIntervalSeconds(minutes: string, seconds: number): number {
     : seconds
 }
 
-// THE ONE DRAFT WHOSE AUTOSAVE FAILED, held outside the panel because the panel is already gone by the
-// time it can know: dismissing IS the save gesture, so a write that is refused takes the operator's text
-// down with the subtree that was holding it. Reproduced on the running app — arm a thread whose session
-// has since been replaced, type, click out: a toast names the refusal and there is nothing left to retry
-// from. The next open of that same thread seeds from this instead of the server's row, so the text is in
-// front of them again, and the next dismissal tries the write again.
+// THE DRAFT THE SERVER HAS NOT GOT, held outside the panel because the panel unmounts with it. Two ways
+// a draft ends up here: a dismissal with unsaved edits (dismissing writes NOTHING since 2026-08-31 — the
+// Save button is the only writer — but it must not destroy typed text either), and a Save the server
+// refused (arm a thread whose session has since been replaced: a toast names the refusal, and without
+// this slot there is nothing left to retry from once the panel closes). The next open of that same
+// thread seeds from this instead of the server's row, so the text is back in front of the operator —
+// visibly unsaved, because the Save button lights up against a row it does not match.
 //
 // ONE entry, not a map: it is a rescue, not a draft store, and a single slot cannot grow without bound.
 let rescued: { slug: string; draft: Draft } | null = null
@@ -315,20 +317,33 @@ function draftAsSent(d: Draft) {
   }
 }
 
+/** Does this draft match what the `sent` mirror is holding? ONE comparison worn by three callers — the
+ *  save (skip the round-trip when nothing changed), the Save button (disabled when there is nothing to
+ *  save), and the unmount (stash only a draft that would otherwise be lost) — so "unchanged" cannot mean
+ *  three subtly different things. */
+function sameAsSent(next: Draft, sent: ReturnType<typeof draftAsSent>): boolean {
+  return (next.text.trim() || null) === (sent.prompt || null)
+    && next.stopHook === sent.stopHook
+    && next.heartbeat === sent.heartbeat
+    && next.postCompaction === sent.postCompaction
+    && next.seconds === sent.seconds
+}
+
 /** Does this panel open PRE-FILLED with the standard sentence rather than empty?
  *
  *  Only for a thread that has nothing armed, because an armed row's own words are the thing to show.
  *  And never for an ARCHIVED one: the server refuses to arm a shelved thread (router
- *  `assertRecurringPromptArmable`), so a dismissal that wrote the seed would end in an error toast on a
- *  panel the operator only LOOKED at.
+ *  `assertRecurringPromptArmable`), so a seed there would be an invitation to a Save that can only end
+ *  in an error toast.
  *
  *  IT SEEDS THE TEXT AND NOTHING ELSE (2026-08-16). It used to switch the stop hook on with it, so the
- *  dismissal that followed armed the thread — merely opening the panel to read it was enough. Maintainer:
- *  "When you first click the archery target icon, it should not automatically arm anything. It could show
- *  you the default stop hook prompt". So the sentence is a PREFILL now: it is there to be accepted with
- *  one switch instead of typed, it renders muted until a trigger is on (nothing is being sent yet), and
- *  an untouched open writes nothing at all — see `sent` in PromptPanel, which is seeded from this same
- *  text so "nothing changed" is true of a panel nobody touched.
+ *  dismissal that followed (dismissing was the save gesture then) armed the thread — merely opening the
+ *  panel to read it was enough. Maintainer: "When you first click the archery target icon, it should not
+ *  automatically arm anything. It could show you the default stop hook prompt". So the sentence is a
+ *  PREFILL now: it is there to be accepted with one switch instead of typed, it renders muted until a
+ *  trigger is on (nothing is being sent yet), and an untouched open has nothing to save — see `sent` in
+ *  PromptPanel, which is seeded from this same text so "nothing changed" is true of a panel nobody
+ *  touched.
  *
  *  Extracted and exported so the test beside this file can pin all three branches cheaply. Both are
  *  ALSO driven in a real browser — an archived thread's panel opens empty and its dismissal writes
@@ -354,20 +369,18 @@ function triggerClauses(d: Pick<Draft, "stopHook" | "heartbeat" | "postCompactio
   ].filter((c): c is string => c !== null)
 }
 
-function PromptPanel({ thread, armed }: {
+function PromptPanel({ thread, armed, close }: {
   thread: ThreadView
   armed: ThreadView["recurringPrompt"]
+  close: () => void
 }) {
-  // NO `busy` STATE, and that is the fix for a visible flash rather than a missing feature. Every write
-  // here used to flip one, which put `disabled` on all four switches and the minutes field — and
-  // `disabled:opacity-45` is not transitioned, so a click dropped the whole panel to 45% and snapped it
-  // back the instant the RPC returned, tens of milliseconds later (maintainer 2026-08-12: "there is a
-  // terrible render flash everytimem you check one of these fucking toggles").
-  //
-  // Disabling bought nothing anyway. The switch is already OPTIMISTIC — local state moves on click and
-  // the panel reads from it — and writes are serialised through `queue` below, so a second click while
-  // one is in flight simply queues behind it and the last draft wins. The only thing the flag added was
-  // the flash.
+  // NO `busy` STATE. Under the old save-on-every-edit regime a busy flag put `disabled` on all four
+  // switches for every write, and `disabled:opacity-45` is not transitioned, so each click dropped the
+  // whole panel to 45% and snapped it back tens of milliseconds later (maintainer 2026-08-12: "there is
+  // a terrible render flash everytimem you check one of these fucking toggles"). The controls are
+  // local-only now, so there is nothing to guard — and the one writer left, Save, stays enabled through
+  // its own round-trip because a double-click just queues a second write that sees "unchanged" and
+  // skips itself.
   // WHAT AN UNARMED PANEL OPENS WITH: the standard text, and EVERY TRIGGER OFF. The reason an operator
   // opens this control is almost always the same one, so the panel writes that sentence for them — but
   // writing it is all it does. Switching a trigger on is the operator's, and until they do the panel has
@@ -395,15 +408,15 @@ function PromptPanel({ thread, armed }: {
   // "120") is not immediately clamped out from under the caret. It becomes a number on commit.
   const [minutes, setMinutes] = useState(String(Math.round((carried?.seconds ?? armed?.intervalSeconds ?? DEFAULT_INTERVAL_SECONDS) / 60)))
   const textarea = useRef<HTMLTextAreaElement>(null)
-  // What was last SENT, so a blur or a close can skip a round-trip when nothing actually changed —
-  // otherwise every stray click through the panel re-arms the row and mints a new generation.
+  // What the server row is holding (as far as this panel knows), so a Save can skip the round-trip when
+  // nothing actually changed, the Save button can disable itself when there is nothing to save, and the
+  // unmount can tell a draft worth stashing from one already stored.
   //
   // SEEDED FROM THE PREFILL, not from the server row, and that inversion IS how "opening the panel arms
   // nothing" is implemented. Until 2026-08-16 this held the row's empty prompt while the draft above held
-  // the default sentence, so the panel opened already differing from storage and the dismissal wrote it —
-  // which is precisely the auto-arming the maintainer asked to stop. Seeding both from one expression
-  // makes an untouched open compute `unchanged` and send nothing. Editing the text, or flipping any
-  // switch, still differs and is still written by the dismissal.
+  // the default sentence, so the panel opened already differing from storage and the dismissal (then the
+  // save gesture) wrote it — which is precisely the auto-arming the maintainer asked to stop. Seeding
+  // both from one expression makes an untouched open compute "unchanged" with nothing to save.
   const sent = useRef({
     prompt: armed?.prompt ?? seededText,
     stopHook: armed?.stopHook ?? false,
@@ -424,22 +437,28 @@ function PromptPanel({ thread, armed }: {
     ...over,
   })
 
-  // AUTOSAVE ON DISMISS. Closing the popover destroys this subtree, and dismissing is how the panel is
-  // normally left — by clicking out of it, by Escape, by clicking the trigger again — so the unmount is
-  // the save, and it is the ONLY save for anything not already written by its own control.
+  // THE DISMISSAL WRITES NOTHING (2026-08-31). It was the save gesture from 2026-08-11 until then —
+  // every switch also wrote itself on its own click — and that is exactly what the maintainer asked to
+  // stop: checking "Stop hook" on a rested thread armed it mid-configuration and the scheduler bumped
+  // the thread before the other toggles could even be reached ("you should be able to check all the
+  // toggles and stuff, and then there should probably just be a save button. And only then does it take
+  // effect"). So the Save button below is the ONLY writer, and leaving the panel any other way — click
+  // out, Escape, the trigger again — discards nothing to the server and sends nothing to it.
+  //
+  // Discarding must not DESTROY, though: an unsaved draft is stashed in the `rescued` slot on unmount,
+  // so a stray click out from under 4000 typed characters costs a reopen, not the text. A clean unmount
+  // clears the slot instead, so a reopen never resurrects a draft the server is already holding.
   const latest = useRef<Draft>(draft())
   latest.current = draft()
-  // Through a REF, because the cleanup below captures the render that armed it. `persistNow` closes over
-  // the `thread` prop, and a thread whose session was replaced while the panel sat open would otherwise
-  // autosave against the id it had when the panel OPENED — refused by the server, draft lost, for a
-  // reason that had stopped being true.
-  const persistRef = useRef<(next: Draft) => Promise<boolean>>(() => Promise.resolve(true))
-  persistRef.current = (next) => persistNow(next)
-  useEffect(() => () => { void persistRef.current(latest.current) }, [])
+  useEffect(() => () => {
+    const d = latest.current
+    if (!sameAsSent(d, sent.current)) rescued = { slug: thread.id, draft: d }
+    else if (rescued?.slug === thread.id) rescued = null
+  }, [])
 
-  // Writes go ONE AT A TIME. Leaving the panel fires two of them — the focused field's blur and the
-  // unmount — and `sent.current` only catches up when a write RETURNS, so an unserialised pair sends the
-  // same row twice and, if they land out of order, the older one reverts the toggle that was just moved.
+  // Writes go ONE AT A TIME. Save is the only writer, but nothing disables it in flight (see the busy
+  // note above), so a double-click is two writes — serialised, the second computes "unchanged" once the
+  // first lands and skips itself.
   const queue = useRef<Promise<boolean>>(Promise.resolve(true))
   function persistNow(next: Draft): Promise<boolean> {
     const run = queue.current.catch(() => false).then(async () => {
@@ -456,22 +475,12 @@ function PromptPanel({ thread, armed }: {
   }
 
   /** Resolves TRUE when the server row matches this draft — either it already did, or the write landed.
-   *  FALSE only on a failed write, which is what puts the draft in the rescue slot above: the panel is
-   *  already gone by then, and the operator needs the text back in front of them to retry. */
+   *  FALSE only on a failed write: the panel is still open then (Save does not close on failure), the
+   *  toast names the refusal, and the rescue slot holds the draft in case the operator dismisses before
+   *  retrying. */
   async function persistDraft(next: Draft): Promise<boolean> {
     const prompt = next.text.trim() || null
-    const unchanged = prompt === (sent.current.prompt || null)
-      && next.stopHook === sent.current.stopHook
-      && next.heartbeat === sent.current.heartbeat
-      && next.postCompaction === sent.current.postCompaction
-      && next.seconds === sent.current.seconds
-    if (unchanged) return true
-    // Nothing armed and nothing typed — flipping a trigger before writing anything has nothing to
-    // persist yet. Keep the local flip and let the first real text carry it up.
-    if (prompt === null && !armed) {
-      sent.current = { ...draftAsSent(next), prompt: "" }
-      return true
-    }
+    if (sameAsSent(next, sent.current)) return true
     try {
       await rpc.setThreadRecurringPrompt({
         slug: thread.id,
@@ -503,14 +512,23 @@ function PromptPanel({ thread, armed }: {
     }
     return true
   }
-  const persist = () => void persistNow(draft())
+  // SAVABLE = the draft differs from what the server holds, and there is something coherent to write: a
+  // trimmed prompt, or an armed row to clear by saving the emptied text. Toggles flipped under an empty
+  // prompt on an unarmed thread stay a local draft — there is no goal to arm until words exist — and the
+  // dimmed button says so.
+  const savable = !sameAsSent(draft(), sent.current) && (text.trim() !== "" || Boolean(armed))
+  // THE SAVE. Persist the whole draft, and leave: a landed save is a finished gesture, so the panel
+  // closes on it. A refused one keeps the panel open with everything still in place to retry.
+  function save(): void {
+    if (!savable) { close(); return }
+    void persistNow(draft()).then((ok) => { if (ok) close() })
+  }
   // Clamp on COMMIT, not on keystroke. An out-of-range or empty field snaps back to something legal and
-  // the field is rewritten to match, so what the operator sees is always what was actually stored.
+  // the field is rewritten to match, so what the operator sees is always what the draft carries.
   function commitMinutes(): void {
     const next = draftIntervalSeconds(minutes, seconds)
     setMinutes(String(Math.round(next / 60)))
     setSeconds(next)
-    void persistNow(draft({ seconds: next }))
   }
   // The far end of the header belongs to the reading, not to a control. Each trigger keeps its own clock,
   // so this names WHICH one last fired rather than implying they share a stamp — and only while exactly
@@ -545,9 +563,8 @@ function PromptPanel({ thread, armed }: {
         value={text}
         maxLength={RECURRING_PROMPT_MAX}
         onChange={(e) => setText(e.target.value)}
-        onBlur={persist}
         // Enter (or ⌘/Ctrl-Enter) saves; Shift/Option-Enter make a newline — the three Enter keys
-        // every box shares (2026-08-26). Blur saves too, so Enter is a convenience, not the gate.
+        // every box shares (2026-08-26). Enter is the keyboard's Save button: same write, same close.
         onKeyDown={(e) => {
           if (shouldSubmitStagedEnter({
             key: e.key,
@@ -559,7 +576,7 @@ function PromptPanel({ thread, armed }: {
             keyCode: e.nativeEvent.keyCode,
           })) {
             e.preventDefault()
-            persist()
+            save()
           }
         }}
         placeholder="What is this thread trying to achieve?"
@@ -606,7 +623,6 @@ function PromptPanel({ thread, armed }: {
           checked={stopHook}
           onChange={(next) => {
             setStopHook(next)
-            void persistNow(draft({ stopHook: next }))
             if (next && !text.trim()) requestAnimationFrame(() => textarea.current?.focus())
           }}
         />
@@ -632,7 +648,6 @@ function PromptPanel({ thread, armed }: {
           checked={heartbeat}
           onChange={(next) => {
             setHeartbeat(next)
-            void persistNow(draft({ heartbeat: next }))
             if (next && !text.trim()) requestAnimationFrame(() => textarea.current?.focus())
           }}
         />
@@ -687,7 +702,6 @@ function PromptPanel({ thread, armed }: {
           checked={postCompaction}
           onChange={(next) => {
             setPostCompaction(next)
-            void persistNow(draft({ postCompaction: next }))
             if (next && !text.trim()) requestAnimationFrame(() => textarea.current?.focus())
           }}
         />
@@ -704,15 +718,31 @@ function PromptPanel({ thread, armed }: {
             `restPromptMessage` — and the ```done and ```awaiting carve-outs are untouched, because those
             are about the fence answering the trigger rather than about who is waiting on whom. */}
       </div>
-      {/* NO SAVE BUTTON, AND NO EXPLAINER. Every edit writes itself — a switch on its own click, the text
-          and the cadence on blur, and whatever is still uncommitted on the dismissal that unmounts this
-          subtree (maintainer 2026-08-11: "no save button. (autosaves when you click out)").
+      {/* THE SAVE BUTTON, and the panel's ONLY writer. This panel has now held both positions, each at
+          the maintainer's instruction, and the dates matter because the earlier one is still quoted in
+          old comments: 2026-08-11 said "no save button. (autosaves when you click out)", and 2026-08-31
+          reversed it after living with the consequence — checking "Stop hook" on a rested thread armed
+          it INSTANTLY, and the scheduler bumped the thread while the operator was still reaching for the
+          next toggle ("you should be able to check all the toggles and stuff, and then there should
+          probably just be a save button. And only then does it take effect"). Everything above is a
+          draft until this is pressed; dismissal discards (into the rescue slot), never writes.
 
-          The paragraph that used to sit here — "Saved as you go. Switch them all off to stop it, or the
-          agent stops it itself…" — is gone at the maintainer's instruction (2026-08-12: "drop this"). It
-          was explaining the panel to someone already looking at it: the switches say what they do, the
-          toast says what was saved, and how the AGENT ends the loop is the agent's business, told to it
-          in the delivery's own trailer. */}
+          DIMMED WHILE THERE IS NOTHING TO SAVE — which doubles as the panel's dirty flag: a lit Save
+          over a restored rescue draft is what says "the server does not have this yet".
+
+          Still no explainer paragraph beside it (2026-08-12: "drop this") — the switches say what they
+          do and the toast says what was saved. */}
+      <div className="mt-3 flex justify-end">
+        <button
+          type="button"
+          data-recurring-save
+          disabled={!savable}
+          onClick={save}
+          className="rounded-md bg-fg px-2.5 py-1 text-[11px] font-medium text-bg outline-none transition-all hover:opacity-90 active:scale-95 disabled:opacity-30 disabled:hover:opacity-30"
+        >
+          Save
+        </button>
+      </div>
     </section>
   )
 }
