@@ -746,10 +746,13 @@ export function sessionIndicatorFor(t: ThreadView): { node: ReactElement; tip: s
   // The tooltip is now the ONLY place a snooze is legible on the rail (the subtitle no longer names it),
   // so it has to say so on every parked row — not just the ones the park actually quiets. The hourglass
   // arm below already tells that story for a Snoozed row. These are the rows a snooze does NOT silence:
-  // one whose own turn is running, one still waiting on a sub-agent it dispatched, and one holding a
-  // concrete ask (which outranks the park in sessionIndicatorKind). Each keeps its live glyph — the park
-  // has not taken effect yet and the rail must not claim otherwise — and gains a second line saying when
-  // it will.
+  // one whose own turn is running, and one still waiting on a sub-agent it dispatched. Each keeps its
+  // live glyph — MOTION is a fact about the process that a park does not change — and gains a second
+  // line saying when the park takes effect.
+  // A CONCRETE ASK USED TO BE THE THIRD such row, and it was the one case where the rail lied: the
+  // server dequeues a user-snoozed thread before it ever reaches its ask gates (deriveNeedsYou), so the
+  // [?] pointed at a card that did not exist on any surface (2026-08-31 — see sessionIndicatorKind). It
+  // takes the hourglass now, and that arm names the ask the park is holding.
   if (sessionIndicatorKind(t) === "snoozed") return base
   const snoozedUntil = futureSnoozedUntil(t)
   const parked = snoozedUntil ? formatUserSnooze(snoozedUntil, t.snoozePrompt) : null
@@ -846,7 +849,13 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
     // so formatUserSnooze reads it as the auto variant and names the follow-up it will send.
     const snoozedUntil = futureSnoozedUntil(t)
     if (snoozedUntil) {
-      return { node: parkMark, tip: popover(t, formatUserSnooze(snoozedUntil, t.snoozePrompt) ?? "Snoozed until a scheduled check") }
+      const parked = formatUserSnooze(snoozedUntil, t.snoozePrompt) ?? "Snoozed until a scheduled check"
+      // …AND WHAT THE PARK IS HOLDING, when it is holding an ask. A user snooze takes this row out of the
+      // queue server-side, so its card — the only surface that renders a question — is gone until the
+      // wake. The mark can no longer say [?] (it would advertise a card nobody can open), so the tooltip
+      // is where the unanswered ask stays legible until then.
+      const asking = (t.questions?.length ?? 0) > 0 || t.pendingQuestion === true || Boolean(t.pendingAsk)
+      return { node: parkMark, tip: popover(t, asking ? `${parked}\nA question is unanswered behind this park` : parked) }
     }
     // A usage-limit park is NOT in this family any more (2026-08-31): a limit kill queues as a failed
     // thread and wears the yellow "limit" mark above. What still reaches this arm with a limitPause set
@@ -919,12 +928,12 @@ function Glyph({ ch, muted }: { ch: string; muted?: boolean }) {
   return (
     <span
       aria-hidden
-      className={`font-bold leading-none ${muted ? "text-muted/70" : "text-accent"}`}
-      // MEASURED 2026-08-31, scripts/verify-rail-status-glyphs.mjs at dsf 8: a text glyph's ink rides
-      // ~0.94px HIGH of the lucide family's centre band ("down +1.438px" = must move down, where the
-      // family reads +0.5px — the instrument's dy is positive-above-centre). +0.09em tracks the 10px
-      // font (≈0.9px down); re-run the verifier rather than re-guessing if the size or font moves.
-      style={{ fontSize: 10, transform: "translateY(0.09em)" }}
+      // `frizz-rail-glyph` trims the span to the glyph's own cap band, so the box centres its INK rather
+      // than its em box — the correction is the BROWSER's, holds in both of this app's fonts, and lives
+      // with its readings in styles.css. It replaced `translateY(0.09em)`, a constant fitted on a fixture
+      // that silently rendered mono while the app runs sans, which left both marks ~1.4px low on screen.
+      className={`frizz-rail-glyph font-bold leading-none ${muted ? "text-muted/70" : "text-accent"}`}
+      style={{ fontSize: 10 }}
     >
       {ch}
     </span>

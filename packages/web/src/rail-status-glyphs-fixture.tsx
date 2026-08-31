@@ -4,6 +4,12 @@ import { ThreadIndicator } from "./components/Sidebar.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
 import "./styles.css"
 
+// THIS APP RENDERS IN TWO FONTS and every TEXT mark here (the "?" and the "!") carries a different ink
+// position in each — a fixture that never sets `data-font` silently measures the MONO default, which is
+// how the "?" came to ship with a nudge fitted in a font the maintainer does not use. `?font=sans`
+// measures the other one; both readings live beside the constant in Sidebar.tsx.
+document.documentElement.dataset.font = new URLSearchParams(location.search).get("font") === "sans" ? "sans" : "mono"
+
 // EVERY RAIL STATUS MARK, side by side, drawn by the REAL <ThreadIndicator/> — the measuring surface for
 // scripts/verify-rail-status-glyphs.mjs. The rail is a checkbox family (one 15px rounded box, a
 // different mark inside per state), and a family only reads as one when the marks carry comparable

@@ -197,6 +197,42 @@ test("sessionIndicatorKind: a REGISTERED question wears the ? at rest, never the
   assert.equal(sessionIndicatorKind(thread({ ...asked, subAgents: liveSub })), "needs-input")
 })
 
+// A USER SNOOZE OUTRANKS THE ASK MARKS, because the SERVER already dequeued the thread on it
+// (deriveNeedsYou checks futureSnooze before every ask gate). Until 2026-08-31 the mark did not: a
+// snoozed thread with an unanswered ask sat in the dimmed Snoozed band wearing the [?] of a queue
+// member, and since it had no card on any surface, nothing rendered the question the mark advertised
+// (maintainer: "marked as a question status, but there is no question rendering"). Measured that day on
+// the maintainer's own machine: 3 of the 37 rows marked [?] were in exactly this state, across three
+// projects.
+test("sessionIndicatorKind: a user snooze outranks an ask the server has already dequeued", () => {
+  const parked = { snoozedUntil: "2999-01-01T00:00:00.000Z", needsYou: false, runtime: "turn-idle" as const }
+  // A ```question fence at the tail (pendingQuestion), a registered row, and a native ask — all three.
+  assert.equal(sessionIndicatorKind(thread({ kind: "session", state: "open", ...parked, pendingQuestion: true })), "snoozed")
+  assert.equal(sessionIndicatorKind(thread({ kind: "session", state: "open", ...parked, questions: regQuestion })), "snoozed")
+  assert.equal(sessionIndicatorKind(thread({ kind: "session", state: "open", ...parked, pendingAsk: { questions: [] } })), "snoozed")
+  // MOTION still wins — a park does not change what the process is doing, and isSnoozed carves both out
+  // (a running/spawning turn, and a live sub-agent whose return will re-invoke the thread).
+  assert.equal(sessionIndicatorKind(thread({ kind: "session", state: "open", ...parked, runtime: "running", questions: regQuestion })), "working")
+  assert.equal(sessionIndicatorKind(thread({ kind: "session", state: "open", ...parked, questions: regQuestion, subAgents: liveSub })), "working")
+  // A ```question fence mid-turn is the one ask that outranks motion, snoozed or not, and that is
+  // untouched here: the board degrades a pendingQuestion thread to turn-idle anyway
+  // (board.degradeIfAwaitingAnswer), so the pair below does not occur in production.
+  assert.equal(sessionIndicatorKind(thread({ kind: "session", state: "open", ...parked, runtime: "running", pendingQuestion: true })), "needs-input")
+  // …and an ask with NO user park is untouched: the server queues it, so the [?] leads to a real card.
+  assert.equal(sessionIndicatorKind(thread({ kind: "session", state: "open", needsYou: true, runtime: "turn-idle", pendingQuestion: true })), "needs-input")
+})
+
+test("needsAction: a user-snoozed ask is not an attention row — the server dequeued it", () => {
+  const parked = { snoozedUntil: "2999-01-01T00:00:00.000Z", runtime: "turn-idle" as const }
+  assert.equal(needsAction(thread({ ...parked, pendingQuestion: true })), false)
+  assert.equal(needsAction(thread({ ...parked, questions: regQuestion })), false)
+  assert.equal(needsAction(thread({ ...parked, pendingAsk: { questions: [] } })), false)
+  // A perm-prompt is parked by the same rule — the server checks futureSnooze ahead of it too.
+  assert.equal(needsAction(thread({ ...parked, runtime: "perm-prompt" })), false)
+  // The park ELAPSED ⇒ the ask is a queue member again, with nothing to re-derive.
+  assert.equal(needsAction(thread({ runtime: "turn-idle", snoozedUntil: "2020-01-01T00:00:00.000Z", pendingQuestion: true })), true)
+})
+
 // THE SHELL-ONLY REST — maintainer 2026-08-01: "if a thread has rested but it still has background work
 // going, like background shells, we should … stop the spinner and put a pulsing blue dot in the middle
 // of the rounded circle shape" — and, decisively, "this should not show up if there are sub-agents". So

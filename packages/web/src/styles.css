@@ -393,6 +393,23 @@ html[data-font="sans"] .frizz-op-dot-slot { --op-dot-nudge: 0em; }
    or a sub-agent), and in the sidebar the accent means "awaiting you", so an accent dot would read as
    an ask from a thread that is asking for nothing. Keep the width in sync with STATUS_BOX
    (components/BoxSpinner.tsx) if that ever moves. */
+/* THE RAIL'S TEXT MARKS — the "?" and the "!" — centred by the BROWSER rather than by a fitted constant.
+   A "?" or a "!" paints exactly its cap band: ink runs from the cap height down to the alphabetic
+   baseline, with nothing above or below. `text-box: trim-both cap alphabetic` makes the span's LAYOUT box
+   that band, so the flex row's `items-center` centres the ink itself — in either font, at any size, with
+   nothing to re-measure when the setting flips.
+   IT REPLACES A NUDGE FITTED IN THE WRONG FONT. `translateY(0.09em)` shipped 2026-08-31, measured on
+   rail-status-glyphs-fixture, which set no `data-font` and therefore rendered MONO while the maintainer's
+   window runs SANS. Readings from scripts/verify-rail-status-glyphs.mjs, positive = ink sits ABOVE centre:
+   with that constant the "?" read +0.563px in mono and -1.375px in SANS (the "!" +0.563 / -1.438) — i.e.
+   in the font actually on screen both marks rode a pixel and a half LOW inside a 15px box (maintainer:
+   "you broke the optical balance on the question mark"). No single `em` can serve both fonts: mono wanted
+   +0.146em and sans -0.048em. With the trim, all four readings land at 0.000px.
+   A browser without text-box support simply falls back to em-box centring — the behaviour that shipped
+   before the constant existed, and never worse than it. */
+.frizz-rail-glyph {
+  text-box: trim-both cap alphabetic;
+}
 .frizz-rail-dot {
   width: calc(15px * 0.31);
   height: calc(15px * 0.31);

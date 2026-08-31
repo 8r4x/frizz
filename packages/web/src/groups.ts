@@ -112,6 +112,12 @@ export function needsAction(t: ThreadView): boolean {
   // on the human. (An earlier "done-but-unread = card until acknowledged" rule violated this and
   // was explicitly overruled by the maintainer: a done thread must never appear in the queue.)
   if (t.status === "done" || t.status === "dismissed") return false
+  // THE OPERATOR'S OWN PARK COMES FIRST, exactly as the server orders it (deriveNeedsYou checks
+  // futureSnooze ahead of every ask gate). Without it this predicate promoted rows the server had
+  // already dequeued — a snoozed thread with an unanswered ask sorted to the top of the attention order
+  // and led the mobile asks-first list, with no card behind it to open. Same pair of guards as
+  // sessionIndicatorKind, for the same reasons.
+  if (futureSnoozedUntil(t) !== undefined && isSnoozed(t)) return false
   // Paused on an interactive permission prompt: the process is parked waiting on the human's answer.
   if (t.runtime === "perm-prompt") return true
   // Frozen at a native AskUserQuestion TUI dialog (safety net for pre-contract / adopted sessions that
@@ -627,6 +633,21 @@ export type SessionIndicatorKind = "archived" | "needs-input" | "working" | "bac
 export function sessionIndicatorKind(t: ThreadView): SessionIndicatorKind {
   const activelyRunning = isActivelyRunning(t)
   if (t.state === "archived" && !activelyRunning) return "archived"
+
+  // A PARK THE OPERATOR SET OUTRANKS EVERY ASK MARK BELOW IT — the order the SERVER already derives the
+  // queue in (deriveNeedsYou checks futureSnooze before pendingAsk, pendingQuestion and the registered
+  // rows), and the order isSnoozed itself states in prose: "a user-owned snooze deliberately wins over a
+  // concrete ask, permission prompt, or crash". Only the MARK disagreed, and the disagreement was
+  // visible: a snoozed thread carrying an unanswered ```question sat in the dimmed Snoozed band wearing
+  // the [?] of a queue member while the server had dequeued it, so NOTHING anywhere drew the question the
+  // mark advertised (maintainer 2026-08-31: "marked as a question status, but there is no question
+  // rendering"). Measured on this machine that day: 3 of the 37 threads the rail marked [?] had no card
+  // on any surface, on three different projects, and all three were user-snoozed with a pending ask.
+  // Gated on isSnoozed so its carve-outs still hold — a running turn and a live sub-agent keep their
+  // spinner, because motion is a fact about the process that a park does not change — and on
+  // futureSnoozedUntil so ONLY the operator's own wall-clock park takes this branch: a declared wait or
+  // an event-snooze leaves the thread QUEUED server-side, where the ask is reachable and the [?] is true.
+  if (futureSnoozedUntil(t) !== undefined && isSnoozed(t)) return "snoozed"
 
   const explicitlyNeedsInput = Boolean(
     t.actionableInteraction ||
