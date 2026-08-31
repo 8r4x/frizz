@@ -14,7 +14,7 @@ import type { EditedFile, TranscriptMessage } from "@frizz/shared"
 
 const FILE_WRITING_TOOL_NAMES = new Set(["edit", "multiedit", "write", "apply patch"])
 
-type ToolLike = { name: string; detail?: string; edit?: { file: string } }
+type ToolLike = { name: string; detail?: string; edit?: { file: string; added?: number; removed?: number } }
 type MessageLike = Pick<TranscriptMessage, "tools"> & { at?: string }
 
 function normalizedToolName(name: string): string {
@@ -38,11 +38,19 @@ export function editedFilesOf(messages: readonly MessageLike[]): EditedFile[] {
       if (existing) {
         existing.edits++
         if (message.at) existing.lastEditedAt = message.at
+        if (tool.edit?.added !== undefined) existing.added = (existing.added ?? 0) + tool.edit.added
+        if (tool.edit?.removed !== undefined) existing.removed = (existing.removed ?? 0) + tool.edit.removed
         // Re-insert so Map order tracks recency.
         byPath.delete(path)
         byPath.set(path, existing)
       } else {
-        byPath.set(path, { path, edits: 1, ...(message.at ? { lastEditedAt: message.at } : {}) })
+        byPath.set(path, {
+          path,
+          edits: 1,
+          ...(message.at ? { lastEditedAt: message.at } : {}),
+          ...(tool.edit?.added !== undefined ? { added: tool.edit.added } : {}),
+          ...(tool.edit?.removed !== undefined ? { removed: tool.edit.removed } : {}),
+        })
       }
     }
   }

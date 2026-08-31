@@ -24,9 +24,13 @@ export const SHEET_PANEL_CLASS =
 // reads as a stack. `offset` pulls the effective depth back — ThreadDrawer passes 1 because the frizz-doc
 // is a "flip surface" of the chat drawer for the same thread, not a genuine extra layer, so it must
 // render at the width of the drawer beneath it (depth-1) rather than one step narrower.
+// The depth-0 panel width, exported because the fullscreen page's thread column caps at the SAME
+// width — the maintainer wants /full to read like the drawer, not wider (2026-08-31).
+export const SHEET_BASE_WIDTH = 720
+
 export function sheetWidth(widthDepth: number, offset = 0): string {
   const depth = Math.max(0, widthDepth - offset)
-  return `min(${720 - depth * 28}px, ${80 - depth * 4}vw)`
+  return `min(${SHEET_BASE_WIDTH - depth * 28}px, ${80 - depth * 4}vw)`
 }
 
 export function prefersReducedMotion(): boolean {

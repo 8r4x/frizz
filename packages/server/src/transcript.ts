@@ -1147,6 +1147,12 @@ function redactToolPayload(s: string): string {
     )
 }
 
+// The line count of one side of an edit, on the RAW string — the capped transport copy undercounts.
+// "" is zero lines (a Write's old side, an empty new file), anything else counts its newlines + 1.
+function editLines(s: string): number {
+  return s === "" ? 0 : s.split("\n").length
+}
+
 function capEdit(s: string): string {
   const safe = redactToolPayload(s)
   return safe.length > EDIT_CAP ? safe.slice(0, EDIT_CAP) + TRUNC_MARKER : safe
@@ -1594,15 +1600,15 @@ function toolCalls(block: any, turn: { turnModel?: string; turnEffort?: string }
     if (todoCall) return [todoCall]
     const file = typeof input.file_path === "string" ? redactToolPayload(input.file_path) : undefined
     if (name === "Edit" && file && typeof input.old_string === "string" && typeof input.new_string === "string") {
-      return [{ name, detail, edit: { file, old: capEdit(input.old_string), new: capEdit(input.new_string) } }]
+      return [{ name, detail, edit: { file, old: capEdit(input.old_string), new: capEdit(input.new_string), added: editLines(input.new_string), removed: editLines(input.old_string) } }]
     }
     if (name === "Write" && file && typeof input.content === "string") {
-      return [{ name, detail, edit: { file, old: "", new: capEdit(input.content) } }]
+      return [{ name, detail, edit: { file, old: "", new: capEdit(input.content), added: editLines(input.content), removed: 0 } }]
     }
     if (name === "MultiEdit" && file && Array.isArray(input.edits)) {
       const calls = input.edits
         .filter((e: any) => e && typeof e.old_string === "string" && typeof e.new_string === "string")
-        .map((e: any) => ({ name, detail, edit: { file, old: capEdit(e.old_string), new: capEdit(e.new_string) } }))
+        .map((e: any) => ({ name, detail, edit: { file, old: capEdit(e.old_string), new: capEdit(e.new_string), added: editLines(e.new_string), removed: editLines(e.old_string) } }))
       if (calls.length) return calls
     }
     if (name === "Bash" && typeof input.command === "string" && input.command.trim()) {

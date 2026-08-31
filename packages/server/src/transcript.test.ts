@@ -327,12 +327,12 @@ test("Edit → structured edit payload (old/new captured)", () => {
   const msgs = parseTranscript(toolLine("Edit", { file_path: "/x/a.ts", old_string: "foo", new_string: "bar" }))
   const call = msgs[0].tools[0]
   assert.equal(call.name, "Edit")
-  assert.deepEqual(call.edit, { file: "/x/a.ts", old: "foo", new: "bar" })
+  assert.deepEqual(call.edit, { file: "/x/a.ts", old: "foo", new: "bar", added: 1, removed: 1 })
 })
 
 test("Write → edit with empty old side (whole file new)", () => {
   const msgs = parseTranscript(toolLine("Write", { file_path: "/x/n.ts", content: "hello" }))
-  assert.deepEqual(msgs[0].tools[0].edit, { file: "/x/n.ts", old: "", new: "hello" })
+  assert.deepEqual(msgs[0].tools[0].edit, { file: "/x/n.ts", old: "", new: "hello", added: 1, removed: 0 })
 })
 
 test("MultiEdit → one tool call per sub-edit", () => {
@@ -346,8 +346,8 @@ test("MultiEdit → one tool call per sub-edit", () => {
     }),
   )
   assert.equal(msgs[0].tools.length, 2)
-  assert.deepEqual(msgs[0].tools[0].edit, { file: "/x/m.ts", old: "a", new: "A" })
-  assert.deepEqual(msgs[0].tools[1].edit, { file: "/x/m.ts", old: "b", new: "B" })
+  assert.deepEqual(msgs[0].tools[0].edit, { file: "/x/m.ts", old: "a", new: "A", added: 1, removed: 1 })
+  assert.deepEqual(msgs[0].tools[1].edit, { file: "/x/m.ts", old: "b", new: "B", added: 1, removed: 1 })
 })
 
 test("edit strings are capped with a truncation marker", () => {

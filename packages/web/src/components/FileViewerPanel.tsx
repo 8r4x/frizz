@@ -83,26 +83,45 @@ export function FileViewerPanel({ slug, path }: { slug: string; path: string }) 
   const title = resolved.split("/").filter(Boolean).pop() || resolved
 
   // ⌘I / Ctrl-I: stage the current selection (when it lives inside this panel) as a context item on
-  // the thread's composer. Window-level, capture-phase: the selection owns no focusable element, so a
-  // local key handler would never see the chord.
+  // the thread's composer, then FOCUS the composer (maintainer 2026-08-31: "Hit Command-I, which adds
+  // the chip. Type immediately into the prompt box."). A textarea keeps its own caret across blur, so
+  // re-selecting in the file and hitting ⌘I again returns the writer to the exact point they were
+  // typing at — the round trip costs nothing. A bare ⌘I with no selection just focuses the box.
+  // Window-level, capture-phase: the selection owns no focusable element, so a local key handler
+  // would never see the chord.
   useEffect(() => {
+    function focusComposer() {
+      const ta = document.querySelector<HTMLTextAreaElement>("main[data-standalone-thread] textarea")
+      if (!ta) return
+      // A never-touched textarea wakes with its caret at 0; put it at the end, where typing after a
+      // fresh ⌘I belongs. One that has been typed in keeps the caret exactly where it was.
+      if (document.activeElement !== ta && ta.selectionStart === 0 && ta.selectionEnd === 0 && ta.value.length > 0) {
+        ta.setSelectionRange(ta.value.length, ta.value.length)
+      }
+      ta.focus()
+    }
     function onKey(e: KeyboardEvent) {
       if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey || e.key.toLowerCase() !== "i") return
       const root = rootRef.current
       const selection = window.getSelection()
-      if (!root || !selection || selection.isCollapsed || selection.rangeCount === 0) return
-      const range = selection.getRangeAt(0)
-      if (!root.contains(range.commonAncestorContainer)) return
-      const text = selection.toString()
-      if (!text.trim()) return
+      const range = selection && !selection.isCollapsed && selection.rangeCount > 0 ? selection.getRangeAt(0) : null
+      const inPanel = !!(root && range && root.contains(range.commonAncestorContainer))
+      const text = inPanel ? selection!.toString() : ""
+      if (!inPanel || !text.trim()) {
+        // No stageable selection: the chord still lands the writer in the prompt box.
+        e.preventDefault()
+        e.stopPropagation()
+        focusComposer()
+        return
+      }
       e.preventDefault()
       e.stopPropagation()
       // Exact lines when the selection sits in the verbatim <pre>; best-effort otherwise.
       let lines: { startLine: number; endLine: number } | null = null
       const pre = sourceRef.current
-      if (pre && pre.contains(range.commonAncestorContainer)) {
-        const start = charOffsetIn(pre, range.startContainer, range.startOffset)
-        const end = charOffsetIn(pre, range.endContainer, range.endOffset)
+      if (pre && pre.contains(range!.commonAncestorContainer)) {
+        const start = charOffsetIn(pre, range!.startContainer, range!.startOffset)
+        const end = charOffsetIn(pre, range!.endContainer, range!.endOffset)
         if (start !== null && end !== null) {
           lines = { startLine: lineOfOffset(raw, Math.min(start, end)), endLine: lineOfOffset(raw, Math.max(0, Math.max(start, end) - 1)) }
         }
@@ -112,7 +131,8 @@ export function FileViewerPanel({ slug, path }: { slug: string; path: string }) 
       addContextItem(slug, { path: resolved, text, ...(lines ?? {}) })
       // Collapsing the selection is the acknowledgment — the chip appearing on the composer is the
       // payload, and a still-highlighted range invites a second ⌘I that would stage a duplicate.
-      selection.removeAllRanges()
+      selection!.removeAllRanges()
+      focusComposer()
     }
     window.addEventListener("keydown", onKey, true)
     return () => window.removeEventListener("keydown", onKey, true)

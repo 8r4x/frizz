@@ -3817,6 +3817,10 @@ export const TranscriptEdit = z.object({
   file: z.string(),
   old: z.string(),
   new: z.string(),
+  // Line counts of the UNCAPPED sides, taken at projection time — `old`/`new` above are capped for
+  // transport, so a diffstat recomputed from them undercounts any large edit.
+  added: z.number().int().nonnegative().optional(),
+  removed: z.number().int().nonnegative().optional(),
 })
 export type TranscriptEdit = z.infer<typeof TranscriptEdit>
 
@@ -4144,6 +4148,10 @@ export const EditedFile = z.object({
   path: z.string().min(1),
   edits: z.number().int().positive(),
   lastEditedAt: z.string().optional(),
+  // The file's diffstat, summed over its write calls (each call's counts are the line counts of its
+  // raw old/new sides). A Write counts as all additions — what it replaced is unknowable here.
+  added: z.number().int().nonnegative().optional(),
+  removed: z.number().int().nonnegative().optional(),
 }).strict()
 export type EditedFile = z.infer<typeof EditedFile>
 

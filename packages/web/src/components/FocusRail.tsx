@@ -2,7 +2,6 @@ import { FileDiff } from "lucide-react"
 import type { EditedFile, ThreadView } from "@frizz/shared"
 import { useTranscript } from "../hooks.ts"
 import { openLocalPath } from "../lib/local-file-links.ts"
-import { compactElapsedSince } from "../lib/durationLabels.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { AgentRow, BgShellRow, GithubWatchRow, ON_CAP, TimerRow, WaitGrid, WaitRow, liveAgents } from "./AwaitingBackgroundCard.tsx"
 
@@ -38,19 +37,28 @@ function basenameOf(path: string): string {
   return path.split("/").filter(Boolean).pop() ?? path
 }
 
-function FileRow({ file, now }: { file: EditedFile; now: number }) {
-  const age = file.lastEditedAt ? compactElapsedSince(file.lastEditedAt, now) : ""
+function FileRow({ file }: { file: EditedFile }) {
+  // The status is the file's DIFFSTAT, GitHub-green and GitHub-red — the edit count and the
+  // last-edited clock both came off on review (maintainer 2026-08-31: "hide the 2×…", the age
+  // "seems useless to me"). A zero side stays quiet; a file with no counted lines (an
+  // unreconstructed apply_patch) carries no status at all rather than a fabricated 0.
   return (
     <WaitRow
       testKind="file"
       testId={file.path}
       mark={<FileDiff size={12} className={`${ON_CAP} text-muted/60`} />}
-      // The basename is the name; the full path is the tooltip. A 300px rail truncates from the end,
+      // The basename is the name; the full path is the tooltip. A 340px rail truncates from the end,
       // and a repo path truncated from the end lost exactly the part that names the file.
       name={basenameOf(file.path)}
       onOpen={() => openLocalPath(file.path)}
       title={file.path}
-      status={[file.edits > 1 ? `${file.edits}×` : null, age || null].filter(Boolean).join(" · ")}
+      status={
+        <>
+          {(file.added ?? 0) > 0 && <span className="text-emerald-500">+{file.added}</span>}
+          {(file.added ?? 0) > 0 && (file.removed ?? 0) > 0 && " "}
+          {(file.removed ?? 0) > 0 && <span className="text-red-400">−{file.removed}</span>}
+        </>
+      }
     />
   )
 }
@@ -70,7 +78,7 @@ export function FocusRail({ thread }: { thread: ThreadView }) {
     { head: "Background shells", rows: shells.map((s) => <BgShellRow key={s.id ?? s.label} shell={s} slug={thread.id} now={now} />) },
     { head: "Pull requests", rows: prs.map((w) => <GithubWatchRow key={w.id} watch={w} />) },
     { head: "Timers", rows: timers.map((w) => <TimerRow key={w.id} watch={w} now={now} />) },
-    { head: "Edited files", rows: files.map((f) => <FileRow key={f.path} file={f} now={now} />) },
+    { head: "Edited files", rows: files.map((f) => <FileRow key={f.path} file={f} />) },
   ].filter((g) => g.rows.length > 0)
   return (
     <aside data-focus-rail aria-label="Thread activity" className="flex h-full shrink-0 flex-col justify-center overflow-y-auto px-4 py-6" style={{ width: RAIL_WIDTH }}>

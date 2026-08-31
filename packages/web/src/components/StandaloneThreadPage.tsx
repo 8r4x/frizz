@@ -7,6 +7,7 @@ import { displayTitle } from "../groups.ts"
 import { resolveThreadRoute } from "../lib/threadRouteState.ts"
 import { projectHref } from "../lib/base-path.ts"
 import { standaloneThreadHref } from "../lib/standaloneThreadRoute.ts"
+import { SHEET_BASE_WIDTH } from "../lib/sheet.ts"
 import type { ThreadView } from "@frizz/shared"
 import { ThreadView as ThreadViewSurface } from "./ChatView.tsx"
 import { DrawerStack } from "./DrawerStack.tsx"
@@ -82,7 +83,9 @@ export function StandaloneThreadPage({ slug }: { slug: string }) {
             rail sit together as ONE CENTERED PAIR — "the combination of the agent pane and the
             artifact readout should be centered on the page, and there should be some reasonable
             maximum width on the agent pane" — with the file viewer fading in over the rail when a
-            file opens (see SidePane).
+            file opens (see SidePane). The column's ceiling is the DRAWER's own width
+            (lib/sheet.ts SHEET_BASE_WIDTH; maintainer 2026-08-31: "the same width as the regular
+            drawer width" — an earlier 960px "still lets the chat go too wide").
 
             The two empty flex-1 GUTTERS are the whole centering mechanism, and they are also the
             slack the viewer draws on. Closed, the pair is the thread (≤960px) plus the rail and the
@@ -94,14 +97,14 @@ export function StandaloneThreadPage({ slug }: { slug: string }) {
             width they hide under. */}
         <div className="flex h-full w-full overflow-hidden">
           {/* The gutters collapse while a file is open: the reading is DETERMINISTIC then — the thread
-              column at half the viewport (still under its ceiling) and the file on the other half,
-              full bleed ("600px of content, and then the file takes up 600px" on a 1200px screen,
-              maintainer 2026-08-30) — rather than whatever the gutters happened to leave. */}
+              column at half the viewport (still under the drawer-width ceiling) and the file on the
+              other half, full bleed ("600px of content, and then the file takes up 600px" on a 1200px
+              screen, maintainer 2026-08-30) — rather than whatever the gutters happened to leave. */}
           <div className="hidden md:block transition-[flex-grow] duration-200 ease-out" style={{ flexGrow: fileOpen ? 0 : 1 }} aria-hidden="true" />
           <main
             data-standalone-thread
             className="flex h-full w-full min-w-0 flex-col overflow-hidden border-border bg-panel transition-[width] duration-200 ease-out sm:border-x"
-            style={{ width: fileOpen ? "min(960px, 50vw)" : "min(960px, 100%)", flexShrink: fileOpen ? 0 : 1 }}
+            style={{ width: fileOpen ? `min(${SHEET_BASE_WIDTH}px, 50vw)` : `min(${SHEET_BASE_WIDTH}px, 100%)`, flexShrink: fileOpen ? 0 : 1 }}
           >
             {route.kind === "loading" ? (
               <div className="flex flex-1 items-center justify-center" role="status" aria-label="Loading thread">
@@ -156,7 +159,7 @@ function SidePane({ slug, thread }: { slug: string; thread: ThreadView }) {
       // Open, the pane is EXACTLY the remainder of the 50/50 law the thread column states (its width
       // is min(960px, 50vw) and it stops shrinking), so the two always sum to the viewport — 600+600
       // on a 1200px screen. Both states are lengths, so the basis animates the slide.
-      style={{ flexBasis: panel ? "calc(100% - min(960px, 50vw))" : RAIL_WIDTH }}
+      style={{ flexBasis: panel ? `calc(100% - min(${SHEET_BASE_WIDTH}px, 50vw))` : RAIL_WIDTH }}
     >
       <div inert={panel ? true : undefined} className="h-full min-h-0">
         <FocusRail thread={thread} />
