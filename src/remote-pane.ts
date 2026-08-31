@@ -1,3 +1,4 @@
+import { isAnonymousClaimName } from "@frizz/shared";
 import { renderQrLines } from "@frizz/server/qr";
 import type { AccessLink } from "./access-pane.ts";
 import { ALT_SCREEN_OFF, ALT_SCREEN_ON, CLEAR, DIM, HIDE_CURSOR, RESET, SHOW_CURSOR } from "./access-pane.ts";
@@ -21,14 +22,17 @@ import type { CloudflaredProbe, GithubProbe, TailscaleProbe } from "./remote-det
  * host's) is heard.
  */
 
-export type RemoteKind = "frizz" | "cloudflare" | "tailscale" | "other" | "off";
+export type RemoteKind = "private" | "frizz" | "cloudflare" | "tailscale" | "other" | "off";
 
 export interface RemotePaneOptions {
   port: number;
   current: () => CloudConfig | null;
   /** Switch the running board to `next`, or to loopback-only with null. Rejects with a message. */
   apply: (next: CloudConfig | null, options?: { justClaimed?: boolean }) => Promise<void>;
-  /** Claim `<name>.frizz.sh` for the signed-in GitHub account. Rejects with a message. */
+  /**
+   * Claim `<name>.frizz.sh`. An empty name mints a private unguessable one with no account; a word
+   * claims that word for the signed-in GitHub account. Rejects with a message.
+   */
   claim: (name: string) => Promise<CloudConfig>;
   /** A fresh single-use link for the origin now in force, for the done screen. */
   issueLink: () => AccessLink | null;
@@ -51,7 +55,8 @@ interface Choice {
 }
 
 const CHOICES: Choice[] = [
-  { kind: "frizz", title: "frizz.sh name", blurb: "<name>.frizz.sh — nothing to install; needs the GitHub CLI" },
+  { kind: "private", title: "Private name", blurb: "an unguessable name on frizz.sh — no account, nothing to install" },
+  { kind: "frizz", title: "Custom name", blurb: "<name>.frizz.sh of your choosing; needs the GitHub CLI" },
   { kind: "cloudflare", title: "Cloudflare Tunnel", blurb: "a domain you own on Cloudflare; cloudflared on this machine" },
   { kind: "tailscale", title: "Tailscale", blurb: "your tailnet; tailscale serve does the TLS" },
   { kind: "other", title: "Something else", blurb: "any proxy or tunnel you run — tell Frizz its address" },
@@ -68,7 +73,7 @@ const SHIFT_TAB = "\x1b[Z";
 
 type Screen =
   | { name: "menu"; index: number }
-  | { name: "form"; kind: Exclude<RemoteKind, "off">; fields: Field[]; focus: number; note?: string }
+  | { name: "form"; kind: FormKind; fields: Field[]; focus: number; note?: string }
   | { name: "busy"; message: string }
   | { name: "done"; message: string; link: AccessLink | null; config: CloudConfig | null }
   | { name: "error"; message: string; back: Screen };
@@ -80,9 +85,12 @@ interface Field {
   placeholder?: string;
 }
 
+/** The setups that ask for anything. "off" clears and "private" claims — neither has a form. */
+type FormKind = Exclude<RemoteKind, "off" | "private">;
+
 function kindOf(config: CloudConfig | null): RemoteKind {
   if (!config) return "off";
-  if (isClaimedConfig(config)) return "frizz";
+  if (isClaimedConfig(config)) return isAnonymousClaimName(config.claim!) ? "private" : "frizz";
   if (isExternalConfig(config)) return config.provider === "tailscale" ? "tailscale" : "other";
   return "cloudflare";
 }
@@ -171,7 +179,7 @@ export function createRemotePane(options: RemotePaneOptions): Pane {
     write([`Could not apply that: ${s.message}`, "", `${DIM}press any key to go back${RESET}`]);
   };
 
-  const formHead = (kind: Exclude<RemoteKind, "off">): string[] => {
+  const formHead = (kind: FormKind): string[] => {
     if (kind === "frizz") {
       const gh = github === "pending" || github === null
         ? `${DIM}GitHub CLI   checking…${RESET}`
@@ -181,10 +189,10 @@ export function createRemotePane(options: RemotePaneOptions): Pane {
             ? check(true, `GitHub CLI   signed in as ${github.login}`)
             : "GitHub CLI   not signed in — run `gh auth login` in another terminal";
       return [
-        "frizz.sh name",
+        "Custom frizz.sh name",
         "",
         ...wrap(
-          "Claims <name>.frizz.sh for your GitHub account. The board dials out to frizz.sh — no port, no DNS record, no tunnel binary. One name per account; a name nobody runs for 30 days is released.",
+          "Claims <name>.frizz.sh of your choosing, tied to your GitHub account so names cannot be squatted. The board dials out to frizz.sh — no port, no DNS record, no tunnel binary. One name per account; a name nobody runs for 30 days is released. (A private name needs none of this.)",
         ),
         ...(options.sandbox
           ? ["", ...wrap("This is a sandbox, but a claim is real: it binds this machine's one name to your account, and your real board keeps it. Only the setup saved here is thrown away.")]
@@ -246,7 +254,7 @@ export function createRemotePane(options: RemotePaneOptions): Pane {
     ];
   };
 
-  const openForm = (kind: Exclude<RemoteKind, "off">) => {
+  const openForm = (kind: FormKind) => {
     const current = options.current();
     const same = kindOf(current) === kind ? current : null;
     let fields: Field[];
@@ -321,6 +329,24 @@ export function createRemotePane(options: RemotePaneOptions): Pane {
     paint();
   };
 
+  // No form and nothing to ask: the name is minted, so choosing this IS the claim.
+  const claimPrivate = async () => {
+    const back: Screen = { name: "menu", index: 0 };
+    screen = { name: "busy", message: "claiming a private name on frizz.sh…" };
+    paint();
+    try {
+      const next = await options.claim("");
+      screen = { name: "busy", message: `serving ${next.hostname}…` };
+      paint();
+      await options.apply(next, { justClaimed: true });
+      options.onChanged?.(next);
+      screen = { name: "done", message: `Serving https://${next.hostname} (${describeCloudConfig(next)}).`, link: options.issueLink(), config: next };
+    } catch (error) {
+      screen = { name: "error", message: error instanceof Error ? error.message : String(error), back };
+    }
+    paint();
+  };
+
   const turnOff = async () => {
     screen = { name: "busy", message: "back to loopback only…" };
     paint();
@@ -357,10 +383,11 @@ export function createRemotePane(options: RemotePaneOptions): Pane {
         if (key === ESC || key === "q") return "close";
         if (key === UP || key === "k") s.index = (s.index + CHOICES.length - 1) % CHOICES.length;
         else if (key === DOWN || key === "j") s.index = (s.index + 1) % CHOICES.length;
-        else if (/^[1-5]$/.test(key)) s.index = Number(key) - 1;
+        else if (/^[1-6]$/.test(key)) s.index = Number(key) - 1;
         else if (ENTER.has(key)) {
           const choice = CHOICES[s.index]!;
           if (choice.kind === "off") void turnOff();
+          else if (choice.kind === "private") void claimPrivate();
           else openForm(choice.kind);
           return "keep";
         }

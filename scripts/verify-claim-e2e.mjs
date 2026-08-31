@@ -98,6 +98,8 @@ const home = mkdtempSync(join(tmpdir(), "frizz-claim-e2e-"));
 const cf = fakeCloudflare();
 const st = memoryStore();
 let clock = 1_800_000_000_000;
+// Off for the first legs, armed for the anonymous one — the waiver only means anything with a gate up.
+let gate = null;
 
 const server = createServer((req, res) => {
   const chunks = [];
@@ -114,6 +116,7 @@ const server = createServer((req, res) => {
       store: st.store,
       zone: "frizz.sh",
       now: () => clock,
+      ...(gate ? { github: gate } : {}),
     });
     res.writeHead(outcome.status, { "content-type": "application/json" });
     res.end(JSON.stringify(outcome.body));
@@ -183,6 +186,32 @@ try {
     rejected = error;
   }
   check("a reserved name is refused before provisioning", rejected !== null, rejected?.message ?? "it was ALLOWED");
+
+  // 6. THE AUTH-FREE PATH, over the same wire, with the GitHub gate UP: an anonymous name claims
+  // with no token while a vanity name is still refused for lacking one.
+  gate = async () => null; // every token is refused, so only the waiver can let a claim through
+  const { generateAnonymousClaimName } = await import("@frizz/shared");
+  const anonHome = mkdtempSync(join(tmpdir(), "frizz-claim-e2e-anon-"));
+  try {
+    const anonIdentity = await loadOrCreateClaimIdentity(anonHome);
+    const anonName = generateAnonymousClaimName();
+    const anon = await claimName({ name: anonName, port: 9393, identity: anonIdentity, origin, now: () => clock });
+    check("an anonymous name claims through the gate with no GitHub", anon.hostname === `${anonName}.frizz.sh`, anon.hostname);
+
+    let gated = null;
+    try {
+      await claimName({ name: "wants-a-word", port: 9393, identity: anonIdentity, origin, now: () => clock });
+    } catch (error) {
+      gated = error;
+    }
+    check(
+      "a vanity name still pays the gate on the same wire",
+      gated instanceof ClaimError && gated.code === "github-required",
+      gated ? `${gated.code}` : "it was ALLOWED"
+    );
+  } finally {
+    rmSync(anonHome, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  }
 } catch (error) {
   check("harness completed", false, error instanceof Error ? error.message : String(error));
 } finally {

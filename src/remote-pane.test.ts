@@ -41,9 +41,9 @@ function build(overrides: Partial<Parameters<typeof createRemotePane>[0]> = {}) 
 test("R opens the chooser with every setup, and Off applies loopback-only", async () => {
   const { pane, out, applied } = build();
   assert.equal(pane.open(), true);
-  for (const title of ["frizz.sh name", "Cloudflare Tunnel", "Tailscale", "Something else", "Off"]) assert.match(out.text(), new RegExp(title));
+  for (const title of ["Private name", "Custom name", "Cloudflare Tunnel", "Tailscale", "Something else", "Off"]) assert.match(out.text(), new RegExp(title));
   assert.match(out.text(), /Off.*\(current\)/s);
-  pane.key("5");
+  pane.key("6");
   assert.equal(pane.key("\r"), "keep");
   await settle();
   assert.deepEqual(applied, [null]);
@@ -55,7 +55,7 @@ test("R opens the chooser with every setup, and Off applies loopback-only", asyn
 test("Cloudflare Tunnel asks for the hostname and the tunnel, then serves them", async () => {
   const { pane, out, applied, type } = build();
   pane.open();
-  pane.key("2");
+  pane.key("3");
   pane.key("\r");
   await settle();
   assert.match(out.text(), /cloudflared tunnel route dns my-board board\.example\.com/);
@@ -73,7 +73,7 @@ test("Cloudflare Tunnel asks for the hostname and the tunnel, then serves them",
 test("Tailscale offers this machine's MagicDNS name and saves an external origin", async () => {
   const { pane, out, applied } = build();
   pane.open();
-  pane.key("3");
+  pane.key("4");
   pane.key("\r");
   await settle();
   assert.match(out.text(), /tailscale serve --bg 9393/);
@@ -93,7 +93,7 @@ test("a frizz.sh name is claimed for the signed-in account, and a failure goes b
     },
   });
   pane.open();
-  pane.key("1"); // the cursor starts on the current setup (Off), so pick frizz.sh explicitly
+  pane.key("2"); // the cursor starts on the current setup (Off), so pick the custom name explicitly
   pane.key("\r");
   await settle();
   assert.match(out.text(), /signed in as ada ✓/);
@@ -114,7 +114,7 @@ test("a frizz.sh name is claimed for the signed-in account, and a failure goes b
 test("escape leaves a form for the menu, and leaves the menu for the readout", () => {
   const { pane } = build();
   pane.open();
-  pane.key("4");
+  pane.key("5");
   pane.key("\r");
   assert.equal(pane.key("\x1b"), "keep");
   assert.equal(pane.key("\x1b"), "close");
@@ -123,13 +123,42 @@ test("escape leaves a form for the menu, and leaves the menu for the readout", (
 test("under --sandbox the frizz.sh screen says a claim is real, and the others say nothing", async () => {
   const { pane, out } = build({ sandbox: true });
   pane.open();
-  pane.key("1");
+  pane.key("2");
   pane.key("\r");
   await settle();
   assert.match(out.text(), /This is a sandbox, but a claim is real/);
   pane.key("\x1b");
   out.reset();
-  pane.key("4");
+  pane.key("5");
   pane.key("\r");
   assert.doesNotMatch(out.text(), /claim is real/);
+});
+
+test("a private name claims on the spot — no form, no GitHub, QR straight away", async () => {
+  // The auth-free default. Choosing it IS the claim: the pane asks nothing, mints through claim("")
+  // and lands on the done screen with the sign-in QR.
+  const claims: string[] = [];
+  const { pane, out, applied } = build({
+    claim: async (name) => {
+      claims.push(name);
+      return { hostname: "abcdefghjkmnpqrstuvw.frizz.sh", claim: "abcdefghjkmnpqrstuvw", serve: "relay" };
+    },
+  });
+  pane.open();
+  pane.key("1");
+  pane.key("\r");
+  await settle();
+  assert.deepEqual(claims, [""], "an empty name asks the claimer to mint one");
+  assert.deepEqual(applied, [{ hostname: "abcdefghjkmnpqrstuvw.frizz.sh", claim: "abcdefghjkmnpqrstuvw", serve: "relay" }]);
+  assert.match(out.text(), /Serving https:\/\/abcdefghjkmnpqrstuvw\.frizz\.sh \(frizz\.sh\)/);
+  assert.match(out.text(), /frizz_code=c0de/, "the done screen offers the sign-in QR");
+  assert.equal(pane.key("x"), "close");
+});
+
+test("a saved private name shows as the current setup on the private row", () => {
+  const config: CloudConfig = { hostname: "abcdefghjkmnpqrstuvw.frizz.sh", claim: "abcdefghjkmnpqrstuvw", serve: "relay" };
+  const { pane, out } = build({ current: () => config });
+  pane.open();
+  assert.match(out.text(), /❯ Private name/, "the cursor starts on the current setup");
+  assert.match(out.text(), /Private name.*\(current\)/s);
 });

@@ -367,3 +367,45 @@ test("reconciling leaves a relay claim and an operator's own hostname exactly as
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("an EMPTY answer claims a private unguessable name, and GitHub is never consulted", async () => {
+  // The auth-free default: no `gh`, no account, no sign-in. The stand-in below throws on any touch,
+  // so this also proves the anonymous path works on a machine with no GitHub CLI at all.
+  const home = tempHome();
+  const server = await claimServer({ hostname: "x.frizz.sh", leaseExpiresAt: 0, renewed: false });
+  const untouchable = {
+    accessToken: async (): Promise<string> => { throw new Error("GitHub must not be consulted"); },
+    login: async (): Promise<string | null> => { throw new Error("GitHub must not be consulted"); },
+  };
+  try {
+    const config = await establishCloudConfig("", 9393, home, server.origin, untouchable);
+    assert.match(config.claim!, /^[a-z2-7]{20}$/, "the label is the 20-character anonymous shape");
+    assert.equal(config.serve, "relay");
+    assert.equal(server.claims[0]?.name, config.claim, "the generated name is what was claimed");
+    assert.equal("github" in server.claims[0]!, false, "the claim carries no GitHub token");
+    assert.equal(readTunnelToken(home), null, "a relay name has no run token");
+  } finally {
+    await server.close();
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("a name that already HAS the anonymous shape re-claims without GitHub too", async () => {
+  // reconcileCloudConfig re-claims a saved label through establishCloudConfig, so an anonymous label
+  // arriving as TEXT must ride the anonymous path — or a reconcile would suddenly demand `gh`.
+  const home = tempHome();
+  const server = await claimServer({ hostname: "x.frizz.sh", leaseExpiresAt: 0, renewed: true });
+  const untouchable = {
+    accessToken: async (): Promise<string> => { throw new Error("GitHub must not be consulted"); },
+    login: async (): Promise<string | null> => { throw new Error("GitHub must not be consulted"); },
+  };
+  try {
+    const label = "abcdefghjkmnpqrstuvw";
+    const config = await establishCloudConfig(label, 9393, home, server.origin, untouchable);
+    assert.equal(config.claim, label, "the given label is claimed, not a fresh one");
+    assert.equal("github" in server.claims[0]!, false);
+  } finally {
+    await server.close();
+    rmSync(home, { recursive: true, force: true });
+  }
+});

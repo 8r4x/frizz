@@ -5,6 +5,9 @@ import {
   CLAIM_MAX_AGE_MS,
   CLAIM_PROTOCOL_VERSION,
   claimLeaseExpired,
+  claimNameIsValid,
+  generateAnonymousClaimName,
+  isAnonymousClaimName,
   claimSigningInput,
   exportClaimPrivateKey,
   exportClaimPublicKey,
@@ -223,4 +226,38 @@ test("a genuinely malformed name is still bad-name, not reserved", async () => {
     )
     assert.equal(verdict.ok === false && verdict.reason, "bad-name", `${name} was misclassified`)
   }
+})
+
+test("an anonymous name is 20 characters of [a-z2-7], valid to claim, and never repeats", () => {
+  const seen = new Set<string>()
+  for (let i = 0; i < 200; i++) {
+    const name = generateAnonymousClaimName()
+    assert.match(name, /^[a-z2-7]{20}$/)
+    assert.ok(isAnonymousClaimName(name))
+    assert.ok(claimNameIsValid(name), "the shape must pass ordinary name validation")
+    seen.add(name)
+  }
+  assert.equal(seen.size, 200, "100 bits of entropy cannot collide in 200 draws")
+})
+
+test("the anonymous shape excludes near misses", () => {
+  for (const name of [
+    "colin",
+    "abcdefghjkmnpqrstuv", // 19
+    "abcdefghjkmnpqrstuvwx", // 21
+    "Abcdefghjkmnpqrstuvw", // uppercase
+    "abcdefghjkmnpqrstuv1", // 1 is outside base32
+    "abcdefghjkmnpqrstu-v", // hyphen
+  ]) {
+    assert.equal(isAnonymousClaimName(name), false, name)
+  }
+})
+
+test("an anonymous name signs and verifies like any other claim", async () => {
+  const identity = await generateClaimIdentity()
+  const name = generateAnonymousClaimName()
+  const request = await signClaim({ name, port: 9393, issuedAt: 1_800_000_000_000 }, identity)
+  const verdict = await verifyClaim(request, 1_800_000_000_000)
+  assert.ok(verdict.ok)
+  assert.equal(verdict.ok && verdict.payload.name, name)
 })

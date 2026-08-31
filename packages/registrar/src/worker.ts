@@ -23,7 +23,7 @@ import { createCloudflareApi } from "./cloudflare.ts"
  */
 export interface KvNamespace {
   get(key: string): Promise<string | null>
-  put(key: string, value: string): Promise<void>
+  put(key: string, value: string, options?: { expirationTtl?: number }): Promise<void>
   delete(key: string): Promise<void>
   list(options?: { prefix?: string; cursor?: string }): Promise<{
     keys: Array<{ name: string }>
@@ -78,6 +78,36 @@ export interface RegistrarEnv {
 
 /** A GitHub account younger than this cannot claim, which blunts throwaway-account squatting. */
 const MIN_GITHUB_ACCOUNT_AGE_MS = 30 * 24 * 60 * 60_000
+
+/**
+ * New ANONYMOUS names one network address may mint per hour.
+ *
+ * Anonymous claims have no GitHub gate, so this is their entire cost. Generous on purpose: a person
+ * setting up every machine they own in one sitting stays far under it, while the loop that would mint
+ * keys until the namespace ceiling stopped all signups hits it on its tenth iteration. Renewals are
+ * never counted — the handler consults the budget only when creating.
+ */
+const ANONYMOUS_CLAIMS_PER_HOUR = 10
+
+/**
+ * A per-address creation budget on one KV counter per hour bucket.
+ *
+ * KV is eventually consistent, so two racing claims can both read the same count and one slips past —
+ * this is a blunt guard against a runaway loop, not an exact quota, and an exact one would need
+ * storage this Worker deliberately does not have. The row expires on its own; nothing sweeps it.
+ */
+export function kvAnonymousBudget(kv: KvNamespace, address: string, now: () => number = Date.now): () => Promise<boolean> {
+  return async () => {
+    const bucket = Math.floor(now() / 3_600_000)
+    const key = `anonrl:${address}:${bucket}`
+    const used = Number((await kv.get(key)) ?? "0")
+    if (used >= ANONYMOUS_CLAIMS_PER_HOUR) return false
+    // TTL of two hours, not one: the row only has to outlive its own bucket, and cutting it close
+    // would let a claim land in a bucket whose counter had already expired mid-hour.
+    await kv.put(key, String(used + 1), { expirationTtl: 7_200 })
+    return true
+  }
+}
 
 /**
  * How many names the zone may hold.
@@ -156,8 +186,9 @@ const json = (status: number, body: unknown): Response =>
     headers: { "content-type": "application/json", "cache-control": "no-store" },
   })
 
-function claimDeps(env: RegistrarEnv) {
+function claimDeps(env: RegistrarEnv, anonymousBudget?: () => Promise<boolean>) {
   return {
+    ...(anonymousBudget ? { anonymousBudget } : {}),
     // RELAY by default: a claim records the name and nothing else, because the relay serves every
     // name off one wildcard record. `CLOUD_MODE=tunnel` restores per-name tunnel provisioning for one
     // release, so the old path can be turned back on without a rebuild.
@@ -223,7 +254,11 @@ export default {
     // everything past this point, including that the thing parsed is shaped like a claim at all.
     const body = await request.json().catch(() => null)
 
-    const outcome = await handleClaim(body, claimDeps(env))
+    // The budget key is the connecting address, which Cloudflare stamps on every request it fronts.
+    // Absent (a direct hit on the Worker in a test) the budget still exists under one shared key,
+    // because an absent header must never mean an absent limit.
+    const address = request.headers.get("cf-connecting-ip") ?? "unknown"
+    const outcome = await handleClaim(body, claimDeps(env, kvAnonymousBudget(env.CLAIMS, address)))
 
     return json(outcome.status, outcome.body)
   },

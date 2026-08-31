@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node
 import { createInterface } from "node:readline/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { claimNameIsValid, normalizeClaimName } from "@frizz/shared";
+import { claimNameIsValid, generateAnonymousClaimName, isAnonymousClaimName, normalizeClaimName } from "@frizz/shared";
 import { loadOrCreateClaimIdentity } from "./identity.ts";
 import { githubCli, type GithubIdentity } from "./github-identity.ts";
 import { ClaimError, claimName } from "./registrar-client.ts";
@@ -23,9 +23,10 @@ import { connectRelay } from "./relay-connection.ts";
  * Deliberately does NOT ask about the port. There is a default, and `FRIZZ_PORT` overrides it for the
  * few people who care — a prompt for it would be a question almost nobody has an answer to.
  *
- * Two ways to have a hostname, told apart by whether the answer contains a dot:
+ * Three ways to have a hostname, told apart by the shape of the answer:
  *
- *   colin              -> CLAIM `colin.frizz.sh` from the registrar, which creates the tunnel for you
+ *   (empty)            -> CLAIM a private unguessable name on frizz.sh — no account, no sign-in
+ *   colin              -> CLAIM `colin.frizz.sh` from the registrar, bound to your GitHub account
  *   board.example.com  -> a tunnel you made yourself, which Frizz only runs
  *
  * The claimed path exists because creating a tunnel and its DNS record needs a zone-scoped Cloudflare
@@ -246,7 +247,9 @@ export async function promptForCloudName(): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   try {
     return (
-      await rl.question("Name for this board — a word claims <name>.frizz.sh, or paste a hostname you already run a tunnel for: ")
+      await rl.question(
+        "Name for this board — press enter for a private unguessable name (no account), a word claims <name>.frizz.sh (needs GitHub), or paste a hostname you already run a tunnel for: ",
+      )
     ).trim();
   } finally {
     rl.close();
@@ -295,20 +298,30 @@ export async function establishCloudConfig(
     );
   }
 
-  if (!claimNameIsValid(answer)) {
+  // An EMPTY answer is the auth-free default: mint an unguessable name and claim it with the keypair
+  // alone. The registrar recognises the shape and asks for no GitHub identity, so this path works on a
+  // machine with no `gh` at all — which is the whole point of it. A name that already HAS the
+  // anonymous shape rides the same path, so reconciling or re-entering one never demands GitHub.
+  const anonymous = answer === "" || isAnonymousClaimName(answer);
+  if (!anonymous && !claimNameIsValid(answer)) {
     // Surface the specific reason — reserved, too short, bad character — rather than a generic refusal.
     normalizeClaimName(answer);
   }
-  const name = normalizeClaimName(answer);
+  const name = answer === "" ? generateAnonymousClaimName() : normalizeClaimName(answer);
   const identity = await loadOrCreateClaimIdentity(home);
-  // A name is bound to a GitHub account, so say WHICH one before binding it. Someone signed in as a
-  // work account would otherwise find out only when they wanted the name somewhere else.
-  const token = await github.accessToken();
-  const login = await github.login();
-  if (login) console.log(`  claiming ${name}.frizz.sh for GitHub user ${login}`);
+  let token: string | undefined;
+  if (!anonymous) {
+    // A name is bound to a GitHub account, so say WHICH one before binding it. Someone signed in as a
+    // work account would otherwise find out only when they wanted the name somewhere else.
+    token = await github.accessToken();
+    const login = await github.login();
+    if (login) console.log(`  claiming ${name}.frizz.sh for GitHub user ${login}`);
+  } else {
+    console.log("  claiming a private name on frizz.sh — no account needed");
+  }
   let result;
   try {
-    result = await claimName({ name, port, identity, github: token, ...(origin ? { origin } : {}) });
+    result = await claimName({ name, port, identity, ...(token ? { github: token } : {}), ...(origin ? { origin } : {}) });
   } catch (error) {
     // A FIRST claim that cannot reach the registrar leaves the operator with nothing — unlike a
     // renewal, which falls back to its cached token. Point at the path that works without us rather

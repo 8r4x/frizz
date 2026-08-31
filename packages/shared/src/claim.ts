@@ -68,6 +68,39 @@ export const RESERVED_CLAIM_NAMES: ReadonlySet<string> = new Set([
 export const CLAIM_NAME_MIN_LENGTH = 3
 export const CLAIM_NAME_MAX_LENGTH = 63
 
+/**
+ * Anonymous names: the auth-free path.
+ *
+ * A name of exactly this shape — 20 characters drawn from a 32-letter alphabet — is claimable with no
+ * GitHub identity at all: the registrar recognises the shape and waives the gate. That is safe where
+ * waiving it for vanity names would not be, because the whole point of the gate is to make squatting
+ * cost something, and a name nobody can predict or want has no squatting value. What the shape buys
+ * the OWNER is 100 bits of entropy: the hostname itself is unguessable, the zone's certificate is a
+ * wildcard so no per-name hostname ever appears in a certificate-transparency log, and the wildcard
+ * DNS record means there is no per-name record to enumerate. The single-use access gate still stands
+ * on the far side; the obscure name is a moat in front of it, not a replacement for it.
+ */
+export const ANONYMOUS_CLAIM_NAME_LENGTH = 20
+
+/** Exactly 32 letters, so a random byte masked to 5 bits indexes it without modulo bias. */
+const ANONYMOUS_CLAIM_ALPHABET = "abcdefghijklmnopqrstuvwxyz234567"
+
+const ANONYMOUS_CLAIM_PATTERN = new RegExp(`^[a-z2-7]{${ANONYMOUS_CLAIM_NAME_LENGTH}}$`)
+
+/** Does this (already-normalized) name have the shape the registrar claims without identity? */
+export function isAnonymousClaimName(name: string): boolean {
+  return ANONYMOUS_CLAIM_PATTERN.test(name)
+}
+
+/** Mint a fresh anonymous name. 20 characters of [a-z2-7] — 100 bits, so collisions never happen. */
+export function generateAnonymousClaimName(): string {
+  const bytes = new Uint8Array(ANONYMOUS_CLAIM_NAME_LENGTH)
+  crypto.getRandomValues(bytes)
+  let name = ""
+  for (const byte of bytes) name += ANONYMOUS_CLAIM_ALPHABET[byte & 31]
+  return name
+}
+
 export interface ClaimPayload {
   /** The label to the left of `.frizz.sh`. */
   name: string

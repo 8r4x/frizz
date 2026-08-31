@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { CLAIM_LEASE_MS, generateClaimIdentity, signClaim } from "@frizz/shared"
+import { CLAIM_LEASE_MS, generateAnonymousClaimName, generateClaimIdentity, signClaim } from "@frizz/shared"
 import { handleClaim, sweepExpiredClaims, type ClaimDeps, type ClaimRecord } from "./claim-handler.ts"
 
 const NOW = 1_800_000_000_000
@@ -602,4 +602,79 @@ test("releasing a relay name is only forgetting it", async () => {
   assert.equal(taken.status, 200, "a lapsed relay name must still be reclaimable")
   assert.deepEqual(cf.calls, [], "nothing to tear down in Cloudflare")
   assert.equal(st.rows.get("colin")?.pubkey, (await claimFor(newcomer)).pubkey)
+})
+
+test("an ANONYMOUS name claims through the gate with no GitHub identity at all", async () => {
+  // The gate exists to make squatting cost something, and a 20-character random name has no squatting
+  // value — so the auth-free path must work even while the gate is ON for everyone else.
+  const st = fakeStore()
+  const identity = await generateClaimIdentity()
+  const name = generateAnonymousClaimName()
+  const d: ClaimDeps = { store: st.store, zone: ZONE, now: () => NOW, github: fakeGithub({ "gho_ok": ACCOUNT }) }
+
+  const result = await handleClaim(await signClaim({ name, port: 9393, issuedAt: NOW }, identity), d)
+  assert.equal(result.status, 200)
+  assert.equal("hostname" in result.body && result.body.hostname, `${name}.${ZONE}`)
+  assert.equal(st.rows.get(name)?.githubId, undefined, "no account is recorded — there is none")
+})
+
+test("the anonymous shape is exact — anything else still pays the GitHub gate", async () => {
+  // A 19- or 21-character name, or one outside the alphabet, is a vanity claim like any other. The
+  // waiver keys on the shape alone, so the shape must not be approximately matched.
+  const st = fakeStore()
+  const identity = await generateClaimIdentity()
+  const d: ClaimDeps = { store: st.store, zone: ZONE, now: () => NOW, github: fakeGithub({}) }
+  for (const name of ["abcdefghjkmnpqrstuv", "abcdefghjkmnpqrstuvwx", "abcdefghjkmnpqrstuv1"]) {
+    const result = await handleClaim(await signClaim({ name, port: 9393, issuedAt: NOW }, identity), d)
+    assert.equal("error" in result.body && result.body.error, "github-required", name)
+  }
+})
+
+test("a spent anonymous budget refuses a NEW name, and a renewal never consults it", async () => {
+  // The budget is the auth-free path's whole cost, so it must bind creation — but a live board
+  // renewing its lease must never lose its name to its network neighbours' behaviour.
+  const st = fakeStore()
+  const identity = await generateClaimIdentity()
+  const name = generateAnonymousClaimName()
+  let consulted = 0
+  let allow = false
+  const d: ClaimDeps = {
+    store: st.store,
+    zone: ZONE,
+    now: () => NOW,
+    anonymousBudget: async () => (consulted++, allow),
+  }
+
+  const refused = await handleClaim(await signClaim({ name, port: 9393, issuedAt: NOW }, identity), d)
+  assert.equal(refused.status, 429)
+  assert.equal("error" in refused.body && refused.body.error, "too-many-claims")
+  assert.equal(st.rows.size, 0, "nothing was recorded")
+
+  allow = true
+  assert.equal((await handleClaim(await signClaim({ name, port: 9393, issuedAt: NOW }, identity), d)).status, 200)
+
+  allow = false
+  const renewed = await handleClaim(await signClaim({ name, port: 9494, issuedAt: NOW }, identity), d)
+  assert.equal(renewed.status, 200, "a renewal must never be budget-limited")
+  assert.ok("renewed" in renewed.body && renewed.body.renewed)
+  assert.equal(consulted, 2, "the renewal did not consult the budget")
+})
+
+test("a VANITY claim never consults the anonymous budget — GitHub is that path's cost", async () => {
+  const st = fakeStore()
+  const identity = await generateClaimIdentity()
+  let consulted = 0
+  const d: ClaimDeps = {
+    store: st.store,
+    zone: ZONE,
+    now: () => NOW,
+    github: fakeGithub({ "gho_ok": ACCOUNT }),
+    anonymousBudget: async () => (consulted++, false),
+  }
+  const result = await handleClaim(
+    await signClaim({ name: "colin", port: 9393, issuedAt: NOW, github: "gho_ok" }, identity),
+    d
+  )
+  assert.equal(result.status, 200)
+  assert.equal(consulted, 0)
 })

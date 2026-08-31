@@ -1,6 +1,7 @@
 import {
   CLAIM_LEASE_MS,
   claimLeaseExpired,
+  isAnonymousClaimName,
   tunnelNameForClaim,
   verifyClaim,
   type ClaimRejection,
@@ -92,6 +93,16 @@ export interface ClaimDeps {
    * provisioning failure — the user cannot tell what went wrong and neither can we.
    */
   maxNames?: number
+  /**
+   * May this request create one more ANONYMOUS name right now?
+   *
+   * Anonymous names skip the GitHub gate, and keys are free — so without some cost a loop of generated
+   * keypairs mints names until the namespace ceiling stops ALL signups. This is that cost, consulted
+   * only for a NEW anonymous name: never for a renewal (a live board must never lose its name to its
+   * neighbours' behaviour) and never for a vanity claim (GitHub is that path's cost). Absent means
+   * unlimited, which is only ever right in tests.
+   */
+  anonymousBudget?: () => Promise<boolean>
 }
 
 export type ClaimFailure =
@@ -105,11 +116,12 @@ export type ClaimFailure =
   | "github-too-new"
   | "one-name-per-account"
   | "namespace-full"
+  | "too-many-claims"
 
 export type ClaimOutcome =
   /** `token` is present only in tunnel mode; a relay board proves itself with its keypair instead. */
   | { status: 200; body: { hostname: string; token?: string; leaseExpiresAt: number; renewed: boolean } }
-  | { status: 400 | 409 | 502 | 503; body: { error: ClaimFailure; message: string } }
+  | { status: 400 | 409 | 429 | 502 | 503; body: { error: ClaimFailure; message: string } }
 
 const MESSAGES: Record<ClaimFailure, string> = {
   "bad-version": "this Frizz is too old to claim a name — upgrade and try again",
@@ -131,9 +143,10 @@ const MESSAGES: Record<ClaimFailure, string> = {
   "github-too-new": "that GitHub account is too new to claim a name",
   "one-name-per-account": "that GitHub account already holds a name",
   "namespace-full": "frizz.sh has no free names left — this is our limit to raise, not yours",
+  "too-many-claims": "too many new names from this network just now — try again in an hour",
 }
 
-const reject = (error: ClaimFailure, status: 400 | 409 | 502 | 503 = 400): ClaimOutcome => ({
+const reject = (error: ClaimFailure, status: 400 | 409 | 429 | 502 | 503 = 400): ClaimOutcome => ({
   status,
   body: { error, message: MESSAGES[error] },
 })
@@ -170,9 +183,15 @@ export async function handleClaim(body: unknown, deps: ClaimDeps): Promise<Claim
   }
 
   // IDENTITY, and only here — a renewal is proved by the keypair alone, so a live name never depends
-  // on GitHub being reachable. A first claim is the one moment where cost can be imposed.
+  // on GitHub being reachable. A first claim is the one moment where cost can be imposed, and the two
+  // claim kinds pay it differently: an ANONYMOUS name (the 20-character shape, worthless to squat)
+  // pays a per-network creation budget, and a vanity name pays a GitHub identity.
   let githubId: number | undefined
-  if (deps.github) {
+  if (isAnonymousClaimName(name)) {
+    if (deps.anonymousBudget && !(await deps.anonymousBudget())) {
+      return reject("too-many-claims", 429)
+    }
+  } else if (deps.github) {
     if (!verdict.payload.github) return reject("github-required")
     const who = await deps.github(verdict.payload.github)
     if (!who) return reject("github-rejected")
