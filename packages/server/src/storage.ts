@@ -690,6 +690,12 @@ export interface Storage {
   // atomic with the text write so no board refresh, transcript ai-title, resume upsert, or server
   // restart can see the new title as machine-generated or still replaceable.
   setTitle(slug: string, title: string): void
+  // Persist the WORKER's own considered name (`mcp__frizz__title`), marked `title_agent = 1` so the
+  // display can trust it once live telemetry is gone. Refused — `false`, not a throw — when a human has
+  // claimed the name, because that is a legitimate answer the worker should be told rather than an
+  // error it will retry. Never touches `title_auto`: which machine wrote the current text does not
+  // change the row's display provenance, and leaving it set is what keeps a human rename outranking.
+  setAgentTitle(slug: string, title: string): boolean
   // AI rename is asynchronous. Commit only if this is still the same session with the same title
   // provenance captured at start, so a later manual rename/re-dispatch always wins.
   setTitleIfCurrent(
@@ -1680,6 +1686,15 @@ export function createStorage(source: string | Database, projectId: string): Sto
     WHERE project_id = @project_id AND slug = ? AND session_id = ? AND agent_session_id IS ?
       AND runtime_generation = ? AND title_locked = 0
   `)
+  // The WORKER's own considered name for its thread, from `mcp__frizz__title`. Writes exactly what the
+  // auto-title CAS writes — the text plus `title_agent = 1`, gated on the LOCK so a human rename always
+  // outranks it — but keyed on the SLUG alone. The caller is the live worker's own MCP server, which
+  // knows the slug frizz stamped into its env and nothing about the session id underneath it; that env
+  // survives every resume, while the session id does not.
+  const agentTitleStmt = scope.prepare(`
+    UPDATE session SET title = ?, title_agent = 1
+    WHERE project_id = @project_id AND slug = ? AND title_locked = 0
+  `)
   const delSession = scope.prepare("DELETE FROM session WHERE project_id = @project_id AND slug = ?")
   const putRetiredOp = scope.prepare("INSERT OR IGNORE INTO retired_op (project_id, slug, session_id, op_id, retired_at) VALUES (@project_id, ?, ?, ?, ?)")
   const getRetiredOps = scope.prepare<[string, string], { op_id: string }>("SELECT op_id FROM retired_op WHERE project_id = @project_id AND slug = ? AND session_id = ?")
@@ -2339,6 +2354,7 @@ export function createStorage(source: string | Database, projectId: string): Sto
       recurringCompactFiredStmt.run(firedAt, slug, armedAt).changes === 1,
     clearExpiredSnoozes: (now) => clearExpiredSnoozesStmt.run(now).changes,
     setTitle: (slug, title) => void titleStmt.run(title, slug),
+    setAgentTitle: (slug, title) => agentTitleStmt.run(title, slug).changes === 1,
     setTitleIfCurrent: (slug, title, expected) =>
       titleCasStmt.run(title, slug, expected.sessionId, expected.title, expected.titleAuto).changes === 1,
     setAutoTitleIfCurrent: (slug, title, expected) =>

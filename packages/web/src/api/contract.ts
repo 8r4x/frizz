@@ -37,6 +37,8 @@ import type {
   SetThreadRecurringPromptInput,
   SetOwnThreadRecurringPromptInput,
   SetOwnThreadRecurringPromptResult,
+  SetOwnThreadTitleInput,
+  SetOwnThreadTitleResult,
   GetOwnThreadRecurringPromptInput,
   OwnThreadRecurringPromptResult,
   SetOwnThreadStopHookInput,
@@ -182,6 +184,9 @@ export interface Api {
   // The READ half of the same tool (`action: "get"`), so a worker can see the row before it overwrites
   // it — after a compaction, or after the human edited the text in the footer panel.
   getOwnThreadRecurringPrompt(input: GetOwnThreadRecurringPromptInput): Promise<OwnThreadRecurringPromptResult>
+  // THE WORKER NAMING ITS OWN THREAD, called by `mcp__frizz__title`. Declared here for the drift gate
+  // alone — the browser's rename verbs are `renameThread` / `aiRenameThread`, which lock the name.
+  setOwnThreadTitle(input: SetOwnThreadTitleInput): Promise<SetOwnThreadTitleResult>
   // THE PR WATCHER REGISTRY, called by `mcp__frizz__watch_pr` rather than by this client. Declared here
   // for the same reason as its neighbours: rpc-contract.ts proves the two procedure NAME SETS are equal,
   // so an RPC the client cannot name is one nothing checks the shape of. No browser call site uses these.
@@ -360,6 +365,7 @@ export const PROCEDURES = {
   setThreadSnooze: "mutation",
   setThreadRecurringPrompt: "mutation",
   setOwnThreadRecurringPrompt: "mutation",
+  setOwnThreadTitle: "mutation",
   addOwnPrWatch: "mutation",
   dropOwnPrWatch: "mutation",
   listOwnPrWatches: "mutation",

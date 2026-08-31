@@ -2998,6 +2998,35 @@ export type AiRenameThreadInput = z.infer<typeof AiRenameThreadInput>
 export const AiRenameThreadResult = z.object({ title: z.string().min(1).max(200) })
 export type AiRenameThreadResult = z.infer<typeof AiRenameThreadResult>
 
+// THE WORKER NAMING ITS OWN THREAD, from `mcp__frizz__title`. Both backends get a name automatically at
+// spawn — Claude from the provider's own titler, Codex from the first-line `<!-- frizz title="…" -->`
+// marker — and both are minted from the raw dispatch prompt before the worker has read a single line of
+// the repo, so they can only ever paraphrase what the operator typed. That is how a zod thread came out
+// named "Zon4.5 features and z.properties documentation audit": the titler copied the operator's typo
+// verbatim, because at that instant nothing in the session knew the product is called Zod.
+//
+// This is the SECOND, considered pass: the worker registers a real name once it understands the task.
+//
+// Unlike RenameThreadInput it never LOCKS the row — the name is machine-authored, so a human rename
+// still outranks it. Unguarded on session/generation for `SetOwnThreadRecurringPromptInput`'s reasons:
+// the MCP server knows only the slug frizz stamped into its env, and a model chooses the TEXT, never
+// the thread.
+export const SetOwnThreadTitleInput = z.object({
+  slug: ThreadSlug,
+  title: z.string().trim().min(1).max(200),
+}).strict()
+export type SetOwnThreadTitleInput = z.infer<typeof SetOwnThreadTitleInput>
+
+// What the write answers with: whether it landed, and the name the thread carries NOW. A refusal is not
+// an error — a human who has renamed the thread owns its name — so it comes back as a flag the tool can
+// explain rather than a throw the model will retry.
+export const SetOwnThreadTitleResult = z.object({
+  accepted: z.boolean(),
+  title: z.string(),
+  lockedByHuman: z.boolean(),
+}).strict()
+export type SetOwnThreadTitleResult = z.infer<typeof SetOwnThreadTitleResult>
+
 export const SetThreadPermissionInput = z.object({
   slug: ThreadSlug,
   permissionMode: PermissionMode,

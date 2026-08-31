@@ -497,6 +497,25 @@ body is one line ("Answered inline — conversational prompt, nothing to ship.")
 needs a reply, ask with a \` \`\`\`question \` instead. Do not manufacture scope, restate the "task", or ask
 clarifying questions to seem busy.`
 
+// WHY THIS EARNS ITS TOKENS (the SIZING bar above): both backends already name a thread automatically,
+// and both mint that name at spawn from the raw prompt — Claude through the provider's own titler, Codex
+// through the first-line marker — so neither has read a line of the repo when it names the work. The
+// failure is not hypothetical: a zod thread went onto the board as "Zon4.5 features and z.properties
+// documentation audit" because the operator's prompt said "Zon4.5" (maintainer 2026-08-31: "it just
+// registers a clearly incorrect name"). Only the worker can fix that, and only after it has oriented —
+// so the rule a worker gets wrong without this is WHEN, not how. Everything else lives in the tool
+// description.
+const THREAD_NAME = `## Name your thread once you know what the work is
+
+Your thread reaches the board wearing a name frizz minted from the raw prompt before you had read
+anything, so it carries the operator's shorthand and their typos. Once you have oriented — read the
+issue, opened the code, found the bug — call \`mcp__frizz__title\` with a real name for the actual work:
+3-8 words, sentence case, spelling every product and identifier the way the PROJECT spells it rather
+than the way the prompt did.
+
+Not on arrival. A name you register before you understand the task is the same guess you are replacing.
+A human rename outranks yours, and frizz reports that rather than failing.`
+
 // LEGACY NAME, current behaviour. This block and `scratchpadOrientation` still say "scratchpad"; both
 // describe the scratch DIRECTORY. (`ThreadView.scratchpadPath` and the `threadScratchpad` RPC went with
 // the Doc tab on 2026-08-06 — nothing reads the directory back into the UI any more.)
@@ -693,6 +712,9 @@ never Title-Case Every Word. Put the comment on its own first line with nothing 
 never again on later turns. Frizz strips this comment from visible chat and uses only its
 quoted title while the thread still has an automatic title; a human rename always wins. Never use an H1
 for the title signal: H1 parsing exists only for compatibility with old transcripts.
+
+That marker is only the PROVISIONAL name — it is minted before you have read anything, so it can only
+paraphrase the prompt. Replace it with \`mcp__frizz__title\` once you know what the work is (below).
 
 ## Bounded native delegation
 
@@ -924,6 +946,7 @@ export function buildWorkerPrompt(kind: BackendKind = "claude", opts: { monitors
     SIGNALS,
     SCRATCHPAD[kind],
     BACKEND[kind],
+    THREAD_NAME,
     SPAWN_THREAD,
     lean ? null : THREAD_EXECUTION[kind],
     AGENT_COMPLETION,

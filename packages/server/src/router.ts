@@ -114,8 +114,11 @@ import {
   OWN_WATCH_MAX_ARMED,
   type OwnWatchView,
   humanGapNote,
+  SetOwnThreadTitleInput,
+  SetOwnThreadTitleResult,
 } from "@frizz/shared"
 import { type AppContext } from "./context.ts"
+import { sessionTitleLocked } from "./storage.ts"
 import { mayHaveLiveBackgroundWork, needsFreshProcessForLimit } from "./backend/usage-limit.ts"
 import { appServerTurnStalled, resolveLiveWatchTarget, resolveRecurringPrompt } from "./board.ts"
 import { runThreadUpdate } from "./frizz.ts"
@@ -3006,6 +3009,32 @@ export function createRouter(ctx: AppContext) {
         if (!ctx.storage.getSession(input.slug)) throw new Error(`thread ${input.slug} is not editable`)
         ctx.storage.setTitle(input.slug, input.title)
         ctx.board.refresh() // storage-only overlay; publishes an immediate board delta to every client
+      },
+    }),
+
+    // The WORKER naming its own thread, from `mcp__frizz__title`. Same row `renameThread` writes;
+    // different caller, and therefore a weaker claim: this name is machine-authored, so it does NOT
+    // lock, and a human rename outranks it both before and after.
+    //
+    // Unguarded on session/generation ON PURPOSE, exactly as `setOwnThreadRecurringPrompt` is: the MCP
+    // server knows only the slug frizz stamped into its env, and a model may choose the TEXT but never
+    // the thread — there is deliberately no slug parameter it could aim at someone else's row.
+    setOwnThreadTitle: mutation({
+      input: SetOwnThreadTitleInput,
+      output: SetOwnThreadTitleResult,
+      handler: async ({ input }) => {
+        const row = ctx.storage.getSession(input.slug)
+        if (!row) throw new Error(`thread ${input.slug} is not registered`)
+        // A human who has renamed the thread owns its name. Report that as a REFUSAL rather than a
+        // throw: the worker did nothing wrong, and an error is the one answer it would retry.
+        const lockedByHuman = sessionTitleLocked(row)
+        const accepted = lockedByHuman ? false : ctx.storage.setAgentTitle(input.slug, input.title)
+        if (accepted) ctx.board.refresh()
+        return {
+          accepted,
+          title: accepted ? input.title : (ctx.storage.getSession(input.slug)?.title?.trim() || input.slug),
+          lockedByHuman,
+        }
       },
     }),
 

@@ -1204,7 +1204,16 @@ export function resolveLimitPause(
 // and it is all that is left once the thread rests, is archived, or the server restarts. Falling back
 // to it is what stops a codex thread reading "Untitled thread" for the rest of its life: with no
 // aiTitle on the wire the display side cannot tell a persisted worker title from the dispatch chop,
-// so it must assume the chop. Telemetry still wins while present — it is the fresher of the two.
+// so it must assume the chop.
+//
+// THE REGISTRY COPY OUTRANKS TELEMETRY, which is the reverse of the rule here until `mcp__frizz__title`
+// existed ("telemetry wins while present — it is the fresher of the two"). Freshness was the right
+// tiebreak only while the two could not disagree: both halves were the same codex marker, so the CAS
+// either matched telemetry exactly or had not run. A worker registering its own name breaks that tie
+// for real — `title_agent = 1` now means a worker DELIBERATELY named the thread after reading the task,
+// while `tele.aiTitle` is the spawn-time guess it is correcting, and the guess must not win. For a
+// codex row the flip is a no-op by construction: the persisted copy was written FROM telemetry, so it
+// is either byte-identical or absent.
 export function resolveSessionTitle(
   row: Pick<SessionRow, "title" | "title_auto" | "title_locked" | "title_agent">,
   tele: Pick<SessionTelemetry, "aiTitle"> | undefined,
@@ -1215,7 +1224,7 @@ export function resolveSessionTitle(
     title: row.title ?? "",
     titleAuto: row.title_auto === 1,
     titleLocked: locked,
-    aiTitle: locked ? undefined : (tele?.aiTitle ?? persisted),
+    aiTitle: locked ? undefined : (persisted ?? tele?.aiTitle),
   }
 }
 

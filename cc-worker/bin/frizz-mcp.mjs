@@ -600,6 +600,41 @@ const DONE = {
   },
 }
 
+const TITLE = {
+  name: "title",
+  description:
+    "NAME THIS THREAD on the human's board, once you actually know what the work is.\n\n" +
+    "WHY IT EXISTS: the name your thread is wearing right now was minted the instant you were " +
+    "dispatched, from the raw text of the prompt, before you had read a single file. It can only ever " +
+    "paraphrase what the operator typed — so it inherits their shorthand, their ambiguity and their " +
+    "typos. One zod thread went onto the board as \"Zon4.5 features and z.properties documentation " +
+    "audit\" because the operator typed \"Zon4.5\" and nothing in the session yet knew the product is " +
+    "called Zod. You know. That is the entire point of this tool.\n\n" +
+    "WHEN TO CALL IT: after you have oriented — read the issue, opened the code, found the bug — and " +
+    "can name the actual work in your own words. Not on arrival: a name you register before you " +
+    "understand the task is the same guess the board already has. Once is normally enough; call it " +
+    "again only if the work turns out to be genuinely something else.\n\n" +
+    "NAME THE WORK, NOT THE PROMPT. \"Is this true? We should probably…\" is what the human said, not " +
+    "what you are doing. A good name is the thing a reader picking one card out of thirty needs: the " +
+    "subject and the verb.\n\n" +
+    "A HUMAN RENAME OUTRANKS YOU, always. If the human has already named this thread, frizz refuses " +
+    "this and tells you so — that is a correct answer, not a failure, and you should not retry it.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      title: {
+        type: "string",
+        description:
+          "The thread's name: 3-8 words, SENTENCE case (capitalize only the first word and proper " +
+          "nouns — \"Fix queue focus\", never \"Fix Queue Focus\"). No trailing period, no ticks, no " +
+          "issue-body quoting. Spell every product, file and identifier the way the PROJECT spells it, " +
+          "not the way the prompt did.",
+      },
+    },
+    required: ["title"],
+  },
+}
+
 // The unified server's tool registry: `tools/list` returns these and `tools/call` routes by name.
 // Adding a worker-facing frizz tool = one entry here + one handler in `HANDLERS` — never a second
 // MCP server, so every frizz tool stays under the same `mcp__frizz__*` namespace and the same
@@ -624,7 +659,7 @@ const ACTIVITY = {
   inputSchema: { type: "object", properties: {}, required: [] },
 }
 
-const TOOLS = [SPAWN_THREAD, GOAL, TIMER, WATCH_PR, WATCH, UNWATCH, ASK, UNASK, DONE, ACTIVITY]
+const TOOLS = [SPAWN_THREAD, GOAL, TIMER, WATCH_PR, WATCH, UNWATCH, ASK, UNASK, DONE, TITLE, ACTIVITY]
 
 /** @type {Record<string, (args: Record<string, unknown>) => Promise<string>>} */
 const HANDLERS = {
@@ -636,8 +671,28 @@ const HANDLERS = {
   [ASK.name]: ask,
   [UNASK.name]: unask,
   [DONE.name]: done,
+  [TITLE.name]: title,
   [UNWATCH.name]: unwatch,
   [ACTIVITY.name]: activity,
+}
+
+/** The `title` handler: register this thread's considered name.
+ * @param {Record<string, unknown>} args @returns {Promise<string>} */
+async function title(args) {
+  const slug = threadSlug()
+  const wanted = typeof args.title === "string" ? args.title.trim() : ""
+  if (!wanted) throw new Error("`title` is required — 3-8 words naming the work, in sentence case")
+  const result = (await callRpc("setOwnThreadTitle", { slug, title: wanted }))?.result
+  if (result?.accepted) return `This thread is now named "${result.title}" on the board.`
+  // The refusal is REPORTED, never thrown: a human who renamed the thread owns its name, and a worker
+  // told "error" would retry a call that can only ever fail again.
+  if (result?.lockedByHuman) {
+    return (
+      `Not renamed — the human has named this thread "${result.title}" themselves, and their name ` +
+      "outranks yours. Leave it; do not call this again for this thread."
+    )
+  }
+  return `Not renamed — frizz did not accept the write. This thread still reads "${result?.title ?? slug}".`
 }
 
 /** Read out every background thing this thread has running, in the shape an awaiting fence names them.

@@ -64,7 +64,7 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
     rpc.send({ jsonrpc: "2.0", method: "notifications/initialized" })
     rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/list" })
     const list = await rpc.next(2)
-    assert.deepEqual(list.result.tools.map((t: { name: string }) => t.name), ["spawn_thread", "goal", "timer", "watch_pr", "watch", "unwatch", "ask", "unask", "done", "activity"])
+    assert.deepEqual(list.result.tools.map((t: { name: string }) => t.name), ["spawn_thread", "goal", "timer", "watch_pr", "watch", "unwatch", "ask", "unask", "done", "title", "activity"])
     for (const required of ["prompt", "model", "effort"]) {
       assert.ok(list.result.tools[0].inputSchema.required.includes(required))
     }
@@ -133,13 +133,17 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
     // tax (plans/rest-by-registration.md).
     assert.deepEqual(list.result.tools[8].inputSchema.required, ["body"])
     assert.deepEqual(Object.keys(list.result.tools[8].inputSchema.properties), ["body"])
+    // `title` takes ONLY the name. It exposes no thread parameter for `goal`'s reason — the slug comes
+    // from the server's env — so a worker can rename its own thread and no other.
+    assert.deepEqual(list.result.tools[9].inputSchema.required, ["title"])
+    assert.deepEqual(Object.keys(list.result.tools[9].inputSchema.properties), ["title"])
     // `activity` READS every kind of background work with the ids a fence names them by, plus the
     // `wch_…` id of any watch holding one. It takes NOTHING: there is no thread parameter and no filter,
     // because the only correct answer is "everything you have running", and a worker that has lost its
     // ids cannot be trusted to name them.
-    assert.equal(list.result.tools.length, 10)
-    assert.deepEqual(list.result.tools[9].inputSchema.required, [])
-    assert.deepEqual(Object.keys(list.result.tools[9].inputSchema.properties), [])
+    assert.equal(list.result.tools.length, 11)
+    assert.deepEqual(list.result.tools[10].inputSchema.required, [])
+    assert.deepEqual(Object.keys(list.result.tools[10].inputSchema.properties), [])
 
     // An unregistered name is a protocol error, not a crash — the registry routes by name now.
     rpc.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "spawn_frizz_thread", arguments: {} } })
@@ -432,6 +436,68 @@ test("`goal` arms and disarms the CALLING thread, identified from its env", asyn
     assert.equal(bogus.result.isError, true)
     assert.match(bogus.result.content[0].text, /`action` must be one of/)
     assert.equal(seen.length, before)
+  } finally {
+    rpc.kill()
+    http.close()
+  }
+})
+
+// `title` is the CONSIDERED naming pass — the one a worker makes after reading the task, replacing the
+// name frizz minted from the raw prompt at spawn. What this pins is the two things a worker gets wrong
+// without them: that it can only ever name its OWN thread (the slug comes from the env, never from the
+// model), and that a human's rename comes back as a REPORTED refusal rather than an error, because an
+// error is the one answer a model retries against a call that can never succeed.
+test("`title` names the CALLING thread, and a human's own name refuses it out loud", async () => {
+  const seen: Array<{ url: string; body: any }> = []
+  let reply: unknown = { accepted: true, title: "Audit the Zod 4.5 docs", lockedByHuman: false }
+  const http = createServer((req, res) => {
+    let body = ""
+    req.on("data", (c) => (body += c))
+    req.on("end", () => {
+      seen.push({ url: req.url ?? "", body: JSON.parse(body || "{}") })
+      res.writeHead(200, { "content-type": "application/json" })
+      res.end(JSON.stringify({ result: reply }))
+    })
+  })
+  await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve))
+  const port = (http.address() as { port: number }).port
+  const stateDir = mkdtempSync(join(tmpdir(), "frizz-mcp-"))
+  writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ port }))
+  const rpc = startServer({ FRIZZ_STATE_DIR: stateDir, FRIZZ_THREAD_SLUG: "is-this-true-we-should-probably" })
+  try {
+    rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
+    await rpc.next(1)
+
+    rpc.send({
+      jsonrpc: "2.0", id: 2, method: "tools/call",
+      params: { name: "title", arguments: { title: "  Audit the Zod 4.5 docs  " } },
+    })
+    const named = await rpc.next(2)
+    assert.equal(named.result.isError, undefined)
+    // THE SLUG IS THE ENV'S, not the model's — the tool exposes no thread parameter at all, which is what
+    // stops one worker renaming another's thread. And the title is trimmed before it goes on the wire.
+    assert.deepEqual(seen.at(-1), {
+      url: "/_frizz/rpc/setOwnThreadTitle",
+      body: { slug: "is-this-true-we-should-probably", title: "Audit the Zod 4.5 docs" },
+    })
+    assert.match(named.result.content[0].text, /now named "Audit the Zod 4\.5 docs"/)
+
+    // A HUMAN HAS NAMED IT: not an error, and the reply says plainly not to try again.
+    reply = { accepted: false, title: "Named by hand", lockedByHuman: true }
+    rpc.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "title", arguments: { title: "Something else" } } })
+    const refused = await rpc.next(3)
+    assert.equal(refused.result.isError, undefined, "a human owning the name is a correct answer, not a failure")
+    assert.match(refused.result.content[0].text, /Not renamed/)
+    assert.match(refused.result.content[0].text, /outranks yours/)
+    assert.match(refused.result.content[0].text, /do not call this again/)
+
+    // An empty name is refused in the HANDLER, so a whitespace-only title never reaches the server.
+    const before = seen.length
+    rpc.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "title", arguments: { title: "   " } } })
+    const blank = await rpc.next(4)
+    assert.equal(blank.result.isError, true)
+    assert.match(blank.result.content[0].text, /`title` is required/)
+    assert.equal(seen.length, before, "and nothing was sent to the server")
   } finally {
     rpc.kill()
     http.close()

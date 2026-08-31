@@ -327,6 +327,9 @@ never again on later turns. Frizz strips this comment from visible chat and uses
 quoted title while the thread still has an automatic title; a human rename always wins. Never use an H1
 for the title signal: H1 parsing exists only for compatibility with old transcripts.
 
+That marker is only the PROVISIONAL name — it is minted before you have read anything, so it can only
+paraphrase the prompt. Replace it with `mcp__frizz__title` once you know what the work is (below).
+
 ## Bounded native delegation
 
 When delegation is explicitly authorized:
@@ -431,6 +434,17 @@ sandbox — not a bug: `read-only` (inspect, never write), `workspace-write` (ed
 denied outside), or `danger-full-access` (unrestricted). Approvals are off (`approvalPolicy: never`), so a
 sandbox-denied action fails straight back to you rather than prompting a human — adapt, or surface
 the blocker in your final message.
+
+## Name your thread once you know what the work is
+
+Your thread reaches the board wearing a name frizz minted from the raw prompt before you had read
+anything, so it carries the operator's shorthand and their typos. Once you have oriented — read the
+issue, opened the code, found the bug — call `mcp__frizz__title` with a real name for the actual work:
+3-8 words, sentence case, spelling every product and identifier the way the PROJECT spells it rather
+than the way the prompt did.
+
+Not on arrival. A name you register before you understand the task is the same guess you are replacing.
+A human rename outranks yours, and frizz reports that rather than failing.
 
 ## Spawning a separate frizz thread
 

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { randomUUID } from "node:crypto"
 import Database from "./sqlite.ts"
-import { createStorage, type ProfileHandoffJournal, type Storage, type SessionRow } from "./storage.ts"
+import { createStorage, sessionTitleLocked, type ProfileHandoffJournal, type Storage, type SessionRow } from "./storage.ts"
 
 function profileHandoff(
   nativeSessionId: string,
@@ -612,6 +612,41 @@ test("conditional AI title commit cannot overwrite a manual rename or replacemen
   assert.equal(s.setTitleIfCurrent("rename-race", "AI title", expected), false)
   assert.equal(s.getSession("rename-race")?.title, "Replacement title")
   s.close()
+})
+
+// `setAgentTitle` is the WORKER's own considered name, from `mcp__frizz__title`. It writes what the
+// auto-title CAS writes and is gated on the same lock, but keyed on the SLUG alone: its caller is the
+// live worker's MCP server, which knows only the slug frizz stamped into its env. Both backends reach
+// it — unlike the CAS, which the tailer runs for codex rows alone — because a Claude thread's name comes
+// from the provider's titler and is never persisted at all, so before this a rested Claude row fell all
+// the way back to the raw prompt chop.
+test("a worker's own title persists on either backend, and a human's rename refuses it", () => {
+  const s = store()
+  s.upsertSession(row({ slug: "claude-named", session_id: "sid", title: "Is this true? We should probably…", title_auto: 1 }))
+  assert.equal(s.getSession("claude-named")?.title_agent, 0, "a freshly dispatched row holds its chop")
+
+  assert.equal(s.setAgentTitle("claude-named", "Audit the Zod 4.5 docs"), true)
+  assert.equal(s.getSession("claude-named")?.title, "Audit the Zod 4.5 docs")
+  assert.equal(s.getSession("claude-named")?.title_agent, 1, "the flag the display reads once telemetry is gone")
+  // DELIBERATELY untouched: which machine wrote the current text does not change the row's display
+  // provenance, and leaving it set is what keeps a later human rename outranking this name.
+  assert.equal(s.getSession("claude-named")?.title_auto, 1)
+
+  // A second, better name from the same worker still lands — the task can genuinely turn out to be
+  // something else, and nothing about the first registration is a claim on the row.
+  assert.equal(s.setAgentTitle("claude-named", "Document z.properties"), true)
+  assert.equal(s.getSession("claude-named")?.title, "Document z.properties")
+
+  // THE HUMAN OUTRANKS IT, in both directions: a rename locks the row against every later worker name…
+  s.setTitle("claude-named", "Named by hand")
+  assert.equal(s.setAgentTitle("claude-named", "Too late"), false)
+  assert.equal(s.getSession("claude-named")?.title, "Named by hand")
+  assert.equal(s.getSession("claude-named")?.title_agent, 0, "the human's text replaced the worker's, so its provenance goes too")
+
+  // …and a row a human never touched is never locked by the worker writing to it.
+  s.upsertSession(row({ slug: "still-open", session_id: "sid2", title: "chop", title_auto: 1 }))
+  assert.equal(s.setAgentTitle("still-open", "A considered name"), true)
+  assert.equal(sessionTitleLocked(s.getSession("still-open")!), false)
 })
 
 test("automatic title CAS persists provenance and rejects manual, native-session, generation, and replacement races", () => {

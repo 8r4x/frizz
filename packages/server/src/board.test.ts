@@ -219,11 +219,20 @@ test("resolveSessionTitle: a PERSISTED worker title survives the loss of its tel
     resolveSessionTitle(row({ title: "i want to start working", title_auto: 1, title_locked: 0, title_agent: 0 }), undefined),
     { title: "i want to start working", titleAuto: true, titleLocked: false, aiTitle: undefined },
   )
-  // Live telemetry is the FRESHER of the two — a worker that renames itself mid-turn shows the new
-  // name before the CAS has persisted it.
+  // THE REGISTRY COPY OUTRANKS TELEMETRY. This assertion read the other way ("live telemetry is the
+  // FRESHER of the two") until `mcp__frizz__title` existed, and freshness was the right tiebreak only
+  // while the two could not disagree: the persisted copy was written FROM telemetry on the same fold
+  // tick, so it was byte-identical or absent. A worker registering its own name breaks the tie for
+  // real — the row now holds the name it chose after reading the task, and the wire still holds the
+  // spawn-time guess it is correcting, which must not win.
   assert.deepEqual(
-    resolveSessionTitle(row({ title: "Stale persisted name", title_auto: 1, title_locked: 0, title_agent: 1 }), tele({ aiTitle: "Newer live name" })),
-    { title: "Stale persisted name", titleAuto: true, titleLocked: false, aiTitle: "Newer live name" },
+    resolveSessionTitle(row({ title: "Named after reading the issue", title_auto: 1, title_locked: 0, title_agent: 1 }), tele({ aiTitle: "Spawn-time guess" })),
+    { title: "Named after reading the issue", titleAuto: true, titleLocked: false, aiTitle: "Named after reading the issue" },
+  )
+  // Telemetry still covers the row the CAS never reached: no flag, so nothing persisted to prefer.
+  assert.deepEqual(
+    resolveSessionTitle(row({ title: "i want to start working", title_auto: 1, title_locked: 0, title_agent: 0 }), tele({ aiTitle: "Live worker name" })),
+    { title: "i want to start working", titleAuto: true, titleLocked: false, aiTitle: "Live worker name" },
   )
   // A human's name still outranks both, exactly as it does the live one.
   assert.deepEqual(

@@ -351,6 +351,17 @@ your scratch directory. Pass an ARRAY to render several in one captioned block:
 whenever you have screenshots worth showing: it renders the whole decisive set inline, which a terminal
 agent cannot do.
 
+## Name your thread once you know what the work is
+
+Your thread reaches the board wearing a name frizz minted from the raw prompt before you had read
+anything, so it carries the operator's shorthand and their typos. Once you have oriented — read the
+issue, opened the code, found the bug — call `mcp__frizz__title` with a real name for the actual work:
+3-8 words, sentence case, spelling every product and identifier the way the PROJECT spells it rather
+than the way the prompt did.
+
+Not on arrival. A name you register before you understand the task is the same guess you are replacing.
+A human rename outranks yours, and frizz reports that rather than failing.
+
 ## Spawning a separate frizz thread
 
 `mcp__frizz__spawn_thread` dispatches a brand-new, SEPARATE top-level frizz thread — its own board card,
