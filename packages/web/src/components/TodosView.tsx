@@ -947,21 +947,25 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
     () => coalesceToolActivityMessages(visible).map((entry) => ({ ...entry, messageIndex: entry.messageIndex + visibleStart })),
     [visible, visibleStart],
   )
-  // WHERE EACH OPEN QUESTION SITS: at the rest it was asked at, keyed by index into the FULL message
-  // list (the loop below carries that index as `globalIdx`). `tail` is the ordinary case — the worker
-  // asked and rested — above the composer. Mid-prose placement is retired (lib/questionShadow).
+  // WHERE EACH OPEN QUESTION SITS: at the thread's CURRENT rest while it is at rest, and at the rest it
+  // was asked at while it is mid-flight — keyed by index into the FULL message list (the loop below
+  // carries that index as `globalIdx`). `tail` is the ordinary case — the worker asked and rested —
+  // above the composer, and `atRest` is what keeps a question the human replied PAST there rather than
+  // stranded above their reply while the card's newest handoff reads as a bare stop. Mid-prose
+  // placement is retired (lib/questionShadow).
   const questionAnchors = useMemo(() => {
     const tail: RegisteredQuestionView[] = []
     const byAnchor = new Map<number, RegisteredQuestionView[]>()
     const tailAnchor = messages.length - 1
-    for (const [anchor, group] of questionsByAnchor(messages, thread?.questions ?? [])) {
+    const atRest = thread.runtime !== "running" && thread.runtime !== "spawning"
+    for (const [anchor, group] of questionsByAnchor(messages, thread?.questions ?? [], { atRest })) {
       if (anchor >= tailAnchor) { tail.push(...group); continue }
       const at = byAnchor.get(anchor)
       if (at) at.push(...group)
       else byAnchor.set(anchor, [...group])
     }
     return { byAnchor, tail }
-  }, [messages, thread?.questions])
+  }, [messages, thread.runtime, thread?.questions])
   // The registered questions standing at each message — its rest and every later one — so a fence
   // restating or naming one folds into its card (lib/questionShadow), here exactly as on the thread page.
   const shadowedByMessage = useMemo(() => registeredStandingAt(messages, thread?.questions ?? []), [messages, thread?.questions])

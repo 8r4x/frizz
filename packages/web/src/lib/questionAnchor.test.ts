@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
-import { questionAnchorIndex, questionsByAnchor, type AnchorMessage } from "./questionAnchor.ts"
+import { agentSpokeLast, questionAnchorIndex, questionsByAnchor, type AnchorMessage } from "./questionAnchor.ts"
 
 const at = (n: number) => new Date(Date.UTC(2026, 7, 27, 20, n)).toISOString()
 const msg = (role: string, minute: number, kind?: string): AnchorMessage => ({ role, at: at(minute), ...(kind ? { kind } : {}) })
@@ -87,4 +87,78 @@ test("a mount placed at an older rest never draws the in-flight answer", () => {
     assert.ok(!/showInFlight=\{false\}/.test(tail[0]), `${file}: the tail mount draws the in-flight answer`)
     for (const m of anchored) assert.match(m, /showInFlight=\{false\}/, `${file}: an anchored mount must not`)
   }
+})
+
+// ---- AT REST, THE CURRENT REST OWNS THE ASK -------------------------------------------------------
+//
+// The other half of the 2026-08-27 report, and the one freezing the card at its asking rest created.
+// The human replies past an open question without answering it, the worker answers the follow-up and
+// RESTS AGAIN with the question still open. Anchored to history, the card sits above the human's own
+// reply and the newest handoff — the one they are actually reading — shows no ask at all, so the rest
+// reads as a bare stop while frizz's sign-off nudge rightly stands down (the open row IS the sign-off).
+// Observed 2026-08-31 on `evaluate-critically-never-assume`: "Why was this able to come to rest without
+// a proper handoff?"
+test("at rest, a question the human replied past moves to the current rest", () => {
+  const messages = [
+    msg("user", 0),        // 0 the original task
+    msg("assistant", 1),   // 1 the worker's turn…
+    msg("assistant", 2),   // 2 …and the rest it asked at
+    msg("user", 3),        // 3 the human replies without answering
+    msg("assistant", 4),   // 4 the worker answers and rests again
+  ]
+  const grouped = questionsByAnchor(messages, [{ id: "a", askedAt: at(2) }], { atRest: true })
+  assert.deepEqual([...grouped.keys()], [4])
+})
+
+// MID-FLIGHT IT MUST NOT MOVE, which is the 2026-08-27 defect itself: while the worker is running, the
+// tail is live output, and a card under it claims to be the current ask when the rest it belongs to is
+// further up.
+test("running, the same question stays at its own rest", () => {
+  const messages = [msg("user", 0), msg("assistant", 1), msg("assistant", 2), msg("user", 3), msg("assistant", 4)]
+  const grouped = questionsByAnchor(messages, [{ id: "a", askedAt: at(2) }], { atRest: false })
+  assert.deepEqual([...grouped.keys()], [2])
+})
+
+// AT REST BUT THE HUMAN SPOKE LAST: their message is the tail and the worker has not picked it up yet.
+// Dropping the card below it is the original report verbatim, so `atRest` alone cannot be the test —
+// the worker must also have ended the exchange.
+test("at rest with the human's reply unanswered at the tail, the card stays above it", () => {
+  const messages = [msg("user", 0), msg("assistant", 1), msg("assistant", 2), msg("user", 3)]
+  const grouped = questionsByAnchor(messages, [{ id: "a", askedAt: at(2) }], { atRest: true })
+  assert.deepEqual([...grouped.keys()], [2])
+})
+
+// Two questions asked at two different rests collapse into ONE stack at the current rest: both are open,
+// both are owed an answer now, and splitting them across the transcript hides the older one above a
+// reply the human has already scrolled past.
+test("at rest, questions from several rests collapse into one stack in asked order", () => {
+  const messages = [msg("assistant", 1), msg("user", 2), msg("assistant", 3), msg("user", 4), msg("assistant", 5)]
+  const grouped = questionsByAnchor(
+    messages,
+    [{ id: "a", askedAt: at(1) }, { id: "b", askedAt: at(3) }],
+    { atRest: true },
+  )
+  assert.deepEqual([...grouped.keys()], [4])
+  assert.deepEqual(grouped.get(4)?.map((q) => q.id), ["a", "b"])
+})
+
+// No questions ⇒ no groups, at rest or not; the tail entry must not be minted for an empty set.
+test("no open questions produces no groups", () => {
+  const messages = [msg("user", 0), msg("assistant", 1)]
+  assert.equal(questionsByAnchor(messages, [], { atRest: true }).size, 0)
+})
+
+// The default (no opts) is the mid-flight reading, which is what keeps lib/questionShadow's fold —
+// which spans from the asking rest onward and must never be collapsed to the tail — unchanged.
+test("omitting opts keeps the historical anchor", () => {
+  const messages = [msg("user", 0), msg("assistant", 1), msg("assistant", 2), msg("user", 3), msg("assistant", 4)]
+  assert.deepEqual([...questionsByAnchor(messages, [{ id: "a", askedAt: at(2) }]).keys()], [2])
+})
+
+test("agentSpokeLast reads the end of the exchange, ignoring punctuation", () => {
+  assert.equal(agentSpokeLast([msg("user", 0), msg("assistant", 1)]), true)
+  assert.equal(agentSpokeLast([msg("assistant", 0), msg("user", 1)]), false)
+  // An event line after the worker's last word is punctuation, not the human taking the floor.
+  assert.equal(agentSpokeLast([msg("assistant", 0), msg("user", 1, "event")]), true)
+  assert.equal(agentSpokeLast([]), false)
 })

@@ -779,8 +779,11 @@ function VirtualizedThreadTranscript({
       && thread?.runtime !== "perm-prompt"
     return workingWins ? workingIndicatorGap(activityMessages.map((entry) => entry.message)) : STEP
   }, [activityMessages, showWorking, thread])
-  // EVERY OPEN QUESTION, at the rest it was asked at (mid-prose placement is retired — see
-  // lib/questionShadow). `byRow` keys into
+  // EVERY OPEN QUESTION, at the thread's CURRENT rest while it is at rest, and at the rest it was asked
+  // at while it is mid-flight (mid-prose placement is retired — see lib/questionShadow). Passing
+  // `atRest` is what keeps a question the human replied PAST from stranding above their reply while the
+  // worker's newest handoff reads as a bare stop: at rest the tail is the rest that owes them the ask.
+  // `byRow` keys into
   // `messageRows` (the coalesced list actually rendered, which drops messages the transcript does not
   // draw), so the group hangs off the last row at or before its anchor; -1 means the rest is older than
   // the loaded window and it goes above everything rather than back at the bottom, lying about being
@@ -790,7 +793,7 @@ function VirtualizedThreadTranscript({
     const tail: RegisteredQuestionView[] = []
     const byRow = new Map<number, RegisteredQuestionView[]>()
     const tailAnchor = messages.length - 1
-    for (const [anchor, group] of questionsByAnchor(messages, thread?.questions ?? [])) {
+    for (const [anchor, group] of questionsByAnchor(messages, thread?.questions ?? [], { atRest: !running })) {
       if (anchor >= tailAnchor) { tail.push(...group); continue }
       let rowIdx = -1
       for (let i = 0; i < messageRows.length; i++) {
@@ -802,7 +805,7 @@ function VirtualizedThreadTranscript({
       else byRow.set(rowIdx, [...group])
     }
     return { byRow, tail }
-  }, [messageRows, messages, thread?.questions])
+  }, [messageRows, messages, running, thread?.questions])
   // The same rows, keyed by message index, for the fold: a fence restating or naming a registration
   // standing at that message draws nothing of its own (lib/questionShadow).
   const shadowedByMessage = useMemo(() => registeredStandingAt(messages, thread?.questions ?? []), [messages, thread?.questions])
