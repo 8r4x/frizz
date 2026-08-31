@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { mayHaveLiveBackgroundWork, needsFreshProcessForLimit } from "./context.ts"
+import { mayHaveLiveBackgroundWork, needsFreshProcessForLimit } from "./backend/usage-limit.ts"
 
 const running = { subAgents: [{ state: "running" }], bgShells: [] }
 const finished = { subAgents: [{ state: "rested" }, { state: "stale" }], bgShells: [{ state: "done" }] }

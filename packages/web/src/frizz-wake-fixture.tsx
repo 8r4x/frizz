@@ -1,6 +1,6 @@
 import { createRoot } from "react-dom/client"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { formatGithubWakeSteer, limitResumeSteer, parkExpiredWakeMessage, parkFinishedWakeMessage, prWatchExpiredWakeMessage, prWatchWakeMessage, questionsCancelledWakeMessage, shellDoneMessage, timerPromptMessage } from "@frizz/shared"
+import { formatGithubWakeSteer, limitModelSwitchSteer, limitResumeSteer, parkExpiredWakeMessage, parkFinishedWakeMessage, prWatchExpiredWakeMessage, prWatchWakeMessage, questionsCancelledWakeMessage, shellDoneMessage, timerPromptMessage } from "@frizz/shared"
 import type { ChatMessage } from "./hooks.ts"
 import { Message } from "./components/ChatView.tsx"
 import "./styles.css"
@@ -77,6 +77,10 @@ const messages: ChatMessage[] = [
   // A USAGE WINDOW rolling over. The amber pause card it answers is the notable state and keeps its
   // card; this is one line saying the thread is going again.
   wake("w12", limitResumeSteer("weekly")),
+  // …and the MODEL-SCOPED cap, which is answered the other way: nothing reset, so the line names the
+  // model that ran out AND the one the thread now runs, because that second word is what the composer
+  // selector beside it reads and this hairline is the only place the transcript says why it changed.
+  wake("w12b", limitModelSwitchSteer("Fable 5", "Opus")),
   // THE ONE WAKE THAT KEEPS A BODY — click it. Its text is the worker's own, and a fired one-off's
   // registration is gone the instant it delivers, so this disclosure is the only rendering that text
   // ever gets. Two of them, because the second is the case a bare hairline would have destroyed.

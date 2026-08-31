@@ -115,7 +115,8 @@ import {
   type OwnWatchView,
   humanGapNote,
 } from "@frizz/shared"
-import { mayHaveLiveBackgroundWork, needsFreshProcessForLimit, type AppContext } from "./context.ts"
+import { type AppContext } from "./context.ts"
+import { mayHaveLiveBackgroundWork, needsFreshProcessForLimit } from "./backend/usage-limit.ts"
 import { appServerTurnStalled, resolveLiveWatchTarget, resolveRecurringPrompt } from "./board.ts"
 import { runThreadUpdate } from "./frizz.ts"
 import { repairThreadFile } from "./repair.ts"

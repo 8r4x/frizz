@@ -225,6 +225,61 @@ export function limitResumeNeedsFreshProcess(
   return nowMs < resumesAt
 }
 
+/**
+ * Whether a thread MAY have background work in flight. Unknown counts as YES.
+ *
+ * This feeds needsFreshProcessForLimit, whose whole job is the invariant stated at the restart verb:
+ * frizz "declines to kill a live child when FRIZZ is the one deciding to restart" (an operator asking
+ * outright is a different case and still kills them, deliberately).
+ *
+ * The call sites used to read `(tailer.get(slug)?.subAgents ?? []).some(running)`, which silently
+ * turns "I have no state for this thread" into "this thread has no background work" — the two
+ * readings a safety guard must never confuse. On 2026-08-06 a 566MB transcript could not be primed,
+ * so the tailer had NO state for the busiest thread on the machine, the guard read false, and the
+ * daemon was retired mid-flight — killing seven background sub-agents whose reports were never
+ * delivered. A read failure produced a confident wrong answer that then drove a destructive action.
+ *
+ * So it fails CLOSED. The cost of a false positive is a limit-paused thread that waits for the
+ * operator instead of auto-resuming; the cost of a false negative is the work they already lost.
+ * Background SHELLS count too — they were never checked at all, and a running shell is exactly as
+ * live as a running sub-agent.
+ */
+export function mayHaveLiveBackgroundWork(
+  state:
+    | { subAgents?: { state: string }[]; bgShells?: { state: string }[] }
+    | undefined,
+): boolean {
+  // The distinction that matters is whether the tailer knows this thread AT ALL. A state object that
+  // simply omits one of the arrays is shape variance, not a read failure, so it contributes nothing.
+  if (!state) return true // no state is not evidence of no work
+  return (
+    (state.subAgents ?? []).some((agent) => agent.state === "running") ||
+    (state.bgShells ?? []).some((shell) => shell.state === "running")
+  )
+}
+
+/**
+ * Does a follow-up aimed at this thread have to land in a NEW `claude` process?
+ *
+ * Yes exactly when the thread's tail still carries a usage-limit fault whose reset instant has not
+ * arrived: the running process latched on that 429 and will refuse this message — and every later one
+ * — until then, so delivering into it is a guaranteed no-op (the latch is measured above).
+ * Shared by the scheduler's auto-resume and the followUp RPC behind the card's "Continue now", because
+ * both are the same act: asking a walled-off thread to carry on.
+ *
+ * A thread with LIVE background work is deliberately exempt. A restart kills the in-memory sub-agents,
+ * and frizz's completion invariant says an agent runs to its terminal return; a parent whose child is
+ * still producing is not the wedged case this exists for.
+ */
+export function needsFreshProcessForLimit(
+  fault: LimitFault | undefined,
+  nowMs: number,
+  liveBackgroundWork = false,
+): boolean {
+  if (!fault || liveBackgroundWork) return false
+  return limitResumeNeedsFreshProcess(fault, nowMs)
+}
+
 // One stable key per "wall the provider put this thread behind". Two faults that name the SAME reset
 // instant are the same wall — the second is just the thread bouncing off it again — so anything that
 // must happen once per wall (see the scheduler's early-resume guard) keys on this rather than on

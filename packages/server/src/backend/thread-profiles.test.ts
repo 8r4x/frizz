@@ -1,6 +1,8 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import {
+  claudeFallbackModel,
+  claudeModelFromLimitName,
   normalizeObservedThreadModel,
   resolveRollbackProfile,
   threadProfileOptions,
@@ -59,4 +61,32 @@ test("an observed 1M model collapses to the bare picker alias", () => {
   assert.equal(normalizeObservedThreadModel("claude", "opus[1m]"), "opus")
   // The bare id is unaffected — an account already on 1M reports no suffix at all.
   assert.equal(normalizeObservedThreadModel("claude", "claude-opus-5"), "opus")
+})
+
+// ---- The MODEL-SCOPED-CAP fallback ladder ---------------------------------------------------------
+// Read by the scheduler when the provider says "You've reached your Fable 5 limit. Switch to another
+// model … to continue" — so the two functions below are what turn that sentence into an argv change.
+
+test("the fallback ladder walks the catalogue down and ends at the bottom rung", () => {
+  assert.equal(claudeFallbackModel("fable"), "opus")
+  assert.equal(claudeFallbackModel("opus"), "sonnet")
+  assert.equal(claudeFallbackModel("sonnet"), "haiku")
+  // Haiku has nothing below it, and an unknown model has no place on the ladder at all — both cases
+  // leave the thread waiting for its window rather than being switched to a guess.
+  assert.equal(claudeFallbackModel("haiku"), undefined)
+  assert.equal(claudeFallbackModel("claude-mystery-9"), undefined)
+})
+
+test("a limit message names a model in the PROVIDER's spelling, matched by token prefix", () => {
+  // The verbatim name from the real 2026-08-31 record. The catalogue keys on the bare family, so the
+  // version the message carries has to be tolerated rather than matched literally.
+  assert.equal(claudeModelFromLimitName("Fable 5"), "fable")
+  assert.equal(claudeModelFromLimitName("Opus 4.6"), "opus")
+  assert.equal(claudeModelFromLimitName("Haiku 4.5"), "haiku")
+  assert.equal(claudeModelFromLimitName("sonnet"), "sonnet")
+  // …and it fails closed rather than reaching for the nearest rung: a name the catalogue cannot place
+  // must not be answered with a downgrade to something the operator never chose.
+  assert.equal(claudeModelFromLimitName("Fabulous 5"), undefined)
+  assert.equal(claudeModelFromLimitName(""), undefined)
+  assert.equal(claudeModelFromLimitName("  "), undefined)
 })

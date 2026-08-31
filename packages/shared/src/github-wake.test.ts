@@ -5,12 +5,14 @@ import {
   isGithubWakeBacklog,
   parseGithubWakeSteer,
   parseLimitResumeWake,
+  parseLimitModelSwitchWake,
   parseParkWake,
   parsePrWatchExpiredWake,
   parsePrWatchWake,
   parseShellDoneWake,
   parseTimerWake,
   limitResumeSteer,
+  limitModelSwitchSteer,
   parkExpiredWakeMessage,
   parkFinishedWakeMessage,
   prWatchExpiredWakeMessage,
@@ -355,7 +357,7 @@ test("text that is not a fired timer parses as none", () => {
 // the delivered text alone, so the pair has to live in the one package both sides can reach. The round
 // trip is what makes that move safe to have made.
 test("a usage-limit resume round-trips through its own parser", () => {
-  for (const window of ["weekly", "session", "unknown"] as const) {
+  for (const window of ["weekly", "session", "model", "unknown"] as const) {
     assert.deepEqual(parseLimitResumeWake(limitResumeSteer(window)), { window }, window)
   }
 })
@@ -364,6 +366,20 @@ test("text that is not a usage-limit resume parses as none", () => {
   assert.equal(parseLimitResumeWake(formatGithubWakeSteer(single)), null)
   assert.equal(parseLimitResumeWake("⏳ The weekly usage limit that interrupted you has reset."), null)
   assert.equal(parseLimitResumeWake("⏳ The context window that interrupted you has reset. Continue exactly where you left off."), null)
+})
+
+// ---- parseLimitModelSwitchWake ----
+//
+// The MODEL-SCOPED cap's other answer, and the reason it needs a wake of its own: nothing has reset.
+// The cap is still standing and the thread is running on a different model, so the resume steer above
+// would tell the worker — and the hairline the human reads — something that is simply not true.
+test("a model switch round-trips, naming both models", () => {
+  assert.deepEqual(parseLimitModelSwitchWake(limitModelSwitchSteer("Fable 5", "Opus")), { capped: "Fable 5", to: "Opus" })
+})
+
+test("the two limit wakes never read as each other", () => {
+  assert.equal(parseLimitResumeWake(limitModelSwitchSteer("Fable 5", "Opus")), null)
+  assert.equal(parseLimitModelSwitchWake(limitResumeSteer("model")), null)
 })
 
 // ---- parseParkWake / parsePrWatchExpiredWake ----
@@ -427,7 +443,7 @@ test("parsePrWatchExpiredWake: the lapsed watcher's ref is the whole of what a r
 // formatter, or this fails — which is the point. It is the machine-checked half of the `frizz-wake`
 // fixture's claim to hold "every wake frizz delivers".
 const RECOGNIZERS = [
-  parseShellDoneWake, parseTimerWake, parseLimitResumeWake, parsePrWatchWake, parseGithubWakeSteer,
+  parseShellDoneWake, parseTimerWake, parseLimitResumeWake, parseLimitModelSwitchWake, parsePrWatchWake, parseGithubWakeSteer,
   parseParkWake, parsePrWatchExpiredWake,
 ] as const
 
@@ -437,6 +453,7 @@ test("every wake frizz composes is recognized by a parser — none may reach the
     ["shell failed", shellDoneMessage({ label: "vite --port 5199", status: "failed" })],
     ["timer fired", timerPromptMessage("Re-check the promoted artifact.", "2026-08-24T09:50:00.000Z")],
     ["limit reset", limitResumeSteer("weekly")],
+    ["limit model switch", limitModelSwitchSteer("Fable 5", "Opus")],
     ["pr merged", prWatchWakeMessage({ target: "nubjs/nub#777", merged: true })],
     ["pr checks", prWatchWakeMessage({ target: "nubjs/nub#777", checks: { verdict: "failing", passed: 1, failed: 1, failing: ["typecheck"] } })],
     ["review activity", formatGithubWakeSteer(single)],

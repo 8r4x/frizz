@@ -24,6 +24,36 @@ export const CLAUDE_THREAD_PROFILES: readonly ThreadProfileOption[] = [
   { model: "haiku", label: "Haiku", defaultEffort: "medium", efforts: claudeEffortsFor("haiku") },
 ]
 
+// ---- The MODEL-SCOPED-CAP fallback ladder ---------------------------------------------------------
+// A model-scoped limit ("You've reached your Fable 5 limit. Switch to another model, or manage usage
+// credits…") is the provider saying the ACCOUNT can still work — just not on that model. So the
+// scheduler steps the thread one rung down this list and resumes it, rather than parking it behind a
+// weekly window (see evalLimits). CLAUDE_THREAD_PROFILES is already ordered by capability — it is what
+// the composer renders, top to bottom — so "one rung down" is simply the next entry, and the bottom of
+// the ladder (Haiku) has no fallback and falls back to waiting for the window.
+
+/** The next model down from `model`, or undefined when it is unknown or already the bottom rung. */
+export function claudeFallbackModel(model: string): string | undefined {
+  const index = CLAUDE_THREAD_PROFILES.findIndex((option) => option.model === model)
+  if (index < 0) return undefined
+  return CLAUDE_THREAD_PROFILES[index + 1]?.model
+}
+
+/** The catalogue entry for a model slug — the label a steer names it by. */
+export function claudeProfile(model: string): ThreadProfileOption | undefined {
+  return CLAUDE_THREAD_PROFILES.find((option) => option.model === model)
+}
+
+// The catalogue model a provider LIMIT MESSAGE names. The message writes a display name carrying its
+// version ("Fable 5"); the catalogue keys on the bare family ("fable"). The two spellings are the
+// provider's, not ours, so the match is TOKEN-PREFIX in either direction — the same discipline
+// scopedQuotaWindow uses against the usage endpoint's `weekly-<model>` keys, and for the same reason.
+export function claudeModelFromLimitName(name: string): string | undefined {
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")
+  if (!slug) return undefined
+  return CLAUDE_THREAD_PROFILES.find(({ model }) => slug === model || slug.startsWith(`${model}-`) || model.startsWith(`${slug}-`))?.model
+}
+
 export function threadProfileOptions(backend: unknown): { backend: Backend; options: ThreadProfileOption[] } {
   if (backend === "claude") return { backend, options: CLAUDE_THREAD_PROFILES.map((option) => ({ ...option, efforts: [...option.efforts] })) }
   if (backend === "codex") {

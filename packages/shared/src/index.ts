@@ -1391,6 +1391,28 @@ export function limitResumeSteer(window: LimitWindow): string {
   return `⏳ The ${which} that interrupted you has reset. Continue exactly where you left off.`
 }
 
+/** The message a worker receives when frizz answered a MODEL-SCOPED cap by moving the thread down a rung.
+ *
+ *  The provider's own line says it outright — "Switch to another model … to continue" — so the account
+ *  is not out of capacity, this MODEL is, and waiting out a weekly window is the wrong answer. Frizz
+ *  takes the provider's advice on the thread's behalf and restarts it on the next model down (see
+ *  claudeFallbackModel), which is why this wake says nothing has reset: the cap is still standing.
+ *
+ *  Named at the same altitude as the human's own vocabulary — the models by their catalogue LABELS
+ *  ("Fable", "Opus"), never their argv slugs — because the operator reads this line in the transcript
+ *  and the composer's selector beside it says exactly the same word. */
+export function limitModelSwitchSteer(capped: string, to: string): string {
+  return `⏳ The ${capped} limit that interrupted you is still closed — frizz restarted this thread on ${to}. Continue exactly where you left off.`
+}
+
+const LIMIT_MODEL_SWITCH = /^⏳ The (.+?) limit that interrupted you is still closed — frizz restarted this thread on (.+?)\. Continue exactly where you left off\.$/
+
+/** Which model was capped and which one the thread now runs, or `null` when this is not a switch wake. */
+export function parseLimitModelSwitchWake(text: string): { capped: string; to: string } | null {
+  const m = LIMIT_MODEL_SWITCH.exec(text.trim())
+  return m ? { capped: m[1], to: m[2] } : null
+}
+
 const LIMIT_RESUME = /^⏳ The (weekly usage limit|session usage limit|model usage limit|usage limit) that interrupted you has reset\. Continue exactly where you left off\.$/
 
 /** Which window reset, or `null` when this is not a limit-resume wake. The chat draws one hairline from

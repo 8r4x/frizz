@@ -1,13 +1,14 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { createHash, randomUUID } from "node:crypto"
-import { PARK_CORRECTION_NAMES_LEAD, PARK_CORRECTION_QUESTION_LEAD, PARK_CORRECTION_RETIRED_LEAD, parkExpiredWakeMessage, parkFinishedWakeMessage, prWatchExpiredWakeMessage, ownWatchExpiredWakeMessage, questionAnswerMessage, questionsCancelledWakeMessage, type QuestionAnswer, type QuestionDismissal, RETIRED_AWAITING_REPLACEMENT, retiredAwaitingKindsIn, compactionPromptMessage, limitResumeSteer, formatGithubWakeSteer, type GithubWatchStatus, prWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, liveOpsLines, wakeDeliveryToken, wakeTimeHeader, type QuotaSnapshot } from "@frizz/shared"
+import { PARK_CORRECTION_NAMES_LEAD, PARK_CORRECTION_QUESTION_LEAD, PARK_CORRECTION_RETIRED_LEAD, parkExpiredWakeMessage, parkFinishedWakeMessage, prWatchExpiredWakeMessage, ownWatchExpiredWakeMessage, questionAnswerMessage, questionsCancelledWakeMessage, type QuestionAnswer, type QuestionDismissal, RETIRED_AWAITING_REPLACEMENT, retiredAwaitingKindsIn, compactionPromptMessage, limitResumeSteer, limitModelSwitchSteer, formatGithubWakeSteer, type GithubWatchStatus, prWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, liveOpsLines, wakeDeliveryToken, wakeTimeHeader, type QuotaSnapshot } from "@frizz/shared"
 import { GITHUB_STATUS_SETTING, parkExpiresAt, parkIsHonoured, readAwaitingPark, unaccountedItems, type LiveActivity } from "./awaiting.ts"
 import type { SessionRow, Storage, ThreadQuestionRow } from "./storage.ts"
 import type { Tailer } from "./tailer.ts"
 import type { SessionTelemetry } from "./tailer.ts"
 import type { LimitFault } from "./backend/types.ts"
-import { limitFaultResetKey, limitPauseIsStale, quotaWindowKeyFor, quotaWindowRecovered, scopedQuotaWindow, scopedQuotaWindowRecovered, textResetInstant } from "./backend/usage-limit.ts"
+import { limitFaultResetKey, limitPauseIsStale, mayHaveLiveBackgroundWork, quotaWindowKeyFor, quotaWindowRecovered, scopedQuotaWindow, scopedQuotaWindowRecovered, textResetInstant } from "./backend/usage-limit.ts"
+import { claudeFallbackModel, claudeModelFromLimitName, claudeProfile, normalizeObservedThreadModel } from "./backend/thread-profiles.ts"
 import { createWakeDeliveryStore, type WakeDelivery } from "./wake-store.ts"
 // The board owns the registered-done lifetime rule, and the waker must read it by exactly the same rule
 // or the two disagree about whether a thread is finished.
@@ -1433,6 +1434,57 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     return nowMs >= faultAtMs + LIMIT_RESUME_GRACE_MS
   }
 
+  // ---- The MODEL-SCOPED cap: step down a rung instead of waiting out the week ----------------------
+  //
+  // A model-scoped limit is NOT the account running dry, and the provider's own message says so —
+  // "You've reached your Fable 5 limit. Switch to another model, or manage usage credits … to
+  // continue." Parking the thread behind that cap's `weekly-<model>` window costs up to seven days of
+  // capacity the account still has, so frizz takes the provider's advice on the thread's behalf:
+  // persist the next model down as the thread's profile and resume it now. The resume is a COLD one
+  // (the fault has no resolvable clock, so needsFreshProcessForLimit is true), and a cold resume forks
+  // `claude` with `row.model` — which is what carries the new model into argv, and the reason this
+  // cannot be done by steering the live process: the SDK takes the model at query start.
+  //
+  // IT TERMINATES BY CONSTRUCTION, which is what makes it safe to fire without the once-per-wall guard
+  // the headroom trigger needs. Every step names a DIFFERENT model, so a thread that re-caps on the
+  // rung below writes a fault naming THAT model and steps down again — Fable → Opus → Sonnet → Haiku,
+  // where the ladder ends and it waits out the window like any other limit. A step that fails to take
+  // effect cannot loop either: the persisted model no longer matches the fault's, so the
+  // same-model guard below declines and the thread falls back to waiting.
+  function modelFallbackFor(c: LimitCandidate): { model: string; effort: string; label: string; capped: string } | undefined {
+    if (c.backend !== "claude" || c.fault.window !== "model" || !c.fault.model) return undefined
+    const row = deps.storage.getSession(c.slug)
+    // Broker rows only. The cold fork is the thing that applies a new model, and only the broker
+    // transport has one; a legacy row would be downgraded on paper and resumed on the old model.
+    if (!row || row.claude_runtime !== "broker") return undefined
+    // Restarting is how the switch happens at all, so a thread frizz may not restart cannot be
+    // switched — the same fail-closed reading, on the same predicate, as the resume's own freshProcess
+    // decision. Such a thread keeps the ordinary wait-for-the-window behaviour.
+    const tele = deps.tailer.get(c.slug)
+    if (mayHaveLiveBackgroundWork(tele)) return undefined
+    const capped = claudeModelFromLimitName(c.fault.model)
+    if (!capped) return undefined
+    // The cap must be on the model THIS thread is running. Another thread — or a sub-agent dispatched
+    // onto a model of its own — can exhaust one this thread never touched, and stepping an Opus thread
+    // down to Sonnet because Fable ran dry is a downgrade that buys nothing. Read the value the resume
+    // will actually spawn with (the persisted target), falling back to the observed model only where
+    // the row never recorded one.
+    const current = row.model?.trim() || (tele?.model ? normalizeObservedThreadModel("claude", tele.model) : undefined)
+    if (!current || current !== capped) return undefined
+    const next = claudeFallbackModel(capped)
+    const option = next ? claudeProfile(next) : undefined
+    if (!next || !option) return undefined // bottom rung: nothing left to fall to
+    // Carry the thread's own effort across when the target offers it (ultracode rides only the
+    // xhigh-capable models), else that model's default — the pair a fresh dispatch of it would use.
+    const effort = row.effort?.trim()
+    return {
+      model: next,
+      effort: effort && option.efforts.includes(effort) ? effort : option.defaultEffort,
+      label: option.label,
+      capped: c.fault.model,
+    }
+  }
+
   async function evalLimits(nowMs: number): Promise<void> {
     const candidates = limitCandidates(nowMs)
     if (candidates.length === 0) return
@@ -1452,15 +1504,23 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       const fenceId = limitFenceId(c.fault)
       const deliveryId = wakeDeliveryId(c.slug, c.sessionId, fenceId)
       if (outbox.get(deliveryId)) continue // this interruption already has its one wake
-      if (limitRecovered(c, quota, nowMs) !== true) continue
+      // A model-scoped cap the thread can simply step down from needs no recovery at all — the account
+      // is not out of capacity, this model is. Everything else waits for its window.
+      const fallback = modelFallbackFor(c)
+      if (!fallback && limitRecovered(c, quota, nowMs) !== true) continue
+      // Persist the new pair BEFORE the wake is enqueued: the delivery forks `claude` from this row, so
+      // a wake that raced ahead of the write would restart the thread on the model that just capped.
+      if (fallback) deps.storage.setProfile(c.slug, fallback.model, fallback.effort)
       const item = outbox.enqueue({
         id: deliveryId,
         slug: c.slug,
         sessionId: c.sessionId,
         fenceId,
-        hintKey: `${LIMIT_HINT_PREFIX}${c.fault.window}`,
-        message: limitResumeSteer(c.fault.window),
-        reason: `${c.fault.window} usage limit reset (interrupted ${c.fault.at})`,
+        hintKey: fallback ? `${LIMIT_HINT_PREFIX}model-switch` : `${LIMIT_HINT_PREFIX}${c.fault.window}`,
+        message: fallback ? limitModelSwitchSteer(fallback.capped, fallback.label) : limitResumeSteer(c.fault.window),
+        reason: fallback
+          ? `${fallback.capped} limit — restarting on ${fallback.label} (interrupted ${c.fault.at})`
+          : `${c.fault.window} usage limit reset (interrupted ${c.fault.at})`,
       }, nowMs).delivery
       log(`waker: queued ${c.slug} — ${item.reason}`)
       checkpoint("after-enqueue", item)

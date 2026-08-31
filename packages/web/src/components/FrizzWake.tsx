@@ -30,7 +30,7 @@
 // accent ref, the corner glyph) with no hierarchy between them.
 import { useId, useState } from "react"
 import { AlarmClock, Bell, Github, Hourglass, MessageCircleOff, TerminalSquare } from "lucide-react"
-import { isGithubWakeBacklog, parseGithubWakeSteer, parseLimitResumeWake, parseParkWake, parsePrWatchExpiredWake, parsePrWatchWake, parseQuestionsCancelledWake, parseShellDoneWake, parseTimerWake, type GithubWakeSteer, type LimitWindow, type ParkWake, type PrWatchWake, type ShellDoneWake, type TimerWake } from "@frizz/shared"
+import { isGithubWakeBacklog, parseGithubWakeSteer, parseLimitModelSwitchWake, parseLimitResumeWake, parseParkWake, parsePrWatchExpiredWake, parsePrWatchWake, parseQuestionsCancelledWake, parseShellDoneWake, parseTimerWake, type GithubWakeSteer, type LimitWindow, type ParkWake, type PrWatchWake, type ShellDoneWake, type TimerWake } from "@frizz/shared"
 import { CARD_BODY, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
 import { VSpace } from "./rhythm.tsx"
 import { WakeDivider } from "./WakeDivider.tsx"
@@ -71,6 +71,8 @@ export function FrizzWake({ steer: served, text, sourceId, at, wrap }: { steer?:
   if (timer) return <TimerDivider wake={timer} sourceId={sourceId} />
   const limit = parseLimitResumeWake(text)
   if (limit) return <LimitResumeDivider window={limit.window} sourceId={sourceId} at={at} />
+  const switched = parseLimitModelSwitchWake(text)
+  if (switched) return <LimitModelSwitchDivider capped={switched.capped} to={switched.to} sourceId={sourceId} at={at} />
   const park = parseParkWake(text)
   if (park) return <ParkDivider wake={park} sourceId={sourceId} at={at} />
   const lapsed = parsePrWatchExpiredWake(text)
@@ -286,6 +288,24 @@ function LimitResumeDivider({ window, sourceId, at }: { window: LimitWindow; sou
   const label = `${which} reset — resuming`
   return (
     <WakeDivider icon={Hourglass} sourceId={sourceId} marker="limit-resume" ariaLabel={label} at={at}>
+      <span className="min-w-0 truncate">{label}</span>
+    </WakeDivider>
+  )
+}
+
+// The MODEL-SCOPED cap's other answer, and the reason it cannot borrow the hairline above: nothing
+// reset. The cap is still standing and frizz moved the thread onto the next model down instead, so the
+// line names BOTH models — the second one is what the composer's selector now reads, and this is the
+// only place the transcript says why it changed.
+//
+// TERSER THAN THE STEER IT IS DRAWN FROM, and the narrow width is why. "Fable 5 limit reached —
+// restarted on Opus" truncates at 420px to "…RESTARTED ON …", losing the destination — the one word
+// the line exists to carry. This wording is shorter than the resume hairline beside it, so it survives
+// intact at every width the drawer renders at.
+function LimitModelSwitchDivider({ capped, to, sourceId, at }: { capped: string; to: string; sourceId?: string; at?: string }) {
+  const label = `${capped} limit — switched to ${to}`
+  return (
+    <WakeDivider icon={Hourglass} sourceId={sourceId} marker="limit-model-switch" ariaLabel={label} at={at}>
       <span className="min-w-0 truncate">{label}</span>
     </WakeDivider>
   )

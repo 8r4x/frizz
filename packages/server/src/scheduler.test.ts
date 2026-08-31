@@ -1531,6 +1531,110 @@ test("limit: a MODEL-scoped pause resolves against the endpoint's scoped weekly 
   h.storage.close()
 })
 
+// ---- The MODEL-SCOPED cap's OTHER answer: step down a rung rather than wait out the week ----------
+// Every case below runs with NO usage endpoint at all, which is the point: a thread that can simply
+// change models needs no recovery signal, so none of these may depend on a quota read.
+
+function cappedRow(h: Harness, slug: string, over: Partial<SessionRow>): void {
+  h.storage.upsertSession(row(slug, over))
+  h.storage.setClaudeRuntime(slug, "broker")
+}
+
+test("limit: a MODEL-scoped cap steps the thread down a rung and restarts it immediately", async () => {
+  const h = limitHarness()
+  const faultAt = "2026-08-31T17:31:18.427Z"
+  h.clock.ms = Date.parse(faultAt) + 1000
+  cappedRow(h, "m", { model: "fable", effort: "high" })
+  h.tele.set("m", limitTele({ window: "model", at: faultAt, model: "Fable 5" }))
+  const s = h.make()
+  await s.tick()
+  assert.deepEqual(h.resumes.map((r) => r.slug), ["m"], "the account still has capacity — only Fable ran out")
+  assert.match(h.resumes[0].message, /The Fable 5 limit that interrupted you is still closed — frizz restarted this thread on Opus\. Continue/)
+  const after = h.storage.getSession("m")
+  assert.equal(after?.model, "opus", "the cold resume forks from the row, so the new model has to be persisted")
+  assert.equal(after?.effort, "high", "the thread's own effort rides across when the target offers it")
+  h.storage.close()
+})
+
+test("limit: the fallback ladder ENDS — a capped bottom rung waits for its window like any other limit", async () => {
+  const h = limitHarness()
+  const faultAt = "2026-08-31T17:31:18.427Z"
+  h.clock.ms = Date.parse(faultAt) + 1000
+  cappedRow(h, "m", { model: "haiku", effort: "medium" })
+  h.tele.set("m", limitTele({ window: "model", at: faultAt, model: "Haiku 4.5" }))
+  const s = h.make()
+  await s.tick()
+  h.clock.ms += 2 * 60 * 60_000
+  await s.tick()
+  assert.deepEqual(h.resumes, [], "nothing left to fall to")
+  assert.equal(h.storage.getSession("m")?.model, "haiku")
+  h.storage.close()
+})
+
+test("limit: a cap on a model this thread is NOT running leaves its profile alone", async () => {
+  // A sibling thread — or a sub-agent dispatched onto a model of its own — can exhaust a model this
+  // thread never touched. Stepping it down would be a downgrade that buys nothing.
+  const h = limitHarness()
+  const faultAt = "2026-08-31T17:31:18.427Z"
+  h.clock.ms = Date.parse(faultAt) + 1000
+  cappedRow(h, "m", { model: "opus", effort: "medium" })
+  h.tele.set("m", limitTele({ window: "model", at: faultAt, model: "Fable 5" }))
+  const s = h.make()
+  await s.tick()
+  h.clock.ms += 2 * 60 * 60_000
+  await s.tick()
+  assert.deepEqual(h.resumes, [])
+  assert.equal(h.storage.getSession("m")?.model, "opus")
+  h.storage.close()
+})
+
+test("limit: a thread with LIVE background work is never restarted onto another model", async () => {
+  // The switch only takes effect through a cold fork, and frizz does not kill a live child to restart
+  // a thread on its own initiative. Same fail-closed predicate the resume's freshProcess decision uses.
+  const h = limitHarness()
+  const faultAt = "2026-08-31T17:31:18.427Z"
+  h.clock.ms = Date.parse(faultAt) + 1000
+  cappedRow(h, "m", { model: "fable", effort: "high" })
+  const tele = limitTele({ window: "model", at: faultAt, model: "Fable 5" })
+  h.tele.set("m", { ...tele, subAgents: [{ id: "a1", state: "running" } as never] })
+  const s = h.make()
+  await s.tick()
+  assert.deepEqual(h.resumes, [])
+  assert.equal(h.storage.getSession("m")?.model, "fable")
+  h.storage.close()
+})
+
+test("limit: capping the rung below steps down AGAIN, and the walk is what makes it terminate", async () => {
+  const h = limitHarness()
+  const first = "2026-08-31T17:31:18.427Z"
+  h.clock.ms = Date.parse(first) + 1000
+  cappedRow(h, "m", { model: "fable", effort: "medium" })
+  h.tele.set("m", limitTele({ window: "model", at: first, model: "Fable 5" }))
+  const s = h.make()
+  await s.tick()
+  assert.equal(h.storage.getSession("m")?.model, "opus")
+
+  // The resumed thread caps again on the rung below: a NEW fault, naming a DIFFERENT model, so it is a
+  // new interruption rather than the same wall bounced off twice.
+  const second = "2026-08-31T18:02:00.000Z"
+  h.clock.ms = Date.parse(second) + 1000
+  h.tele.set("m", limitTele({ window: "model", at: second, model: "Opus 5" }))
+  await s.tick()
+  assert.equal(h.storage.getSession("m")?.model, "sonnet")
+  assert.deepEqual(h.resumes.map((r) => r.slug), ["m", "m"])
+  assert.match(h.resumes[1].message, /The Opus 5 limit .* frizz restarted this thread on Sonnet\./)
+
+  // …and a fault that names a model the thread is no longer on (the switch never took) cannot walk it
+  // any further: the guard declines and the thread falls back to waiting.
+  const stale = "2026-08-31T18:30:00.000Z"
+  h.clock.ms = Date.parse(stale) + 1000
+  h.tele.set("m", limitTele({ window: "model", at: stale, model: "Fable 5" }))
+  await s.tick()
+  assert.equal(h.storage.getSession("m")?.model, "sonnet")
+  assert.equal(h.resumes.length, 2)
+  h.storage.close()
+})
+
 test("limit: a MODEL-scoped pause with NO scoped window on the snapshot holds rather than guessing", async () => {
   // An account whose endpoint reports only 5h + weekly (no scoped entry): both triggers are
   // indeterminate for a model fault, and indeterminate must never resolve to "go".
