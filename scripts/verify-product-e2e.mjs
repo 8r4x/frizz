@@ -86,7 +86,10 @@ try {
   const token = execFileSync("gh", ["auth", "token"], { encoding: "utf8" }).trim();
   if (!token) throw new Error("no GitHub token — run `gh auth login`");
 
-  const owned = join(homedir(), ".frizz", "identity.key");
+  // The key that owns NAME. Defaults to this machine's own identity; FRIZZ_PRODUCT_IDENTITY points at
+  // a different key file when the run exercises a name claimed by a throwaway identity instead — an
+  // anonymous name above all, whose whole point is that no account of ours is anywhere near it.
+  const owned = process.env.FRIZZ_PRODUCT_IDENTITY ?? join(homedir(), ".frizz", "identity.key");
   if (existsSync(owned)) {
     mkdirSync(join(home, ".frizz"), { recursive: true });
     copyFileSync(owned, join(home, ".frizz", "identity.key"));
