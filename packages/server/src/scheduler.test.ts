@@ -1494,6 +1494,66 @@ test("limit: a WEEKLY pause waits for the usage endpoint, and never guesses from
   h.storage.close()
 })
 
+test("limit: a MODEL-scoped pause resolves against the endpoint's scoped weekly window", async () => {
+  // The real 2026-08-31 incident shape: "You've reached your Fable 5 limit…" carries no clock and no
+  // named window; its live percent and reset instant exist only on the endpoint's `weekly-fable`
+  // scoped entry (note the spelling gap — message "Fable 5", key "weekly-fable").
+  const h = limitHarness()
+  const day = 24 * 3_600_000
+  const faultAt = "2026-08-31T17:31:18.427Z"
+  const faultMs = Date.parse(faultAt)
+  h.clock.ms = faultMs + 1000
+  h.storage.upsertSession(row("m"))
+  h.tele.set("m", limitTele({ window: "model", at: faultAt, model: "Fable 5" }))
+
+  // Scoped window still near-full inside the same week: no wake in either trigger.
+  let scoped = { key: "weekly-fable", label: "Fable wk", usedPercent: 100, resetsAt: (faultMs + 3 * day) / 1000 }
+  const s = h.make({ readQuota: async () => ({
+    claude: { status: "ok" as const, windows: [
+      { key: "5h", label: "5h", usedPercent: 12, resetsAt: (h.clock.ms + 3_600_000) / 1000 },
+      { key: "weekly", label: "Weekly", usedPercent: 57, resetsAt: (faultMs + 3 * day) / 1000 },
+      scoped,
+    ] },
+    codex: { status: "unavailable" as const, windows: [] },
+  }) })
+  await s.tick()
+  h.clock.ms = faultMs + 60 * 60_000
+  await s.tick()
+  assert.equal(h.resumes.length, 0, "a near-full scoped window inside its own week must hold the fleet")
+
+  // The cap FREES (credits bought, cap raised — observed live: 62% within the hour): the headroom
+  // trigger reads the SCOPED window's percent, not the global weekly's, and fires once.
+  scoped.usedPercent = 62
+  h.clock.ms = faultMs + 90 * 60_000
+  await s.tick()
+  assert.deepEqual(h.resumes.map((r) => r.slug), ["m"])
+  assert.match(h.resumes[0].message, /model usage limit that interrupted you has reset/)
+  h.storage.close()
+})
+
+test("limit: a MODEL-scoped pause with NO scoped window on the snapshot holds rather than guessing", async () => {
+  // An account whose endpoint reports only 5h + weekly (no scoped entry): both triggers are
+  // indeterminate for a model fault, and indeterminate must never resolve to "go".
+  const h = limitHarness()
+  const faultAt = "2026-08-31T17:31:18.427Z"
+  const faultMs = Date.parse(faultAt)
+  h.clock.ms = faultMs + 1000
+  h.storage.upsertSession(row("m"))
+  h.tele.set("m", limitTele({ window: "model", at: faultAt, model: "Fable 5" }))
+  const s = h.make({ readQuota: async () => ({
+    claude: { status: "ok" as const, windows: [
+      { key: "5h", label: "5h", usedPercent: 12, resetsAt: (faultMs + 3_600_000) / 1000 },
+      { key: "weekly", label: "Weekly", usedPercent: 20, resetsAt: (faultMs + 3 * 24 * 3_600_000) / 1000 },
+    ] },
+    codex: { status: "unavailable" as const, windows: [] },
+  }) })
+  await s.tick()
+  h.clock.ms = faultMs + 2 * 60 * 60_000
+  await s.tick()
+  assert.deepEqual(h.resumes, [], "no scoped window → indeterminate, and the global weekly's headroom must not stand in")
+  h.storage.close()
+})
+
 test("limit: an unreadable usage endpoint holds the wake rather than guessing", async () => {
   const h = limitHarness()
   const faultAt = "2026-06-24T23:27:13.000Z"

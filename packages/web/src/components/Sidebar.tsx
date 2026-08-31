@@ -808,7 +808,12 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
     // rail and the card can never tell two stories about one thread.
     const p = t.limitPause
     const which = p?.window === "weekly" ? "weekly limit" : p?.window === "session" ? "session limit" : "usage limit"
-    const resume = p?.resumesAt ? `continuing automatically at ${limitResumeClock(p.resumesAt)}` : "continuing automatically once the window resets"
+    // The auto-resume promise is the server's word (resolveLimitPause keeps it truthful — an unknown
+    // window has no wake), so the tip splits on it: a promised wake names its clock, an unpromised one
+    // says plainly that Retry is the way back.
+    const resume = p?.autoResume
+      ? p.resumesAt ? `continuing automatically at ${limitResumeClock(p.resumesAt)}` : "continuing automatically once the window resets"
+      : "won't resume by itself — Retry to continue"
     return {
       node: <StatusBox accent><Hourglass size={9} className="text-accent" /></StatusBox>,
       tip: `Paused by the ${p?.backend === "codex" ? "Codex" : "Claude"} ${which} — ${resume}`,

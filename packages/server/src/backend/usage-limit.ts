@@ -31,6 +31,10 @@ export interface LimitClassification {
   // Wall-clock reset as the provider stated it, kept structured (hour/minute/tz) rather than as raw
   // provider text — the same discipline authFault follows: only typed data leaves the fold.
   resetClock?: { hour: number; minute: number; timeZone: string }
+  // The provider's model name for a MODEL-scoped cap ("Fable 5" from "You've reached your Fable 5
+  // limit"). Only typed data leaves the fold; the scheduler resolves it against the usage endpoint's
+  // scoped weekly windows (scopedQuotaWindow below).
+  model?: string
 }
 
 // The shape the fold hands us: only the fields this classifier reads, `unknown`-tolerant so a schema
@@ -52,7 +56,24 @@ const RESET_RE = /\bresets?\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(?:\(([^)]+)\)
 function windowFromText(text: string): LimitWindow {
   if (/\bweekly\s+limit\b/i.test(text) || /\bweek\b/i.test(text)) return "weekly"
   if (/\bsession\s+limit\b/i.test(text) || /\b5[- ]?hour\b/i.test(text)) return "session"
+  if (modelFromText(text) !== undefined) return "model"
   return "unknown"
+}
+
+// The MODEL-SCOPED cap, verbatim shape from a real transcript (CLI 2.1.251, 2026-08-31, `error:
+// "rate_limit"` + 429 riding the same synthetic channel):
+//
+//   "You've reached your Fable 5 limit. Switch to another model, or manage usage credits at
+//    claude.ai/settings/usage?from=cc_cli_limit_message, to continue."
+//
+// The captured name ("Fable 5") is the only text-derivable fact; the window's live percent and reset
+// instant come off the usage endpoint's matching `weekly-<model>` scoped entry. Checked AFTER the
+// session/weekly phrasings above, so "reached your weekly limit" can never be mis-read as a model name.
+function modelFromText(text: string): string | undefined {
+  const m = /\breached your\s+(.+?)\s+(?:usage\s+)?limit\b/i.exec(text)
+  const name = m?.[1]?.trim()
+  if (!name || /^(?:session|weekly|usage|5[- ]?hour)$/i.test(name)) return undefined
+  return name
 }
 
 // Parse the wall-clock reset out of the limit text. Returns undefined when the message carries no
@@ -94,7 +115,9 @@ export function classifyLimitRecord(rec: LimitRecordLike, text: string | undefin
   if (rec.error !== "rate_limit") return undefined
   const body = text ?? ""
   const resetClock = parseLimitResetClock(body)
-  return { window: windowFromText(body), ...(resetClock ? { resetClock } : {}) }
+  const window = windowFromText(body)
+  const model = window === "model" ? modelFromText(body) : undefined
+  return { window, ...(resetClock ? { resetClock } : {}), ...(model ? { model } : {}) }
 }
 
 // ---- Wall-clock → instant, in an arbitrary IANA zone ----------------------------------------------
@@ -229,10 +252,12 @@ function faultResetInstant(fault: Pick<LimitFault, "window" | "at" | "resetClock
 // reasonable in the code. (Caught by the weekly scheduler test, which fired zero wakes.)
 export const LIMIT_RESUME_GRACE_AFTER_RESET_MS = 36 * 60 * 60_000
 
-// The longest a window can stay closed after cutting a thread off, per window kind.
+// The longest a window can stay closed after cutting a thread off, per window kind. A model-scoped
+// cap is a weekly window on the endpoint (`weekly-<model>`), so it shares the weekly budget.
 const MAX_CLOSED_MS: Record<LimitWindow, number> = {
   session: 5 * 60 * 60_000,
   weekly: 7 * 24 * 60 * 60_000,
+  model: 7 * 24 * 60 * 60_000,
   unknown: 5 * 60 * 60_000,
 }
 
@@ -252,9 +277,10 @@ const WINDOW_SPAN_MS: Record<string, number> = {
 }
 
 // One quota window as the snapshot reports it (structurally what `QuotaWindow` gives us).
-interface QuotaWindowLike {
+export interface QuotaWindowLike {
   key: string
   resetsAt?: number // unix seconds
+  usedPercent?: number // 0..100 — read by the scheduler's headroom trigger on a scoped window
 }
 
 // Has the window that cut this thread off ROLLED since it did?
@@ -288,9 +314,54 @@ export function quotaWindowRecovered(
 }
 
 // Map a limit window onto the quota snapshot's window key, so a fault can read its exact reset epoch
-// off the provider's own usage endpoint when the text can't supply one.
+// off the provider's own usage endpoint when the text can't supply one. A MODEL-scoped fault has no
+// static key — its window is found by name (scopedQuotaWindow).
 export function quotaWindowKeyFor(window: LimitWindow): string | undefined {
   if (window === "session") return "5h"
   if (window === "weekly") return "weekly"
   return undefined
+}
+
+// Resolve a MODEL-scoped fault to its usage-endpoint window. The endpoint keys a scoped weekly as
+// `weekly-<slug of the model's display_name>` (claude-quota.ts windowFromLimit); the fault carries the
+// LIMIT MESSAGE's name for the same model — and the two spellings differ on the real account
+// (message: "Fable 5" → `fable-5`; endpoint display_name: "Fable" → key `weekly-fable`). So the match
+// is token-prefix in either direction, never equality. Falls back to the SINGLE scoped weekly when
+// exactly one exists (an account is only ever capped per-model on the model tier it actually has);
+// with several scoped windows and no name match, undefined — indeterminate, never a guess.
+export function scopedQuotaWindow(
+  windows: readonly QuotaWindowLike[],
+  model: string | undefined,
+): QuotaWindowLike | undefined {
+  const scoped = windows.filter((w) => w.key.startsWith("weekly-"))
+  if (scoped.length === 0) return undefined
+  const slug = model ? model.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") : ""
+  if (slug) {
+    const hit = scoped.find((w) => {
+      const suffix = w.key.slice("weekly-".length)
+      return slug === suffix || slug.startsWith(`${suffix}-`) || suffix.startsWith(`${slug}-`)
+    })
+    if (hit) return hit
+  }
+  return scoped.length === 1 ? scoped[0] : undefined
+}
+
+// The identity-roll test for a MODEL-scoped fault — the same threshold-free window-identity logic as
+// quotaWindowRecovered, against the scoped weekly window (span: 7 days) instead of a static key.
+// Returns undefined when the endpoint can't answer (no scoped window, no reset instant) — wait, don't
+// guess. The scoped window's HEADROOM is deliberately not read here; that is the scheduler's separate
+// early-resume trigger, with its own floor and once-per-wall guard.
+export function scopedQuotaWindowRecovered(
+  windows: readonly QuotaWindowLike[],
+  model: string | undefined,
+  faultAtMs: number,
+  nowMs: number,
+): boolean | undefined {
+  const w = scopedQuotaWindow(windows, model)
+  if (!w || typeof w.resetsAt !== "number" || !Number.isFinite(w.resetsAt)) return undefined
+  const span = WINDOW_SPAN_MS.weekly
+  const resetsAtMs = w.resetsAt * 1000
+  if (resetsAtMs <= nowMs) return true
+  if (!Number.isFinite(faultAtMs)) return undefined
+  return resetsAtMs - span > faultAtMs
 }

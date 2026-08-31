@@ -467,8 +467,10 @@ export function isSnoozed(t: ThreadView, nowMs = Date.now()): boolean {
   // worker left at its LAST rest, so letting `declaredWait` below claim the row would park a killed
   // thread on a stale story. The server already queues it (needsYou, next line), but the mark and the
   // band must not hinge on that flag arriving: a limit-killed thread is never Snoozed unless the
-  // OPERATOR snoozed it (userSnooze above, which wins by design).
-  if (t.limitPause?.autoResume && t.foreign !== true) return false
+  // OPERATOR snoozed it (userSnooze above, which wins by design). PRESENCE, not `autoResume`: a fault
+  // frizz cannot promise to resume (an unknown phrasing, an aged-out pause) is MORE the human's
+  // problem, not less.
+  if (t.limitPause && t.foreign !== true) return false
   // Without an explicit user snooze, higher-priority attention states render ?, !, or a native
   // prompt—not a wait glyph—so a stale awaiting fence cannot demote them out of Queue.
   if (t.needsYou || t.pendingAsk || t.runtime === "perm-prompt") return false
@@ -652,16 +654,16 @@ export function sessionIndicatorKind(t: ThreadView): SessionIndicatorKind {
   if ((t.questions?.length ?? 0) > 0) return "needs-input"
 
   if (isSnoozed(t)) return "snoozed"
-  // KILLED BY A USAGE LIMIT, auto-resume promised. Its own attention mark — the yellow hourglass —
-  // because it is BOTH things at once: dead like a stall (hence yellow, and the same one-click Retry),
-  // and parked on a wake frizz itself delivers (hence the hourglass, not the [!]). It wore the muted
-  // Snoozed hourglass until 2026-08-31 (maintainer: killed threads "showed up and fucking snoozed …
-  // they're not showing up as yellow in the sidebar"). Below isSnoozed so the operator's own wall-clock
-  // snooze still parks the row; above the done fence and the background dot, both of which would be a
-  // STALE story from before the kill (the fault postdates any fence, and nothing of the thread's is
-  // coming back until the window resets). A STALE pause (autoResume false) deliberately skips this: no
-  // promise is left, so it falls through to canRetry below and wears the honest [!].
-  if (t.limitPause?.autoResume && t.foreign !== true) return "limit"
+  // KILLED BY A USAGE LIMIT. Its own attention mark — the yellow hourglass — because it is BOTH things
+  // at once: dead like a stall (hence yellow, and the same one-click Retry), and a wait on provider
+  // capacity rather than a crash (hence the hourglass, not the [!]). It wore the muted Snoozed
+  // hourglass until 2026-08-31 (maintainer: killed threads "showed up and fucking snoozed … they're
+  // not showing up as yellow in the sidebar"). Below isSnoozed so the operator's own wall-clock snooze
+  // still parks the row; above the done fence and the background dot, both of which would be a STALE
+  // story from before the kill (the fault postdates any fence, and nothing of the thread's is coming
+  // back until the window resets). PRESENCE, not `autoResume`: a pause frizz will not resume by itself
+  // (an unknown phrasing, an aged-out fault) is still a limit kill, and the tip says which story holds.
+  if (t.limitPause && t.foreign !== true) return "limit"
   if (t.lastFence?.kind === "done" && atRest(t)) return "done"
   // Below the two DECLARED states on purpose. A worker that fenced ```done while a server it never
   // killed keeps running is a one-click dismissal, not live work (FRIZZ.md: "name it in the body and
@@ -704,8 +706,9 @@ export function sessionIndicatorKind(t: ThreadView): SessionIndicatorKind {
 //     door from the rail (maintainer 2026-07-23: limit-killed rows want the same one-click retry as
 //     stalled rows). This is why offersRetry is NOT simply `kind === "stalled"`. The invariant the
 //     maintainer reads the rail by (2026-08-31): EVERY YELLOW ROW carries the hover Retry.
-// A non-auto-resume limit pause never takes the "limit" kind: no promise is left, so if its process
-// exited it is already "stalled" above and carries Retry that way.
+// The "limit" kind keys on the fault's PRESENCE, so a pause frizz will not resume by itself (an
+// unknown phrasing, an aged-out fault) still wears the yellow hourglass and this same Retry — for
+// that row the Retry is not a shortcut but the only way back.
 //
 // The drawer used to be deliberately broader — raw `canRetry` (ANY exited owned session) — on the
 // theory that the full view should show every recovery option. That was wrong twice over, and it is

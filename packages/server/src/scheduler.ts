@@ -7,7 +7,7 @@ import type { SessionRow, Storage, ThreadQuestionRow } from "./storage.ts"
 import type { Tailer } from "./tailer.ts"
 import type { SessionTelemetry } from "./tailer.ts"
 import type { LimitFault } from "./backend/types.ts"
-import { limitFaultResetKey, limitPauseIsStale, quotaWindowKeyFor, quotaWindowRecovered, textResetInstant } from "./backend/usage-limit.ts"
+import { limitFaultResetKey, limitPauseIsStale, quotaWindowKeyFor, quotaWindowRecovered, scopedQuotaWindow, scopedQuotaWindowRecovered, textResetInstant } from "./backend/usage-limit.ts"
 import { createWakeDeliveryStore, type WakeDelivery } from "./wake-store.ts"
 // The board owns the registered-done lifetime rule, and the waker must read it by exactly the same rule
 // or the two disagree about whether a thread is finished.
@@ -1399,7 +1399,15 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     // jitter near 100% can't resume the fleet straight back into the wall).
     if (provider?.status === "ok" && Number.isFinite(faultAtMs) && nowMs - faultAtMs >= LIMIT_HEADROOM_MIN_FAULT_AGE_MS) {
       const key = quotaWindowKeyFor(c.fault.window)
-      const w = key ? provider.windows.find((x) => x.key === key) : undefined
+      // A MODEL-scoped fault has no static key: its window is the endpoint's `weekly-<model>` scoped
+      // entry, found by name. This trigger is the one that actually revives a model-capped fleet —
+      // buying credits or a raised cap frees the scoped window's percent long before its weekly roll
+      // (observed live 2026-08-31: the killed fleet's `weekly-fable` read 62% within the hour).
+      const w = key
+        ? provider.windows.find((x) => x.key === key)
+        : c.fault.window === "model"
+          ? scopedQuotaWindow(provider.windows, c.fault.model)
+          : undefined
       const wall = limitFaultResetKey(c.fault)
       // One early resume per wall. A second fault naming the same reset instant is this thread bouncing
       // off the same wall, not a new interruption, so it gets no second attempt — it waits for trigger
@@ -1416,7 +1424,11 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       : undefined
     if (textAt !== undefined) return nowMs >= textAt + LIMIT_RESUME_GRACE_MS
     if (!provider || provider.status !== "ok") return undefined
-    const rolled = quotaWindowRecovered(provider.windows, c.fault.window, faultAtMs, nowMs)
+    // A model-scoped fault rolls with its `weekly-<model>` scoped window — same identity-roll logic,
+    // resolved by name instead of a static key.
+    const rolled = c.fault.window === "model"
+      ? scopedQuotaWindowRecovered(provider.windows, c.fault.model, faultAtMs, nowMs)
+      : quotaWindowRecovered(provider.windows, c.fault.window, faultAtMs, nowMs)
     if (rolled !== true) return rolled
     return nowMs >= faultAtMs + LIMIT_RESUME_GRACE_MS
   }

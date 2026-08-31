@@ -7,6 +7,8 @@ import {
   parseLimitResetClock,
   quotaWindowRecovered,
   resolveResetInstant,
+  scopedQuotaWindow,
+  scopedQuotaWindowRecovered,
   textResetInstant,
 } from "./usage-limit.ts"
 
@@ -53,6 +55,60 @@ test("classify: a NON-synthetic record can never be a limit, whatever it says", 
 test("classify: a rate_limit with unrecognized phrasing stays 'unknown' rather than guessing a window", () => {
   const got = classifyLimitRecord({ isApiErrorMessage: true, error: "rate_limit" }, "Rate limited, try later")
   assert.deepEqual(got, { window: "unknown" })
+})
+
+test("classify: the real MODEL-scoped record (CLI 2.1.251) → model window carrying the model's name", () => {
+  // Verbatim from a real 2026-08-31 transcript (a fleet of these killed the operator's zod workers):
+  // `error:"rate_limit"` + 429 on the same synthetic channel, no reset clock anywhere in the text.
+  const got = classifyLimitRecord(
+    { isApiErrorMessage: true, error: "rate_limit", apiErrorStatus: 429 },
+    "You've reached your Fable 5 limit. Switch to another model, or manage usage credits at claude.ai/settings/usage?from=cc_cli_limit_message, to continue.",
+  )
+  assert.deepEqual(got, { window: "model", model: "Fable 5" })
+})
+
+test("classify: 'reached your' with a session/weekly/usage name is NOT a model window", () => {
+  const at = (text: string) => classifyLimitRecord({ isApiErrorMessage: true, error: "rate_limit" }, text)
+  // The named-window phrasings keep their own kinds even in the newer "reached your" wording…
+  assert.equal(at("You've reached your weekly limit · resets 4pm (America/Los_Angeles)")?.window, "weekly")
+  assert.equal(at("You've reached your session limit · resets 5:50pm (America/Los_Angeles)")?.window, "session")
+  // …and a bare "usage limit" names no model, so it must stay unknown rather than minting one.
+  assert.deepEqual(at("You've reached your usage limit."), { window: "unknown" })
+})
+
+// ---- scoped-window resolution ---------------------------------------------------------------------
+
+test("scopedQuotaWindow: the message's model name finds the endpoint's scoped weekly, spellings apart", () => {
+  // Real account shapes, 2026-08-31: message "Fable 5" → slug fable-5; endpoint display_name "Fable"
+  // → key weekly-fable. Token-prefix in either direction is the match, never equality.
+  const windows = [
+    { key: "5h", resetsAt: 1_788_213_600 },
+    { key: "weekly", resetsAt: 1_788_476_400 },
+    { key: "weekly-fable", resetsAt: 1_788_476_400, usedPercent: 62 },
+  ]
+  assert.equal(scopedQuotaWindow(windows, "Fable 5")?.key, "weekly-fable")
+  assert.equal(scopedQuotaWindow(windows, "Fable")?.key, "weekly-fable")
+  // The reverse spelling gap: a scoped key MORE specific than the message's name still matches.
+  assert.equal(scopedQuotaWindow([{ key: "weekly-fable-5" }], "Fable")?.key, "weekly-fable-5")
+  // An unrelated name with several scoped windows on the account: indeterminate, never a guess.
+  assert.equal(scopedQuotaWindow([{ key: "weekly-fable" }, { key: "weekly-opus" }], "Sonnet 5"), undefined)
+  // …but a lone scoped window IS the account's model cap, whatever the message called it.
+  assert.equal(scopedQuotaWindow([{ key: "weekly", resetsAt: 1 }, { key: "weekly-fable" }], "Sonnet 5")?.key, "weekly-fable")
+  assert.equal(scopedQuotaWindow([{ key: "5h" }, { key: "weekly" }], "Fable 5"), undefined)
+})
+
+test("scopedQuotaWindowRecovered: window identity, same as the static-key weekly logic", () => {
+  const faultAt = Date.parse("2026-08-31T17:31:18.427Z")
+  const day = 24 * 3_600_000
+  const win = (resetsAtMs: number) => [{ key: "weekly-fable", resetsAt: resetsAtMs / 1000 }]
+  // Reset 3 days out → the window began 4 days BEFORE the fault: same window, not recovered.
+  assert.equal(scopedQuotaWindowRecovered(win(faultAt + 3 * day), "Fable 5", faultAt, faultAt + day), false)
+  // The week rolls: the reported window now begins after the fault.
+  assert.equal(scopedQuotaWindowRecovered(win(faultAt + 7 * day + 3_600_000), "Fable 5", faultAt, faultAt + 7 * day), true)
+  // A reset instant already past means the window ended and nothing restarted it.
+  assert.equal(scopedQuotaWindowRecovered(win(faultAt + day), "Fable 5", faultAt, faultAt + 2 * day), true)
+  // No scoped window on the snapshot → indeterminate, wait rather than guess.
+  assert.equal(scopedQuotaWindowRecovered([{ key: "weekly", resetsAt: 1 }], "Fable 5", faultAt, faultAt + day), undefined)
 })
 
 // ---- reset-clock parsing --------------------------------------------------------------------------

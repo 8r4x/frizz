@@ -1387,18 +1387,18 @@ export function parseTimerWake(text: string): TimerWake | null {
  *  the useful thing to add is only WHY it stopped and that it should pick the work back up rather than
  *  re-plan or re-report. */
 export function limitResumeSteer(window: LimitWindow): string {
-  const which = window === "weekly" ? "weekly usage limit" : window === "session" ? "session usage limit" : "usage limit"
+  const which = window === "weekly" ? "weekly usage limit" : window === "session" ? "session usage limit" : window === "model" ? "model usage limit" : "usage limit"
   return `⏳ The ${which} that interrupted you has reset. Continue exactly where you left off.`
 }
 
-const LIMIT_RESUME = /^⏳ The (weekly usage limit|session usage limit|usage limit) that interrupted you has reset\. Continue exactly where you left off\.$/
+const LIMIT_RESUME = /^⏳ The (weekly usage limit|session usage limit|model usage limit|usage limit) that interrupted you has reset\. Continue exactly where you left off\.$/
 
 /** Which window reset, or `null` when this is not a limit-resume wake. The chat draws one hairline from
  *  it; the amber pause card already standing above it carries the weight of the interruption itself. */
 export function parseLimitResumeWake(text: string): { window: LimitWindow } | null {
   const m = LIMIT_RESUME.exec(text.trim())
   if (!m) return null
-  return { window: m[1] === "weekly usage limit" ? "weekly" : m[1] === "session usage limit" ? "session" : "unknown" }
+  return { window: m[1] === "weekly usage limit" ? "weekly" : m[1] === "session usage limit" ? "session" : m[1] === "model usage limit" ? "model" : "unknown" }
 }
 
 // ---- THE PARK-INTEGRITY WAKES (scheduler SOURCE 12) ------------------------------------------------
@@ -2072,9 +2072,11 @@ export type ThreadFence = z.infer<typeof ThreadFence>
 
 // ---- Subscription usage-limit pause (auto-resume) ------------------------------------------------
 // Which metered subscription window the provider says is exhausted. "session" is the 5-hour rolling
-// window (Claude's "You've hit your session limit"); "weekly" is the 7-day window; "unknown" is a
-// limit stop whose phrasing we could not attribute — never auto-resumed on a text-derived clock.
-export const LimitWindow = z.enum(["session", "weekly", "unknown"])
+// window (Claude's "You've hit your session limit"); "weekly" is the 7-day window; "model" is a
+// MODEL-SCOPED weekly cap ("You've reached your Fable 5 limit. Switch to another model…", CLI
+// ≥2.1.251 — the usage endpoint reports it as a `weekly-<model>` scoped window); "unknown" is a limit
+// stop whose phrasing we could not attribute — never auto-resumed on a text-derived clock.
+export const LimitWindow = z.enum(["session", "weekly", "model", "unknown"])
 export type LimitWindow = z.infer<typeof LimitWindow>
 
 // A thread whose turn was cut off mid-work by an exhausted subscription window, plus what frizz will

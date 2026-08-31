@@ -4,7 +4,7 @@ import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, w
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { questionAnswerMessage, type InteractionRequest } from "@frizz/shared"
-import { answersInFlight, appServerTurnStalled, createBoard, deriveAwaitingBackground, deriveNeedsYou, degradeIfAwaitingAnswer, degradeIfNoTranscript, fenceWatchViews, hasDeclaredWait, hasParkedTimerWatch, hasRegisteredBackgroundPark, registeredDoneFence, resolveSessionPermission, resolveSessionProfile, resolveSessionTitle, type RegisteredWatch } from "./board.ts"
+import { answersInFlight, appServerTurnStalled, createBoard, deriveAwaitingBackground, deriveNeedsYou, degradeIfAwaitingAnswer, degradeIfNoTranscript, fenceWatchViews, hasDeclaredWait, hasParkedTimerWatch, hasRegisteredBackgroundPark, registeredDoneFence, resolveLimitPause, resolveSessionPermission, resolveSessionProfile, resolveSessionTitle, type RegisteredWatch } from "./board.ts"
 import { Bus } from "./bus.ts"
 import { createStorage, type ThreadQuestionRow } from "./storage.ts"
 import type { Project } from "./project.ts"
@@ -1890,6 +1890,21 @@ test("deriveNeedsYou: a limit fault outranks the stale park the worker declared 
 
 test("deriveNeedsYou: the operator's own snooze still parks a limit-killed thread", () => {
   assert.equal(deriveNeedsYou(row({ snoozed_until: new Date(NOW + 60 * 60_000).toISOString() }), tele({ turn: "idle" }), "turn-idle", false, NOW, LIMIT_PAUSE), false)
+})
+
+test("resolveLimitPause: the auto-resume promise matches the waker's actual reach", () => {
+  const at = new Date(NOW - 60_000).toISOString()
+  const pause = (window: "session" | "weekly" | "model" | "unknown") =>
+    resolveLimitPause(row(), tele({ limitFault: { window, at } }), NOW)
+  // session/weekly/model each have at least one live trigger (text clock, static quota key, scoped
+  // quota window), so the promise stands while the fault is fresh…
+  assert.equal(pause("session")?.autoResume, true)
+  assert.equal(pause("weekly")?.autoResume, true)
+  assert.equal(pause("model")?.autoResume, true)
+  // …but an UNKNOWN window has none — limitRecovered stays indeterminate forever — so promising
+  // "Continuing automatically" was false advertising (2026-08-31: a fleet killed by an unrecognized
+  // phrasing sat behind exactly that card).
+  assert.equal(pause("unknown")?.autoResume, false)
 })
 
 test("deriveAwaitingBackground: a limit fault silences the declared-wait card — the limit card is the story", () => {

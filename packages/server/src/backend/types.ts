@@ -8,6 +8,10 @@ export interface LimitFault {
   window: LimitWindow
   at: string // ISO8601 of the limit record — when the agent got cut off
   resetClock?: { hour: number; minute: number; timeZone: string }
+  // For a MODEL-scoped cap ("You've reached your Fable 5 limit"): the model name as the provider wrote
+  // it. The scheduler matches it against the usage endpoint's `weekly-<model>` scoped window, which is
+  // where this cap's live percent and reset instant actually live (the text itself carries neither).
+  model?: string
 }
 
 // ---- The agent-backend abstraction (Codex-support epic, Phase 1) ----

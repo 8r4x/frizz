@@ -1183,7 +1183,12 @@ export function resolveLimitPause(
     window: fault.window,
     at: fault.at,
     ...(resumesAtMs !== undefined ? { resumesAt: Math.round(resumesAtMs / 1000) } : {}),
-    autoResume: !stale,
+    // The promise must match the waker's actual reach. An "unknown" window has NO live trigger — no
+    // text clock (textResetInstant is session-only) and no usage-endpoint key (quotaWindowKeyFor) —
+    // so limitRecovered stays indeterminate forever and "Continuing automatically" would be false
+    // advertising (it WAS, until 2026-08-31: a fleet killed by an unrecognized limit phrasing sat
+    // behind that promise for 40+ minutes). session/weekly/model each have at least one trigger.
+    autoResume: !stale && fault.window !== "unknown",
   }
 }
 

@@ -340,9 +340,9 @@ const RETRY_CONTRACT: { name: string; over: Partial<ThreadView>; kind: string; r
   { name: "killed by a limit, needsYou not yet set — still the limit mark", over: { runtime: "exited", limitPause: { backend: "claude", window: "session", at: "2026-07-23T00:00:00.000Z", autoResume: true } }, kind: "limit", retry: true },
   // The OPERATOR's own snooze outranks the kill: they parked it, so it parks (and Retry stands down).
   { name: "limit-killed but user-snoozed — the human's park wins", over: { runtime: "exited", snoozedUntil: "2999-01-01T00:00:00.000Z", limitPause: { backend: "claude", window: "session", at: "2026-07-23T00:00:00.000Z", autoResume: true } }, kind: "snoozed", retry: false },
-  // A limit pause frizz will NOT auto-resume never takes the limit mark — no promise is left, and with
-  // its process exited it is a plain stall, already carrying Retry via the stalled branch.
-  { name: "limit pause without auto-resume — plain stall, not a limit mark", over: { needsYou: true, runtime: "exited", limitPause: { backend: "claude", window: "session", at: "2026-07-23T00:00:00.000Z", autoResume: false } }, kind: "stalled", retry: true },
+  // A limit pause frizz will NOT auto-resume (an unknown phrasing, an aged-out fault) is STILL a limit
+  // kill: same yellow hourglass, same Retry — there the Retry is the only way back, not a shortcut.
+  { name: "limit pause without auto-resume — still the limit mark, retry is the way back", over: { needsYou: true, runtime: "exited", limitPause: { backend: "claude", window: "unknown", at: "2026-07-23T00:00:00.000Z", autoResume: false } }, kind: "limit", retry: true },
   // A FOREIGN read-only session is nothing frizz can restart, so it takes neither yellow mark.
   { name: "foreign killed on a limit — read-only, no retry", over: { foreign: true, runtime: "exited", limitPause: { backend: "claude", window: "session", at: "2026-07-23T00:00:00.000Z", autoResume: true } }, kind: "rest", retry: false },
 ]

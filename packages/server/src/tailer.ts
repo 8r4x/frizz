@@ -1727,7 +1727,7 @@ export function applyRecord(state: TailState, rec: Record): void {
     if (rec.isApiErrorMessage === true) {
       const limit = classifyLimitRecord(rec, raw)
       if (limit && typeof rec.timestamp === "string") {
-        state.limitFault = { window: limit.window, at: rec.timestamp, resetClock: limit.resetClock }
+        state.limitFault = { window: limit.window, at: rec.timestamp, resetClock: limit.resetClock, model: limit.model }
       }
     } else if (raw !== undefined) {
       state.limitFault = undefined
