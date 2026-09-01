@@ -7,7 +7,7 @@ import { TooltipProvider } from "./components/Tooltip.tsx"
 import { store } from "./store.ts"
 import "./styles.css"
 
-// Browser QA for the QUEUED TAIL. Two things live here:
+// Browser QA for the QUEUED TAIL. Three things live here:
 //  · SPACING — successive queued (optimistic) user bubbles must carry the same STEP rhythm as any other
 //    pair of messages.
 //  · THE PUSH-NOW CONTROL — the ↑ that appears left of a queued bubble on hover and preempts the turn
@@ -15,6 +15,11 @@ import "./styles.css"
 //    "running"` on a claude thread plus queued bubbles. `deliveryId`s are set so the bubbles are also
 //    UNQUEUEABLE, which is the real-app shape and the only way to see that the hover lift still fires
 //    from the group rather than the bubble.
+//  · THE HOVER READING under a queued bubble (`MessageStamp`, host `bubble`). Every message carries an
+//    `at` for it — without one the reading renders nothing, which is why this fixture watched the queued
+//    row for a month and never saw its reading land ON the bubble's bottom edge (2026-08-31). The row
+//    is built by ChatView's own QUEUED branch, so what is photographed here is the shipped call site,
+//    not a rebuilt copy of it.
 // Both surfaces that render the queued tail are mounted — the drawer (ThreadView/ChatView) and the
 // queue card (TodosView) — because the pinned queued group is built separately in each.
 
@@ -22,6 +27,10 @@ const SLUG = "queued-spacing"
 const PARAMS = new URLSearchParams(location.search)
 const QUEUED = PARAMS.get("queued") !== "0"
 const INTERLEAVE = PARAMS.get("interleave") === "1"
+// The app picks its prose face in `index.html` before first paint, and a fixture that leaves it unset
+// renders the MONO default — so a reading fitted here would only ever be right in one of the two faces
+// this app ships. `?font=sans` (the default here, matching the maintainer's own window) / `?font=mono`.
+document.documentElement.dataset.font = PARAMS.get("font") === "mono" ? "mono" : "sans"
 
 const thread = {
   id: SLUG,
@@ -58,24 +67,25 @@ const thread = {
 store.board = { projectDir: "/fixture/frizz", threads: [thread] } as BoardSnapshot
 
 const messages: TranscriptMessage[] = [
-  { sourceId: "u1", role: "user", text: "Look at the queued-message spacing.", tools: [], parts: [] },
+  { sourceId: "u1", role: "user", text: "Look at the queued-message spacing.", tools: [], parts: [], at: "2026-07-18T17:15:00.000Z" },
   {
     sourceId: "a1",
     role: "assistant",
     text: "On it — reproducing the queued tail now.",
     tools: [],
     parts: [{ kind: "text", text: "On it — reproducing the queued tail now." }],
+    at: "2026-07-18T17:16:00.000Z",
   },
   // The queued TAIL: three successive optimistic sends, the case in the report. ?queued=0 drops it
   // entirely — the no-regression control for the always-rendered queued GROUP wrapper, which must add
   // no height and no stray gap when nothing is queued.
   ...(QUEUED
     ? ([
-        { sourceId: "q1", role: "user", text: "and  what's the fic", tools: [], parts: [], queued: true, deliveryId: "d-q1" },
+        { sourceId: "q1", role: "user", text: "and  what's the fic", tools: [], parts: [], queued: true, deliveryId: "d-q1", at: "2026-07-18T17:17:00.000Z" },
         // A message that RENDERS NOTHING between two queued sends: the queued pass skips it, so the old
         // "previous array element is queued" margin test failed and the two bubbles butted together.
         ...(INTERLEAVE ? [{ sourceId: "ev1", role: "assistant", kind: "event", text: "", tools: [], parts: [] }] : []),
-        { sourceId: "q2", role: "user", text: "fix", tools: [], parts: [], queued: true, deliveryId: "d-q2" },
+        { sourceId: "q2", role: "user", text: "I want to see both.", tools: [], parts: [], queued: true, deliveryId: "d-q2", at: "2026-07-18T17:18:00.000Z" },
         {
           sourceId: "q3",
           role: "user",
@@ -84,6 +94,7 @@ const messages: TranscriptMessage[] = [
           parts: [],
           queued: true,
           deliveryId: "d-q3",
+          at: "2026-07-18T17:19:00.000Z",
         },
       ] as unknown as TranscriptMessage[])
     : []),
@@ -120,7 +131,12 @@ function Fixture() {
     return (
       <div className="relative h-screen bg-bg text-fg text-sm">
         <div className="mx-auto flex h-screen w-[760px] max-w-full flex-col border-x border-border">
-          <ThreadView slug={SLUG} />
+          {/* `virtualized`, as BOTH production callers mount it (StandaloneThreadPage, the drawer).
+              Without it this fixture rendered ChatView's eager fallback — a branch whose own comment
+              says no production surface reaches it, and which wraps no message in `MessageRow` at all.
+              So the queued rows here carried no hover reading to photograph, and the offset that was
+              wrong on the shipped path could not be seen from this fixture (2026-08-31). */}
+          <ThreadView slug={SLUG} virtualized />
         </div>
       </div>
     )

@@ -57,10 +57,16 @@ import { messageStamp } from "../lib/activityTime.ts"
  * What the reading hangs below. `prose` is agent text, whose ink ends inside its line box; `bubble` is
  * the user's off-white bubble, whose BOX ends exactly where the row ends. The offset below is a
  * measurement against the host's ink edge, and the two hosts do not share one.
+ *
+ * REQUIRED, with no default — the 7px between the two is the difference between air and a collision,
+ * and a default cannot be right for both. It was optional (defaulting to `prose`) for one day, and in
+ * that day the transcript's QUEUED row shipped without it: a bubble wearing the prose offset, whose
+ * cap tops landed on the device row directly under the bubble's bottom edge. A missing host is now a
+ * type error at the call site instead of a silent 7px.
  */
 export type StampHost = "prose" | "bubble"
 
-export function MessageStamp({ at, host = "prose" }: { at: string | undefined; host?: StampHost }) {
+export function MessageStamp({ at, host }: { at: string | undefined; host: StampHost }) {
   const stamp = messageStamp(at)
   if (!stamp || !at) return null
   return (
@@ -101,7 +107,7 @@ export function MessageStamp({ at, host = "prose" }: { at: string | undefined; h
   )
 }
 
-export function MessageRow({ at, host, gap, children }: { at: string | undefined; host?: StampHost; gap: number; children: ReactNode }) {
+export function MessageRow({ at, host, gap, children }: { at: string | undefined; host: StampHost; gap: number; children: ReactNode }) {
   return (
     // A NAMED group (`group/ts`), not a bare one: the transcript nests plenty of its own `group`
     // hovers (the retractable bubble's unqueue control, the clickable dividers), and an unnamed group

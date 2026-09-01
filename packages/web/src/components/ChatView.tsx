@@ -1308,7 +1308,14 @@ function VirtualizedThreadTranscript({
               // The QUEUED branch. Its rows are built straight from `messages`, never through the
               // tool-activity coalescer, so no run can have walked `at` forward and the message's own
               // instant is the only reading there is.
-              <MessageRow at={row.message.at} gap={row.gap}>
+              //
+              // `host="bubble"` unconditionally: a queued row is an optimistic send the human has not
+              // taken back yet, so it is ALWAYS their own bubble — the branch above has to test the
+              // role because it renders agent prose too. This host went unstated until 2026-08-31, so
+              // the reading fell back to the PROSE offset and its cap tops landed on the device row
+              // directly under the bubble's bottom edge — zero clearance against a hard filled edge,
+              // measured off the maintainer's own screenshot.
+              <MessageRow at={row.message.at} host="bubble" gap={row.gap}>
                 <Message m={row.message} paired={paired[row.messageIndex]} />
               </MessageRow>
             )}
