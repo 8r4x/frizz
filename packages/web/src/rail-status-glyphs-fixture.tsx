@@ -61,7 +61,11 @@ const STATES: { kind: string; t: ThreadView }[] = [
   // family as the [!] beside it, same hourglass ink as the muted snoozed mark two over.
   { kind: "limit", t: { ...base, id: "limit", runtime: "exited", needsYou: true, sessionId: "s", limitPause: { backend: "claude", window: "session", at: "2026-08-01T00:00:00.000Z", autoResume: true } } as unknown as ThreadView },
   { kind: "done", t: { ...base, id: "done", runtime: "turn-idle", needsYou: true, lastFence: { kind: "done", body: "shipped", hints: [] } } as unknown as ThreadView },
-  { kind: "snoozed", t: { ...base, id: "snoozed", runtime: "turn-idle", needsYou: false, lastFence: { kind: "awaiting", body: "", hints: [{ kind: "shell", value: "maintainer must approve" }] } } as unknown as ThreadView },
+  // A TIMER park, deliberately: this slot measures the Snoozed band's GLYPH, and since 2026-08-31 a park
+  // on a shell or a sub-agent draws the blue dot instead (Sidebar.tsx shellDot — one mark for "a shell is
+  // alive behind this", whichever band the row sits in). A `shell` hint here would therefore render a
+  // second copy of the `background` dot two entries up and leave the park glyph unmeasured.
+  { kind: "snoozed", t: { ...base, id: "snoozed", runtime: "turn-idle", needsYou: false, lastFence: { kind: "awaiting", body: "", hints: [{ kind: "timer", value: "tmr_a1b2c3d4e5f6" }] } } as unknown as ThreadView },
   { kind: "archived", t: { ...base, id: "archived", state: "archived", runtime: "exited", needsYou: false } as unknown as ThreadView },
 ]
 

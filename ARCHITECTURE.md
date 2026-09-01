@@ -287,8 +287,9 @@ plugin directory. The published package does this for you.
   Rows order by most-recent USER interaction (`orderByInteraction` — agent churn never
   reorders), except the Rested band, which uses the EXACT queue comparator (`orderQueue`) so the rail
   and the cards read in one order.
-  Titles WRAP, never truncate. ONE derived indicator per row (spinner running, blue ● needs-action,
-  clock/dashed-circle machine-waits, faint · idle); a petite-caps PLAN tag marks a doc with a
+  Titles WRAP, never truncate. ONE derived indicator per row (spinner running, blue ● a live background
+  shell — in Active AND in its snoozed twin, since 2026-08-31; clock/GitHub/hourglass parks, "?"
+  needs-action, "!" stalled, faint · idle); a petite-caps PLAN tag marks a doc with a
   `## Plan` section (derived `hasPlan`). ENTIRELY MOUSE-DRIVEN — no arrow-walk, no chevron, no focus
   machine (all deleted): a row click opens the thread's drawer (chat; the frizz DOC composite for a
   never-spawned thread — `store.openThread`), and the remaining keyboard is ⌘K/⌘I + Esc

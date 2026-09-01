@@ -727,7 +727,9 @@ export function ThreadIndicator({ t, legacy }: { t: ThreadView; legacy?: boolean
 //                     turn, or a live SUB-AGENT whose return will re-invoke it. Both are real motion.
 //   [•] background  — at rest with only a detached background SHELL still running (never a sub-agent —
 //                     maintainer 2026-08-01). Nothing is coming back, so nothing spins; the pulsing blue
-//                     dot says "alive, not moving". The row holds its place in the running band.
+//                     dot says "alive, not moving". The row holds its place in the running band — and
+//                     keeps this same dot once the human snoozes its card into the Snoozed band, because
+//                     the shell is the fact and the park is only how the row is presented (see shellDot).
 //   [?] needs input — a question / native ask / permission prompt (accent box + "?")
 //   [!] stalled     — the agent's PROCESS EXITED with the work unfinished (accent box + "!"), whether
 //                     it died mid-turn or exited after resting without a done fence. Same mark either
@@ -771,6 +773,31 @@ function stackParked(tip: string | null, parked: string): string {
   return [`${state}\n${parked}`, ...reason].join("\n\n")
 }
 
+// THE ONE MARK FOR "A BACKGROUND SHELL IS ALIVE BEHIND THIS ROW" — the same blue and the same pulse as
+// the transcript's live-shell dot, sized to this box (styles.css .frizz-rail-dot), so both surfaces say
+// it in one language. It is drawn by BOTH background arms below, and that is the whole point: the
+// Active one (`kind === "background"` — resting on a live shell, undimmed) and the parked one (the same
+// thread after the human snoozed its resting card) are ONE fact about the process, and a park does not
+// change it. The parked arm wore lucide's CircleDashed until 2026-08-31, which said only "waiting on
+// something" — a generic mark for the one state the rail already had a specific one for (maintainer:
+// "we use blue dots to represent background shells … if we're not using a blue dot for a thread that's
+// awaiting a background shell, then what do we use it for?"). What separates the two is the BAND, which
+// dims a snoozed row, and the tooltip, which names the park; the mark itself stays the shell's.
+//
+// THE DOT MUST NEVER CLAIM LIFE THAT IS NOT THERE (see restingOnLiveBackgroundWork's long note in
+// groups.ts, where a green PR wearing this dot was the bug). It cannot here: every arm that draws it is
+// already gated on the server's own `awaitingBackground` verdict — an honoured park, checked against
+// telemetry the browser cannot see — so by the time either arm runs, the work behind it is live. That
+// same gate is why the `agent` hint rides along on the shell's blue rather than the accent-yellow a
+// sub-agent pulses elsewhere: a LIVE sub-agent makes isSnoozed false outright (hasLiveSubAgents), so
+// the arm is reachable only on a park the server honoured for something else in the same fence.
+//
+// AND IT KEEPS ITS PULSE IN THE SNOOZED BAND. The band's own dim (opacity-65 on the row) is what says
+// "parked" — the same ruling .frizz-rail-dot already states for its own animation, that only TONE may
+// move because the geometry is what identifies the mark. A static twin would be a second mark to keep
+// in sync for a distinction the band already draws, and the shell really is still running.
+const shellDot = <StatusBox><span aria-hidden className="frizz-rail-dot" data-running-indicator="thread-background" /></StatusBox>
+
 function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: string | null } {
   const kind = sessionIndicatorKind(t)
   if (kind === "archived") return { node: <StatusBox><Check size={10} strokeWidth={3} className="text-muted/75" /></StatusBox>, tip: "Done" }
@@ -781,15 +808,14 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
   }
   if (kind === "working") return { node: <BoxSpinner />, tip: "Working" }
   // The thread has stopped and nothing is going to wake it — only a detached shell it launched is still
-  // running — so the box stops tracing and the row simply stays alive in the running band. Same blue and
-  // same pulse as the transcript's live-shell dot, sized to this box (styles.css .frizz-rail-dot), so
-  // both surfaces say "a shell is alive behind this" in one language.
+  // running — so the box stops tracing and the row simply stays alive in the running band. The mark is
+  // `shellDot`, shared with the parked arm below; see its note for why one dot serves both.
   if (kind === "background") {
     // The fence, when there is one, names the shell itself (and any PR riding beside it), so the lead
     // drops to a bare "At rest" rather than saying "a background shell" twice in one sentence.
     const fenced = t.lastFence?.kind === "awaiting" && awaitingWaitClause(t.lastFence.hints) !== null
     return {
-      node: <StatusBox><span aria-hidden className="frizz-rail-dot" data-running-indicator="thread-background" /></StatusBox>,
+      node: shellDot,
       tip: popover(t, fenced ? "At rest" : "At rest — a background shell is still running"),
     }
   }
@@ -864,11 +890,11 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
     // the moment the thread next comes to rest, which is when the work it hid has reported back — so
     // the state reads the way the card's own toast did when it was clicked. A fence, when there is
     // one, still supplies the clause and the glyph below; a shell-only rest has no fence, and its snooze
-    // wears the shell's dashed circle rather than the hourglass, because nothing here is on a clock.
+    // wears the shell's blue dot rather than the hourglass, because nothing here is on a clock.
     const eventSnoozed = t.bgSnoozed === true ? "Snoozed until the background work returns" : null
     // Canonical blocked+timer status can arrive from an older/pre-session snapshot without a fence.
     if (t.lastFence?.kind !== "awaiting") {
-      if (eventSnoozed) return { node: <StatusBox><CircleDashed size={10} className="text-muted/70" /></StatusBox>, tip: eventSnoozed }
+      if (eventSnoozed) return { node: shellDot, tip: eventSnoozed }
       const timed = typeof t.revalidate === "string" ? formatAutoSnoozedUntil(t.revalidate) : null
       return { node: hourglass, tip: timed ?? "Auto-snoozed until a scheduled check" }
     }
@@ -886,7 +912,7 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
     const mark = hk === "pr"
       ? github
       : hk === "shell" || hk === "agent"
-        ? <StatusBox><CircleDashed size={10} className="text-muted/70" /></StatusBox>
+        ? shellDot
         : <StatusBox><Clock size={9} className="text-muted/70" /></StatusBox>
     return { node: mark, tip: popover(t, eventSnoozed ?? "Snoozed") }
   }

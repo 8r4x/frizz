@@ -45,6 +45,9 @@ function row(extra: Partial<ThreadView>) {
 // marks in the markup — they are otherwise the same 9px glyph in the same status box.
 const GITHUB = /lucide-github/
 const HOURGLASS = /lucide-hourglass/
+// The shell's live-work dot is not a lucide icon — it is a styled span (Sidebar.tsx shellDot), so its
+// class is the handle. Deliberately the same mark the Active band's `background` row wears.
+const SHELL_DOT = /frizz-rail-dot/
 
 const FAR_FUTURE = "2999-01-01T00:00:00.000Z"
 const watch = (value: string) => ({ kind: "pr" as const, value })
@@ -84,15 +87,20 @@ test("a PR fence with a co-declared timer backstop also wears GitHub's mark", ()
 
 // THE HOURGLASS IS NO LONGER THE GENERIC PARK MARK. It stood for every park that was not a watch, back
 // when the fence's kinds were all "somebody will get to it eventually". The 2026-08-15 grammar names
-// LIVE THINGS, so the glyph says which SHAPE is being waited on — a clock for a timer, a dashed circle
-// for the thread's own work — and the hourglass is left to the one park that really is just elapsed
-// time: a user snooze. What they all still share is that none may borrow GitHub's mark, which is the
-// confusion this file exists to prevent.
+// LIVE THINGS, so the glyph says which SHAPE is being waited on — a clock for a timer, the shell's blue
+// dot for the thread's own background work — and the hourglass is left to the one park that really is
+// just elapsed time: a user snooze. What they all still share is that none may borrow GitHub's mark,
+// which is the confusion this file exists to prevent.
+//
+// The shell arm drew lucide's CircleDashed until 2026-08-31, when it became `shellDot` — the SAME mark
+// the undimmed Active row wears while resting on that shell, because the running shell is one fact and
+// the park is only how the row is presented (maintainer: "we use blue dots to represent background
+// shells"). It is a class, not an svg, so it is matched on the class rather than a lucide icon name.
 test("each park wears its own shape, and none of them borrows GitHub's mark", () => {
   const cases = [
     ["a bare user snooze, no fence", { snoozedUntil: FAR_FUTURE }, HOURGLASS],
     ["a snooze over a declared park", { snoozedUntil: FAR_FUTURE, lastFence: { kind: "awaiting", body: "", hints: [{ kind: "shell", value: "bzvtnt3ig" }] } }, HOURGLASS],
-    ["a park on its own background work", { lastFence: { kind: "awaiting", body: "", hints: [{ kind: "shell", value: "bzvtnt3ig" }] } }, /lucide-circle-dashed/],
+    ["a park on its own background work", { lastFence: { kind: "awaiting", body: "", hints: [{ kind: "shell", value: "bzvtnt3ig" }] } }, SHELL_DOT],
     ["a park on a timer", { lastFence: { kind: "awaiting", body: "", hints: [{ kind: "timer", value: "tmr_a1b2c3" }] } }, /lucide-clock/],
   ] as [string, Partial<ThreadView>, RegExp][]
   for (const [name, extra, mark] of cases) {
@@ -136,14 +144,18 @@ test("a PR-watching thread event-snoozed off its resting card wears GitHub's mar
   assert.equal(sessionIndicatorFor({ ...base, id: "watching-thread", ...t } as ThreadView).tip, "Snoozed until the background work returns — waiting on acme/app#391\n\nApproved, CI green.")
 })
 
-test("a shell-only rest event-snoozed off its resting card wears the shell's dashed circle, not the hourglass", () => {
+// The snoozed twin of the Active band's `background` row: same live vite dev server, same blue dot, and
+// the ONLY differences are the dimmed band and a tooltip that names the park. Nothing here is on a
+// clock, so the hourglass would be a lie about the wake, and the dashed circle it drew until 2026-08-31
+// said merely "waiting on something" about the one state the rail already had a specific mark for.
+test("a shell-only rest event-snoozed off its resting card keeps the shell's blue dot, not the hourglass", () => {
   const t = {
     bgSnoozed: true,
     awaitingBackground: true,
     bgShells: [{ label: "vite dev", startedAt: "2026-08-28T00:00:00.000Z", state: "running", id: "s1" }],
   } as Partial<ThreadView>
   const html = row(t)
-  assert.match(html, /lucide-circle-dashed/)
+  assert.match(html, SHELL_DOT)
   assert.doesNotMatch(html, HOURGLASS)
   assert.equal(sessionIndicatorFor({ ...base, id: "watching-thread", ...t } as ThreadView).tip, "Snoozed until the background work returns")
 })
