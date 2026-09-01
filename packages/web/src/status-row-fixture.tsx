@@ -35,7 +35,7 @@ const nowSeconds = Math.floor(Date.now() / 1000)
 
 function windows(fiveHourUsed: number, weeklyUsed: number) {
   return [
-    { key: "5h", label: "5h", usedPercent: fiveHourUsed, resetsAt: nowSeconds + 2 * 3600 },
+    { key: "5h", label: "5hr", usedPercent: fiveHourUsed, resetsAt: nowSeconds + 2 * 3600 },
     { key: "weekly", label: "Weekly", usedPercent: weeklyUsed, resetsAt: nowSeconds + 3 * 86400 },
   ]
 }

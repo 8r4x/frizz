@@ -91,6 +91,18 @@ dispatches a worker", never "frizz dispatches a worker". Lowercase survives only
 identifiers, where it is part of the name: `npx frizz`, `FRIZZ.md`, `.frizz/`, `~/.frizz/`,
 `frizz-<slug>` session names, the `frizz`/`frizz-update` CLIs, and the `frizz:*` skill and sub-agent profile names.
 
+# Durations: ONE grammar, every reading — `40m`, `2hr 35m`
+
+Every duration and relative age the product renders uses one spelling, and it is not negotiable per surface (maintainer 2026-08-31, after finding four of them in one app: *`"40 minutes" -> "40m"` … `2hr 35m` … Use this stylization everywhere. EVERYWHERE*).
+
+**The units are `ms` · `s` · `m` · `hr` · `d` · `w` · `mo` · `y`.** The unit is a SUFFIX glued to the number with no space (`40m`, never `40 min` and never `40 minutes`), and a compound reading joins at most two of them with one space (`2hr 35m`, `3d 4hr`, `12m 05s`). Hours are the one unit that keeps two letters — `hr`, not `h`. Months are `mo`, because a bare `m` is already minutes.
+
+- **The canonical statement, with the reasoning, is the header comment of [`packages/web/src/lib/durationLabels.ts`](packages/web/src/lib/durationLabels.ts)**, and a test in that directory pins it as a SHAPE, so a reading that reverts to `40 min` or `1h 17m` fails rather than shipping. Relative ages share one ladder in [`activityTime.ts`](packages/web/src/lib/activityTime.ts) (`ageLadder`) for the same reason: three copies of it had already drifted, and one carried a `0y ago` bug the other two also had.
+- **It reaches past the browser.** The same grammar spells the cadence in a Goal's trailer, the elapsed in a worker's wake header (`you last spoke 3hr 12m ago`), the quota chips, the `frizz --sessions` CLI, and the board CLI's ETA. A worker reads its own duration readings; two vocabularies teach it there are two.
+- **What is NOT unified is the LADDER** — which units a reading climbs to, and how much precision it keeps. A countdown pads and ticks (`3hr 05m`), the runtime slot drops seconds past a minute, a tool call keeps them, the GitHub cards stop at `2w` and then give a date. Those are per-surface behaviours with their own documented reasons; only the SPELLING is shared.
+- **The `for:` fence vocabulary is exempt, because it is not a reading.** `30s` / `15m` / `2h` / `3d` is a grammar the worker WRITES and Frizz PARSES, defined in the worker contract; the card echoes the worker's own token back. Restyling it would break the parse and the contract at once.
+- **Running prose keeps its words.** "expires in 5 minutes" in a help line is a sentence, not a reading. The grammar governs a duration rendered as a VALUE: a column, a chip, a label, a status tail, a countdown, a tooltip.
+
 # ONE server, EVERY project — never one per repo
 
 Frizz is a SINGLETON. One server on one origin serves every project on the machine, each named by a URL prefix (`/project/<slug>/…`). It ran one server per repo until 2026-08 and the change is recent enough that stale statements survive in comments, docs and muscle memory — `ARCHITECTURE.md` itself still said "One server per repo" in one bullet while explaining the singleton in another, and the README still promised "one server and one tab per repo" (both corrected 2026-08-19).
