@@ -26,6 +26,7 @@ import { randomUUID } from "node:crypto"
 import { fileURLToPath } from "node:url"
 import { createClaudeQueryFactory } from "./claude-agent-sdk.ts"
 import { inheritWorkerEnvironment } from "./worker-env.ts"
+import { claudeCompactionWindowOf } from "./types.ts"
 import { createClaudeBrokerDiagnosticWriter, createClaudeBrokerExitWriter, type ClaudeBrokerExitReason } from "./claude-broker-diagnostics.ts"
 import { CLAUDE_BROKER_CAPABILITY_CANCEL_INPUT, CLAUDE_BROKER_CAPABILITY_LIST_SKILLS, CLAUDE_BROKER_CAPABILITY_RELOAD_PLUGINS, CLAUDE_BROKER_CAPABILITY_RENAME, CLAUDE_BROKER_CAPABILITY_STOP_TASK, CLAUDE_BROKER_CAPABILITY_SUBAGENT_STEER, CLAUDE_INPUT_DROP_DIAGNOSTIC_PREFIX } from "./claude-agent-sdk-protocol.ts"
 import type {
@@ -72,7 +73,21 @@ export interface ClaudeBrokerConfig {
   generation?: string
 }
 
-export interface BrokerRecord { daemonPid: number; socketPath: string; sessionId: string; generation: string; createdAt: string; capabilities?: string[] }
+export interface BrokerRecord {
+  daemonPid: number
+  socketPath: string
+  sessionId: string
+  generation: string
+  createdAt: string
+  capabilities?: string[]
+  /** The auto-compact ceiling this daemon's worker environment actually carries
+   *  (CLAUDE_CODE_AUTO_COMPACT_WINDOW), echoed onto the record because it is a FORK-TIME property: a
+   *  daemon keeps the value it was forked with while Settings moves on underneath it, and after a frizz
+   *  restart the record is the only thing left that remembers which value that was. Read by the bridge
+   *  to give the board a denominator the session genuinely runs under. Absent ⇒ nothing was set, or the
+   *  daemon predates this field. */
+  compactionWindow?: number
+}
 
 // What THIS daemon build understands, stamped into its record so the bridge can tell an old surviving
 // daemon from a current one. The constant itself lives in the PROTOCOL module, not here: this file is
@@ -433,7 +448,7 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
   server.listen(config.socketPath, () => {
     published = true
     if (config.recordPath) {
-      const record: BrokerRecord = { daemonPid: process.pid, socketPath: config.socketPath, sessionId: config.sessionId, generation, createdAt: new Date().toISOString(), capabilities: BROKER_CAPABILITIES }
+      const record: BrokerRecord = { daemonPid: process.pid, socketPath: config.socketPath, sessionId: config.sessionId, generation, createdAt: new Date().toISOString(), capabilities: BROKER_CAPABILITIES, compactionWindow: claudeCompactionWindowOf(config.workerEnv) }
       try { writeFileSync(config.recordPath, JSON.stringify(record), { mode: 0o600 }) } catch {}
     }
     armIdle()

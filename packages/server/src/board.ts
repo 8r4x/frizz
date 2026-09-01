@@ -1487,6 +1487,11 @@ function sessionThreadView(
     // guessed denominator is a fabricated reading, and the client's contract is that absence means no
     // dial rather than an empty one. A Claude row therefore carries no `context` until its first turn
     // has ended; codex carries one from its first token_count.
+    //
+    // The denominator is the window this session RUNS IN, not the model's size: a Claude worker's
+    // auto-compact ceiling has already lowered it upstream (FoldState.contextWindow). Nothing to do
+    // here — noted because "of 1,000,000" on a thread that compacts at 500K is exactly the reading
+    // that made this wrong, and re-deriving the denominator at this layer would bring it back.
     context: tele?.contextTokens !== undefined && tele?.contextWindow !== undefined && tele.contextWindow > 0
       ? { tokens: tele.contextTokens, window: tele.contextWindow }
       : undefined,

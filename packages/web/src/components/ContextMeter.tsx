@@ -13,6 +13,15 @@ import { Tooltip } from "./Tooltip.tsx"
 // its first assistant record, borrowing the window this frizz process last measured for its own model
 // alias until its own turn ends and names one.)
 //
+// THE DENOMINATOR IS THE ROOM THIS THREAD HAS, NOT THE MODEL'S SIZE, and on a Claude thread those are
+// routinely different numbers. Frizz dispatches at the 1M window and then caps the worker at Settings'
+// compaction window (500K by default), and Claude Code's effective window is the `min` of the two — so
+// this dial read "253,862 of 1,000,000 tokens · 25% full" for a session that had used half its room and
+// was heading for a summary (maintainer 2026-09-01: "it's showing this even though the auto-compaction
+// threshold is currently set to 500k"). The lowering happens once, server-side, in
+// ClaudeRuntimeIngest.contextWindow. Do not add a second number here to explain the first: the
+// Settings drawer's "Compaction window" field is where that ceiling is named and changed.
+//
 // SIZE IS INHERITED, NOT SET. The svg is sized in `em` and the arc colors come from `currentColor`, so
 // the footer's own text scale decides how big this is and what tone it takes — exactly the discipline
 // ChildOpRow's duration reading landed on. Do not put a px size on it.

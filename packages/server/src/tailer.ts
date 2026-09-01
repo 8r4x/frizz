@@ -303,7 +303,7 @@ export interface SessionTelemetry extends NormalizedTail {
   // failed to boot). Drives the board's degraded/stalled runtime instead of an eternal "Spinning up…".
   noTranscript?: boolean
   contextTokens?: number // tokens the model's last request carried (see FoldState.contextTokens)
-  contextWindow?: number // the model's context size, provider-reported (see FoldState.contextWindow)
+  contextWindow?: number // the context size this session RUNS IN (see FoldState.contextWindow)
 }
 
 // One tracked live background sub-agent, keyed in TailState by its dispatch tool_use id (the

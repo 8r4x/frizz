@@ -133,7 +133,8 @@ export interface ClaudeRuntimeIngest {
    */
   tasks(sessionId: string): readonly ClaudeRuntimeTask[]
   /**
-   * The context SIZE of the model this session is running. Undefined forever for a pre-broker/foreign
+   * The context window this session actually RUNS IN — the model's size, lowered to the auto-compact
+   * ceiling its daemon was forked with when that is smaller. Undefined forever for a pre-broker/foreign
    * row that has no broker at all. The numerator comes off disk on every assistant record, so this is
    * the half that decides whether a Claude row has a readout — and an undefined here must render
    * nothing, never a fabricated denominator.
@@ -146,8 +147,26 @@ export interface ClaudeRuntimeIngest {
    * session with no reading of its own BORROWS the window this process last saw for its own model
    * alias — see `modelWindows`. Not a hardcoded table and not a guess: it is a number the provider
    * reported, for this alias, on this account, and the session's own `result` overwrites it.
+   *
+   * THE CEILING IS PART OF THE READING, not a second number beside it — see `noteCompactionWindow`.
    */
   contextWindow(sessionId: string): number | undefined
+  /**
+   * The auto-compact ceiling this session's daemon was forked with (CLAUDE_CODE_AUTO_COMPACT_WINDOW,
+   * from Settings.autoCompactWindow). Reported by the bridge at every attach, off the daemon's own
+   * record, so a reattach after a frizz restart re-learns the value that daemon is really running under
+   * rather than whatever the drawer says today.
+   *
+   * WHY IT LOWERS `contextWindow` INSTEAD OF RIDING BESIDE IT. Claude Code's effective window is
+   * literally `Math.min(model window, this)` — its own `/config` help says so ("the actual threshold is
+   * the minimum of this setting and your model's maximum context window"), and the CLI computes exactly
+   * that. So a frizz worker dispatched at `opus[1m]` under the shipped 500K ceiling has 500K of room,
+   * not 1M, and the footer's dial spent its whole life reporting the second number: 253,862 of
+   * 1,000,000 = a comfortable 25%, when the session was in fact half full and half a turn's reading
+   * away from a summary (maintainer 2026-09-01). One number, one meaning — how full the space this
+   * session has is.
+   */
+  noteCompactionWindow(sessionId: string, window: number | undefined): void
   /** Forget a session (replaced or deleted) so a later same-slug dispatch starts clean. */
   release(sessionId: string): void
   /** Resolves once every event handed to `onEvent` so far has been folded. Tests only. */
@@ -211,6 +230,10 @@ export function createClaudeRuntimeIngest(deps: ClaudeRuntimeIngestDeps): Claude
   // Deliberately NOT cleared by `release`: it describes a model, not a session, and forgetting it when
   // one thread ends would put the next dispatch back to a blank readout.
   const modelWindows = new Map<string, number>()
+  // The auto-compact ceiling each session's daemon was forked with, keyed by session id. Set by the
+  // bridge at attach; see `noteCompactionWindow` for why it lowers the window rather than sitting
+  // beside it. Per-SESSION and not per-model: it is a property of one daemon's environment.
+  const compactionWindows = new Map<string, number>()
 
   // Which row of `modelUsage` describes the MAIN thread. The alias `init` named, when the result
   // carries it. Otherwise: a single-row table is unambiguous (no sub-agent billed anything), and a
@@ -369,19 +392,31 @@ export function createClaudeRuntimeIngest(deps: ClaudeRuntimeIngestDeps): Claude
     tasks: (sessionId) => [...(tasks.get(sessionId)?.values() ?? [])],
     contextWindow: (sessionId) => {
       const own = contextWindows.get(sessionId)
-      if (own !== undefined) return own
       const alias = sessionModel.get(sessionId)
-      return alias ? modelWindows.get(alias) : undefined
+      const measured = own ?? (alias ? modelWindows.get(alias) : undefined)
+      if (measured === undefined) return undefined
+      // The ceiling only ever LOWERS the reading, never raises it — the same `min` Claude Code itself
+      // applies, so a ceiling above the model's window (the "1M tokens" preset on a 200K model) is
+      // correctly a no-op rather than a window the session does not have.
+      const ceiling = compactionWindows.get(sessionId)
+      return ceiling === undefined ? measured : Math.min(measured, ceiling)
+    },
+    noteCompactionWindow(sessionId, window) {
+      // Absent is a real answer, not "leave it": a daemon re-forked with the setting turned off runs on
+      // the whole window again, and a stale ceiling would keep shrinking a reading that has grown.
+      if (window === undefined || !Number.isInteger(window) || window <= 0) compactionWindows.delete(sessionId)
+      else compactionWindows.set(sessionId, window)
     },
     release(sessionId) {
       live.delete(sessionId)
       tasks.delete(sessionId)
       sessionModel.delete(sessionId)
       contextWindows.delete(sessionId)
+      compactionWindows.delete(sessionId)
       deps.receipts?.publish({ type: "claude.runtime.session.released", sessionId })
     },
     drain: () => worker.drain(),
-    close() { worker.close(); live.clear(); tasks.clear(); sessionModel.clear(); contextWindows.clear(); modelWindows.clear() },
+    close() { worker.close(); live.clear(); tasks.clear(); sessionModel.clear(); contextWindows.clear(); modelWindows.clear(); compactionWindows.clear() },
   }
 }
 

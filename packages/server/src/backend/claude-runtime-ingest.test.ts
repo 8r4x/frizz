@@ -462,3 +462,84 @@ test("context window: latched — a later result that omits the row does not bla
   assert.equal(ingest.contextWindow(sessionId), undefined, "…but it goes with the session it described")
   ingest.close()
 })
+
+// ---- the auto-compact ceiling ---------------------------------------------------------------------
+// Frizz dispatches at the 1M window and then hands the worker a 500K CLAUDE_CODE_AUTO_COMPACT_WINDOW,
+// and Claude Code's effective window is the `min` of the two — its own /config help says so. The dial
+// divided by the model's number instead, so a session with 253,862 tokens of a 500K allowance rendered
+// "25% full" (maintainer 2026-09-01). The lowering lives here, once, so every reader downstream gets
+// one number meaning one thing: how full the room this session has actually is.
+
+test("compaction ceiling: it LOWERS the measured window, and the fraction reads against the room the session has", async () => {
+  const ingest = createClaudeRuntimeIngest({ nudge: () => {} })
+  ingest.onEvent("t", sessionId, initAs("claude-opus-5"))
+  ingest.onEvent("t", sessionId, resultBilling({ "claude-opus-5": 1_000_000 }))
+  await ingest.drain()
+  assert.equal(ingest.contextWindow(sessionId), 1_000_000, "no ceiling ⇒ the model's own window")
+  ingest.noteCompactionWindow(sessionId, 500_000)
+  assert.equal(ingest.contextWindow(sessionId), 500_000)
+  ingest.close()
+})
+
+test("compaction ceiling: a ceiling ABOVE the model's window is a no-op, never a window the session lacks", async () => {
+  // The drawer's "1M tokens" preset on a 200K model is exactly this case, and it must not promise room
+  // the provider never granted.
+  const ingest = createClaudeRuntimeIngest({ nudge: () => {} })
+  ingest.onEvent("t", sessionId, initAs("claude-haiku-4-5-20251001"))
+  ingest.onEvent("t", sessionId, resultBilling({ "claude-haiku-4-5-20251001": 200_000 }))
+  await ingest.drain()
+  ingest.noteCompactionWindow(sessionId, 1_000_000)
+  assert.equal(ingest.contextWindow(sessionId), 200_000)
+  ingest.close()
+})
+
+test("compaction ceiling: it lowers a BORROWED window too — a first-turn thread runs under the same cap", async () => {
+  const ingest = createClaudeRuntimeIngest({ nudge: () => {} })
+  ingest.onEvent("t", sessionId, initAs("claude-opus-5"))
+  ingest.onEvent("t", sessionId, resultBilling({ "claude-opus-5": 1_000_000 }))
+  const fresh = "s-fresh"
+  ingest.onEvent("t2", fresh, { ...initAs("claude-opus-5"), sessionId: fresh })
+  await ingest.drain()
+  ingest.noteCompactionWindow(fresh, 350_000)
+  assert.equal(ingest.contextWindow(fresh), 350_000)
+  assert.equal(ingest.contextWindow(sessionId), 1_000_000, "and it is per-SESSION — the neighbour is untouched")
+  ingest.close()
+})
+
+test("compaction ceiling: a ceiling alone renders NOTHING — it is not a denominator of its own", async () => {
+  // It describes the worker's environment, not a measurement. Without a provider-reported window there
+  // is still no reading, exactly as before.
+  const ingest = createClaudeRuntimeIngest({ nudge: () => {} })
+  ingest.noteCompactionWindow(sessionId, 500_000)
+  assert.equal(ingest.contextWindow(sessionId), undefined)
+  ingest.close()
+})
+
+test("compaction ceiling: absent CLEARS it — a re-forked daemon without one is back on the whole window", async () => {
+  const ingest = createClaudeRuntimeIngest({ nudge: () => {} })
+  ingest.onEvent("t", sessionId, initAs("claude-opus-5"))
+  ingest.onEvent("t", sessionId, resultBilling({ "claude-opus-5": 1_000_000 }))
+  await ingest.drain()
+  ingest.noteCompactionWindow(sessionId, 500_000)
+  assert.equal(ingest.contextWindow(sessionId), 500_000)
+  for (const junk of [undefined, 0, -1, 12.5, Number.NaN]) {
+    ingest.noteCompactionWindow(sessionId, junk)
+    assert.equal(ingest.contextWindow(sessionId), 1_000_000, `${String(junk)} must leave no stale ceiling behind`)
+    ingest.noteCompactionWindow(sessionId, 500_000)
+  }
+  ingest.close()
+})
+
+test("compaction ceiling: it is released with the session, like every other per-session fact", async () => {
+  const ingest = createClaudeRuntimeIngest({ nudge: () => {} })
+  ingest.onEvent("t", sessionId, initAs("claude-opus-5"))
+  ingest.onEvent("t", sessionId, resultBilling({ "claude-opus-5": 1_000_000 }))
+  await ingest.drain()
+  ingest.noteCompactionWindow(sessionId, 500_000)
+  ingest.release(sessionId)
+  // A same-alias successor borrows the measured window — and must NOT inherit the dead session's cap.
+  ingest.onEvent("t", sessionId, initAs("claude-opus-5"))
+  await ingest.drain()
+  assert.equal(ingest.contextWindow(sessionId), 1_000_000)
+  ingest.close()
+})

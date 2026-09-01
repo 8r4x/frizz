@@ -285,3 +285,66 @@ test("a dead daemon that left no breadcrumb reads as an absent record, never a t
     await rmEventually(dir)
   }
 })
+
+// ---- the auto-compact ceiling survives the restart that outlives the daemon ------------------------
+// The ceiling is a FORK-TIME property — Settings' own help says a running thread keeps the value it was
+// forked with — so the board's context denominator cannot be re-derived from Settings when the dial is
+// drawn. It comes off the daemon's own record, which is the only thing left after frizz #1 is gone.
+test("a reattach reports the ceiling the DAEMON was forked with, not the one Settings holds now", { timeout: 30_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "cbrk-ceiling-"))
+  const exe = fakeExe(dir, "basic")
+  const env = { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" }
+  const sessionId = randomUUID()
+  const slug = "ceiling-thread"
+  const first = createClaudeAgentBrokerBridge({
+    stateDir: dir, executablePath: exe, env,
+    getSettings: () => ({ autoCompactWindow: 500_000 }),
+  })
+  let second: ReturnType<typeof createClaudeAgentBrokerBridge> | undefined
+  try {
+    await first.spawnDispatch({ threadSlug: slug, sessionId, cwd: dir, prompt: "do the thing", permissionMode: "default" })
+    const recordPath = claudeBrokerRecordPath(dir, sessionId)
+    assert.equal(readBrokerRecord(recordPath)?.compactionWindow, 500_000)
+    first.close() // the restart: the sockets go, the detached daemon stays
+    await sleep(300)
+
+    // frizz #2 boots with the drawer moved to 200K. The DAEMON is still the 500K one, and saying 200K
+    // would understate the room a running thread has by more than half.
+    const adopted: Array<number | undefined> = []
+    second = createClaudeAgentBrokerBridge({
+      stateDir: dir, executablePath: exe, env,
+      getSettings: () => ({ autoCompactWindow: 200_000 }),
+      onCompactionWindow: (_sessionId, window) => adopted.push(window),
+      ownedSessions: () => [{ threadSlug: slug, sessionId, cwd: dir }],
+    })
+    await second.warmUp()
+    await waitFor(() => adopted.length > 0)
+    assert.deepEqual(adopted, [500_000], "the record outranks today's Settings")
+
+    // A daemon forked by a build that predates the field says nothing, and the environment frizz would
+    // compose for it now is then the closest true statement there is — never silently no ceiling at all,
+    // which would put the dial back to dividing by the model's whole window.
+    const record = readBrokerRecord(recordPath)!
+    delete (record as { compactionWindow?: number }).compactionWindow
+    writeFileSync(recordPath, JSON.stringify(record))
+    second.close()
+    await sleep(300)
+    const preField: Array<number | undefined> = []
+    const third = createClaudeAgentBrokerBridge({
+      stateDir: dir, executablePath: exe, env,
+      getSettings: () => ({ autoCompactWindow: 200_000 }),
+      onCompactionWindow: (_sessionId, window) => preField.push(window),
+      ownedSessions: () => [{ threadSlug: slug, sessionId, cwd: dir }],
+    })
+    second = third
+    await third.warmUp()
+    await waitFor(() => preField.length > 0)
+    assert.deepEqual(preField, [200_000], "a pre-field record falls back to the composed environment")
+  } finally {
+    second?.releaseSession(slug, sessionId, "session-deleted")
+    second?.close()
+    first.close()
+    try { const r = readBrokerRecord(claudeBrokerRecordPath(dir, sessionId)); if (r) process.kill(r.daemonPid, "SIGKILL") } catch {}
+    await rmEventually(dir)
+  }
+})

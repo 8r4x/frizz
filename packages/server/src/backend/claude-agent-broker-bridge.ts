@@ -23,7 +23,7 @@ import {
   parseClaudeAskUserQuestion,
   type ClaudeAskSpec,
 } from "./claude-permission-interactions.ts"
-import { FRIZZ_MCP, claudeCompactionEnv, claudeWorkerEnv } from "./types.ts"
+import { FRIZZ_MCP, claudeCompactionEnv, claudeCompactionWindowOf, claudeWorkerEnv } from "./types.ts"
 
 type BrokerMcpServers = NonNullable<ClaudeBrokerConfig["mcpServers"]>
 
@@ -89,6 +89,12 @@ export interface ClaudeBrokerBridgeDeps {
   decidePermission?: (slug: string, sessionId: string, request: ClaudePermissionRequest) => Promise<ClaudePermissionDecision>
   /** Observe the session/transcript event stream (board liveness / telemetry). Optional. */
   onEvent?: (slug: string, sessionId: string, event: ClaudeQueryEvent) => void
+  /** The auto-compact ceiling the session's daemon is running under, reported at every attach — off the
+   *  daemon's own record, so an ADOPTED daemon reports the value it was forked with rather than the one
+   *  `getSettings` would hand a fork today. Undefined ⇒ this daemon has no ceiling and runs on the
+   *  model's whole window. The board lowers its context denominator to it; see
+   *  ClaudeRuntimeIngest.noteCompactionWindow for why that is one number rather than two. */
+  onCompactionWindow?: (sessionId: string, window: number | undefined) => void
   /** Observe daemon lifecycle/stderr diagnostics from a LIVE socket. The durable copy is written by
    *  the daemon itself (claude-broker-diagnostics.ts) precisely because this relay only reaches a frizz
    *  that is attached at the time — which a crash during a restart is not. Optional; for a live
@@ -465,6 +471,17 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
     })
     const session: ActiveSession = { slug, sessionId, cwd, generation: record.generation, client }
     sessions.set(slug, session)
+    // The auto-compact ceiling THIS daemon runs under, taken off its own record so an ADOPTED daemon
+    // reports the value it was forked with rather than whatever Settings says now — the board divides
+    // the context reading by it, and a running thread keeps its ceiling while the drawer moves. Reported
+    // from `bind` and not from `attach` because `warmUp` is the case that most needs it: a daemon that
+    // outlived frizz is exactly the one whose ceiling nothing else remembers.
+    //
+    // A record written by a daemon that predates the field says nothing, and the environment frizz would
+    // compose for it now is then the closest true statement there is — exact on a fresh fork (`attach`
+    // spreads this same value), and on an adopted pre-field daemon the value it would have been forked
+    // with unless the drawer moved since. See ClaudeRuntimeIngest.noteCompactionWindow.
+    deps.onCompactionWindow?.(sessionId, record.compactionWindow ?? claudeCompactionWindowOf(claudeCompactionEnv(deps.getSettings?.())))
     return session
   }
 

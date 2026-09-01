@@ -4,7 +4,7 @@ import { join } from "node:path"
 import { createClaudeBackend, parseClaudeLine } from "./claude.ts"
 import { newTailState, computeTurn } from "../tailer.ts"
 import { buildClaudeCommand, buildClaudeResumeCommand, claudeWorkerEnvironment, loadWorkerPrompt, WORKER_MAX_CONCURRENT_SUBAGENTS, WORKER_MAX_SUBAGENTS, WORKER_MAX_WEB_SEARCHES, workerPluginDir } from "../dispatch.ts"
-import { CLAUDE_WORKER_ENV, claudeCompactionEnv } from "./types.ts"
+import { CLAUDE_WORKER_ENV, claudeCompactionEnv, claudeCompactionWindowOf } from "./types.ts"
 
 // ---- parseClaudeLine: the normalized VIEW of a Claude JSONL line (codex-facing seam; NOT the
 // behavior-critical fold — that is foldLine → applyRecord, covered by tailer.test.ts). ----
@@ -292,4 +292,18 @@ test("claudeCompactionEnv: a positive integer window becomes CLAUDE_CODE_AUTO_CO
   assert.deepEqual(claudeCompactionEnv({ autoCompactWindow: 0 }), {})
   assert.deepEqual(claudeCompactionEnv({ autoCompactWindow: -1 }), {})
   assert.deepEqual(claudeCompactionEnv({ autoCompactWindow: 12.5 }), {})
+})
+
+// The same ceiling READ BACK OUT of the composed environment, which is how the number reaches the
+// board: the daemon stamps it on its record at fork and the bridge lowers the context dial's
+// denominator to it. Round-tripping through the env — rather than re-reading Settings when the dial is
+// drawn — is the point: Settings moves while a forked daemon keeps what it was forked with.
+test("claudeCompactionWindowOf: it round-trips what claudeCompactionEnv wrote, and reads junk as absent", () => {
+  assert.equal(claudeCompactionWindowOf(claudeCompactionEnv({ autoCompactWindow: 500_000 })), 500_000)
+  assert.equal(claudeCompactionWindowOf(claudeCompactionEnv({ autoCompactWindow: 200_000 })), 200_000)
+  assert.equal(claudeCompactionWindowOf(undefined), undefined)
+  assert.equal(claudeCompactionWindowOf({}), undefined, "an environment with no ceiling has none")
+  for (const raw of ["", "0", "-1", "12.5", "500k", "abc", "Infinity"]) {
+    assert.equal(claudeCompactionWindowOf({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: raw }), undefined, `"${raw}" must read as absent`)
+  }
 })

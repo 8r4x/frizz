@@ -715,6 +715,10 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   const claudeBroker = claudeBrokerBridgeEnabled()
     ? createClaudeAgentBrokerBridge({
         onEvent: (slug, sessionId, event) => claudeRuntimeIngest?.onEvent(slug, sessionId, event),
+        // The ceiling this thread's daemon actually runs under, which is what the footer's context dial
+        // has to divide by: a `[1m]` worker forked at the shipped 500K compacts at 500K, and reading its
+        // fullness against 1M reported a comfortable 25% for a session that was half full.
+        onCompactionWindow: (sessionId, window) => claudeRuntimeIngest?.noteCompactionWindow(sessionId, window),
         stateDir: project.stateDir,
         executablePath: opts.claudeBin ?? "claude",
         // Scoped to THIS project, not to whichever one launched the server — see

@@ -377,12 +377,14 @@ test("the lifted worker caps reach the process the broker actually forks", { tim
   const dir = mkdtempSync(join(tmpdir(), "cbrk-caps-"))
   const exe = join(dir, "fake-claude--basic.mjs")
   copyFileSync(fakeCli, exe); chmodSync(exe, 0o700)
+  const reportedCeilings: Array<number | undefined> = []
   const bridge = createClaudeAgentBrokerBridge({
     stateDir: dir, executablePath: exe,
     env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" },
     // The compaction window rides the same composed environment as the caps, read from Settings at
     // fork time — so the same startup capture proves it reaches the process (added 2026-08-26).
     getSettings: () => ({ autoCompactWindow: 123_456 }),
+    onCompactionWindow: (_sessionId, window) => reportedCeilings.push(window),
   })
   const sessionId = randomUUID()
   const slug = "caps-thread"
@@ -404,6 +406,12 @@ test("the lifted worker caps reach the process the broker actually forks", { tim
     assert.equal(env.maxSubagents, String(WORKER_MAX_SUBAGENTS), "the sub-agent spawn lift reaches the worker")
     assert.equal(env.maxConcurrentSubagents, String(WORKER_MAX_CONCURRENT_SUBAGENTS), "the concurrency lift reaches the worker")
     assert.equal(env.autoCompactWindow, "123456", "Settings.autoCompactWindow reaches the worker as CLAUDE_CODE_AUTO_COMPACT_WINDOW")
+    // …and comes back OUT again, which is how the board's context dial learns the room this session
+    // actually has. The daemon stamps the ceiling it forked with onto its own record, so the value
+    // survives a frizz restart adopting it — that record, not today's Settings, is what a reattach
+    // reports (see ClaudeRuntimeIngest.noteCompactionWindow).
+    assert.equal(readBrokerRecord(claudeBrokerRecordPath(dir, sessionId))?.compactionWindow, 123_456, "the daemon records the ceiling it forked with")
+    assert.deepEqual(reportedCeilings, [123_456], "…and the bridge reports it once, at attach")
   } finally {
     bridge.releaseSession(slug, sessionId, "session-deleted")
     bridge.close()

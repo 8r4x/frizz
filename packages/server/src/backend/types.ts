@@ -112,7 +112,7 @@ export interface NormalizedTail {
   apiFault?: boolean // the final assistant record is a synthetic API-ERROR record (see FoldState.apiFault)
   limitFault?: LimitFault // subscription window exhausted mid-turn (see FoldState.limitFault)
   contextTokens?: number // tokens the last request carried (see FoldState.contextTokens)
-  contextWindow?: number // the model's context size, provider-reported (see FoldState.contextWindow)
+  contextWindow?: number // the context size this session RUNS IN (see FoldState.contextWindow)
   // ISO8601 of the newest CONTEXT COMPACTION, or absent if this session has never been compacted. It is
   // the trigger clock for scheduler SOURCE 7 (the recurring prompt's post-compaction delivery): a new
   // compaction necessarily carries a new instant, so "at most one delivery per compaction" falls out of
@@ -196,12 +196,19 @@ export interface FoldState {
   // per-assistant `message.usage` sums input + cache-creation + cache-read (the three components of
   // one request's input). It falls back down after a compaction, exactly as it should.
   contextTokens?: number
-  // The model's context size, as the PROVIDER reports it. Deliberately not a per-model table: the
-  // window depends on the concrete variant in play (a `[1m]` Claude alias reports 1_000_000 where the
-  // same canonical model otherwise reports 200_000), so only the provider can answer for THIS session.
+  // The context size this session actually RUNS IN. Deliberately not a per-model table: the window
+  // depends on the concrete variant in play (a `[1m]` Claude alias reports 1_000_000 where the same
+  // canonical model otherwise reports 200_000), so only the provider can answer for THIS session.
   // Codex names it on every token_count; Claude names it on the SDK `result` message, which means a
   // Claude row has a numerator from its first assistant record but no denominator until its first turn
   // ends — and a pre-broker/foreign Claude row never gets one at all. Absent ⇒ NO reading is rendered.
+  //
+  // "Runs in", not "the model's size", because a Claude worker's AUTO-COMPACT CEILING lowers it: frizz
+  // dispatches at the 1M window and then hands the CLI a 500K CLAUDE_CODE_AUTO_COMPACT_WINDOW, and
+  // Claude Code's effective window is `min` of the two — so the room this session has is 500K and
+  // dividing by 1M reported it a comfortable 25% full at the moment it was half full (2026-09-01). The
+  // lowering happens once, in ClaudeRuntimeIngest.contextWindow, so every reader downstream of it —
+  // this field, ThreadView.context, the footer dial — carries one number with one meaning.
   contextWindow?: number
   // Newest context compaction — the post-compaction trigger's clock (see NormalizedTail.lastCompactionAt).
   // The two backends observe it differently and neither has a second signal: Claude injects its
@@ -451,10 +458,26 @@ export function claudeWorkerEnv(env: NodeJS.ProcessEnv = process.env): Record<st
 // for the model — the whole 1M window on a `[1m]` model, which is exactly the growth this exists to
 // stop (Settings.autoCompactWindow explains the cost). Composed into the worker environment on every
 // fresh daemon fork; a daemon already running keeps the value it was forked with.
+export const CLAUDE_AUTO_COMPACT_WINDOW_ENV = "CLAUDE_CODE_AUTO_COMPACT_WINDOW"
+
 export function claudeCompactionEnv(settings: { autoCompactWindow?: number } | undefined): Record<string, string> {
   const window = settings?.autoCompactWindow
   if (window === undefined || !Number.isInteger(window) || window <= 0) return {}
-  return { CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(window) }
+  return { [CLAUDE_AUTO_COMPACT_WINDOW_ENV]: String(window) }
+}
+
+// The ceiling READ BACK OUT of a composed worker environment — the same value `claudeCompactionEnv`
+// wrote, recovered where the number matters rather than the variable. Two callers, both of which must
+// agree with what the CLI is actually running under: the daemon stamps it onto its record at fork
+// (BrokerRecord.compactionWindow), and the bridge reports it to the runtime ingest, which lowers the
+// board's context denominator to it (ClaudeRuntimeIngest.noteCompactionWindow). Round-tripping through
+// the environment rather than re-reading Settings is the whole point — Settings moves, a forked daemon
+// does not. Anything unparseable reads as absent; a fabricated denominator is worse than none.
+export function claudeCompactionWindowOf(env: Record<string, string> | undefined): number | undefined {
+  const raw = env?.[CLAUDE_AUTO_COMPACT_WINDOW_ENV]
+  if (raw === undefined) return undefined
+  const window = Number(raw)
+  return Number.isInteger(window) && window > 0 ? window : undefined
 }
 
 // Tools an ARGV-SPAWNED Claude worker never gets — the argv turns this into `--disallowedTools=…`.
