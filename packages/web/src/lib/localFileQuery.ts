@@ -1,0 +1,70 @@
+import type { QueryClient } from "@tanstack/react-query"
+import { rpc } from "../api/rpc.ts"
+import { renderCodeBody } from "./codeBody.ts"
+import { isLocalMarkdownFile } from "./markdownTargets.ts"
+import { resolveFileLanguage } from "./syntaxHighlight.ts"
+
+// The ONE read of a local file the /full split viewer renders, shared by the panel that shows it and
+// by the rail row that PREWARMS it on hover (maintainer 2026-09-01: "consider rendering optimizations
+// like eager rendering when the user hovers over a given changed file"). Both must use the identical
+// key and fetcher or the prefetch warms a cache entry the panel never looks in.
+//
+// Markdown reads through the reader gate (home-and-below, `.md` only); anything else reads through the
+// narrower project-only text gate. Either way the result carries the CANONICAL path (symlinks
+// resolved), which is what the panel labels, links relative to, and stamps on context items.
+export function localFileQuery(path: string) {
+  const markdown = isLocalMarkdownFile(path)
+  return {
+    queryKey: [markdown ? "localMarkdown" : "localFile", path],
+    queryFn: async () => {
+      if (markdown) return rpc.localMarkdown({ path })
+      const read = await rpc.localFile({ path })
+      return { path: read.path, markdown: read.text, truncated: read.truncated }
+    },
+    // Long enough that a hover followed by a click is ONE read, short enough that re-opening a file a
+    // worker is actively editing shows the new bytes. The panel does not poll, so this is the only
+    // thing standing between the reader and a stale file.
+    staleTime: 5_000,
+  }
+}
+
+// Highlighted source markup, memoised across mounts. hljs over a few thousand lines is a single
+// blocking task, and the one moment it must not run is while the viewer is sliding in — so the hover
+// prewarm pays it during the idle time before the click, and the panel then just reads the string.
+const HIGHLIGHTED = new Map<string, { raw: string; html: string }>()
+const HIGHLIGHTED_MAX = 12
+
+export function highlightedSource(path: string, raw: string): string {
+  const hit = HIGHLIGHTED.get(path)
+  if (hit && hit.raw === raw) return hit.html
+  const html = renderCodeBody(raw, resolveFileLanguage(path))
+  HIGHLIGHTED.set(path, { raw, html })
+  // Insertion-ordered, so the oldest key is the first one out — a plain LRU is not worth the bookkeeping
+  // for a cache this small, and the reader only ever moves between a handful of files.
+  if (HIGHLIGHTED.size > HIGHLIGHTED_MAX) {
+    const oldest = HIGHLIGHTED.keys().next()
+    if (!oldest.done) HIGHLIGHTED.delete(oldest.value)
+  }
+  return html
+}
+
+function whenIdle(run: () => void): void {
+  const idle = (globalThis as { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number }).requestIdleCallback
+  if (idle) idle(run, { timeout: 500 })
+  else setTimeout(run, 0)
+}
+
+// Hover on a file row: fetch the body and highlight it, both off the click path. Fire-and-forget by
+// design — a file that has gone away, or a gate that refuses it, must not raise anything on a HOVER;
+// the click that follows renders the same error through the panel's own query, where the reader can
+// see it.
+export function prewarmLocalFile(client: QueryClient, path: string): void {
+  client
+    .prefetchQuery(localFileQuery(path))
+    .then(() => {
+      const cached = client.getQueryData<{ path: string; markdown: string }>(localFileQuery(path).queryKey)
+      if (!cached?.markdown || isLocalMarkdownFile(path)) return
+      whenIdle(() => highlightedSource(cached.path, cached.markdown))
+    })
+    .catch(() => {})
+}

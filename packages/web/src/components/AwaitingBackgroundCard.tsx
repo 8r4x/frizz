@@ -369,11 +369,14 @@ function Chevron() {
   return <ChevronRight size={13} aria-hidden className={`${ON_CAP} ml-[3px] -mr-[4px] text-muted/35 transition-colors group-hover:text-muted/70`} />
 }
 
-export function WaitRow({ mark, name, status, onOpen, href, ghRef, title, testKind, testId }: {
+export function WaitRow({ mark, name, status, onOpen, onPrewarm, href, ghRef, title, testKind, testId }: {
   mark: ReactNode
   name: string
   status: ReactNode
   onOpen?: () => void
+  /** Fired when a pointer rests on the row, or the row's control takes focus — the row's chance to
+   *  fetch what the click is about to need. Must be idempotent and silent: it runs on a HOVER. */
+  onPrewarm?: () => void
   href?: string
   /** The `owner/repo#N` key of a GitHub row, stamped as `data-gh-ref` so the app-wide hovercard layer
    *  (GithubHovercards, delegated off the document) opens the PR's card on it exactly as it does on a
@@ -418,6 +421,8 @@ export function WaitRow({ mark, name, status, onOpen, href, ghRef, title, testKi
     <div
       data-wait-row={testId}
       data-wait-kind={testKind}
+      onMouseEnter={onPrewarm}
+      onFocus={onPrewarm}
       className={`${ROW} ${interactive ? "cursor-pointer transition-colors hover:bg-fg/[0.045]" : ""}`}
     >
       <span className="flex shrink-0">{mark}</span>

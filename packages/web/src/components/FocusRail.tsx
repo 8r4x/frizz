@@ -1,7 +1,9 @@
 import { FileDiff } from "lucide-react"
+import { useQueryClient } from "@tanstack/react-query"
 import type { EditedFile, ThreadView } from "@frizz/shared"
 import { useTranscript } from "../hooks.ts"
 import { openLocalPath } from "../lib/local-file-links.ts"
+import { prewarmLocalFile } from "../lib/localFileQuery.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { PRIMER } from "../lib/primer.ts"
 import { AgentRow, BgShellRow, GithubWatchRow, ON_CAP, TimerRow, WaitGrid, WaitRow, liveAgents } from "./AwaitingBackgroundCard.tsx"
@@ -39,6 +41,11 @@ function basenameOf(path: string): string {
 }
 
 function FileRow({ file }: { file: EditedFile }) {
+  // EAGER READ ON HOVER (maintainer 2026-09-01): the pointer resting on a row is the earliest honest
+  // signal that this file is the next one to open, and it buys the whole server round trip plus the
+  // highlight pass before the click. The viewer then mounts against a warm cache and paints on the
+  // first frame of its slide instead of a frame or two into it.
+  const client = useQueryClient()
   // The status is the file's DIFFSTAT, GitHub-green and GitHub-red — the edit count and the
   // last-edited clock both came off on review (maintainer 2026-08-31: "hide the 2×…", the age
   // "seems useless to me"). A zero side stays quiet; a file with no counted lines (an
@@ -56,6 +63,7 @@ function FileRow({ file }: { file: EditedFile }) {
       // and a repo path truncated from the end lost exactly the part that names the file.
       name={basenameOf(file.path)}
       onOpen={() => openLocalPath(file.path)}
+      onPrewarm={() => prewarmLocalFile(client, file.path)}
       title={file.path}
       status={
         <>

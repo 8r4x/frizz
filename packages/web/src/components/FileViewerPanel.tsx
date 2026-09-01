@@ -1,10 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { closeFilePanel, addContextItem } from "../store.ts"
-import { rpc } from "../api/rpc.ts"
 import { useInnerHtml } from "../lib/innerHtml.ts"
-import { renderCodeBody } from "../lib/codeBody.ts"
-import { resolveFileLanguage } from "../lib/syntaxHighlight.ts"
+import { highlightedSource, localFileQuery } from "../lib/localFileQuery.ts"
 import { useLocalFileCodeLinks } from "../lib/localFileCode.ts"
 import { useMarkdownHtml } from "../lib/useMarkdown.ts"
 import { splitFrontmatter } from "../lib/frontmatter.ts"
@@ -57,16 +55,10 @@ function lineOfOffset(raw: string, offset: number): number {
 
 export function FileViewerPanel({ slug, path }: { slug: string; path: string }) {
   // Markdown reads through the reader gate (home-and-below, `.md` only) and renders; anything else
-  // reads through the narrower project-only text gate and is source, full stop.
+  // reads through the narrower project-only text gate and is source, full stop. The read itself lives
+  // in lib/localFileQuery so the rail can PREWARM it on hover through the identical key.
   const markdown = isLocalMarkdownFile(path)
-  const body = useQuery({
-    queryKey: [markdown ? "localMarkdown" : "localFile", path],
-    queryFn: async () => {
-      if (markdown) return rpc.localMarkdown({ path })
-      const read = await rpc.localFile({ path })
-      return { path: read.path, markdown: read.text, truncated: read.truncated }
-    },
-  })
+  const body = useQuery(localFileQuery(path))
   // Canonical path from the server (symlinks resolved) — the base for relative links, the label, and
   // the path stamped on context items, exactly as in MarkdownDrawer.
   const resolved = body.data?.path ?? path
@@ -75,7 +67,10 @@ export function FileViewerPanel({ slug, path }: { slug: string; path: string }) 
   const [view, setView] = useState<"rendered" | "source">(markdown ? "rendered" : "source")
   const html = useMarkdownHtml(source, { baseDir: localFileDir(resolved), asDocument: true })
   const inner = useInnerHtml(html)
-  const sourceHtml = useInnerHtml(useMemo(() => renderCodeBody(raw, resolveFileLanguage(resolved)), [raw, resolved]))
+  // Highlighted ONLY when the source view is actually showing, and memoised across mounts by
+  // localFileQuery: a markdown file opens rendered, and hljs over its raw text was a blocking task
+  // nothing displayed. A hover on the rail's file row has usually already paid for this.
+  const sourceHtml = useInnerHtml(useMemo(() => (view === "source" ? highlightedSource(resolved, raw) : ""), [raw, resolved, view]))
   const renderedRef = useRef<HTMLDivElement>(null)
   const sourceRef = useRef<HTMLPreElement>(null)
   const rootRef = useRef<HTMLDivElement>(null)

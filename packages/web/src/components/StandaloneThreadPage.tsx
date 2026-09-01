@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react"
 import { useSnapshot } from "valtio"
 import { seedBoard, store } from "../store.ts"
 import { useBoard } from "../hooks.ts"
@@ -7,7 +7,7 @@ import { displayTitle } from "../groups.ts"
 import { resolveThreadRoute } from "../lib/threadRouteState.ts"
 import { projectHref } from "../lib/base-path.ts"
 import { standaloneThreadHref } from "../lib/standaloneThreadRoute.ts"
-import { SHEET_BASE_WIDTH } from "../lib/sheet.ts"
+import { SHEET_BASE_WIDTH, SHEET_CLOSE_MS } from "../lib/sheet.ts"
 import type { ThreadView } from "@frizz/shared"
 import { ThreadView as ThreadViewSurface } from "./ChatView.tsx"
 import { DrawerStack } from "./DrawerStack.tsx"
@@ -16,6 +16,30 @@ import { FocusRail, RAIL_WIDTH } from "./FocusRail.tsx"
 import { TooltipProvider } from "./Tooltip.tsx"
 import { Toaster } from "./Toaster.tsx"
 import { useQuery } from "@tanstack/react-query"
+
+/**
+ * THE WHOLE GEOMETRY OF /full, as three lengths that depend on the PAGE WIDTH AND NOTHING ELSE — not
+ * on whether a file is open, which is the point (see the layout comment below). Percentages resolve
+ * against the row, which is the page minus the project rail, so a `vw` here would be wrong on a
+ * board that shows one.
+ *
+ *   thread = half the page, capped at the drawer's width
+ *   pane   = everything the thread does not take
+ *   gutter = the slack left beside the pair once the rail has its 340
+ *
+ * `thread + pane` is exactly the page at every width (below 1440 both are half; above it the thread
+ * pins at 720 and the pane takes the rest), which is what makes the open state a 50/50 read on a
+ * 1200px screen — "600px of content, and then the file takes up 600px" (maintainer 2026-08-30) —
+ * without either column having to change size to get there.
+ */
+const PANE_W = `max(50%, calc(100% - ${SHEET_BASE_WIDTH}px))`
+const LAYOUT_VARS = {
+  "--full-thread": `min(${SHEET_BASE_WIDTH}px, ${PANE_W})`,
+  // Below `md` there is no rail and no viewer, so the column simply takes the page under the cap.
+  "--full-thread-narrow": `min(${SHEET_BASE_WIDTH}px, 100%)`,
+  "--full-pane": PANE_W,
+  "--full-gutter": `max(0px, calc((100% - min(${SHEET_BASE_WIDTH}px, ${PANE_W}) - ${RAIL_WIDTH}px) / 2))`,
+} as CSSProperties
 
 /**
  * The `/full` page for a thread in ANOTHER project — the two places that must name a project other
@@ -82,48 +106,61 @@ export function StandaloneThreadPage({ slug }: { slug: string }) {
         {/* THE FULLSCREEN LAYOUT (maintainer 2026-08-28, second pass): the thread column and the
             rail sit together as ONE CENTERED PAIR — "the combination of the agent pane and the
             artifact readout should be centered on the page, and there should be some reasonable
-            maximum width on the agent pane" — with the file viewer fading in over the rail when a
+            maximum width on the agent pane" — with the file viewer sliding in over the rail when a
             file opens (see SidePane). The column's ceiling is the DRAWER's own width
             (lib/sheet.ts SHEET_BASE_WIDTH; maintainer 2026-08-31: "the same width as the regular
             drawer width" — an earlier 960px "still lets the chat go too wide").
 
-            The two empty flex-1 GUTTERS are the whole centering mechanism, and they are also the
-            slack the viewer draws on. Closed, the pair is the thread (≤960px) plus the rail and the
-            gutters split what is left, so the pair sits centered. Open, the pane widens to the
-            viewer's reading width and the gutters give way first — the pair slides left as a unit,
-            the viewer spilling over the right gutter — and only when they are exhausted does the
-            thread column start to give. No measurement, no breakpoints: the flex algorithm does it.
+            NOTHING HERE IS SIZED BY WHAT IS BESIDE IT (maintainer 2026-09-01: "you should not be
+            resizing the chat transcript column … you also should never resize the code panes that
+            slide in. Otherwise, it's going to be re-flowing in a way that just takes unnecessary
+            CPU"). Both columns are pure functions of the PAGE width — see LAYOUT_VARS — so opening
+            or closing a file changes no width anywhere and neither the transcript nor the file
+            re-wraps. What moves is the ROW, by one transform, from centered to hard left; a
+            transform is composited, so the whole open costs no layout at all. The flex-grow /
+            flex-basis / width transitions this replaced re-laid out both columns' contents on every
+            frame of the 200ms.
+
+            The GUTTER is that centering spelled out rather than left to `flex-1` — exactly the slack
+            beside the pair, so translating the row by −gutter puts the thread column hard against the
+            left edge and the pane against the right. The pane is ALREADY full width while it is
+            closed (the rail sits at its left and the remainder hangs off the page, clipped by the
+            frame around the row), which is what lets its width be a constant.
+
             A phone-width window still gets the old single column — the rail and the viewer need the
-            width they hide under. */}
-        <div className="flex h-full w-full overflow-hidden">
-          {/* The gutters collapse while a file is open: the reading is DETERMINISTIC then — the thread
-              column at half the viewport (still under the drawer-width ceiling) and the file on the
-              other half, full bleed ("600px of content, and then the file takes up 600px" on a 1200px
-              screen, maintainer 2026-08-30) — rather than whatever the gutters happened to leave. */}
-          <div className="hidden md:block transition-[flex-grow] duration-200 ease-out" style={{ flexGrow: fileOpen ? 0 : 1 }} aria-hidden="true" />
-          <main
-            data-standalone-thread
-            className="flex h-full w-full min-w-0 flex-col overflow-hidden border-border bg-panel transition-[width] duration-200 ease-out sm:border-x"
-            style={{ width: fileOpen ? `min(${SHEET_BASE_WIDTH}px, 50vw)` : `min(${SHEET_BASE_WIDTH}px, 100%)`, flexShrink: fileOpen ? 0 : 1 }}
+            width they hide under, so below `md` the thread column takes the page. */}
+        <div className="h-full w-full overflow-hidden">
+          <div
+            className="flex h-full w-full transition-transform duration-200 ease-out motion-reduce:transition-none"
+            style={{ ...LAYOUT_VARS, transform: fileOpen ? "translateX(calc(-1 * var(--full-gutter)))" : undefined }}
           >
-            {route.kind === "loading" ? (
-              <div className="flex flex-1 items-center justify-center" role="status" aria-label="Loading thread">
-                <span className="block h-5 w-5 animate-spin rounded-full border-2 border-muted/50 border-t-transparent" />
-              </div>
-            ) : route.kind === "missing" ? (
-              <MissingThread slug={slug} />
-            ) : (
-              <ThreadViewSurface slug={slug} virtualized showReturnToQueue />
-            )}
-          </main>
-          {thread && <SidePane slug={slug} thread={thread} />}
-          <div className="hidden md:block transition-[flex-grow] duration-200 ease-out" style={{ flexGrow: fileOpen ? 0 : 1 }} aria-hidden="true" />
+            <div className="hidden w-[var(--full-gutter)] shrink-0 md:block" aria-hidden="true" />
+            <main
+              data-standalone-thread
+              className="flex h-full w-[var(--full-thread-narrow)] min-w-0 shrink-0 flex-col overflow-hidden border-border bg-panel sm:border-x md:w-[var(--full-thread)]"
+            >
+              {route.kind === "loading" ? (
+                <div className="flex flex-1 items-center justify-center" role="status" aria-label="Loading thread">
+                  <span className="block h-5 w-5 animate-spin rounded-full border-2 border-muted/50 border-t-transparent" />
+                </div>
+              ) : route.kind === "missing" ? (
+                <MissingThread slug={slug} />
+              ) : (
+                <ThreadViewSurface slug={slug} virtualized showReturnToQueue />
+              )}
+            </main>
+            {/* No thread, no rail — but the page still has to read as centered, so the region holds
+                its width either way. */}
+            {thread
+              ? <SidePane slug={slug} thread={thread} />
+              : <div className="hidden w-[var(--full-pane)] shrink-0 md:block" aria-hidden="true" />}
+          </div>
         </div>
         {/* The SAME drawer stack the queue mounts. Without it every drill-in this page renders — a
             sub-agent row, a background-shell row, the frizz-doc button, a `[…](/thread/<slug>)` link —
             pushed a layer onto the store that nothing displayed, so the click was simply dead. Mounted
-            OUTSIDE <main> (which is overflow-hidden); the sheets are `fixed inset-0` and no ancestor
-            here creates a containing block, so they cover the viewport exactly as they do in App. */}
+            OUTSIDE the transformed row: the sheets are `fixed inset-0`, and a transform on an ancestor
+            is a containing block for them, which would drag every sheet along with the slide. */}
         <DrawerStack />
         <Toaster />
       </div>
@@ -134,43 +171,52 @@ export function StandaloneThreadPage({ slug }: { slug: string }) {
 // THE SIDE PANE: the rail and the file viewer share the one region right of the thread column, and
 // the viewer FADES AND SLIDES IN OVER the rail instead of opening beside it (maintainer 2026-08-28:
 // "the right-side pane should slide over … hide the artifact readout … press the X to see the
-// artifacts again", then: "fade in and slide left over top of the artifact rail"). Closed, the pane
-// IS the rail; open, it is everything right of the half-viewport thread column — the gutters collapse
-// and the split is deterministic (see the layout comment above). The rail stays MOUNTED under
-// the pane — its live rows keep polling — but goes inert, so nothing hidden can take focus or a
-// click. The viewer's CONTENT outlives the store entry by the ~200ms slide-out (`current`), so
-// closing plays the same edge back instead of blanking the pane.
+// artifacts again", then: "fade in and slide left over top of the artifact rail"). The region is
+// ALWAYS its open width — the rail takes the leftmost 340 of it and the rest hangs off the page while
+// nothing is open — so the viewer's own width is a constant and it never re-wraps a line of code to
+// arrive. The rail stays MOUNTED under the pane — its live rows keep polling — but goes inert, so
+// nothing hidden can take focus or a click. The viewer's CONTENT outlives the store entry by the
+// ~200ms slide-out (`held`), so closing plays the same edge back instead of blanking the pane.
 function SidePane({ slug, thread }: { slug: string; thread: ThreadView }) {
   const snap = useSnapshot(store)
   const panel = snap.filePanel
-  const [current, setCurrent] = useState<string | null>(null)
+  const [held, setHeld] = useState<string | null>(null)
+  // The open path is read straight off the store rather than out of state, so the document mounts in
+  // the SAME commit that starts the slide. Routed through state it arrived a frame late, and the
+  // panel visibly popped in over an empty pane that had already finished sliding.
+  const current = panel?.path ?? held
   useEffect(() => {
     if (panel) {
-      setCurrent(panel.path)
+      setHeld(panel.path)
       return
     }
-    const timer = window.setTimeout(() => setCurrent(null), 220)
+    const timer = window.setTimeout(() => setHeld(null), SHEET_CLOSE_MS)
     return () => window.clearTimeout(timer)
-  }, [panel?.path, panel?.openedAt, panel])
+  }, [panel])
   return (
     <div
       data-side-pane
-      className="relative hidden h-full min-h-0 min-w-0 shrink-0 grow-0 overflow-hidden transition-[flex-basis] duration-200 ease-out md:block"
-      // Open, the pane is EXACTLY the remainder of the 50/50 law the thread column states (its width
-      // is min(960px, 50vw) and it stops shrinking), so the two always sum to the viewport — 600+600
-      // on a 1200px screen. Both states are lengths, so the basis animates the slide.
-      style={{ flexBasis: panel ? `calc(100% - min(${SHEET_BASE_WIDTH}px, 50vw))` : RAIL_WIDTH }}
+      className="relative hidden h-full w-[var(--full-pane)] min-h-0 min-w-0 shrink-0 grow-0 overflow-hidden md:block"
     >
       <div inert={panel ? true : undefined} className="h-full min-h-0">
         <FocusRail thread={thread} />
       </div>
+      {/* NO LEFT BORDER: the thread column's own right border is already the seam between the two
+          panes, and drawing one here put a second hairline hard against it — a 2px rule the moment a
+          file opened (maintainer 2026-09-01: "make sure there isn't a double-wide pixel between the
+          chat transcript and the code pane"). */}
       <aside
         data-file-viewer-slot
         aria-hidden={!panel}
-        className={`absolute inset-0 transition-[transform,opacity] duration-200 ease-out ${panel ? "translate-x-0 opacity-100" : "translate-x-full opacity-0"}`}
+        // `translate`, NOT `transform`: Tailwind v4 spells `translate-x-*` with the standalone
+        // `translate` property, so a `transition-[transform,…]` here named a property nothing set and
+        // the pane jumped its full width in one frame and merely FADED in. The pane's own widening
+        // had been standing in for the slide, which is why the dead transition survived until that
+        // widening was taken away.
+        className={`absolute inset-0 transition-[translate,opacity] duration-200 ease-out motion-reduce:transition-none ${panel ? "translate-x-0 opacity-100" : "translate-x-full opacity-0"}`}
       >
         {current && (
-          <div className="flex h-full min-h-0 flex-col overflow-hidden border-l border-border bg-panel">
+          <div className="flex h-full min-h-0 flex-col overflow-hidden bg-panel">
             {/* Keyed on the path so following a link inside the viewer resets the view toggle and
                 scroll to the new document's top. */}
             <FileViewerPanel key={current} slug={slug} path={current} />
