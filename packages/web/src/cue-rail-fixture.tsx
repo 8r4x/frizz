@@ -13,7 +13,7 @@ import "./styles.css"
 // Renders the REAL <Sidebar/> over a board built to exercise exactly what the change can get wrong:
 //
 //   CUE (top, queue order)          the rest-time column, at four magnitudes and three title lengths
-//     · just now / minutes / hours / days — the widest reading ("14 minutes") against the shortest
+//     · just now / minutes / hours / days — the widest reading ("14m") against the shortest
 //     · a LONG title that wraps to three lines: the label must stay on the FIRST line, right-justified,
 //       and must not be squeezed or wrapped by the title beside it
 //     · a SHORT title: the label must hold the same right edge as every other row (it is a COLUMN —

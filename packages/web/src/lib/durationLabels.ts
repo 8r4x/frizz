@@ -18,20 +18,43 @@
 // What is NOT unified is the LADDER — which units a given reading climbs to, and how much precision it
 // keeps. That is per-surface behaviour with its own reasons, documented on each formatter below: a
 // countdown pads and ticks, the runtime slot drops seconds past a minute, a tool call keeps them.
-// Restyling those into one another is a different change and not this one.
+//
+// A ladder DOES move for one reason: when the compact spelling creates an ambiguity the spelled-out one
+// was hiding. A flat-minutes reading was safe as `128 min` and is not as `128m` — on a petite-caps meta
+// line that renders `128M`, which reads as a count. The fix is never to spell the unit back out; it is
+// the next rung up (`2hr 8m`), which is shorter, unambiguous, and the shape of the maintainer's own
+// example. Two formatters gained a rung on 2026-08-31 for exactly that: hours on formatToolDuration,
+// days on formatElapsedMinutes.
+// A tool call's own duration, on the card's meta line: `<1ms`, `450ms`, `2.3s`, `41s`, `9m 12s`,
+// `2hr 8m`. It keeps SECONDS beside minutes where the runtime slot drops them — a Bash call is a thing
+// you watch finish, and 12 seconds either way is the difference between "instant" and "slow".
+//
+// It CLIMBS TO HOURS, and that rung is load-bearing rather than tidy. This line is drawn in
+// petite-caps, where a lowercase unit renders as a small capital — so a flat-minutes reading of a
+// two-hour call rendered `DONE · 128M`, which reads as a COUNT, not a duration (the reason this file
+// spelled its units out at all before the house grammar arrived; see `tool-duration-fixture.tsx`,
+// which exists to draw exactly this span). Past an hour the seconds are noise anyway, so the reading
+// hands the resolution to the next unit down and the ambiguity goes with it.
 export function formatToolDuration(ms: number): string {
   if (ms < 1) return "<1ms"
   if (ms < 1_000) return `${Math.round(ms)}ms`
   if (ms < 60_000) return `${ms < 10_000 ? (ms / 1_000).toFixed(1) : Math.round(ms / 1_000)}s`
   const mins = Math.floor(ms / 60_000)
+  if (mins >= 60) return mins % 60 ? `${Math.floor(mins / 60)}hr ${mins % 60}m` : `${Math.floor(mins / 60)}hr`
   const secs = Math.round((ms % 60_000) / 1_000)
   return secs ? `${mins}m ${secs}s` : `${mins}m`
 }
 
+// `just now` · `40m` · `2hr 35m` · `3d 4hr`. The DAY rung is the same defence the hour rung gives
+// formatToolDuration above: without it a background shell alive for a week read `169hr 12m`, a number
+// nobody parses as a week. Two units, and the smaller one drops when it is zero.
 export function formatElapsedMinutes(minutes: number): string {
   if (minutes < 1) return "just now"
   if (minutes < 60) return `${minutes}m`
-  return `${Math.floor(minutes / 60)}hr ${minutes % 60}m`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return minutes % 60 ? `${hours}hr ${minutes % 60}m` : `${hours}hr`
+  const days = Math.floor(hours / 24)
+  return hours % 24 ? `${days}d ${hours % 24}hr` : `${days}d`
 }
 
 // COMPACT elapsed for the dense child-op row: "38s", "12m", "1hr 5m" (maintainer 2026-07-28). This is

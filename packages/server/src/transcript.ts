@@ -2975,10 +2975,15 @@ function compactFields(obj: Record<string, unknown>, keys: string[]): string | u
   return Object.keys(projected).length ? renderToolInput(projected) : undefined
 }
 
+// The house duration grammar (`packages/web/src/lib/durationLabels.ts`), including its hour rung: a
+// flat-minutes reading of a long wait renders as a small capital M on the card's petite-caps meta line
+// and reads as a count rather than a duration.
 function formatCompactDuration(ms: number): string {
   if (ms < 1000) return `${Math.round(ms)}ms`
   if (ms < 60_000) return `${Math.round(ms / 1000)}s`
-  return `${Math.round(ms / 60_000)}m`
+  const minutes = Math.round(ms / 60_000)
+  if (minutes < 60) return `${minutes}m`
+  return minutes % 60 ? `${Math.floor(minutes / 60)}hr ${minutes % 60}m` : `${Math.floor(minutes / 60)}hr`
 }
 
 interface WrappedInvocation {

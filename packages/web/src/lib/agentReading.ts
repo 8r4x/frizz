@@ -20,14 +20,14 @@ import { AGENT_OUTCOME_VERB } from "./subAgentCompletion.ts"
 //     outcome has none: a card showing a runtime and no liveness mark already means "it ran and stopped"
 //     (maintainer 2026-07-29). Only "stopped" and "failed" are things no mark can say.
 //
-//  2. THE DURATION is spelled out at minute resolution — the form the completion divider two lines below
-//     it already uses (formatFixedDuration), so the card and the divider describing one child read
-//     identically: "STOPPED · 41 MIN" on both. This deliberately drops the compact "41m" form:
-//     durationLabels.ts states the house rule (spell units out in a small-caps status row so an
-//     uppercase M cannot read as "million") and scopes the compact exception to the dense child-op row,
-//     which is fighting for horizontal room against a ×, a live step and two counters. A dispatch card's
-//     reading shares its row with a title and a chevron, so it never qualified for that exception.
-//     The precise duration is not lost — it rides the tooltip.
+//  2. THE DURATION is at MINUTE resolution — the form the completion divider two lines below it already
+//     uses (formatFixedDuration), so the card and the divider describing one child read identically:
+//     "STOPPED · 41M" on both. The resolution is the choice here, not the spelling: units come from the
+//     house duration grammar (durationLabels.ts) like every other reading in the app, and the seconds
+//     this rounds away are not lost — they ride the tooltip, which takes formatToolDuration's precise
+//     form. Until 2026-08-31 this row spelled its units out ("41 MIN") to keep a small-capital M off a
+//     petite-caps line; the grammar's own hour rung does that job now, so no reading here can be a bare
+//     three-digit M.
 //
 //  3. THE TONE is binary. A genuine failure is the red every tool card uses; EVERYTHING else, including
 //     an interruption, is the quiet muted gray. Amber is gone from this row: it was saying "caution"

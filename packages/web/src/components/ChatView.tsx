@@ -4521,7 +4521,7 @@ export function WorkingIndicator({ since, startedAt, activityLabel, run }: { sin
   // now (see relativeToolPaths), so at any realistic width there is nothing left to clip.
   // The duration keeps `shrink-0 whitespace-nowrap` — it is one value and must never break at its
   // own space, which is exactly how the old `828m 49s` spelling used to put the minutes outside the
-  // panel. Two units is now the ceiling (`13h 48m` for that same span; see formatRuntimeElapsed), so
+  // panel. Two units is now the ceiling (`13hr 48m` for that same span; see formatRuntimeElapsed), so
   // the reading is short as well as unbreakable.
   const row = (
     <>

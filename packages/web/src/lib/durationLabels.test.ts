@@ -9,12 +9,18 @@ import { formatAgo, formatCountdown, formatCountdownSeconds, formatElapsedMinute
 // ms · s · m · hr · d · w — whatever ladder it climbs. This test is the pin: a reading that reverts to
 // `40 min`, `2 hr 8 min` or `1h 17m` fails here rather than shipping as a fifth vocabulary.
 test("every formatter spells its units in the house grammar", () => {
-  assert.equal(formatToolDuration(128 * 60_000), "128m")
-  assert.equal(formatToolDuration(128 * 60_000 + 3_000), "128m 3s")
   assert.equal(formatToolDuration(450), "450ms")
   assert.equal(formatToolDuration(0.4), "<1ms")
   assert.equal(formatToolDuration(2_300), "2.3s")
+  assert.equal(formatToolDuration(9 * 60_000 + 12_000), "9m 12s", "a tool call keeps its seconds")
+  // …until an hour, where the next rung takes over. A flat `128m` renders `128M` on the card's
+  // petite-caps meta line and reads as a count; `2hr 8m` cannot.
+  assert.equal(formatToolDuration(128 * 60_000), "2hr 8m")
+  assert.equal(formatToolDuration(128 * 60_000 + 3_000), "2hr 8m")
+  assert.equal(formatToolDuration(120 * 60_000), "2hr", "a whole hour drops the empty minutes")
   assert.equal(formatElapsedMinutes(128), "2hr 8m")
+  assert.equal(formatElapsedMinutes(7 * 24 * 60 + 12), "7d", "and it climbs to days rather than saying 169hr")
+  assert.equal(formatElapsedMinutes(3 * 24 * 60 + 4 * 60), "3d 4hr")
   assert.equal(formatElapsedMinutes(40), "40m", "the maintainer's own example: 40 minutes reads 40m")
   assert.equal(formatElapsedMinutes(155), "2hr 35m", "and the compound one")
   assert.equal(formatFixedDuration(128 * 60_000), "2hr 8m")
@@ -29,7 +35,8 @@ test("every formatter spells its units in the house grammar", () => {
   const HOUSE_GRAMMAR = /^(?:<1|\d+(?:\.\d)?)(?:ms|s|m|hr|d|w|mo|y)(?: \d+(?:ms|s|m|hr|d|w|mo|y))?$/
   const readings = [
     formatToolDuration(0.4), formatToolDuration(450), formatToolDuration(2_300),
-    formatToolDuration(128 * 60_000 + 3_000), formatElapsedMinutes(155), formatFixedDuration(128 * 60_000),
+    formatToolDuration(9 * 60_000 + 12_000), formatToolDuration(128 * 60_000 + 3_000),
+    formatElapsedMinutes(155), formatElapsedMinutes(3 * 24 * 60 + 4 * 60), formatFixedDuration(128 * 60_000),
     formatCountdownSeconds(5_400), formatCountdownSeconds(128), formatCompactElapsed(65 * 60_000),
     formatRuntimeElapsed(3 * 86_400_000 + 4 * 3_600_000), formatRuntimeElapsed(13 * 3_600_000 + 48 * 60_000),
     formatCountdown(3 * 3_600_000 + 5 * 60_000), formatCountdown(2 * 86_400_000 + 3 * 3_600_000),

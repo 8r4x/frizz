@@ -12,7 +12,9 @@ import "./styles.css"
 // Both the last-active reading AND the RUNTIME (`startedAt`, on every child row and on the dispatch
 // card) are relative to NOW, so seed them that way rather than with a frozen date — a child dispatched
 // 12 min ago should read "12m" whenever the fixture is opened. A hard-coded 2026-07-14 read "372hr 53m"
-// the moment the dispatch card started rendering a runtime, which is nobody's real reading.
+// the moment the dispatch card started rendering a runtime, which is nobody's real reading. The SHELL
+// rows kept that frozen date until 2026-08-31 and were reading "1169hr 10m" by then; they are relative
+// now too.
 const agoIso = (minutes: number): string => new Date(Date.now() - minutes * 60_000).toISOString()
 
 // How long the "fresh" foreground shell row has been running, from the URL, so a test can pin BOTH sides
@@ -59,12 +61,12 @@ const thread: ThreadView = {
     { id: "agent-rested", label: "Fan out the migration sweep", startedAt: agoIso(23), state: "rested", subagentType: "frizz:opus-high", lastActivityAt: agoIso(18) },
   ],
   bgShells: [
-    { label: "Watch CI", startedAt: "2026-07-14T10:00:00.000Z", state: "running", lastActivityAt: agoIso(1) },
-    { label: "Tail build log", startedAt: "2026-07-14T10:01:00.000Z", state: "running", lastActivityAt: agoIso(0) },
+    { label: "Watch CI", startedAt: agoIso(34), state: "running", lastActivityAt: agoIso(1) },
+    { label: "Tail build log", startedAt: agoIso(33), state: "running", lastActivityAt: agoIso(0) },
     // Alive but quiet: a dev server waiting for requests, and a Monitor (which has no output file, so
     // it is ALWAYS reported stale). Both are live processes — they breathe, never a dead gray dot.
-    { label: "Dev server (waiting, no recent output)", startedAt: "2026-07-14T09:00:00.000Z", state: "stale", lastActivityAt: agoIso(78) },
-    { label: "Monitor: PR checks", startedAt: "2026-07-14T09:30:00.000Z", state: "stale" },
+    { label: "Dev server (waiting, no recent output)", startedAt: agoIso(94), state: "stale", lastActivityAt: agoIso(78) },
+    { label: "Monitor: PR checks", startedAt: agoIso(64), state: "stale" },
   ],
   watches: [],
   questions: [],
