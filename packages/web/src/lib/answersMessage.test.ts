@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { ANSWER_FOLLOW_UP_MARKER, BURIED_ANSWERS_HEADER, DISMISSED_ANSWER, questionAnswerMessage } from "@frizz/shared"
-import { parseAnswersMessage, parseBuriedAnswersMessage, parseAnswersCard, pairAnswersMessage, pairAllAnswers, type MsgLike } from "./answersMessage.ts"
+import { parseAnswersMessage, parseBuriedAnswersMessage, parseAnswersCard, pairAnswersMessage, pairAllAnswers, unrenderedAnswers, type MsgLike } from "./answersMessage.ts"
 
 test("parses the multi-block composed-answer format into numbered rows", () => {
   const parsed = parseAnswersMessage("Answers:\n1. B. Hard-error with an install hint\n2. A. Preload it")
@@ -313,4 +313,47 @@ test("the buried form and the legacy bare-chip form read displayText the same wa
 test("a user turn with no projection still reads its raw text", () => {
   const paired = pairAnswersMessage([qmsg("Pick?\n- A. x"), user("Answers:\n1. A. x")], 1)
   assert.equal(paired?.[0].answer, "A. x")
+})
+
+// ---- unrenderedAnswers (the in-flight card stands down once the transcript draws the answer) -------
+//
+// The 2026-09-01 double render: the human answers a registered question, frizz's delivery lands in the
+// worker's own queue (a `queue-operation enqueue`, which the transcript draws as this very card), and
+// `answersInFlight` is still set because it is spent by the worker RECEIVING the answer — a later event.
+// So the same answer drew twice, in two identical dimmed cards, for as long as the in-flight turn ran.
+const WIRE = 'Answers to earlier questions:\n1. “Add a Kimi key, or leave the cells off?” → just test it ad hoc'
+
+test("unrenderedAnswers: with nothing on screen the whole in-flight card still has to draw", () => {
+  assert.deepEqual(unrenderedAnswers([user("go")], WIRE), [
+    { n: 1, answer: "just test it ad hoc", question: "Add a Kimi key, or leave the cells off?" },
+  ])
+})
+
+test("unrenderedAnswers: the transcript's own copy of the delivery retires the pinned card", () => {
+  assert.equal(unrenderedAnswers([user("go"), user(WIRE)], WIRE), null)
+})
+
+test("unrenderedAnswers: frizz's riders on the delivered copy do not defeat the match", () => {
+  const delivered: MsgLike = { role: "user", text: `${WIRE}${GAP_NOTE}`, displayText: WIRE }
+  assert.equal(unrenderedAnswers([delivered], WIRE), null)
+})
+
+// The board composes ONE message from every unspent row; the scheduler delivers per BATCH. A half
+// delivered pair must leave the pinned card saying the half nobody can see yet — not all of it, and
+// not none of it.
+test("unrenderedAnswers: a partly delivered batch keeps only the rows still unseen", () => {
+  const both = 'Answers to earlier questions:\n1. “First?” → A\n2. “Second?” → B'
+  const delivered = user('Answers to earlier questions:\n1. “First?” → A')
+  assert.deepEqual(unrenderedAnswers([delivered], both), [{ n: 2, answer: "B", question: "Second?" }])
+})
+
+test("unrenderedAnswers: no wire, or an unreadable one, draws nothing", () => {
+  assert.equal(unrenderedAnswers([user("go")], undefined), null)
+  assert.equal(unrenderedAnswers([user("go")], "an ordinary steer"), null)
+})
+
+// A same-worded answer to a DIFFERENT question is not the same answer, so it must not retire the card.
+test("unrenderedAnswers: the question is part of what makes two rows the same answer", () => {
+  const other = user('Answers to earlier questions:\n1. “Something else entirely?” → just test it ad hoc')
+  assert.equal(unrenderedAnswers([other], WIRE)?.length, 1)
 })

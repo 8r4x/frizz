@@ -177,6 +177,43 @@ export function isAnswersMessage(m: MsgLike): boolean {
   return parseAnswersCard(answersText(m)) !== null
 }
 
+// One answered question, as a key: what makes two renders of it THE SAME ANSWER. The question text plus
+// the answer, because that pair is what the card draws and it is stable across both of the wire's forms.
+const answerKey = (a: PairedAnswer): string => `${a.question ?? ""} ${a.answer}`
+
+/** WHAT THE IN-FLIGHT ANSWER CARD STILL HAS TO SAY — the rows of `wire` that no message in the
+ *  transcript is already drawing. Null when there is nothing left for it to add.
+ *
+ *  The board hands every surface `answersInFlight`: the answer the human has already sent, composed from
+ *  the registry, drawn dimmed at the tail so the seconds before the worker has it are not a hole (see
+ *  board.answersInFlight). It is spent by the worker RECEIVING the answer — the newest USER record — and
+ *  that is deliberately later than the delivery being handed to a channel.
+ *
+ *  But the transcript reaches the same bytes FIRST. Frizz's delivery lands in the worker's own queue the
+ *  moment it is injected, and Claude Code writes a `queue-operation enqueue` for it — which the transcript
+ *  renders as a queued bubble, i.e. as this very Answers card, while `lastUserAt` has not moved because no
+ *  user record exists yet. So for the whole length of the turn that was in flight (minutes on a loaded
+ *  machine) the human saw their own answer TWICE, in two identical dimmed cards, one in the transcript and
+ *  one pinned above the composer (reported 2026-09-01, with a screenshot of both). The same overlap opens
+ *  a shorter way whenever a transcript push simply beats the board push that spends the row.
+ *
+ *  The transcript's copy is the one at its true place in the conversation, so it wins and the pinned card
+ *  stands down. Row-wise rather than whole-message, because the board composes ONE message from every
+ *  unspent row while the scheduler delivers per BATCH: two answers given in two clicks can be half
+ *  delivered, and then the card's job is the half that is not on screen yet — not all of it, and not none. */
+export function unrenderedAnswers(messages: readonly MsgLike[], wire: string | undefined): PairedAnswer[] | null {
+  const rows = wire ? parseAnswersCard(wire) : null
+  if (!rows?.length) return null
+  const shown = new Set<string>()
+  for (const m of messages) {
+    if (m.role !== "user" || m.kind === "event" || m.kind === "reasoning") continue
+    for (const a of parseAnswersCard(answersText(m)) ?? []) shown.add(answerKey(a))
+  }
+  if (shown.size === 0) return rows
+  const left = rows.filter((a) => !shown.has(answerKey(a)))
+  return left.length > 0 ? left : null
+}
+
 // The ```question blocks of the NEAREST EARLIER ask, looking backward from `index` with the same skip
 // discipline as useLiveAnswering: kind:"event"/"reasoning" punctuation and text-less (tool-only) turns
 // are scanned past, and so is a prose-only assistant message WITHOUT blocks (a worker often follows its

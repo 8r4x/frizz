@@ -74,6 +74,10 @@ test("questions from one call group together; questions from two rests do not", 
 // in-flight ANSWER belongs to the TAIL wherever the questions sit — it is the human's newest turn, and
 // the delivered copy of it lands at the tail a second later — so a mount placed at an older rest must
 // not draw it. Two drawing it would render the answer twice, in two places, seconds apart.
+//
+// The prop is OPT-IN (`inFlight`, the rows the transcript is not already drawing — see
+// unrenderedAnswers) rather than the opt-out `showInFlight` it was until 2026-09-01, so an anchored
+// mount draws nothing by simply not passing it, and this reads the same guarantee off the new spelling.
 test("a mount placed at an older rest never draws the in-flight answer", () => {
   for (const file of ["ChatView.tsx", "TodosView.tsx"]) {
     const source = readFileSync(new URL(`../components/${file}`, import.meta.url), "utf8")
@@ -84,8 +88,12 @@ test("a mount placed at an older rest never draws the in-flight answer", () => {
     const anchored = mounts.filter((m) => /questions=\{/.test(m) && !/[Tt]ail\}/.test(m))
     assert.equal(tail.length, 1, `${file}: exactly one tail mount`)
     assert.ok(anchored.length >= 1, `${file}: at least one anchored mount`)
-    assert.ok(!/showInFlight=\{false\}/.test(tail[0]), `${file}: the tail mount draws the in-flight answer`)
-    for (const m of anchored) assert.match(m, /showInFlight=\{false\}/, `${file}: an anchored mount must not`)
+    assert.match(tail[0], /inFlight=\{/, `${file}: the tail mount draws the in-flight answer`)
+    for (const m of anchored) assert.ok(!/inFlight=\{/.test(m), `${file}: an anchored mount must not`)
+    // …and the mount with no `questions` at all (the empty-transcript fallback) is a tail too.
+    for (const m of mounts.filter((x) => !/questions=\{/.test(x))) {
+      assert.match(m, /inFlight=\{/, `${file}: the fallback mount is a tail mount`)
+    }
   }
 })
 

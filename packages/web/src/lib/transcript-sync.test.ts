@@ -38,6 +38,33 @@ test("mergeOptimistic: the server's OWN queued copy also consumes the optimistic
   assert.equal(out.length, 1)
 })
 
+// FRIZZ'S OWN RIDERS MUST NOT DEFEAT CONSUMPTION. The copy handed to the worker carries the clock note
+// and the wake token, and the transcript is read from the WORKER's record — so the server's report of the
+// human's send is their text PLUS those. Compared raw it consumed nothing and the optimistic bubble was
+// re-appended: two identical gray bubbles of the operator's own message (reported 2026-09-01, alongside
+// the answers-card twin). The server hit the same thing in its ledger projection — see renderMatchKey.
+const GAP_NOTE = "⏱ Frizz: the message above arrived 4h 9m after your last one. It is now 2026-09-01 07:09."
+const WAKE_TOKEN = `<!-- frizz-wake:${"a".repeat(64)} -->`
+
+test("mergeOptimistic: the clock note frizz appends does not stop the server's copy consuming the bubble", () => {
+  const typed = "please also handle the empty case"
+  const out = mergeOptimistic(
+    [user(typed, { queued: true })],
+    [user(`${typed}\n\n${GAP_NOTE}`, { queued: true, sourceId: "server-queued-turn" })],
+  )
+  assert.equal(out.length, 1, "the optimistic copy must not survive beside the server's own record")
+})
+
+test("mergeOptimistic: a coalesced run is reconstructed through the riders too", () => {
+  const first = "first send"
+  const second = "second send"
+  const out = mergeOptimistic(
+    [user("old", { sourceId: "old-turn" }), user(first, { queued: true }), user(second, { queued: true })],
+    [user("old", { sourceId: "old-turn" }), user(`${first}\n\n${second}\n\n${WAKE_TOKEN}`, { sourceId: "landed-turn" })],
+  )
+  assert.equal(out.length, 2)
+})
+
 test("mergeOptimistic: an unchanged server queued copy is not appended beside itself", () => {
   const serverQueued = user("landed", { queued: true, sourceId: "server-queued-turn" })
   const incoming = [serverQueued]

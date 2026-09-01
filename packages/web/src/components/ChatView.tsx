@@ -25,7 +25,7 @@ import { splitQuestionBlocks, parseQuestionBlock, type QuestionKind, type BlockA
 import { splitFenceBlocks, type FenceKind } from "../lib/fenceBlocks.ts"
 import { showsRegisteredDoneCard } from "../lib/registeredDone.ts"
 import { RestedCard, showsRestedCard } from "./RestedCard.tsx"
-import { parseAnswersCard, pairAllAnswers, type PairedAnswer } from "../lib/answersMessage.ts"
+import { parseAnswersCard, pairAllAnswers, unrenderedAnswers, type PairedAnswer } from "../lib/answersMessage.ts"
 import { questionsByAnchor } from "../lib/questionAnchor.ts"
 import { fenceStandsFor, registeredStandingAt } from "../lib/questionShadow.ts"
 import { FrizzWake } from "./FrizzWake.tsx"
@@ -288,6 +288,9 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
   // needs the whole list; Message renders per-message). null — a stable primitive — at every ordinary
   // index, so the memoized Message only sees a `paired` prop change on actual answers-messages.
   const paired = useMemo(() => pairAllAnswers(messages), [messages])
+  // What the human's in-flight answer still has to SAY — the rows of it no message above is already
+  // drawing, so the pinned card stands down instead of doubling one the transcript now carries itself.
+  const inFlightAnswers = useMemo(() => unrenderedAnswers(messages, thread?.answersInFlight), [messages, thread?.answersInFlight])
   // The CURRENT ASK — the human's most recent landed turn (see lastAskIndex for what is excluded and
   // why); it supplies the retry text after a provider fault. -1 when the transcript has no human turn yet.
   const lastUserIdx = useMemo(() => lastAskIndex(messages), [messages])
@@ -399,6 +402,7 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
           transcriptKey={q.data?.transcriptKey}
           messages={presentationMessages}
           paired={paired}
+          inFlightAnswers={inFlightAnswers}
           answeringForMessage={answeringForMessage}
           thread={thread}
           running={running}
@@ -423,7 +427,7 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
       />
       {/* A REGISTERED question sits with the pending interactions rather than in the transcript: both are
           things the human still owes an answer to, and neither may scroll out of reach. */}
-      <RegisteredQuestionStack thread={thread} className="px-6 pt-5" />
+      <RegisteredQuestionStack thread={thread} inFlight={inFlightAnswers} className="px-6 pt-5" />
       {q.transportFallback && (
         <div
           data-transcript-sync-fallback
@@ -685,6 +689,7 @@ function VirtualizedThreadTranscript({
   transcriptKey,
   messages,
   paired,
+  inFlightAnswers,
   answeringForMessage,
   thread,
   running,
@@ -705,6 +710,9 @@ function VirtualizedThreadTranscript({
   transcriptKey?: string
   messages: ChatMessage[]
   paired: (PairedAnswer[] | null)[]
+  // Computed by the parent off the SAME list — the in-flight answer's rows this transcript is not
+  // already drawing. See unrenderedAnswers.
+  inFlightAnswers: PairedAnswer[] | null
   answeringForMessage: LiveAnswering["answeringForMessage"]
   thread: ThreadViewData | undefined
   running: boolean
@@ -1217,11 +1225,11 @@ function VirtualizedThreadTranscript({
                 {/* The TAIL group only — questions asked at an older rest render up there, in place. The
                     in-flight answer stays here whatever the questions do: it is the human's newest turn,
                     and the delivered copy of it lands at the tail a second later. */}
-                <RegisteredQuestionStack thread={thread} questions={questionGroups.tail} className="px-6 pt-5" />
+                <RegisteredQuestionStack thread={thread} questions={questionGroups.tail} inFlight={inFlightAnswers} className="px-6 pt-5" />
               </>
             )
             : row.kind === "questions" ? (
-              <RegisteredQuestionStack thread={thread} questions={row.questions} showInFlight={false} className="px-6 pt-5" />
+              <RegisteredQuestionStack thread={thread} questions={row.questions} className="px-6 pt-5" />
             ) : row.kind === "transport-fallback" ? (
               transportFallback ? <div className="px-6 pt-3"><div
                 data-transcript-sync-fallback

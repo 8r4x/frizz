@@ -9,16 +9,17 @@
 // over the other two producers is the STATIC TREE: an option may carry follow-ups that become live only
 // once that option is picked, so one registration renders as a stack of cards that grows as it is
 // answered. lib/registeredQuestion.ts performs that walk; nothing here decides which nodes are live.
-import { useMemo, useState } from "react"
+import { useContext, useMemo, useState } from "react"
 import { useMutation } from "@tanstack/react-query"
 import { X } from "lucide-react"
 import type { QuestionAnswer, RegisteredQuestionView, ThreadView } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { draftKey, draftStore, useDraftValues, useProjectDir } from "../lib/drafts.ts"
 import type { BlockAnswer } from "../lib/questionBlocks.ts"
-import { parseAnswersCard } from "../lib/answersMessage.ts"
+import type { PairedAnswer } from "../lib/answersMessage.ts"
 import { ROOT_PATH, liveQuestionNodes, nodeAnswered, registeredAnswer } from "../lib/registeredQuestion.ts"
 import { AnswersCard } from "./AnswersCard.tsx"
+import { QueueDismissContext } from "./ChatView.tsx"
 import { QuestionBlockCard } from "./QuestionBlockCard.tsx"
 
 function errorText(error: unknown): string {
@@ -34,7 +35,7 @@ const pickKey = (id: string, path: string) => `${id}|${path}`
 export function RegisteredQuestionStack({
   thread,
   questions: only,
-  showInFlight = true,
+  inFlight = null,
   className = "",
 }: {
   thread: ThreadView | undefined
@@ -42,9 +43,12 @@ export function RegisteredQuestionStack({
   // REST IT WAS ASKED AT rather than at the transcript's tail (lib/questionAnchor), so one thread can
   // have several of these mounted at different depths — each handed its own group.
   questions?: readonly RegisteredQuestionView[]
-  // The in-flight ANSWER belongs to the tail wherever the questions sit: it is the human's newest turn,
-  // and the delivered copy of it lands at the tail a second later. Only the tail mount draws it.
-  showInFlight?: boolean
+  // THE ANSWER ALREADY SENT AND NOT YET ON SCREEN ANYWHERE ELSE — the rows of `thread.answersInFlight`
+  // the transcript is not already drawing (lib/answersMessage.unrenderedAnswers). Passed IN rather than
+  // read off the thread here, because deciding it needs the transcript this stack is pinned beside, and
+  // because only ONE mount may draw it: the answer is the human's newest turn and belongs at the tail
+  // however deep the questions themselves sit. An anchored mount simply omits it.
+  inFlight?: PairedAnswer[] | null
   className?: string
 }) {
   const slug = thread?.id
@@ -52,6 +56,13 @@ export function RegisteredQuestionStack({
   const projectDir = useProjectDir()
   const [picks, setPicks] = useState<Picks>(() => new Map())
   const [error, setError] = useState<string>()
+  // THE QUEUE CARD DISSOLVES ON SEND, like every other action on it. Answering is the same commitment as
+  // a fenced Send answers or a composer steer — both of which take the card out of the queue the instant
+  // the human commits, without waiting on the round-trip (see useLiveAnswering's onSent) — and this was
+  // the one send that did not, so a card answered on a loaded machine sat there for the seconds it took
+  // the board to catch up, which is the window its answer rendered twice in (2026-09-01). Null on the
+  // thread page, where there is no card to dismiss.
+  const queueDismiss = useContext(QueueDismissContext)
 
   // Every free-text box of every question, subscribed as one batch — the draft store's own hook takes a
   // key list, and the set only changes when a question is registered or settled.
@@ -93,7 +104,13 @@ export function RegisteredQuestionStack({
         if (q && slug) for (const path of allPaths(q)) draftStore.set(draftKey.question(projectDir, slug, q.id, path), "")
       }
     },
-    onError: (cause) => setError(errorText(cause)),
+    onError: (cause) => {
+      // The card faded on click; the answer did not land, so put it back rather than leaving the human
+      // looking at a queue that quietly swallowed their reply. Same reversal an optimistic Mark-as-done
+      // makes when the server declines it.
+      queueDismiss?.cancel()
+      setError(errorText(cause))
+    },
   })
   const dismiss = useMutation({
     mutationFn: async (id: string) => rpc.dismissQuestions({ slug: slug!, ids: [id] }),
@@ -107,12 +124,13 @@ export function RegisteredQuestionStack({
   // "Rested without a sign-off" card in the hole (maintainer 2026-08-27: "a little card that, for like
   // 5+ seconds, just says that the thread rested without a sign-off before it shows up my answer").
   //
-  // The board composes the bytes the delivery will carry, and this parses them with the reader the chat
-  // uses on the landed turn — so the in-flight card and the real one are the SAME card and the swap is
-  // invisible. Dimmed while it is in flight, exactly like an optimistic follow-up bubble.
-  const inFlight = showInFlight && thread?.answersInFlight ? parseAnswersCard(thread.answersInFlight) : null
+  // The board composes the bytes the delivery will carry, and the caller parses them with the reader the
+  // chat uses on the landed turn — so the in-flight card and the real one are the SAME card and the swap
+  // is invisible. Dimmed while it is in flight, exactly like an optimistic follow-up bubble. The caller
+  // also decides when it has become a SECOND copy of a card the transcript is already drawing, which is
+  // the whole reason the rows arrive as a prop rather than off the thread — see unrenderedAnswers.
   if (!slug || questions.length === 0) {
-    if (!slug || !inFlight) return null
+    if (!slug || !inFlight?.length) return null
     return (
       <section data-answers-in-flight aria-label="Your answer, on its way to the worker" className={`flex min-w-0 flex-col items-end ${className}`}>
         <AnswersCard answers={inFlight} queued />
@@ -122,6 +140,9 @@ export function RegisteredQuestionStack({
   const submit = () => {
     if (staged.length === 0 || send.isPending) return
     setError(undefined)
+    // Local truth FIRST, then the network — the ordering every other send on this card obeys, and the
+    // whole of what "the card goes away when I answer it" means on a machine under load.
+    queueDismiss?.dismiss()
     send.mutate(staged)
   }
 

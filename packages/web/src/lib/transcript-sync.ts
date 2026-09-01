@@ -1,7 +1,20 @@
-import type { TranscriptMessage } from "@frizz/shared"
+import { stripHumanGapNote, stripWakeDeliveryToken, type TranscriptMessage } from "@frizz/shared"
 
 // A transcript message that may carry the client-only/queued flag (server pending OR local optimistic).
 export type QueuedMessage = TranscriptMessage & { queued?: boolean }
+
+// The canonical form for matching an OPTIMISTIC bubble against the server's own record of that send.
+//
+// The worker's copy of a follow-up is not byte-identical to what the human typed: frizz appends its own
+// machine-facing riders — the clock note (humanGapNote, on any reply landing ≥20min after the agent last
+// spoke) and the wake delivery token — and the transcript is read from the WORKER's record, so those are
+// part of `text`. Comparing raw text therefore fails to consume the optimistic copy of the very send the
+// server is reporting, and the bubble is re-appended beside it: two identical gray bubbles of the human's
+// own message, until a later push tags the record with its deliveryId. The server hit exactly this in its
+// own ledger projection (delivery-ledger.renderMatchKey, the maintainer's 2026-08-24 double render); this
+// is the same shedding on the client half. `displayText` is the server's own projection of these riders,
+// so it is preferred where present and the strippers cover a record that arrived without one.
+const matchKey = (m: QueuedMessage): string => stripHumanGapNote(stripWakeDeliveryToken(m.displayText ?? m.text)).trim()
 
 function freshServerUserTexts(prev: QueuedMessage[], incoming: QueuedMessage[]): string[] {
   const previousSourceIds = new Set(
@@ -9,7 +22,7 @@ function freshServerUserTexts(prev: QueuedMessage[], incoming: QueuedMessage[]):
   )
   return incoming
     .filter((message) => message.role === "user" && message.sourceId && !previousSourceIds.has(message.sourceId))
-    .map((message) => message.text.trim())
+    .map(matchKey)
 }
 
 function consumedOptimisticIndexes(optimistic: QueuedMessage[], serverUserTexts: string[]): Set<number> {
@@ -19,7 +32,7 @@ function consumedOptimisticIndexes(optimistic: QueuedMessage[], serverUserTexts:
   for (const serverText of serverUserTexts) {
     for (let start = 0; start < optimistic.length; start++) {
       if (consumed.has(start)) continue
-      const first = optimistic[start].text.trim()
+      const first = matchKey(optimistic[start])
       if (serverText === first) {
         consumed.add(start)
         break
@@ -28,7 +41,7 @@ function consumedOptimisticIndexes(optimistic: QueuedMessage[], serverUserTexts:
       let offset = first.length
       for (let end = start + 1; end < optimistic.length; end++) {
         if (consumed.has(end)) break
-        const next = optimistic[end].text.trim()
+        const next = matchKey(optimistic[end])
         if (!serverText.startsWith(separator, offset) || !serverText.startsWith(next, offset + separator.length)) break
         offset += separator.length + next.length
         if (offset !== serverText.length) continue

@@ -14,7 +14,7 @@ import { hasQuestionBlock } from "../lib/questionBlocks.ts"
 import { showsRegisteredDoneCard } from "../lib/registeredDone.ts"
 import { RestedCard, showsRestedCard } from "./RestedCard.tsx"
 import { collapseMiddleRuns, opensQueueSegment, queueCollapseSegments, segmentFolds, supersededAskIndices, survivesQueueCollapse } from "../lib/queueCollapse.ts"
-import { pairAllAnswers } from "../lib/answersMessage.ts"
+import { pairAllAnswers, unrenderedAnswers } from "../lib/answersMessage.ts"
 import { lastHumanTurnIndex } from "../lib/messagePresentation.ts"
 import { questionsByAnchor } from "../lib/questionAnchor.ts"
 import { allFencesShadowed, registeredStandingAt } from "../lib/questionShadow.ts"
@@ -904,6 +904,10 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
   // The registered questions standing at each message — its rest and every later one — so a fence
   // restating or naming one folds into its card (lib/questionShadow), here exactly as on the thread page.
   const shadowedByMessage = useMemo(() => registeredStandingAt(messages, thread?.questions ?? []), [messages, thread?.questions])
+  // What the human's in-flight answer still has to SAY — the rows of it the transcript above is not
+  // already drawing. Over `messages`, not the window: an answer scrolled above the fold is still on this
+  // card's page and a second copy of it at the tail is the duplicate either way.
+  const inFlightAnswers = useMemo(() => unrenderedAnswers(messages, thread.answersInFlight), [messages, thread.answersInFlight])
   const hasMore = visibleStart > 0 || q.data?.hasEarlier === true
 
   useLayoutEffect(() => {
@@ -1272,7 +1276,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
                   const [anchor, group] = pending.shift()!
                   if (prevTailIsMeta !== null) out.push(<VSpace key={`qa-space-${anchor}`} h={STEP} />)
                   out.push(
-                    <RegisteredQuestionStack key={`qa-${anchor}`} thread={thread} questions={group} showInFlight={false} />,
+                    <RegisteredQuestionStack key={`qa-${anchor}`} thread={thread} questions={group} />,
                   )
                   prevTailIsMeta = false
                 }
@@ -1494,7 +1498,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
           is a gate on a turn already in flight. The tail IS the context for the question, so the card
           reads top to bottom: what happened, then what the worker needs decided, then the prompt box.
           It carries its own Send answers verb, so it sits above the fence path's identical button. */}
-      <RegisteredQuestionStack thread={thread} questions={questionAnchors.tail} className="shrink-0 px-5 pb-4 pt-0" />
+      <RegisteredQuestionStack thread={thread} questions={questionAnchors.tail} inFlight={inFlightAnswers} className="shrink-0 px-5 pb-4 pt-0" />
       {/* Bottom of the card. Answerable question blocks add a "Send answers" action that composes the
           per-block answers into one reply — but the free-form composer stays PRESENT underneath it
           (maintainer 2026-07-22): answering the question is the primary path, not the only one, and
