@@ -15,6 +15,7 @@ import { showsRegisteredDoneCard } from "../lib/registeredDone.ts"
 import { RestedCard, showsRestedCard } from "./RestedCard.tsx"
 import { collapseMiddleRuns, opensQueueSegment, queueCollapseSegments, segmentFolds, supersededAskIndices, survivesQueueCollapse } from "../lib/queueCollapse.ts"
 import { pairAllAnswers } from "../lib/answersMessage.ts"
+import { lastHumanTurnIndex } from "../lib/messagePresentation.ts"
 import { questionsByAnchor } from "../lib/questionAnchor.ts"
 import { allFencesShadowed, registeredStandingAt } from "../lib/questionShadow.ts"
 import { FenceCard, LimitPauseCard, Message, PermPolicyDenialCard, PermPromptBanner, PendingAskCard, VSpace, STEP, messageTailIsMeta, messageHeadIsMeta, messageRendersNothing, messageHasRenderableText, lastAssistantIndex } from "./ChatView.tsx"
@@ -731,24 +732,11 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
   // may need messages above the visible window). Indexed by GLOBAL message index — the same one the
   // Message key uses. null at ordinary indices keeps the memoized Message's props stable.
   const paired = useMemo(() => pairAllAnswers(messages), [messages])
-  // Default window: everything back to (and INCLUDING) the most recent message THE HUMAN wrote — a
-  // built-in reminder of what they last asked for. No such message yet → the whole transcript.
-  //
-  // `role === "user"` alone is not the human. Frizz writes as the user: the Goal delivery, the sign-off
-  // reminder, a watcher wake are all user records carrying `wake` (the server's own tell, set by the
-  // build that composed them). Anchoring on those cut the card at frizz's own boilerplate and hid the
-  // task — the card opened on an answer to a question the reader could no longer see (maintainer
-  // 2026-08-12: "queue cards STILL need to go all the way back to the last user message. that's
-  // important context that needs to be surfaced").
-  //
-  // A queued send is skipped too: it has not been delivered, so nothing after it is a reply to it.
-  const lastUserIdx = useMemo(() => {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const m = messages[i]
-      if (m.role === "user" && !m.wake && !m.queued) return i
-    }
-    return 0
-  }, [messages])
+  // Default window: everything back to (and INCLUDING) the human's most recent INTERACTION — a built-in
+  // reminder of what they last asked for. `role === "user"` alone is not the human, and an answer to a
+  // registered question is the human even though frizz delivered it: see lastHumanTurnIndex, which owns
+  // both halves of that rule. No such message yet → the whole transcript.
+  const lastUserIdx = useMemo(() => lastHumanTurnIndex(messages), [messages])
   // Where the CURRENT TURN starts: one past the most recent `rest` divider that still has renderable
   // content after it — an agent that rested and was then woken again (a background task, a timer, a
   // sub-agent returning) carries the whole PREVIOUS turn above that line. The TRAILING rest is
