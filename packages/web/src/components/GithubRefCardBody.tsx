@@ -10,6 +10,7 @@ import {
   GitPullRequestDraft,
 } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
+import { PRIMER } from "../lib/primer.ts"
 
 // The CONTENTS of a GitHub hovercard — the panel GithubHovercards.tsx anchors under a `#123` or a
 // commit hash. Split from the hover machinery so it can be rendered from a fixture with a literal
@@ -22,19 +23,20 @@ import type { LucideIcon } from "lucide-react"
 // on an issue is a vocabulary people arrive already fluent in, and re-spelling it in accent-yellow
 // would make a familiar object unreadable.
 
-// GitHub's state colours (Primer dark). Kept as literals rather than theme tokens: they are not this
-// app's palette and must not drift with it — a merged PR is Primer purple wherever it is drawn.
-// Primer dark, read off github.githubassets.com 2026-08-14: `--bgColor-open-emphasis` resolves to
-// success `#238636`, `--bgColor-closed-emphasis` to danger `#da3633`, `--bgColor-draft-emphasis` to
-// neutral `#656c76`, and a merged/completed state to done `#8957e5`.
+// GitHub's state colours (Primer dark), from `lib/primer.ts` — which is where they live now that the
+// PR watch row, the picker and the file rail draw the same states and had each reached for a different
+// Tailwind hue instead. A PILL IS A SOLID FILL, so every one of these is a `bg*Emphasis`: the lighter
+// `fg*` pair is for a bare glyph, and a `#3fb950` pill would out-shout the title above it.
+// Read off github.githubassets.com 2026-08-14: `--bgColor-open-emphasis` resolves to success, closed
+// to danger, draft to neutral, and a merged/completed state to done.
 const STATE_STYLE: Record<string, { bg: string; icon: LucideIcon; label: string }> = {
-  OPEN_ISSUE: { bg: "#238636", icon: CircleDot, label: "Open" },
-  CLOSED_ISSUE: { bg: "#8957e5", icon: CircleCheck, label: "Closed" },
-  NOT_PLANNED: { bg: "#656c76", icon: CircleSlash, label: "Closed as not planned" },
-  OPEN_PR: { bg: "#238636", icon: GitPullRequest, label: "Open" },
-  DRAFT: { bg: "#656c76", icon: GitPullRequestDraft, label: "Draft" },
-  MERGED: { bg: "#8957e5", icon: GitMerge, label: "Merged" },
-  CLOSED_PR: { bg: "#da3633", icon: GitPullRequestClosed, label: "Closed" },
+  OPEN_ISSUE: { bg: PRIMER.bgSuccessEmphasis, icon: CircleDot, label: "Open" },
+  CLOSED_ISSUE: { bg: PRIMER.bgDoneEmphasis, icon: CircleCheck, label: "Closed" },
+  NOT_PLANNED: { bg: PRIMER.bgNeutralEmphasis, icon: CircleSlash, label: "Closed as not planned" },
+  OPEN_PR: { bg: PRIMER.bgSuccessEmphasis, icon: GitPullRequest, label: "Open" },
+  DRAFT: { bg: PRIMER.bgNeutralEmphasis, icon: GitPullRequestDraft, label: "Draft" },
+  MERGED: { bg: PRIMER.bgDoneEmphasis, icon: GitMerge, label: "Merged" },
+  CLOSED_PR: { bg: PRIMER.bgDangerEmphasis, icon: GitPullRequestClosed, label: "Closed" },
 }
 
 /** The pill key for one card — the state plus the two things that qualify it (kind, close reason). */
@@ -107,11 +109,12 @@ export function diffBlocks(additions: number, deletions: number): ("add" | "del"
 // Primer dark, read off github.githubassets.com the same day: the SQUARES take the emphasis fills
 // (`--bgColor-success-emphasis` etc.), the NUMBERS beside them take the lighter foreground pair. They
 // are deliberately different values — a solid `#3fb950` square would out-shout the text it labels.
-const DIFF_TEXT = { add: "#3fb950", del: "#f85149" } as const
+const DIFF_TEXT = { add: PRIMER.fgSuccess, del: PRIMER.fgDanger } as const
 const BLOCK_STYLE = {
-  add: { backgroundColor: "#238636", borderColor: "#238636" },
-  del: { backgroundColor: "#da3633", borderColor: "#da3633" },
-  none: { backgroundColor: "#656c7633", borderColor: "#3d444d" },
+  add: { backgroundColor: PRIMER.bgSuccessEmphasis, borderColor: PRIMER.bgSuccessEmphasis },
+  del: { backgroundColor: PRIMER.bgDangerEmphasis, borderColor: PRIMER.bgDangerEmphasis },
+  // The empty block is neutral at 0x33, over Primer's own `--borderColor-default` hairline.
+  none: { backgroundColor: `${PRIMER.bgNeutralEmphasis}33`, borderColor: "#3d444d" },
 } as const
 
 function Diffstat({ additions, deletions }: { additions: number; deletions: number }) {

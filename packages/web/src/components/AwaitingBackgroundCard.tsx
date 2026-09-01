@@ -39,6 +39,7 @@ import { pushBackgroundShellDrawer, pushSubAgentDrawer, showToast } from "../sto
 import { rpc } from "../api/rpc.ts"
 import { threadLifecycleAvailability } from "../lib/threadLifecycle.ts"
 import { ICON_LABEL_NUDGE } from "../lib/iconAlign.ts"
+import { PRIMER, PRIMER_DANGER_LINK } from "../lib/primer.ts"
 import { LinkedHtml } from "./LinkedHtml.tsx"
 import { BLOCK_RADIUS_INNER_BOTTOM, CARD_ACTION_EXPLAINER, CARD_BODY, CARD_PRIMARY_ACTION, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
 
@@ -237,9 +238,10 @@ function Spinner({ tone }: { tone: string }) {
  *  opacity is the one number the two GitHub surfaces disagree on: the Checks tab's SVG says `.5`, while
  *  the merge box in the maintainer's screenshot measures rgb(53,42,19) over rgb(2,4,8) — the attention
  *  colour at 0.25 — and the merge box is the surface this row mirrors, so 0.25 wins. The colour is
- *  Primer's dark `--fgColor-attention` `#d29922` (the screenshot's dot samples rgb(211,154,33));
- *  Tailwind's `amber-400` `#fbbf24` that this mark wore before was brighter and pinker than the thing
- *  it evoked. Drawn at 12 through the 16 viewBox so it scales with the column's other 12px circles:
+ *  Primer's `fgColor-attention` (the screenshot's dot samples rgb(211,154,33)); Tailwind's `amber-400`
+ *  that this mark wore before rendered `#ffb900`, brighter and pinker than the thing it evoked. It now
+ *  comes from `lib/primer.ts` with the row's other three verdicts, which is where that reading lives.
+ *  Drawn at 12 through the 16 viewBox so it scales with the column's other 12px circles:
  *  dot ⌀6, ring ⌀12 with a 1.5px pen.
  *
  *  Only the ring GROUP spins — the dot is concentric so spinning it would be invisible, but rotating the
@@ -247,7 +249,7 @@ function Spinner({ tone }: { tone: string }) {
  *  against the view-box (transform-box's SVG default), i.e. 8 8 — the ring's own centre. */
 function ChecksInProgress() {
   return (
-    <svg aria-hidden viewBox="0 0 16 16" width={12} height={12} fill="none" stroke="currentColor" overflow="visible" className={`${ON_CAP} text-[#d29922]`}>
+    <svg aria-hidden viewBox="0 0 16 16" width={12} height={12} fill="none" stroke="currentColor" overflow="visible" className={ON_CAP} style={{ color: PRIMER.fgAttention }}>
       <circle cx="8" cy="8" r="4" fill="currentColor" stroke="none" />
       <g strokeWidth="2" className="origin-center motion-safe:animate-spin">
         <circle cx="8" cy="8" r="7" opacity="0.25" />
@@ -257,12 +259,19 @@ function ChecksInProgress() {
   )
 }
 
+/** GITHUB'S STATE COLOURS, NOT TAILWIND'S NEAREST HUE (`lib/primer.ts` carries the readings). This row
+ *  sits inches under the hovercard's `#238636` "Open" pill and its `#3fb950` "+316", and `emerald-500`
+ *  renders `#00bc7d` — 32° of hue away, a teal beside a green (maintainer 2026-08-31: "These greens
+ *  just don't match"). A bare 12px glyph takes the `fg*` family, never the `bg*Emphasis` fill.
+ *
+ *  The CircleDashed arms stay on the app's `muted`, deliberately: "frizz has not polled this PR yet" is
+ *  not a GitHub state, so no Primer colour means it. */
 function ChecksGlyph({ status }: { status: GithubWatchStatus | undefined }) {
   if (!status) return <CircleDashed size={12} className={`${ON_CAP} text-muted/60`} />
-  if (status.state === "merged") return <GitMerge size={12} className={`${ON_CAP} text-purple-400`} />
-  if (status.state === "closed") return <GitPullRequestClosed size={12} className={`${ON_CAP} text-red-400`} />
-  if (status.checks === "failing") return <CircleX size={12} className={`${ON_CAP} text-red-400`} />
-  if (status.checks === "passing") return <CircleCheck size={12} className={`${ON_CAP} text-emerald-500`} />
+  if (status.state === "merged") return <GitMerge size={12} className={ON_CAP} style={{ color: PRIMER.fgDone }} />
+  if (status.state === "closed") return <GitPullRequestClosed size={12} className={ON_CAP} style={{ color: PRIMER.fgDanger }} />
+  if (status.checks === "failing") return <CircleX size={12} className={ON_CAP} style={{ color: PRIMER.fgDanger }} />
+  if (status.checks === "passing") return <CircleCheck size={12} className={ON_CAP} style={{ color: PRIMER.fgSuccess }} />
   if (status.checks === "running") return <ChecksInProgress />
   return <CircleDashed size={12} className={`${ON_CAP} text-muted/60`} />
 }
@@ -454,7 +463,7 @@ export function GithubWatchRow({ watch }: { watch: ThreadWatchView }) {
                 target="_blank"
                 rel="noreferrer noopener"
                 onMouseDown={(e) => e.stopPropagation()}
-                className="relative text-red-400/85 underline decoration-red-400/30 underline-offset-2 hover:decoration-red-400"
+                className={`relative underline underline-offset-2 ${PRIMER_DANGER_LINK}`}
               >
                 view failures
               </a>

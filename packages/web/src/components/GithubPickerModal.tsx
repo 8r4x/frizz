@@ -12,6 +12,7 @@ import { OPAQUE_PORTAL_SURFACE_ABOVE_DIALOG_Z } from "../lib/overlaySurface.ts"
 import { buildGithubBatchInput, dispatchProfileError } from "../lib/githubDispatch.ts"
 import { useGithubStatus } from "./GithubTrigger.tsx"
 import { applyRowSelection } from "../lib/rowRangeSelection.ts"
+import { PRIMER } from "../lib/primer.ts"
 
 type Kind = "issues" | "prs"
 type Sort = "recent" | "reactions"
@@ -378,16 +379,21 @@ function Segmented<T extends string>({
 // GitHub's own issue/PR state glyph — green open-dot for an open issue, purple merge for a merged PR,
 // etc. Mirrors github.com so the row reads the same at a glance. Defaults to the open glyph if state
 // is absent (the picker lists OPEN items, so that's the common case).
+//
+// The colours are GITHUB'S, from `lib/primer.ts`, not Tailwind's nearest hue — this list is read
+// beside the hovercard that renders the same PRs, and `emerald-500`/`purple-400` are 32°/10° of hue
+// away from the Primer values that card is drawn in. A bare glyph takes the `fg*` family; the
+// `bg*Emphasis` fills are for the hovercard's solid pills.
 function StateIcon({ item }: { item: GithubItem }) {
   const st = (item.state ?? "OPEN").toUpperCase()
   if (item.kind === "pr") {
-    if (st === "MERGED") return <GitMerge size={15} className="shrink-0 text-purple-400" />
-    if (st === "CLOSED") return <GitPullRequestClosed size={15} className="shrink-0 text-red-400" />
-    if (item.isDraft) return <GitPullRequestDraft size={15} className="shrink-0 text-muted/70" />
-    return <GitPullRequest size={15} className="shrink-0 text-emerald-500" />
+    if (st === "MERGED") return <GitMerge size={15} className="shrink-0" style={{ color: PRIMER.fgDone }} />
+    if (st === "CLOSED") return <GitPullRequestClosed size={15} className="shrink-0" style={{ color: PRIMER.fgDanger }} />
+    if (item.isDraft) return <GitPullRequestDraft size={15} className="shrink-0" style={{ color: PRIMER.fgNeutral }} />
+    return <GitPullRequest size={15} className="shrink-0" style={{ color: PRIMER.fgSuccess }} />
   }
-  if (st === "CLOSED") return <CircleCheck size={15} className="shrink-0 text-purple-400" />
-  return <CircleDot size={15} className="shrink-0 text-emerald-500" />
+  if (st === "CLOSED") return <CircleCheck size={15} className="shrink-0" style={{ color: PRIMER.fgDone }} />
+  return <CircleDot size={15} className="shrink-0" style={{ color: PRIMER.fgSuccess }} />
 }
 
 // Compact "opened <ago>" relative time (github-ish: 8h ago, 3d ago). Empty when the timestamp is absent.

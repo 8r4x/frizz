@@ -3,6 +3,7 @@ import type { EditedFile, ThreadView } from "@frizz/shared"
 import { useTranscript } from "../hooks.ts"
 import { openLocalPath } from "../lib/local-file-links.ts"
 import { useNowMs } from "../lib/liveClock.ts"
+import { PRIMER } from "../lib/primer.ts"
 import { AgentRow, BgShellRow, GithubWatchRow, ON_CAP, TimerRow, WaitGrid, WaitRow, liveAgents } from "./AwaitingBackgroundCard.tsx"
 
 // THE FULLSCREEN PAGE'S OPERATIONAL RAIL — what is going on in this thread, listed beside the transcript
@@ -42,6 +43,10 @@ function FileRow({ file }: { file: EditedFile }) {
   // last-edited clock both came off on review (maintainer 2026-08-31: "hide the 2×…", the age
   // "seems useless to me"). A zero side stays quiet; a file with no counted lines (an
   // unreconstructed apply_patch) carries no status at all rather than a fabricated 0.
+  //
+  // "GitHub-green" is now literally GitHub's green (`lib/primer.ts`), which is what the comment
+  // already claimed: it read `emerald-500`, which renders `#00bc7d` — a teal 32° off the `#3fb950`
+  // the hovercard's own `+316` is drawn in, on a rail that sits beside it.
   return (
     <WaitRow
       testKind="file"
@@ -54,9 +59,9 @@ function FileRow({ file }: { file: EditedFile }) {
       title={file.path}
       status={
         <>
-          {(file.added ?? 0) > 0 && <span className="text-emerald-500">+{file.added}</span>}
+          {(file.added ?? 0) > 0 && <span style={{ color: PRIMER.fgSuccess }}>+{file.added}</span>}
           {(file.added ?? 0) > 0 && (file.removed ?? 0) > 0 && " "}
-          {(file.removed ?? 0) > 0 && <span className="text-red-400">−{file.removed}</span>}
+          {(file.removed ?? 0) > 0 && <span style={{ color: PRIMER.fgDanger }}>−{file.removed}</span>}
         </>
       }
     />
