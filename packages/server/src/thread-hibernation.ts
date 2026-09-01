@@ -260,7 +260,7 @@ export function sweepHibernationOnce(deps: HibernationDeps): HibernationResult {
   }
   if (result.hibernated.length) {
     const detail = result.hibernated
-      .map(({ slug, idleMs: ms }) => `${slug} (idle ${(ms / 3_600_000).toFixed(1)}h)`)
+      .map(({ slug, idleMs: ms }) => `${slug} (idle ${(ms / 3_600_000).toFixed(1)}hr)`)
       .join(", ")
     deps.log?.(
       `hibernate: retired ${result.hibernated.length} idle broker daemon(s); each wakes on its next input by cold-resuming its transcript: ${detail}`,
