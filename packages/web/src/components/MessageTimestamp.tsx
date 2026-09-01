@@ -1,5 +1,6 @@
 import type { ReactNode } from "react"
 import { messageStamp } from "../lib/activityTime.ts"
+import type { StampHost } from "../lib/stampHost.ts"
 
 // The transcript's per-message time reading: invisible at rest, revealed at the message's own trailing
 // edge on hover. It answers the one question the thread header cannot — the header's "Last active 12
@@ -63,8 +64,11 @@ import { messageStamp } from "../lib/activityTime.ts"
  * that day the transcript's QUEUED row shipped without it: a bubble wearing the prose offset, whose
  * cap tops landed on the device row directly under the bubble's bottom edge. A missing host is now a
  * type error at the call site instead of a silent 7px.
+ *
+ * WHICH host a row takes is `stampHostFor` (lib/stampHost.ts), not a role test — four message shapes
+ * are recorded as the user's and draw no bubble at all.
  */
-export type StampHost = "prose" | "bubble"
+export type { StampHost }
 
 export function MessageStamp({ at, host }: { at: string | undefined; host: StampHost }) {
   const stamp = messageStamp(at)

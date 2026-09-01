@@ -44,6 +44,7 @@ import { useInnerHtml } from "../lib/innerHtml.ts"
 import { useLocalFileCodeLinks } from "../lib/localFileCode.ts"
 import { shouldSubmitStagedEnter } from "../lib/composerKeyboard.ts"
 import { lastAskIndex, messagePresentationText } from "../lib/messagePresentation.ts"
+import { stampHostFor } from "../lib/stampHost.ts"
 import { snoozePresetInstant, formatSnoozeWake } from "../lib/snooze.ts"
 import { noteGithubRefs } from "../lib/githubHovercards.ts"
 import { AWAITING_FALLBACK_TITLE, AWAITING_PARK_BUTTON, awaitingParkAction, awaitingPresentationLine, prWatchRefs } from "../lib/awaitingPresentation.ts"
@@ -1259,7 +1260,11 @@ function VirtualizedThreadTranscript({
                 )}
               </div>
             ) : row.kind === "message" ? (
-              <MessageRow at={row.stampAt} host={row.message.role === "user" ? "bubble" : "prose"} gap={row.gap}>
+              // `stampHostFor`, NOT `role === "user"`. The role records which SIDE of the conversation
+              // a turn was recorded on, and three shapes recorded as the human's end on text ink
+              // rather than a bubble: a frizz wake, a recurring-prompt line and a sub-agent's report,
+              // all three hairline dividers. See lib/stampHost.ts.
+              <MessageRow at={row.stampAt} host={stampHostFor(row.message, paired[row.messageIndex])} gap={row.gap}>
                 <Message
                   m={row.message}
                   answering={answeringForMessage(row.message)}
@@ -1309,13 +1314,13 @@ function VirtualizedThreadTranscript({
               // tool-activity coalescer, so no run can have walked `at` forward and the message's own
               // instant is the only reading there is.
               //
-              // `host="bubble"` unconditionally: a queued row is an optimistic send the human has not
-              // taken back yet, so it is ALWAYS their own bubble — the branch above has to test the
-              // role because it renders agent prose too. This host went unstated until 2026-08-31, so
-              // the reading fell back to the PROSE offset and its cap tops landed on the device row
-              // directly under the bubble's bottom edge — zero clearance against a hard filled edge,
-              // measured off the maintainer's own screenshot.
-              <MessageRow at={row.message.at} host="bubble" gap={row.gap}>
+              // The host went unstated until 2026-08-31, so the reading fell back to the PROSE offset
+              // and its cap tops landed on the device row directly under the bubble's bottom edge —
+              // zero clearance against a hard filled edge, measured off the maintainer's own
+              // screenshot. It takes the same `stampHostFor` as the branch above rather than a flat
+              // "bubble": a queued send is the human's, but answering a question composes one of these
+              // too, and that lands as an answers card.
+              <MessageRow at={row.message.at} host={stampHostFor(row.message, paired[row.messageIndex])} gap={row.gap}>
                 <Message m={row.message} paired={paired[row.messageIndex]} />
               </MessageRow>
             )}
