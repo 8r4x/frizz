@@ -1067,11 +1067,12 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
   // something to click. Queue sends deliberately suppress the generic chat bottom-pin: it fights card
   // exit/reorder. Both keyboard and button submits run this same onSent, which dissolves the card in
   // place — TodosView's unmount effect then auto-scrolls the next card to the viewport top (like every
-  // user-initiated dismissal).
+  // user-initiated dismissal). …and `onSendFailed` puts it straight back when the send is refused,
+  // rather than leaving the human to wait out resolve()'s 8s reappear guard with only a toast.
   const { answeringForMessage, answerable, anyAnswered, sendAnswers, sendMessage } = useLiveAnswering(thread.id, messages, () => {
     ;(document.activeElement as HTMLElement | null)?.blur()
     onResolve(thread.id)
-  }, { scrollToBottom: false })
+  }, { scrollToBottom: false, onSendFailed: () => onUnresolve(thread.id) })
   // The card-level "Send answers" action shows for the standing ask (the common case) OR the moment the
   // human touches an OLDER question's chips — an answer you can stage but not send would be a dead end.
   // Not for a standing ask whose every fence was folded into a registered card, though: that card

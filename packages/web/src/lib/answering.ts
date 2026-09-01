@@ -169,12 +169,21 @@ export function composeAnswerWire(input: {
 // Deliberately best-effort, TRACKING NOTHING: no answered/unanswered bookkeeping, no "closing" of asks.
 // An already-answered question stays clickable (its AnswersCard renders right below it), and Send only
 // gathers the blocks the human actually filled, so untouched questions contribute nothing. `onSent` runs
-// the caller's tail after a send (queue: optimistic exit + park focus; thread: nothing).
+// the caller's tail after a send (queue: optimistic exit + park focus; thread: nothing), and
+// `opts.onSendFailed` is its REVERSAL — see there.
 export function useLiveAnswering(
   slug: string,
   messages: ChatMessage[],
   onSent?: () => void,
-  opts: { scrollToBottom?: boolean } = {},
+  // `onSendFailed` UNDOES `onSent` when the send is refused. `onSent` fires the instant the human
+  // commits — that optimism is the point — so something has to reverse it when the message provably did
+  // not land, and until 2026-09-01 nothing did: the queue card stayed dismissed and only a toast said
+  // otherwise, until resolve()'s 8s reappear guard happened to notice the board still wanted it
+  // (measured on a refused steer: 8084ms of a card the human had no way to get back). The eager send
+  // only reaches its failure path once retries are exhausted or the error is provably non-replayable —
+  // the same evidence it deletes the optimistic bubble on — so restoring the card here is exactly as
+  // safe as removing that bubble. The thread page passes nothing; it has no card to reinstate.
+  opts: { scrollToBottom?: boolean; onSendFailed?: () => void } = {},
 ): LiveAnswering {
   const followUp = useEagerFollowUp(slug)
   const [answers, setAnswers] = useState<Record<string, BlockAnswer>>({})
@@ -213,6 +222,10 @@ export function useLiveAnswering(
   // latest-ref because QueueCard passes a fresh closure every render.
   const onSentRef = useRef(onSent)
   onSentRef.current = onSent
+  // Same latest-ref discipline as onSent, and for the same reason: QueueCard passes a fresh closure
+  // every render, and `sendMessage` must stay identity-stable.
+  const onSendFailedRef = useRef(opts.onSendFailed)
+  onSendFailedRef.current = opts.onSendFailed
 
   const answerFor = useCallback(
     (identity: string, bi: number): BlockAnswer => {
@@ -267,9 +280,18 @@ export function useLiveAnswering(
   const anyAnswered = openAsks.some((a) => a.blocks.some((blk, i) => composeBlockAnswer(blk, answerFor(a.identity, i)) !== ""))
 
   const scrollToBottom = opts.scrollToBottom !== false
+  // ONE place both send verbs go through, so the exit and its reversal are wired once: `sendAnswers`
+  // composes its wire and hands it here, and the free-form composer calls it directly via
+  // `submitOverride`. The caller's own `onRollback` (sendAnswers restores its drafts with it) runs
+  // first and the card is reinstated after, so a failed answer gets its text back AND its card back.
   const sendMessage = useCallback(
     (text: string, callbacks: EagerFollowUpCallbacks = {}) => {
-      if (followUp.submit(text, { ...callbacks, scrollToBottom })) onSentRef.current?.()
+      const submitted = followUp.submit(text, {
+        ...callbacks,
+        scrollToBottom,
+        onRollback: () => { callbacks.onRollback?.(); onSendFailedRef.current?.() },
+      })
+      if (submitted) onSentRef.current?.()
     },
     [followUp, scrollToBottom],
   )

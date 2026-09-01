@@ -1,5 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
+import { readFileSync } from "node:fs"
 import { selectOpenAsks, tailAskIdx, composeAnswerWire, type AskMsgLike } from "./answering.ts"
 
 // A single ```question block message, tagged with a sourceId for identity.
@@ -183,4 +184,31 @@ test("two identical-text asks with no sourceId get DISTINCT identities (no state
 test("unique-identity asks are NOT perturbed by the collision guard", () => {
   const open = selectOpenAsks([ask("q1"), prose("x"), ask("q2")])
   assert.deepEqual(open.map((a) => a.identity), ["q1", "q2"]) // no '#idx' suffix on distinct identities
+})
+
+// ---- the optimistic exit's REVERSAL --------------------------------------------------------------
+//
+// `onSent` dissolves the queue card the instant the human commits, which is the point; nothing undid it
+// when the send was then REFUSED, so the card stayed gone and only a toast said otherwise until
+// resolve()'s 8s reappear guard noticed the board still wanted it (measured on a refused steer against a
+// dead worker: 8084ms before, 305ms after). Two things have to hold, and both are structure rather than
+// behaviour a pure call can reach — so they are read off the source, as the question-shadow pins are.
+const answeringSource = readFileSync(new URL("./answering.ts", import.meta.url), "utf8")
+
+test("sendMessage composes the caller's own onRollback ahead of the failure tail", () => {
+  // sendAnswers restores the answer drafts with its onRollback and the composer restores its text with
+  // one; overwriting either — rather than calling it first — loses the human's words on a failed send.
+  assert.match(
+    answeringSource,
+    /onRollback: \(\) => \{ callbacks\.onRollback\?\.\(\); onSendFailedRef\.current\?\.\(\) \}/,
+    "the caller's rollback must run, and run BEFORE the card is reinstated",
+  )
+})
+
+test("the queue card wires the reversal; the thread page does not", () => {
+  const todos = readFileSync(new URL("../components/TodosView.tsx", import.meta.url), "utf8")
+  const chat = readFileSync(new URL("../components/ChatView.tsx", import.meta.url), "utf8")
+  assert.match(todos, /onSendFailed: \(\) => onUnresolve\(thread\.id\)/, "the card reinstates itself")
+  // The thread page has no card to reinstate, so it passes no tail at all.
+  assert.ok(!/onSendFailed/.test(chat), "the thread page must not wire a card reversal it has no card for")
 })
