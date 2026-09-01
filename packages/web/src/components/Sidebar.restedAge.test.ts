@@ -66,5 +66,5 @@ test("a thread that has never produced output falls back rather than printing no
   // No lastAssistantAt at all (a dispatch that has not spoken yet): lastActiveLabelAt falls through to
   // the tailer's activity, then to spawn — the column stays populated instead of leaving a hole in it.
   const html = row({ lastAssistantAt: undefined, lastActivityAt: undefined, spawnedAt: ago(3 * 60 * 60_000) })
-  assert.match(html, />3hr</)
+  assert.match(html, />3h</)
 })

@@ -475,7 +475,7 @@ export function summarizeRunaways(runaways: readonly RunawayAux[]): string[] {
     .sort((a, b) => b.cores - a.cores)
     .map(({ slug, list, cores }) => {
       const hours = (Math.max(...list.map((r) => r.ageMs)) / 3_600_000).toFixed(1)
-      return `orphan-reaper: thread "${slug}" is holding ~${cores.toFixed(1)} core(s) across ${list.length} background process(es), oldest ${hours}hr — frizz dispatched these but does not reap a LIVE thread's work`
+      return `orphan-reaper: thread "${slug}" is holding ~${cores.toFixed(1)} core(s) across ${list.length} background process(es), oldest ${hours}h — frizz dispatched these but does not reap a LIVE thread's work`
     })
 }
 

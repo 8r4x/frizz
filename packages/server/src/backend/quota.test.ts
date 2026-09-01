@@ -194,7 +194,7 @@ test("claude: modern limits[] body (live 2026-07 shape) — session + model-scop
   })
   assert.equal(q.status, "ok")
   assert.deepEqual(q.windows.map((w) => [w.key, w.label, w.usedPercent]), [
-    ["5h", "5hr", 40],
+    ["5h", "5h", 40],
     ["weekly-fable", "Fable wk", 49],
   ])
   assert.equal(q.windows[0]?.resetsAt, Math.round(Date.parse("2026-07-24T03:00:00.417680+00:00") / 1000))
@@ -249,7 +249,7 @@ test("claude CLI usage: parses independent session, weekly, and model-scoped win
   const q = parseClaudeUsageOutput(usageText, now)
   assert.equal(q.status, "ok")
   assert.deepEqual(q.windows.map((w) => [w.key, w.label, w.usedPercent]), [
-    ["5h", "5hr", 20],
+    ["5h", "5h", 20],
     ["weekly", "Weekly", 44],
     ["weekly-sonnet", "Sonnet wk", 61],
   ])

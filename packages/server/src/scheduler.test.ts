@@ -1510,7 +1510,7 @@ test("limit: a MODEL-scoped pause resolves against the endpoint's scoped weekly 
   let scoped = { key: "weekly-fable", label: "Fable wk", usedPercent: 100, resetsAt: (faultMs + 3 * day) / 1000 }
   const s = h.make({ readQuota: async () => ({
     claude: { status: "ok" as const, windows: [
-      { key: "5h", label: "5hr", usedPercent: 12, resetsAt: (h.clock.ms + 3_600_000) / 1000 },
+      { key: "5h", label: "5h", usedPercent: 12, resetsAt: (h.clock.ms + 3_600_000) / 1000 },
       { key: "weekly", label: "Weekly", usedPercent: 57, resetsAt: (faultMs + 3 * day) / 1000 },
       scoped,
     ] },
@@ -1646,7 +1646,7 @@ test("limit: a MODEL-scoped pause with NO scoped window on the snapshot holds ra
   h.tele.set("m", limitTele({ window: "model", at: faultAt, model: "Fable 5" }))
   const s = h.make({ readQuota: async () => ({
     claude: { status: "ok" as const, windows: [
-      { key: "5h", label: "5hr", usedPercent: 12, resetsAt: (faultMs + 3_600_000) / 1000 },
+      { key: "5h", label: "5h", usedPercent: 12, resetsAt: (faultMs + 3_600_000) / 1000 },
       { key: "weekly", label: "Weekly", usedPercent: 20, resetsAt: (faultMs + 3 * 24 * 3_600_000) / 1000 },
     ] },
     codex: { status: "unavailable" as const, windows: [] },
@@ -1694,7 +1694,7 @@ test("limit: account headroom on the blown window resumes a session pause BEFORE
   h.storage.upsertSession(row("a"))
   h.tele.set("a", limitTele(sessionFault()))
   const s = h.make({ readQuota: async () => ({
-    claude: { status: "ok" as const, windows: [{ key: "5h", label: "5hr", usedPercent: 20, resetsAt: (Date.parse(SESSION_FAULT_AT) + 3_600_000) / 1000 }] },
+    claude: { status: "ok" as const, windows: [{ key: "5h", label: "5h", usedPercent: 20, resetsAt: (Date.parse(SESSION_FAULT_AT) + 3_600_000) / 1000 }] },
     codex: { status: "unavailable" as const, windows: [] },
   }) })
   await s.tick() // fault ~1s old: younger than the min-age, so a reading that could predate the fault is NOT trusted
@@ -1712,7 +1712,7 @@ test("limit: a still-near-full window does NOT trigger the account-availability 
   h.storage.upsertSession(row("a"))
   h.tele.set("a", limitTele(sessionFault()))
   const s = h.make({ readQuota: async () => ({
-    claude: { status: "ok" as const, windows: [{ key: "5h", label: "5hr", usedPercent: 90, resetsAt: (Date.parse(SESSION_FAULT_AT) + 3_600_000) / 1000 }] },
+    claude: { status: "ok" as const, windows: [{ key: "5h", label: "5h", usedPercent: 90, resetsAt: (Date.parse(SESSION_FAULT_AT) + 3_600_000) / 1000 }] },
     codex: { status: "unavailable" as const, windows: [] },
   }) })
   await s.tick()
@@ -1731,7 +1731,7 @@ test("limit: the early resume is spent ONCE per wall — bouncing off it does no
   h.storage.upsertSession(row("a"))
   h.tele.set("a", limitTele(sessionFault()))
   const healthyAccount = async () => ({
-    claude: { status: "ok" as const, windows: [{ key: "5h", label: "5hr", usedPercent: 1, resetsAt: (Date.parse(SESSION_FAULT_AT) + 3_600_000) / 1000 }] },
+    claude: { status: "ok" as const, windows: [{ key: "5h", label: "5h", usedPercent: 1, resetsAt: (Date.parse(SESSION_FAULT_AT) + 3_600_000) / 1000 }] },
     codex: { status: "unavailable" as const, windows: [] },
   })
   const s = h.make({ readQuota: healthyAccount })

@@ -40,14 +40,14 @@ test("the diffstat gauge matches the one github.com actually draws", () => {
   }
 })
 
-// The LADDER is coarse — a card says `2w`, never `358hr` — but the SPELLING is the app's house duration
+// The LADDER is coarse — a card says `2w`, never `358h` — but the SPELLING is the app's house duration
 // grammar, which is why these read `40m` rather than the "40 minutes" they said until 2026-08-31.
 test("recency reads in GitHub's coarse vocabulary, in the house duration grammar", () => {
   const now = Date.parse("2026-08-14T12:00:00Z")
   const ago = (iso: string) => coarseAgo(iso, now)
   assert.equal(ago("2026-08-14T11:59:30Z"), "just now")
   assert.equal(ago("2026-08-14T11:20:00Z"), "40m ago")
-  assert.equal(ago("2026-08-14T09:00:00Z"), "3hr ago")
+  assert.equal(ago("2026-08-14T09:00:00Z"), "3h ago")
   assert.equal(ago("2026-08-13T09:00:00Z"), "1d ago")
   assert.equal(ago("2026-07-31T10:55:44Z"), "2w ago")
   assert.equal(ago("2026-05-14T12:00:00Z"), "3mo ago")

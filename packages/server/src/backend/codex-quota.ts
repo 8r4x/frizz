@@ -110,14 +110,14 @@ function readTail(path: string): string {
 // window LENGTH rather than trusting the primary/secondary names: 300 min = 5h, 10080 min = weekly;
 // anything else falls back to an hour count. usedPercent is 0..100 (remaining = 100 - usedPercent).
 //
-// The KEY is a stable provider-neutral id (`"5h"` is what QuotaBar looks the binding window up by) and
-// never restyles. The LABEL is the chip the operator reads, so it takes the house duration grammar:
-// `5hr`, not `5h`.
+// The key doubles as the label because `5h` is BOTH a stable provider-neutral id (QuotaBar looks the
+// binding window up by it) and the house duration grammar's own spelling of five hours. Those are two
+// different jobs that happen to want the same string; if the grammar ever moves off single letters,
+// the key must not move with it.
 function makeWindow(used: number | undefined, minutes: number | undefined, resetsAt: number | undefined): QuotaWindow | undefined {
   if (used === undefined) return undefined
-  const hours = minutes === 300 ? 5 : minutes ? Math.round(minutes / 60) : undefined
-  const key = minutes === 300 ? "5h" : minutes && minutes >= 10080 ? "weekly" : hours ? `${hours}h` : "window"
-  const label = key === "weekly" ? "Weekly" : hours ? `${hours}hr` : "window"
+  const key = minutes === 300 ? "5h" : minutes && minutes >= 10080 ? "weekly" : minutes ? `${Math.round(minutes / 60)}h` : "window"
+  const label = key === "weekly" ? "Weekly" : key
   return { key, label, usedPercent: used, resetsAt }
 }
 

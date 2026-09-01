@@ -963,11 +963,11 @@ export function schedulePromptMessage(prompt: string, intervalSeconds: number): 
   return `${prompt.trim()}\n\n(Goal — sent every ${formatIntervalLabel(intervalSeconds)}. ${OPT_OUT_NOTE})`
 }
 
-/** "10m" / "1hr 30m" / "90s" — whole units only, because a cadence printed to the second promises a
+/** "10m" / "1h 30m" / "90s" — whole units only, because a cadence printed to the second promises a
  * precision the delivery does not have (it is read at the agent's next sampling boundary).
  *
  * The house duration grammar (`web/src/lib/durationLabels.ts`), which is also why an hour and a half
- * is `1hr 30m` rather than the `1.5 hr` this printed until 2026-08-31. That decimal was not only off
+ * is `1h 30m` rather than the `1.5 hr` this printed until 2026-08-31. That decimal was not only off
  * the house grammar, it broke the round trip: `RECURRING_TRAILER` stops the cadence capture at the
  * first `.`, so a 90-minute goal's trailer never parsed back into a wake divider. */
 export function formatIntervalLabel(seconds: number): string {
@@ -976,7 +976,7 @@ export function formatIntervalLabel(seconds: number): string {
   const minutes = Math.round(seconds / 60)
   if (minutes < 60) return `${minutes}m`
   const hours = Math.floor(minutes / 60)
-  return minutes % 60 ? `${hours}hr ${minutes % 60}m` : `${hours}hr`
+  return minutes % 60 ? `${hours}h ${minutes % 60}m` : `${hours}h`
 }
 
 /** What a delivered recurring prompt looks like once it is back out of the transcript.
@@ -2421,7 +2421,7 @@ export type BoardSnapshot = z.infer<typeof BoardSnapshot>
 // so remaining = 100 - usedPercent); `resetsAt` is a unix-seconds instant the window rolls over.
 export const QuotaWindow = z.object({
   key: z.string(), // stable id: "5h" | "weekly" (provider-neutral)
-  label: z.string(), // short human label for the chip ("5hr", "Weekly") — house duration grammar
+  label: z.string(), // short human label for the chip ("5h", "Weekly") — house duration grammar
   usedPercent: z.number(), // 0..100
   resetsAt: z.number().optional(), // unix seconds; absent when the source doesn't report it
 })
@@ -3141,7 +3141,7 @@ export const GITHUB_DISPATCH_UI_BOUNDARY = "<!-- frizz:github-dispatch-ui-bounda
 //
 // That is the root of arbitrary `for:` values. A worker writing `for: 1h` is not estimating badly — it
 // has no clock to estimate against, and no way to notice that its last four parks each lasted four
-// minutes. ELAPSED is the number that teaches it: "you last spoke 3hr 12m ago" is the feedback that makes
+// minutes. ELAPSED is the number that teaches it: "you last spoke 3h 12m ago" is the feedback that makes
 // the next `for:` an actual judgement.
 //
 // Frizz cannot fix the runtime's env block, but every wake IT sends lands in the worker's context, so
@@ -3153,9 +3153,9 @@ export function formatElapsed(ms: number): string {
   const m = Math.floor(s / 60)
   if (m < 60) return `${m}m`
   const h = Math.floor(m / 60)
-  if (h < 24) return m % 60 === 0 ? `${h}hr` : `${h}hr ${m % 60}m`
+  if (h < 24) return m % 60 === 0 ? `${h}h` : `${h}h ${m % 60}m`
   const d = Math.floor(h / 24)
-  return h % 24 === 0 ? `${d}d` : `${d}d ${h % 24}hr`
+  return h % 24 === 0 ? `${d}d` : `${d}d ${h % 24}h`
 }
 
 /** One line of wall clock, prepended to every frizz delivery. Local time, because that is the clock the

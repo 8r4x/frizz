@@ -1037,7 +1037,7 @@ function cadenceLabel(seconds) {
   if (seconds % 60 !== 0) return `${seconds}s`
   const minutes = seconds / 60
   if (minutes < 60) return `${minutes}m`
-  return minutes % 60 ? `${Math.floor(minutes / 60)}hr ${minutes % 60}m` : `${Math.floor(minutes / 60)}hr`
+  return minutes % 60 ? `${Math.floor(minutes / 60)}h ${minutes % 60}m` : `${Math.floor(minutes / 60)}h`
 }
 
 /** Render an armed goal for the worker to read: which triggers are live, the cadence, when

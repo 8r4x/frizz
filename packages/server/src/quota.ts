@@ -20,7 +20,7 @@ async function fixture(name: string): Promise<QuotaSnapshot | undefined> {
     status: "ok",
     planType: "max",
     windows: [
-      { key: "5h", label: "5hr", usedPercent: 34, resetsAt: now + 2 * hour + 900 },
+      { key: "5h", label: "5h", usedPercent: 34, resetsAt: now + 2 * hour + 900 },
       { key: "weekly", label: "Weekly", usedPercent: 61, resetsAt: now + 3 * 24 * hour },
     ],
   }
@@ -28,7 +28,7 @@ async function fixture(name: string): Promise<QuotaSnapshot | undefined> {
     status: "ok",
     planType: "pro",
     windows: [
-      { key: "5h", label: "5hr", usedPercent: 12, resetsAt: now + 4 * hour },
+      { key: "5h", label: "5h", usedPercent: 12, resetsAt: now + 4 * hour },
       { key: "weekly", label: "Weekly", usedPercent: 47, resetsAt: now + 5 * 24 * hour },
     ],
   }
@@ -38,11 +38,11 @@ async function fixture(name: string): Promise<QuotaSnapshot | undefined> {
     case "near-limit":
       return {
         claude: { ...claudeOk, windows: [
-          { key: "5h", label: "5hr", usedPercent: 92, resetsAt: now + 40 * 60 },
+          { key: "5h", label: "5h", usedPercent: 92, resetsAt: now + 40 * 60 },
           { key: "weekly", label: "Weekly", usedPercent: 78, resetsAt: now + 2 * 24 * hour },
         ] },
         codex: { ...codexOk, windows: [
-          { key: "5h", label: "5hr", usedPercent: 99, resetsAt: now + 12 * 60 },
+          { key: "5h", label: "5h", usedPercent: 99, resetsAt: now + 12 * 60 },
           { key: "weekly", label: "Weekly", usedPercent: 88, resetsAt: now + 6 * 24 * hour },
         ] },
       }

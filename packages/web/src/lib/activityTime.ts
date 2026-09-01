@@ -19,7 +19,7 @@ export function relativeAge(at: string | undefined, nowMs = Date.now()): string 
 const JUST_NOW = "just now"
 
 /**
- * THE AGE LADDER, in the house duration grammar (`lib/durationLabels.ts`): `12s` · `40m` · `3hr` ·
+ * THE AGE LADDER, in the house duration grammar (`lib/durationLabels.ts`): `12s` · `40m` · `3h` ·
  * `3d` · `1w` · `4mo` · `2y`. Shared by every reading below so the rail's rest column and a hairline's
  * tail cannot spell the same span two ways.
  *
@@ -31,7 +31,7 @@ function ageLadder(seconds: number): string {
   const minutes = Math.floor(seconds / 60)
   if (minutes < 60) return `${minutes}m`
   const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}hr`
+  if (hours < 24) return `${hours}h`
   const days = Math.floor(hours / 24)
   if (days < 7) return `${days}d`
   const weeks = Math.floor(days / 7)
@@ -80,7 +80,7 @@ export function ageSpan(at: string | undefined, nowMs = Date.now()): string | nu
  * rare enough that spending four characters on every reading to cover it is the wrong trade, and its
  * absence is not ambiguous the way a missing date is — `Aug 25` in August 2026 is this August.
  *
- * Deliberately NOT relative ("3hr ago"). The board already speaks in relative ages everywhere —
+ * Deliberately NOT relative ("3h ago"). The board already speaks in relative ages everywhere —
  * the rail's rest column, `LastActive`, the child-op rows — and this exists precisely because those
  * cannot answer "when exactly did this come out". An absolute reading also never needs to tick, so it
  * does not join `useNowMs`.

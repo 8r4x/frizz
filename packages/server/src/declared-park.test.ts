@@ -614,7 +614,7 @@ test("a park correction tells the worker what time it is and how long it has bee
     await h.s.tick()
     const msg = h.queued()[0].message
     assert.match(msg, /⏱ \d{4}-\d{2}-\d{2} \d{2}:\d{2}/, "an absolute wall clock…")
-    assert.match(msg, /you last spoke 3hr 12m ago/, "…and the ELAPSED number, which is the one that teaches")
+    assert.match(msg, /you last spoke 3h 12m ago/, "…and the ELAPSED number, which is the one that teaches")
     // At the FOOT: the correction's own instruction is what the worker must act on first.
     assert.ok(msg.trimEnd().endsWith("ago."), "the clock is frizz's footnote, not its headline")
   } finally { h.close() }

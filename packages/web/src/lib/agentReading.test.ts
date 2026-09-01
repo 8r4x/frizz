@@ -86,7 +86,7 @@ test("an untracked pending dispatch claims nothing at all", () => {
 test("durations are the minute-resolution form, with the precise value in the tooltip", () => {
   // The house duration grammar in durationLabels.ts, on both readings — the row's coarse one and the
   // precise one behind the hover.
-  assert.equal(agentReading({ agentStatus: "killed", agentElapsedMs: 65 * MIN })!.duration, "1hr 5m")
+  assert.equal(agentReading({ agentStatus: "killed", agentElapsedMs: 65 * MIN })!.duration, "1h 5m")
   assert.equal(agentReading({ agentStatus: "completed", agentElapsedMs: 38_000 })!.duration, "<1m")
   // …and the seconds the reading rounds away are still one hover from the reader.
   assert.equal(agentReading({ agentStatus: "completed", agentElapsedMs: 38_000 })!.title, "Ran for 38s")

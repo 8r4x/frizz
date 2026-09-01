@@ -63,7 +63,7 @@ export function shortDate(iso: string | undefined, nowMs = Date.now()): string {
   return t.toLocaleDateString(undefined, { month: "short", day: "numeric", ...(sameYear ? {} : { year: "numeric" }) })
 }
 
-// GitHub's COARSE recency: a card says `2w ago`, never `358hr ago`. The LADDER is the coarse part and
+// GitHub's COARSE recency: a card says `2w ago`, never `358h ago`. The LADDER is the coarse part and
 // it is this function's own — anything past a year falls back to the date, because "1y ago" stops being
 // information about a two-year-old commit. The SPELLING is the app's, so `compactAge` carries every
 // reading under a year rather than this file keeping a second ladder that says the same spans in

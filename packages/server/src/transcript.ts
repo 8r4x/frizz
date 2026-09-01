@@ -2983,7 +2983,7 @@ function formatCompactDuration(ms: number): string {
   if (ms < 60_000) return `${Math.round(ms / 1000)}s`
   const minutes = Math.round(ms / 60_000)
   if (minutes < 60) return `${minutes}m`
-  return minutes % 60 ? `${Math.floor(minutes / 60)}hr ${minutes % 60}m` : `${Math.floor(minutes / 60)}hr`
+  return minutes % 60 ? `${Math.floor(minutes / 60)}h ${minutes % 60}m` : `${Math.floor(minutes / 60)}h`
 }
 
 interface WrappedInvocation {

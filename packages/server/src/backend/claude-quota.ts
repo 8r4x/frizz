@@ -130,10 +130,8 @@ function windowFromLimit(raw: unknown): QuotaWindow | undefined {
   let key: string
   let label: string
   if (group === "session") {
-    // The KEY is a stable provider-neutral id and never restyles; the LABEL is the chip the operator
-    // reads, so it takes the house duration grammar (`5hr`, not `5h`).
     key = "5h"
-    label = "5hr"
+    label = "5h"
   } else if (group === "weekly") {
     key = scopeName ? `weekly-${slugify(scopeName)}` : "weekly"
     label = scopeName ? `${scopeName} wk` : "Weekly"
@@ -166,7 +164,7 @@ export function parseClaudeUsage(body: unknown, planType?: string): ProviderQuot
     }
   }
   if (Array.isArray(b.limits)) for (const entry of b.limits) add(windowFromLimit(entry))
-  add(toWindow(b.five_hour, "5h", "5hr"))
+  add(toWindow(b.five_hour, "5h", "5h"))
   add(toWindow(b.seven_day, "weekly", "Weekly"))
   add(toWindow(b.seven_day_opus, "weekly-opus", "Opus wk"))
   add(toWindow(b.seven_day_sonnet, "weekly-sonnet", "Sonnet wk"))
@@ -300,7 +298,7 @@ async function refreshQuota(claudeBin: string, deps: ClaudeQuotaDeps, now: numbe
 }
 
 const LINE_WINDOWS: Array<[RegExp, string, string]> = [
-  [/^Current session$/i, "5h", "5hr"],
+  [/^Current session$/i, "5h", "5h"],
   [/^Current week \(all models\)$/i, "weekly", "Weekly"],
   [/^Current week \(Opus only\)$/i, "weekly-opus", "Opus wk"],
   [/^Current week \(Sonnet only\)$/i, "weekly-sonnet", "Sonnet wk"],

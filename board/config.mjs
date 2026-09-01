@@ -907,7 +907,7 @@ export function revalidateState(revalidateAtRaw, lastCheckedRaw, now = Date.now(
 }
 
 /**
- * Humanize a minutes-until-due into a compact ETA (`45m`, `7hr`, `2d`) for the board's
+ * Humanize a minutes-until-due into a compact ETA (`45m`, `7h`, `2d`) for the board's
  * "next check in" line, in the app's house duration grammar
  * (`packages/web/src/lib/durationLabels.ts`). Clamps negatives (an already-due timer) to `0m`.
  * @param {number} etaMin
@@ -916,7 +916,7 @@ export function revalidateState(revalidateAtRaw, lastCheckedRaw, now = Date.now(
 export function formatEta(etaMin) {
   const m = Math.max(0, etaMin);
   if (m < 60) return `${m}m`;
-  if (m < 60 * 24) return `${Math.round(m / 60)}hr`;
+  if (m < 60 * 24) return `${Math.round(m / 60)}h`;
   return `${Math.round(m / (60 * 24))}d`;
 }
 

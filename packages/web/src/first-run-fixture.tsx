@@ -22,7 +22,7 @@ document.documentElement.dataset.font = params.get("font") === "mono" ? "mono" :
 
 const nowSeconds = Math.floor(Date.now() / 1000)
 const windows = (fiveHour: number, weekly: number) => [
-  { key: "5h", label: "5hr", usedPercent: fiveHour, resetsAt: nowSeconds + 2 * 3600 },
+  { key: "5h", label: "5h", usedPercent: fiveHour, resetsAt: nowSeconds + 2 * 3600 },
   { key: "weekly", label: "Weekly", usedPercent: weekly, resetsAt: nowSeconds + 3 * 86400 },
 ]
 

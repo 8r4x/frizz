@@ -141,7 +141,7 @@ test("an agent row mirrors the child-line shape and shows exactly one running in
     // doubled by the meta badge.
     assert.equal(rows[0].indicators, 1)
     assert.doesNotMatch(rows[0].text, /running/)
-    assert.match(rows[0].rightText, /^(\d+m|<1m|\d+hr( \d+m)?)$/)
+    assert.match(rows[0].rightText, /^(\d+m|<1m|\d+h( \d+m)?)$/)
 
     // A quiet child: the flat stale mark carries the state (its tooltip says so), with no dot and no
     // "running" badge to contradict it.
@@ -153,7 +153,7 @@ test("an agent row mirrors the child-line shape and shows exactly one running in
     // stale one, and still reads its runtime.
     assert.equal(rows[2].indicators, 0)
     assert.match(String(rows[2].quietMark), /^rested — /)
-    assert.match(rows[2].rightText, /^(\d+m|<1m|\d+hr( \d+m)?)$/)
+    assert.match(rows[2].rightText, /^(\d+m|<1m|\d+h( \d+m)?)$/)
 
     // A completed child: no mark, no slot, just the bare runtime. A card that reports a runtime and shows
     // no liveness mark already says "it ran and stopped", so the verb is deliberately absent.

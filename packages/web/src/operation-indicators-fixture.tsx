@@ -11,9 +11,9 @@ import "./styles.css"
 
 // Both the last-active reading AND the RUNTIME (`startedAt`, on every child row and on the dispatch
 // card) are relative to NOW, so seed them that way rather than with a frozen date — a child dispatched
-// 12 min ago should read "12m" whenever the fixture is opened. A hard-coded 2026-07-14 read "372hr 53m"
+// 12 min ago should read "12m" whenever the fixture is opened. A hard-coded 2026-07-14 read "372h 53m"
 // the moment the dispatch card started rendering a runtime, which is nobody's real reading. The SHELL
-// rows kept that frozen date until 2026-08-31 and were reading "1169hr 10m" by then; they are relative
+// rows kept that frozen date until 2026-08-31 and were reading "1169h 10m" by then; they are relative
 // now too.
 const agoIso = (minutes: number): string => new Date(Date.now() - minutes * 60_000).toISOString()
 

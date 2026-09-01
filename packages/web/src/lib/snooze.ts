@@ -10,7 +10,7 @@ const DAY = 24 * HOUR
  *  preset: you snooze FOR a duration but UNTIL an instant. See `snoozePresetAction`. */
 type SnoozePresetKind = "duration" | "calendar"
 
-// The DURATION labels are the house duration grammar (`web/src/lib/durationLabels.ts`): `1hr`, not
+// The DURATION labels are the house duration grammar (`web/src/lib/durationLabels.ts`): `1h`, not
 // "1 hour" — the maintainer collapsed every duration reading in the app onto one spelling on
 // 2026-08-31. The detail beside each restates the same span one unit down, in the same grammar.
 //
@@ -18,10 +18,10 @@ type SnoozePresetKind = "duration" | "calendar"
 // lowercase — sentence case, and it reads as a phrase inside the button beside it ("Snooze until
 // tomorrow"), where a capital would look like a proper noun.
 export const SNOOZE_PRESETS: readonly { value: SnoozePreset; label: string; detail: string; kind: SnoozePresetKind }[] = [
-  { value: "1h", label: "1hr", detail: "60m", kind: "duration" },
+  { value: "1h", label: "1h", detail: "60m", kind: "duration" },
   { value: "tomorrow", label: "tomorrow", detail: "9am", kind: "calendar" },
-  { value: "1d", label: "1d", detail: "24hr", kind: "duration" },
-  { value: "3d", label: "3d", detail: "72hr", kind: "duration" },
+  { value: "1d", label: "1d", detail: "24h", kind: "duration" },
+  { value: "3d", label: "3d", detail: "72h", kind: "duration" },
   { value: "1w", label: "1w", detail: "7d", kind: "duration" },
 ]
 

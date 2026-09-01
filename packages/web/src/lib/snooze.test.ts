@@ -32,7 +32,7 @@ test("snooze preset metadata has a stable one-day default and sentence-case labe
 test("the button says 'until' for a calendar preset and nothing extra for a duration", () => {
   assert.equal(snoozePresetAction("tomorrow"), "Snooze until tomorrow")
   assert.equal(snoozePresetAction("1d"), "Snooze 1d")
-  assert.equal(snoozePresetAction("1h"), "Snooze 1hr")
+  assert.equal(snoozePresetAction("1h"), "Snooze 1h")
   assert.equal(snoozePresetAction("3d"), "Snooze 3d")
   assert.equal(snoozePresetAction("1w"), "Snooze 1w")
 })
