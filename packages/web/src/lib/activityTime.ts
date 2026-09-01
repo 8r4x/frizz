@@ -10,7 +10,7 @@ export function formatLastActive(at: string | undefined, nowMs = Date.now()): st
   return age && `Last active ${age}`
 }
 
-/** `just now` / `3 days ago` — the phrase without a label, so a caller can supply its own. */
+/** `just now` / `3d ago` — the phrase without a label, so a caller can supply its own. */
 export function relativeAge(at: string | undefined, nowMs = Date.now()): string | null {
   const span = ageSpan(at, nowMs)
   return span === null || span === JUST_NOW ? span : `${span} ago`
@@ -19,38 +19,50 @@ export function relativeAge(at: string | undefined, nowMs = Date.now()): string 
 const JUST_NOW = "just now"
 
 /**
- * The bare SPAN — `just now` / `12 minutes` / `3 days` — with no "ago" on the end.
+ * THE AGE LADDER, in the house duration grammar (`lib/durationLabels.ts`): `12s` · `40m` · `3hr` ·
+ * `3d` · `1w` · `4mo` · `2y`. Shared by every reading below so the rail's rest column and a hairline's
+ * tail cannot spell the same span two ways.
+ *
+ * It climbs past weeks where the duration formatters stop, because an AGE has no upper bound — a
+ * project's `lastOpenedAt` is routinely months old — while a duration times a stretch of live work.
+ */
+function ageLadder(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}hr`
+  const days = Math.floor(hours / 24)
+  if (days < 7) return `${days}d`
+  const weeks = Math.floor(days / 7)
+  if (weeks < 5) return `${weeks}w`
+  const months = Math.floor(days / 30)
+  if (months < 12) return `${months}mo`
+  // `Math.max(1, …)` because the month bucket ends at 360 days, five short of a year: a bare floor
+  // reported those five days as `0y`.
+  return `${Math.max(1, Math.floor(days / 365))}y`
+}
+
+/** Where `ageLadder` stops counting months and starts counting years. A reading that needs to bail out
+ *  to an absolute date rather than say `1y` (the GitHub cards' `coarseAgo`) switches here. */
+export const AGE_LADDER_YEARS_FROM_DAYS = 360
+
+/**
+ * The bare SPAN — `just now` / `12m` / `3d` — with no "ago" on the end.
  *
  * The rail's rest-time column is a COLUMN: every row in it carries one, right-justified, so the
  * position already says "ago" and repeating the word on every row spends the rail's scarcest axis
  * (its width) on three characters that add nothing. Everywhere a reading stands ALONE in prose, use
  * relativeAge above — which is this function plus that word, so the two vocabularies cannot drift.
+ *
+ * It spelled its units out (`12 minutes`, `3 hours`) until 2026-08-31, when the maintainer collapsed
+ * every duration reading in the app onto one grammar: `"40 minutes" -> "40m"`.
  */
 export function ageSpan(at: string | undefined, nowMs = Date.now()): string | null {
   const activityMs = at ? Date.parse(at) : NaN
   if (!Number.isFinite(activityMs) || !Number.isFinite(nowMs)) return null
-
   const seconds = Math.max(0, Math.floor((nowMs - activityMs) / 1_000))
-  if (seconds === 0) return JUST_NOW
-  if (seconds < 60) return `${seconds} ${seconds === 1 ? "second" : "seconds"}`
-
-  const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) return `${minutes} ${minutes === 1 ? "minute" : "minutes"}`
-
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours} ${hours === 1 ? "hour" : "hours"}`
-
-  const days = Math.floor(hours / 24)
-  if (days < 7) return `${days} ${days === 1 ? "day" : "days"}`
-
-  const weeks = Math.floor(days / 7)
-  if (weeks < 5) return `${weeks} ${weeks === 1 ? "week" : "weeks"}`
-
-  const months = Math.floor(days / 30)
-  if (months < 12) return `${months} ${months === 1 ? "month" : "months"}`
-
-  const years = Math.floor(days / 365)
-  return `${years} ${years === 1 ? "year" : "years"}`
+  return seconds === 0 ? JUST_NOW : ageLadder(seconds)
 }
 
 /**
@@ -68,7 +80,7 @@ export function ageSpan(at: string | undefined, nowMs = Date.now()): string | nu
  * rare enough that spending four characters on every reading to cover it is the wrong trade, and its
  * absence is not ambiguous the way a missing date is — `Aug 25` in August 2026 is this August.
  *
- * Deliberately NOT relative ("3 hours ago"). The board already speaks in relative ages everywhere —
+ * Deliberately NOT relative ("3hr ago"). The board already speaks in relative ages everywhere —
  * the rail's rest column, `LastActive`, the child-op rows — and this exists precisely because those
  * cannot answer "when exactly did this come out". An absolute reading also never needs to tick, so it
  * does not join `useNowMs`.
@@ -84,28 +96,21 @@ export function messageStamp(at: string | undefined, now: Date = new Date()): st
 }
 
 /**
- * The COMPACT age a hairline's tail carries: `just now` / `21m ago` / `3d ago`. Deliberately terser
- * than relativeAge — it sits at the end of a dense one-line petite-caps label, not on its own line, and
- * at queue-rail width it is the one field that must survive the label's truncation. Moved here from
- * githubWakeCard.ts on 2026-08-29, when every divider grew one (it was the GitHub review line's alone
- * for a month) and the compact grammar stopped being about GitHub.
+ * The COMPACT age a hairline's tail carries: `just now` / `21m ago` / `3d ago`. It sits at the end of
+ * a dense one-line petite-caps label, not on its own line, and at queue-rail width it is the one field
+ * that must survive the label's truncation. Moved here from githubWakeCard.ts on 2026-08-29, when every
+ * divider grew one (it was the GitHub review line's alone for a month) and the compact grammar stopped
+ * being about GitHub.
+ *
+ * It differs from relativeAge in exactly one place — the sub-minute reading, which is "just now" here
+ * and `12s ago` there. The rail's column is watched while a thread rests and the seconds are the point;
+ * a hairline is scanned once, where they are noise.
  */
 export function compactAge(at: string | undefined, nowMs = Date.now()): string | null {
   const ms = at ? Date.parse(at) : NaN
   if (!Number.isFinite(ms) || !Number.isFinite(nowMs)) return null
   const seconds = Math.max(0, Math.floor((nowMs - ms) / 1_000))
-  if (seconds < 60) return "just now"
-  const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) return `${minutes}m ago`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}h ago`
-  const days = Math.floor(hours / 24)
-  if (days < 7) return `${days}d ago`
-  const weeks = Math.floor(days / 7)
-  if (weeks < 5) return `${weeks}w ago`
-  const months = Math.floor(days / 30)
-  if (months < 12) return `${months}mo ago`
-  return `${Math.floor(days / 365)}y ago`
+  return seconds < 60 ? JUST_NOW : `${ageLadder(seconds)} ago`
 }
 
 /**

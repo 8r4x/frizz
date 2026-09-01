@@ -1027,11 +1027,17 @@ function threadSlug() {
 }
 
 /** How a heartbeat cadence reads back to the worker. ONE formatter, because `start` and `get` describe
- * the same stored number and a worker that saw "every 15 min" armed must not read "every 900s" back.
+ * the same stored number and a worker that saw "every 15m" armed must not read "every 900s" back.
+ *
+ * The house duration grammar (`packages/web/src/lib/durationLabels.ts`), matching the trailer
+ * `formatIntervalLabel` writes into the delivery itself — a worker reads both.
  * @param {number|undefined} seconds */
 function cadenceLabel(seconds) {
   if (typeof seconds !== "number" || !Number.isFinite(seconds)) return undefined
-  return seconds % 60 === 0 ? `${seconds / 60} min` : `${seconds}s`
+  if (seconds % 60 !== 0) return `${seconds}s`
+  const minutes = seconds / 60
+  if (minutes < 60) return `${minutes}m`
+  return minutes % 60 ? `${Math.floor(minutes / 60)}hr ${minutes % 60}m` : `${Math.floor(minutes / 60)}hr`
 }
 
 /** Render an armed goal for the worker to read: which triggers are live, the cadence, when

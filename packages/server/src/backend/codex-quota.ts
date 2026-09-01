@@ -109,10 +109,15 @@ function readTail(path: string): string {
 // Build a QuotaWindow from an already-normalized (usedPercent, minutes, resetsAt) triple. Label by
 // window LENGTH rather than trusting the primary/secondary names: 300 min = 5h, 10080 min = weekly;
 // anything else falls back to an hour count. usedPercent is 0..100 (remaining = 100 - usedPercent).
+//
+// The KEY is a stable provider-neutral id (`"5h"` is what QuotaBar looks the binding window up by) and
+// never restyles. The LABEL is the chip the operator reads, so it takes the house duration grammar:
+// `5hr`, not `5h`.
 function makeWindow(used: number | undefined, minutes: number | undefined, resetsAt: number | undefined): QuotaWindow | undefined {
   if (used === undefined) return undefined
-  const key = minutes === 300 ? "5h" : minutes && minutes >= 10080 ? "weekly" : minutes ? `${Math.round(minutes / 60)}h` : "window"
-  const label = key === "weekly" ? "Weekly" : key
+  const hours = minutes === 300 ? 5 : minutes ? Math.round(minutes / 60) : undefined
+  const key = minutes === 300 ? "5h" : minutes && minutes >= 10080 ? "weekly" : hours ? `${hours}h` : "window"
+  const label = key === "weekly" ? "Weekly" : hours ? `${hours}hr` : "window"
   return { key, label, usedPercent: used, resetsAt }
 }
 

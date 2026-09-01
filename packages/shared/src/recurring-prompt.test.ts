@@ -116,16 +116,19 @@ test("restPromptMessage says why the bump crosses a pending question", () => {
 // this distinction load-bearing rather than cosmetic: a worker reading a scheduled delivery has NOT
 // necessarily stopped, and must not conclude it has.
 test("the two trailers are distinguishable — each says why it arrived, and the scheduled one how often", () => {
-  assert.match(schedulePromptMessage("check the deploy", 600), /Goal — sent every 10 min/)
+  assert.match(schedulePromptMessage("check the deploy", 600), /Goal — sent every 10m/)
   assert.match(restPromptMessage("check the deploy"), /Goal — sent each time you come to rest/)
 })
 
-test("formatIntervalLabel renders whole units", () => {
+test("formatIntervalLabel renders whole units, in the house duration grammar", () => {
   assert.equal(formatIntervalLabel(45), "45s")
-  assert.equal(formatIntervalLabel(90), "2 min", "under a minute is seconds; anything else rounds to whole minutes")
-  assert.equal(formatIntervalLabel(600), "10 min")
-  assert.equal(formatIntervalLabel(3600), "1 hr")
-  assert.equal(formatIntervalLabel(5400), "1.5 hr")
+  assert.equal(formatIntervalLabel(90), "2m", "under a minute is seconds; anything else rounds to whole minutes")
+  assert.equal(formatIntervalLabel(600), "10m")
+  assert.equal(formatIntervalLabel(3600), "1hr")
+  // An hour and a half is two whole units, never the `1.5 hr` decimal this printed until 2026-08-31 —
+  // which was off the grammar AND unparseable, because RECURRING_TRAILER stops the cadence capture at
+  // the first `.`. The round trip below is what that decimal used to break.
+  assert.equal(formatIntervalLabel(5400), "1hr 30m")
   assert.equal(formatIntervalLabel(0), "—")
 })
 
@@ -136,7 +139,10 @@ test("parseRecurringPrompt reads back exactly what the composers emit", () => {
   assert.deepEqual(rest, { kind: "rest", prompt: "Keep working the checklist." })
 
   const scheduled = parseRecurringPrompt(schedulePromptMessage("Check the deploy.", 600))
-  assert.deepEqual(scheduled, { kind: "schedule", every: "10 min", prompt: "Check the deploy." })
+  assert.deepEqual(scheduled, { kind: "schedule", every: "10m", prompt: "Check the deploy." })
+
+  const compound = parseRecurringPrompt(schedulePromptMessage("Check the deploy.", 5400))
+  assert.deepEqual(compound, { kind: "schedule", every: "1hr 30m", prompt: "Check the deploy." })
 
   // A multi-line operator prompt keeps every line, and only the trailer is stripped.
   const multi = parseRecurringPrompt(restPromptMessage("One.\nTwo.\n\nThree."))
@@ -205,7 +211,7 @@ test("a human reply after a long gap carries the gap; a fast one carries nothing
 
   // ABOVE IT, the elapsed number and the wall clock — the two facts the worker cannot derive.
   const note = humanGapNote(at(192), spoke)
-  assert.match(note ?? "", /arrived 3h12m after your last one/)
+  assert.match(note ?? "", /arrived 3hr 12m after your last one/)
   assert.match(note ?? "", /It is now \d{4}-\d{2}-\d{2} \d{2}:\d{2}\./)
   // ATTRIBUTED: it rides on the HUMAN's message, so it must not read as something the human wrote.
   assert.match(note ?? "", /^⏱ Frizz:/)
@@ -262,13 +268,13 @@ test("the wake clock line is stripped back off for display, and only when frizz 
   assert.equal(stripWakeTimeHeader("ship it"), "ship it")
 })
 
-test("formatElapsed reads in the units a human would say it in", () => {
+test("formatElapsed reads in the house duration grammar", () => {
   assert.equal(formatElapsed(45_000), "45s")
   assert.equal(formatElapsed(90_000), "1m")
-  assert.equal(formatElapsed(60 * 60_000), "1h")
-  assert.equal(formatElapsed(192 * 60_000), "3h12m")
+  assert.equal(formatElapsed(60 * 60_000), "1hr")
+  assert.equal(formatElapsed(192 * 60_000), "3hr 12m")
   assert.equal(formatElapsed(48 * 60 * 60_000), "2d")
-  assert.equal(formatElapsed(50 * 60 * 60_000), "2d2h")
+  assert.equal(formatElapsed(50 * 60 * 60_000), "2d 2hr")
   // A clock that has gone backwards is never reported as a negative age.
   assert.equal(formatElapsed(-5), "an unknown time")
 })

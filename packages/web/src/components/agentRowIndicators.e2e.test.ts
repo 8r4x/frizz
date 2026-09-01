@@ -141,7 +141,7 @@ test("an agent row mirrors the child-line shape and shows exactly one running in
     // doubled by the meta badge.
     assert.equal(rows[0].indicators, 1)
     assert.doesNotMatch(rows[0].text, /running/)
-    assert.match(rows[0].rightText, /^(\d+ min|<1 min|\d+ hr( \d+ min)?)$/)
+    assert.match(rows[0].rightText, /^(\d+m|<1m|\d+hr( \d+m)?)$/)
 
     // A quiet child: the flat stale mark carries the state (its tooltip says so), with no dot and no
     // "running" badge to contradict it.
@@ -153,26 +153,26 @@ test("an agent row mirrors the child-line shape and shows exactly one running in
     // stale one, and still reads its runtime.
     assert.equal(rows[2].indicators, 0)
     assert.match(String(rows[2].quietMark), /^rested — /)
-    assert.match(rows[2].rightText, /^(\d+ min|<1 min|\d+ hr( \d+ min)?)$/)
+    assert.match(rows[2].rightText, /^(\d+m|<1m|\d+hr( \d+m)?)$/)
 
     // A completed child: no mark, no slot, just the bare runtime. A card that reports a runtime and shows
     // no liveness mark already says "it ran and stopped", so the verb is deliberately absent.
     assert.equal(rows[3].indicators, 0)
     assert.equal(rows[3].doneMarks, 0)
-    assert.equal(rows[3].rightText, "3 min")
+    assert.equal(rows[3].rightText, "3m")
     assert.doesNotMatch(rows[3].text, /finished/)
 
     // A NON-nominal outcome keeps its verb — no mark can say it — but the WORD is the shared vocabulary,
     // never the harness's raw `agentStatus` enum, and the two outcomes are TONED APART:
     //   • a STOPPED child (interrupted / timed out) is not an error, so it reads at the quiet weight of
     //     every other reading on the row. It shipped in blood-red as "killed 10m" beside its neighbours'
-    //     "done · 9 ms" (maintainer: "this is way too scary looking") — hence both halves are pinned;
+    //     "done · 9ms" (maintainer: "this is way too scary looking") — hence both halves are pinned;
     //   • a FAILED child keeps the red the tool cards use for a real failure.
     assert.equal(rows[4].indicators, 0)
-    assert.equal(rows[4].rightText, "stopped · 41 min")
+    assert.equal(rows[4].rightText, "stopped · 41m")
     assert.doesNotMatch(rows[4].text, /killed/)
     assert.equal(rows[5].indicators, 0)
-    assert.equal(rows[5].rightText, "failed · 12 min")
+    assert.equal(rows[5].rightText, "failed · 12m")
     // The tones, sampled: the stop must be a NEUTRAL gray (r≈g≈b), the failure the red the tool cards own.
     const spread = (rgb: number[]) => Math.max(...rgb) - Math.min(...rgb)
     assert.ok(spread(rows[4].readingRgb) <= 24, `a stopped child must read neutral, not rgb(${rows[4].readingRgb})`)
@@ -313,7 +313,7 @@ test("a background shell card marks its liveness in the same slot as a dispatch 
     // A RESOLVED BACKGROUND task is the row that most invites a finished glyph — its card is permanent in
     // the transcript, so it is tempting to keep marking it. It states its outcome in words instead.
     assert.equal(shells[RESOLVED_BACKGROUND].markClass, null, "a finished background task draws no mark")
-    assert.equal(shells[RESOLVED_BACKGROUND].rightText, "done · 1 min 36 sec")
+    assert.equal(shells[RESOLVED_BACKGROUND].rightText, "done · 1m 36s")
     // The spinner is gone from this card family entirely — it now belongs only to a dispatch with no
     // child record, which elapsed time cannot speak for.
     assert.equal(await page.$$eval("[data-shell-rows] [data-running-indicator]", (n) => n.map((e) => e.getAttribute("data-running-indicator"))).then((k) => k.filter((v) => v === "tool-pending").length), 0, "no shell row may spin")

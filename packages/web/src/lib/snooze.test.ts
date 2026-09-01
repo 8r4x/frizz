@@ -17,9 +17,11 @@ import {
 
 test("snooze preset metadata has a stable one-day default and sentence-case labels", () => {
   assert.equal(DEFAULT_SNOOZE_PRESET, "1d")
-  assert.equal(snoozePresetLabel(DEFAULT_SNOOZE_PRESET), "1 day")
-  // Sentence case, like every other preset in the same menu — "Tomorrow" was the only capitalized
-  // entry in a list of bare nouns, and it capitalized mid-phrase inside the button.
+  // The DURATION labels are the house duration grammar (`1d`, not "1 day") — the maintainer collapsed
+  // every duration reading in the app onto one spelling on 2026-08-31.
+  assert.equal(snoozePresetLabel(DEFAULT_SNOOZE_PRESET), "1d")
+  // The calendar preset is not a duration, so it keeps its word — and its sentence case, because
+  // "Tomorrow" was the only capitalized entry in the menu and it capitalized mid-phrase in the button.
   assert.equal(snoozePresetLabel("tomorrow"), "tomorrow")
   assert.equal(isSnoozePreset("1w"), true)
   assert.equal(isSnoozePreset("custom"), false)
@@ -29,10 +31,10 @@ test("snooze preset metadata has a stable one-day default and sentence-case labe
 // which reads as deferring the snoozing rather than naming the wake.
 test("the button says 'until' for a calendar preset and nothing extra for a duration", () => {
   assert.equal(snoozePresetAction("tomorrow"), "Snooze until tomorrow")
-  assert.equal(snoozePresetAction("1d"), "Snooze 1 day")
-  assert.equal(snoozePresetAction("1h"), "Snooze 1 hour")
-  assert.equal(snoozePresetAction("3d"), "Snooze 3 days")
-  assert.equal(snoozePresetAction("1w"), "Snooze 1 week")
+  assert.equal(snoozePresetAction("1d"), "Snooze 1d")
+  assert.equal(snoozePresetAction("1h"), "Snooze 1hr")
+  assert.equal(snoozePresetAction("3d"), "Snooze 3d")
+  assert.equal(snoozePresetAction("1w"), "Snooze 1w")
 })
 
 test("snooze presets distinguish exact duration from tomorrow's local wall clock", () => {

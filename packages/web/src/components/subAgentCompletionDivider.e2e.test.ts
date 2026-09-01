@@ -55,7 +55,7 @@ test("a finished sub-agent draws the shell's wake divider, and every sub-agent t
     // innerText inserts a space between the guillemets and the title because they are separate flex
     // items (the guillemets sit OUTSIDE the truncating title so a clipped title still closes its
     // quote); the gap-less nested flex renders them touching. Tolerate that in the extraction only.
-    assert.match(agent.text, /Sub-agent\s+«\s*Audit the pricing parser for edge cases\s*»\s+finished · 35 min$/)
+    assert.match(agent.text, /Sub-agent\s+«\s*Audit the pricing parser for edge cases\s*»\s+finished · 35m$/)
     assert.match(shell.text, /Background task «.+» exited 143$/)
 
     // ---- 1b. a STEER draws the same divider (maintainer 2026-07-31) ----

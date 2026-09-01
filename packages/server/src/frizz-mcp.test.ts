@@ -392,7 +392,7 @@ test("`goal` arms and disarms the CALLING thread, identified from its env", asyn
       url: "/_frizz/rpc/setOwnThreadRecurringPrompt",
       body: { slug: "owning-thread", prompt: "check the deploy", stopHook: false, heartbeat: true, postCompaction: false, intervalSeconds: 600 },
     }, "giving a cadence and nothing else means the schedule trigger alone")
-    assert.match(scheduled.result.content[0].text, /every 10 min/)
+    assert.match(scheduled.result.content[0].text, /every 10m/)
 
     rpc.send({
       jsonrpc: "2.0", id: 7, method: "tools/call",
@@ -550,9 +550,9 @@ test("`goal` reads back what is armed, and a `start` reports what it replaced", 
     // VERBATIM, or the read is worthless — this is the text a worker would have to retype to restore.
     assert.ok(text.includes(armed.prompt), text)
     assert.match(text, /stop_hook/)
-    // The SAME cadence form `start` prints — one formatter, so a worker cannot be told "every 10 min"
+    // The SAME cadence form `start` prints — one formatter, so a worker cannot be told "every 10m"
     // when it arms and "every 600s" when it reads back the very same number.
-    assert.match(text, /every 10 min/)
+    assert.match(text, /every 10m/)
     assert.match(text, /last fired 2026-08-06T11:00:00\.000Z/)
     // A trigger that is OFF must not be listed as if it were live.
     assert.doesNotMatch(text, /post_compaction/)

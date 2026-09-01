@@ -86,6 +86,6 @@ test("a marker with no status degrades to the neutral outcome rather than invent
 })
 
 test("the elapsed rides the label in the coarse fixed-duration form", () => {
-  assert.equal(subAgentCompletionOutcome({ agentStatus: "completed", agentElapsedMs: 35 * 60_000 }).tail, "finished · 35 min")
-  assert.equal(subAgentCompletionOutcome({ agentStatus: "failed", agentElapsedMs: 12 * 60_000 }).tail, "failed · 12 min")
+  assert.equal(subAgentCompletionOutcome({ agentStatus: "completed", agentElapsedMs: 35 * 60_000 }).tail, "finished · 35m")
+  assert.equal(subAgentCompletionOutcome({ agentStatus: "failed", agentElapsedMs: 12 * 60_000 }).tail, "failed · 12m")
 })

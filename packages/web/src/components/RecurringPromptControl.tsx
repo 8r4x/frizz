@@ -257,7 +257,8 @@ function GoalPreview({ armed }: { armed: ThreadView["recurringPrompt"] }) {
 // wrong twice over: it decided for the operator which cadences were reasonable (the whole point of
 // making the schedule modifiable was that they know and we do not), and it read the interval back in
 // mixed units — "Every 2 hr" for a thing whose every other surface counts minutes. Minutes are the unit
-// now, everywhere, and any number in range is allowed.
+// now, everywhere, and any number in range is allowed. (The unit is SPELLED by the house duration
+// grammar — `every 90m`, never `every 90 min`; see web/src/lib/durationLabels.ts.)
 //
 // The bounds are the schema's, restated here only so the input can enforce them at the point of typing:
 // a 1 minute floor (a delivery is read at the agent's next tool boundary, so faster buys no promptness)
@@ -364,7 +365,7 @@ export function seedsDefaults(
 function triggerClauses(d: Pick<Draft, "stopHook" | "heartbeat" | "postCompaction" | "seconds">): string[] {
   return [
     d.stopHook ? "at every rest" : null,
-    d.heartbeat ? `every ${Math.round(d.seconds / 60)} min` : null,
+    d.heartbeat ? `every ${Math.round(d.seconds / 60)}m` : null,
     d.postCompaction ? "after every compaction" : null,
   ].filter((c): c is string => c !== null)
 }

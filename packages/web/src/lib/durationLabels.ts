@@ -1,28 +1,41 @@
-// Compact labels are rendered in small caps in status rows. Spell units out enough that an
-// uppercase M cannot be read as "million" (for example, `128 min`, not `128m`).
+// THE HOUSE DURATION GRAMMAR — one stylization, every surface (maintainer 2026-08-31: `"40 minutes" ->
+// "40m"` / `2hr 35m` / "Use this stylization everywhere. EVERYWHERE").
+//
+//   ms · s · m · hr · d · w · mo · y
+//
+// The unit is a SUFFIX, glued to the number with no space (`40m`, never `40 min`), and a compound
+// reading joins two of them with one space (`2hr 35m`). Hours are the one unit that keeps two letters:
+// `hr`, not `h` — the maintainer's own spelling, in both the examples above and the 2026-07-28 spec
+// that first put `1hr 5m` on the child-op row. Everything else is the shortest form that stays
+// unambiguous, which is why months are `mo` (a bare `m` is already minutes).
+//
+// This replaced FOUR vocabularies that had drifted apart surface by surface — spelled-out `128 min`
+// and `2 hr 8 min` here, `12 minutes` / `3 hours` in the rail's rest column, `1h 17m` in the runtime
+// slot, `2 weeks ago` on the GitHub cards. Each was defensible alone and the set was not: the same
+// span read four ways depending on which row you looked at. If you add a duration reading, it uses
+// this grammar; if a surface seems to need its own, it does not.
+//
+// What is NOT unified is the LADDER — which units a given reading climbs to, and how much precision it
+// keeps. That is per-surface behaviour with its own reasons, documented on each formatter below: a
+// countdown pads and ticks, the runtime slot drops seconds past a minute, a tool call keeps them.
+// Restyling those into one another is a different change and not this one.
 export function formatToolDuration(ms: number): string {
-  if (ms < 1) return "<1 ms"
-  if (ms < 1_000) return `${Math.round(ms)} ms`
-  if (ms < 60_000) return `${ms < 10_000 ? (ms / 1_000).toFixed(1) : Math.round(ms / 1_000)} sec`
+  if (ms < 1) return "<1ms"
+  if (ms < 1_000) return `${Math.round(ms)}ms`
+  if (ms < 60_000) return `${ms < 10_000 ? (ms / 1_000).toFixed(1) : Math.round(ms / 1_000)}s`
   const mins = Math.floor(ms / 60_000)
   const secs = Math.round((ms % 60_000) / 1_000)
-  return secs ? `${mins} min ${secs} sec` : `${mins} min`
+  return secs ? `${mins}m ${secs}s` : `${mins}m`
 }
 
 export function formatElapsedMinutes(minutes: number): string {
   if (minutes < 1) return "just now"
-  if (minutes < 60) return `${minutes} min`
-  return `${Math.floor(minutes / 60)} hr ${minutes % 60} min`
+  if (minutes < 60) return `${minutes}m`
+  return `${Math.floor(minutes / 60)}hr ${minutes % 60}m`
 }
 
-// COMPACT elapsed, for the dense child-op row only: "38s", "12m", "1hr 5m" (maintainer 2026-07-28).
-//
-// This deliberately breaks the house rule at the top of this file — spell units out so an uppercase M
-// cannot read as "million" — and the exception is scoped to exactly one reading for two reasons. It is
-// a DURATION on a row that already says what the thing is, so there is no quantity it could be confused
-// with; and that row is the tightest horizontal budget in the app, sharing a line with a title, a ×, a
-// live step and two counters, where four characters of unit spelling is the difference between the step
-// rendering and being clipped. Every other surface keeps the spelled-out forms.
+// COMPACT elapsed for the dense child-op row: "38s", "12m", "1hr 5m" (maintainer 2026-07-28). This is
+// the reading the house grammar above was generalized FROM, so it is unchanged by the sweep.
 //
 // Sub-minute resolves to SECONDS rather than the "just now" the recency formatters use: a child that
 // has been working 38 seconds is meaningfully different from one at 5 seconds, and this reading exists
@@ -38,18 +51,19 @@ export function formatCompactElapsed(ms: number): string {
   return minutes ? `${hours}hr ${minutes}m` : `${hours}hr`
 }
 
-// The BOTTOM RUNTIME SLOT's clock: `42s`, `2m`, `1h 17m`, `3d 4h`, `2w 3d` (maintainer 2026-08-08:
-// `"2m" "1h 17m" etc (smhdw)`). Single-letter units, at most TWO of them, and the ladder runs all the
-// way to weeks because that row times a live stretch of work whose length nobody bounds.
+// The BOTTOM RUNTIME SLOT's clock: `42s`, `2m`, `1hr 17m`, `3d 4hr`, `2w 3d` (maintainer 2026-08-08:
+// `"2m" "1h 17m" etc (smhdw)`, restyled to `hr` by the 2026-08-31 sweep). At most TWO units, and the
+// ladder runs all the way to weeks because that row times a live stretch of work whose length nobody
+// bounds.
 //
 // SECONDS never appear beside another unit. They used to — the slot read `${m}m ${ss}s`, so a run that
 // crossed an hour rendered `120m 00s`: two units of false precision, the larger one in the wrong scale,
 // and wide enough that `828m 49s` once pushed its own minutes outside the panel. Past a minute the
 // second-hand digits are noise, so the reading drops them; past an hour the next unit down carries the
-// resolution instead. A zero remainder is dropped too — `2h`, not `2h 0m`.
+// resolution instead. A zero remainder is dropped too — `2hr`, not `2hr 0m`.
 //
-// Distinct from formatCompactElapsed above, which spells hours `1hr 5m` and stops there. That spelling
-// is the child-op row's own (maintainer 2026-07-28) and this one must not quietly restyle it.
+// Distinct from formatCompactElapsed above only in its LADDER — this one climbs past hours to days and
+// weeks, that one stops at hours. The spelling is now shared, so neither can restyle the other.
 export function formatRuntimeElapsed(ms: number): string {
   if (!Number.isFinite(ms) || ms < 0) return ""
   const seconds = Math.floor(ms / 1_000)
@@ -57,9 +71,9 @@ export function formatRuntimeElapsed(ms: number): string {
   const minutes = Math.floor(seconds / 60)
   if (minutes < 60) return `${minutes}m`
   const hours = Math.floor(minutes / 60)
-  if (hours < 24) return minutes % 60 ? `${hours}h ${minutes % 60}m` : `${hours}h`
+  if (hours < 24) return minutes % 60 ? `${hours}hr ${minutes % 60}m` : `${hours}hr`
   const days = Math.floor(hours / 24)
-  if (days < 7) return hours % 24 ? `${days}d ${hours % 24}h` : `${days}d`
+  if (days < 7) return hours % 24 ? `${days}d ${hours % 24}hr` : `${days}d`
   const weeks = Math.floor(days / 7)
   return days % 7 ? `${weeks}w ${days % 7}d` : `${weeks}w`
 }
@@ -75,20 +89,20 @@ export function compactElapsedSince(startedAt: string | undefined, nowMs = Date.
 export function formatFixedDuration(ms: number): string {
   if (!Number.isFinite(ms) || ms < 0) return ""
   const mins = Math.floor(ms / 60_000)
-  if (mins < 1) return "<1 min"
+  if (mins < 1) return "<1m"
   return formatElapsedMinutes(mins)
 }
 
 // The snooze card's COUNTDOWN — time REMAINING until a wall-clock instant, ticking down live. Same
-// smhdw ladder and same at-most-TWO-units rule as formatRuntimeElapsed above, but it deliberately
+// house grammar and same at-most-TWO-units rule as formatRuntimeElapsed above, but it deliberately
 // departs from that formatter in two ways, both because this is a clock face rather than a duration
 // label:
-//   • the trailing sub-day unit is zero-PADDED and never dropped ("3h 05m", "12m 05s", never "3h") —
+//   • the trailing sub-day unit is zero-PADDED and never dropped ("3hr 05m", "12m 05s", never "3hr") —
 //     a countdown that loses a unit or a digit as it crosses a boundary visibly jumps width mid-tick,
 //     and the steady two-unit shape is what reads as counting rather than as a restated duration;
 //   • seconds survive up to an hour (formatRuntimeElapsed drops them past a minute), because a ticking
 //     seconds digit is the whole difference between a countdown and a caption.
-// Above a day the trailing unit goes unpadded ("2d 3h", "1w 2d") — nothing ticks at that scale, so the
+// Above a day the trailing unit goes unpadded ("2d 3hr", "1w 2d") — nothing ticks at that scale, so the
 // padding would read as a leading zero on prose.
 export function formatCountdown(ms: number): string {
   if (!Number.isFinite(ms) || ms <= 0) return "0s"
@@ -98,16 +112,16 @@ export function formatCountdown(ms: number): string {
   const minutes = Math.floor(seconds / 60)
   if (minutes < 60) return `${minutes}m ${pad(seconds % 60)}s`
   const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}h ${pad(minutes % 60)}m`
+  if (hours < 24) return `${hours}hr ${pad(minutes % 60)}m`
   const days = Math.floor(hours / 24)
-  if (days < 7) return hours % 24 ? `${days}d ${hours % 24}h` : `${days}d`
+  if (days < 7) return hours % 24 ? `${days}d ${hours % 24}hr` : `${days}d`
   const weeks = Math.floor(days / 7)
   return days % 7 ? `${weeks}w ${days % 7}d` : `${weeks}w`
 }
 
-// Human-friendly elapsed since an ISO timestamp, measured against NOW: "just now", "12 min",
-// "1 hr 3 min". Empty when absent or unparseable. Distinct from formatFixedDuration, which formats an
-// already-COMPLETED span (a dispatch→completion elapsed, in ms). This was written twice verbatim — in
+// Human-friendly elapsed since an ISO timestamp, measured against NOW: "just now", "12m", "1hr 3m".
+// Empty when absent or unparseable. Distinct from formatFixedDuration, which formats an already-
+// COMPLETED span (a dispatch→completion elapsed, in ms). This was written twice verbatim — in
 // ChatView's ops strip and in BackgroundShellSheet — while every other duration formatter already
 // lived here.
 export function elapsedSince(startedAt: string | undefined, nowMs = Date.now()): string {
@@ -117,9 +131,9 @@ export function elapsedSince(startedAt: string | undefined, nowMs = Date.now()):
   return formatElapsedMinutes(Math.floor((nowMs - started) / 60_000))
 }
 
-// Compact "time since" for a dense status row: "just now", "6 min ago", "1 hr 3 min ago". Distinct
-// from elapsedSince (which reads as a DURATION — "running 6 min") by carrying the "ago" that marks it
-// as recency, not lifetime. `nowMs` is passed in so a live clock can drive it without re-reading Date.
+// Compact "time since" for a dense status row: "just now", "6m ago", "1hr 3m ago". Distinct from
+// elapsedSince (which reads as a DURATION — "running 6m") by carrying the "ago" that marks it as
+// recency, not lifetime. `nowMs` is passed in so a live clock can drive it without re-reading Date.
 export function formatAgo(at: string | undefined, nowMs = Date.now()): string {
   if (!at) return ""
   const t = Date.parse(at)
@@ -130,7 +144,7 @@ export function formatAgo(at: string | undefined, nowMs = Date.now()): string {
 }
 
 export function formatCountdownSeconds(seconds: number): string {
-  if (seconds < 60) return `${seconds} sec`
-  if (seconds < 3600) return `${Math.floor(seconds / 60)} min ${String(seconds % 60).padStart(2, "0")} sec`
-  return `${Math.floor(seconds / 3600)} hr ${Math.floor((seconds % 3600) / 60)} min`
+  if (seconds < 60) return `${seconds}s`
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`
+  return `${Math.floor(seconds / 3600)}hr ${Math.floor((seconds % 3600) / 60)}m`
 }

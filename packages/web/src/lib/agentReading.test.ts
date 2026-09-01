@@ -13,15 +13,15 @@ const MIN = 60_000
 test("a resolved child reports its outcome verb, and a nominal one reports none", () => {
   assert.deepEqual(
     agentReading({ agentStatus: "completed", agentElapsedMs: 3 * MIN }),
-    { label: undefined, duration: "3 min", tone: "muted", title: "Ran for 3 min" },
+    { label: undefined, duration: "3m", tone: "muted", title: "Ran for 3m" },
   )
   assert.deepEqual(
     agentReading({ agentStatus: "killed", agentElapsedMs: 41 * MIN }),
-    { label: "stopped", duration: "41 min", tone: "muted", title: "Stopped after 41 min" },
+    { label: "stopped", duration: "41m", tone: "muted", title: "Stopped after 41m" },
   )
   assert.deepEqual(
     agentReading({ agentStatus: "failed", agentElapsedMs: 12 * MIN }),
-    { label: "failed", duration: "12 min", tone: "failed", title: "Failed after 12 min" },
+    { label: "failed", duration: "12m", tone: "failed", title: "Failed after 12m" },
   )
 })
 
@@ -29,7 +29,7 @@ test("a tracked child reads a BARE runtime — the mark on its left is what says
   for (const liveState of ["running", "stale", "rested"] as const) {
     const reading = agentReading({ liveState, liveElapsedMs: 4 * MIN })!
     assert.equal(reading.label, undefined, `${liveState}: no verb — the mark carries the state`)
-    assert.equal(reading.duration, "4 min")
+    assert.equal(reading.duration, "4m")
     assert.equal(reading.tone, "muted")
   }
   // Only a RUNNING child is "working": a tooltip must never contradict the mark beside it.
@@ -79,17 +79,18 @@ test("an untracked pending dispatch claims nothing at all", () => {
   // A TRACKED child still reads its runtime; the mark beside it is what says it is running.
   assert.deepEqual(
     agentReading({ status: "pending", liveState: "running", liveElapsedMs: MIN }),
-    { label: undefined, duration: "1 min", tone: "muted", title: "Working for 1 min" },
+    { label: undefined, duration: "1m", tone: "muted", title: "Working for 1m" },
   )
 })
 
-test("durations are the spelled-out minute-resolution form, with the precise value in the tooltip", () => {
-  // The house rule in durationLabels.ts: spell units out in a small-caps status row. No "41m" anywhere.
-  assert.equal(agentReading({ agentStatus: "killed", agentElapsedMs: 65 * MIN })!.duration, "1 hr 5 min")
-  assert.equal(agentReading({ agentStatus: "completed", agentElapsedMs: 38_000 })!.duration, "<1 min")
+test("durations are the minute-resolution form, with the precise value in the tooltip", () => {
+  // The house duration grammar in durationLabels.ts, on both readings — the row's coarse one and the
+  // precise one behind the hover.
+  assert.equal(agentReading({ agentStatus: "killed", agentElapsedMs: 65 * MIN })!.duration, "1hr 5m")
+  assert.equal(agentReading({ agentStatus: "completed", agentElapsedMs: 38_000 })!.duration, "<1m")
   // …and the seconds the reading rounds away are still one hover from the reader.
-  assert.equal(agentReading({ agentStatus: "completed", agentElapsedMs: 38_000 })!.title, "Ran for 38 sec")
-  assert.equal(agentReading({ status: "failed", durationMs: 12_000 })!.title, "Failed after 12 sec")
+  assert.equal(agentReading({ agentStatus: "completed", agentElapsedMs: 38_000 })!.title, "Ran for 38s")
+  assert.equal(agentReading({ status: "failed", durationMs: 12_000 })!.title, "Failed after 12s")
 })
 
 test("nothing to report renders nothing, never a fabricated reading", () => {

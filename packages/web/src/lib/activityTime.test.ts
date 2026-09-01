@@ -5,13 +5,13 @@ import { activityTimestamp, ageSpan, compactAge, exactStamp, formatLastActive } 
 const now = Date.parse("2026-07-13T12:00:00.000Z")
 const at = (offsetMs: number) => new Date(now - offsetMs).toISOString()
 
-test("formatLastActive uses readable relative units with the required label", () => {
+test("formatLastActive uses the house duration grammar with the required label", () => {
   assert.equal(formatLastActive(at(0), now), "Last active just now")
-  assert.equal(formatLastActive(at(1_000), now), "Last active 1 second ago")
-  assert.equal(formatLastActive(at(32_000), now), "Last active 32 seconds ago")
-  assert.equal(formatLastActive(at(60_000), now), "Last active 1 minute ago")
-  assert.equal(formatLastActive(at(3 * 60 * 60 * 1_000), now), "Last active 3 hours ago")
-  assert.equal(formatLastActive(at(2 * 24 * 60 * 60 * 1_000), now), "Last active 2 days ago")
+  assert.equal(formatLastActive(at(1_000), now), "Last active 1s ago")
+  assert.equal(formatLastActive(at(32_000), now), "Last active 32s ago")
+  assert.equal(formatLastActive(at(60_000), now), "Last active 1m ago")
+  assert.equal(formatLastActive(at(3 * 60 * 60 * 1_000), now), "Last active 3hr ago")
+  assert.equal(formatLastActive(at(2 * 24 * 60 * 60 * 1_000), now), "Last active 2d ago")
 })
 
 test("formatLastActive hides absent and invalid timestamps", () => {
@@ -21,12 +21,17 @@ test("formatLastActive hides absent and invalid timestamps", () => {
 
 // The rail's rest-time column prints the SPAN alone — the column position carries the "ago" that a
 // standalone prose reading has to spell. Same vocabulary either way: relativeAge is this plus the word.
+//
+// It spelled its units out ("12 minutes", "3 hours") until 2026-08-31, when the maintainer collapsed
+// every duration reading in the app onto one grammar: `"40 minutes" -> "40m"`.
 test("ageSpan is relativeAge without the ago, and keeps just now intact", () => {
   assert.equal(ageSpan(at(0), now), "just now")
-  assert.equal(ageSpan(at(1_000), now), "1 second")
-  assert.equal(ageSpan(at(12 * 60_000), now), "12 minutes")
-  assert.equal(ageSpan(at(3 * 60 * 60 * 1_000), now), "3 hours")
-  assert.equal(ageSpan(at(9 * 24 * 60 * 60 * 1_000), now), "1 week")
+  assert.equal(ageSpan(at(1_000), now), "1s")
+  assert.equal(ageSpan(at(12 * 60_000), now), "12m")
+  assert.equal(ageSpan(at(40 * 60_000), now), "40m", "the maintainer's own example")
+  assert.equal(ageSpan(at(3 * 60 * 60 * 1_000), now), "3hr")
+  assert.equal(ageSpan(at(9 * 24 * 60 * 60 * 1_000), now), "1w")
+  assert.equal(ageSpan(at(60 * 24 * 60 * 60 * 1_000), now), "2mo")
   assert.equal(ageSpan(undefined, now), null)
   assert.equal(ageSpan("not-a-date", now), null)
 })
@@ -47,12 +52,14 @@ test("compactAge is a compact age, and refuses to invent one", () => {
   assert.equal(ago(59_000), "just now")
   assert.equal(ago(60_000), "1m ago")
   assert.equal(ago(59 * 60_000), "59m ago")
-  assert.equal(ago(60 * 60_000), "1h ago")
-  assert.equal(ago(23 * 3_600_000), "23h ago")
+  assert.equal(ago(60 * 60_000), "1hr ago")
+  assert.equal(ago(23 * 3_600_000), "23hr ago")
   assert.equal(ago(3 * 86_400_000), "3d ago")
   assert.equal(ago(14 * 86_400_000), "2w ago")
   assert.equal(ago(60 * 86_400_000), "2mo ago")
   assert.equal(ago(400 * 86_400_000), "1y ago")
+  // The month bucket ends five days short of a year; a bare floor used to report those days as "0y".
+  assert.equal(ago(362 * 86_400_000), "1y ago")
   // A future timestamp (clock skew between GitHub and this machine) reads as "just now", never as a
   // negative age.
   assert.equal(compactAge(new Date(then + 60_000).toISOString(), then), "just now")

@@ -54,8 +54,8 @@ test('revalidateState: strips surrounding quotes (matches the frontmatter quoter
 
 test('formatEta: minutes, hours, days; negatives clamp to 0m', () => {
   assert.equal(formatEta(45), '45m');
-  assert.equal(formatEta(90), '2h'); // rounds
-  assert.equal(formatEta(8 * 60), '8h');
+  assert.equal(formatEta(90), '2hr'); // rounds
+  assert.equal(formatEta(8 * 60), '8hr');
   assert.equal(formatEta(48 * 60), '2d');
   assert.equal(formatEta(-5), '0m', 'an already-due timer clamps to 0m');
 });

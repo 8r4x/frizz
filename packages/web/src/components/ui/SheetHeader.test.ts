@@ -23,14 +23,14 @@ test("SheetHeader renders subtitle, icon, meta, and actions when provided", () =
     title: "Background shell",
     subtitle: "plan-42.md",
     icon: createElement("span", { "data-testid": "icon" }, "IC"),
-    meta: createElement("span", { "data-testid": "meta" }, "running 3 min"),
+    meta: createElement("span", { "data-testid": "meta" }, "running 3m"),
     actions: createElement("span", { "data-testid": "actions" }, "● unsaved"),
     onClose: () => undefined,
   }))
   assert.match(html, /plan-42\.md/)
   assert.match(html, /data-testid="icon"/)
   assert.match(html, /data-testid="meta"/)
-  assert.match(html, /running 3 min/)
+  assert.match(html, /running 3m/)
   assert.match(html, /data-testid="actions"/)
   assert.match(html, /● unsaved/)
 })

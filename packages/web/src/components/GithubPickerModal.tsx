@@ -13,6 +13,7 @@ import { buildGithubBatchInput, dispatchProfileError } from "../lib/githubDispat
 import { useGithubStatus } from "./GithubTrigger.tsx"
 import { applyRowSelection } from "../lib/rowRangeSelection.ts"
 import { PRIMER } from "../lib/primer.ts"
+import { compactAge } from "../lib/activityTime.ts"
 
 type Kind = "issues" | "prs"
 type Sort = "recent" | "reactions"
@@ -396,22 +397,6 @@ function StateIcon({ item }: { item: GithubItem }) {
   return <CircleDot size={15} className="shrink-0" style={{ color: PRIMER.fgSuccess }} />
 }
 
-// Compact "opened <ago>" relative time (github-ish: 8h ago, 3d ago). Empty when the timestamp is absent.
-function relTime(iso?: string): string {
-  if (!iso) return ""
-  const t = Date.parse(iso)
-  if (!Number.isFinite(t)) return ""
-  const s = Math.max(0, (Date.now() - t) / 1000)
-  const mn = s / 60
-  const h = mn / 60
-  const d = h / 24
-  if (s < 45) return "just now"
-  if (mn < 60) return `${Math.round(mn)}m ago`
-  if (h < 24) return `${Math.round(h)}h ago`
-  if (d < 30) return `${Math.round(d)}d ago`
-  if (d < 365) return `${Math.round(d / 30)}mo ago`
-  return `${Math.round(d / 365)}y ago`
-}
 
 // A github-style label chip: the label's own color as outline + text on a faint tint. Truncates long names.
 function LabelChip({ name, color }: { name: string; color: string }) {
@@ -432,7 +417,7 @@ function LabelChip({ name, color }: { name: string; color: string }) {
 // reaction badges on the right. Clicking the row toggles selection, SHIFT-clicking extends from the last clicked row
 // through every row in between; clicking the title or the #number opens GitHub.
 function Row({ item, checked, onActivate }: { item: GithubItem; checked: boolean; onActivate: (shiftKey: boolean) => void }) {
-  const opened = relTime(item.createdAt)
+  const opened = compactAge(item.createdAt) ?? ""
   const meta = [item.author, opened ? `opened ${opened}` : ""].filter(Boolean).join(" ")
   return (
     <div

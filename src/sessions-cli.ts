@@ -19,7 +19,7 @@ const ago = (at: number, now = Date.now()): string => {
   const minutes = Math.round(seconds / 60);
   if (minutes < 90) return `${minutes}m ago`;
   const hours = Math.round(minutes / 60);
-  if (hours < 36) return `${hours}h ago`;
+  if (hours < 36) return `${hours}hr ago`;
   return `${Math.round(hours / 24)}d ago`;
 };
 

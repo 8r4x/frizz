@@ -50,11 +50,11 @@ function row(extra: Partial<ThreadView>, restedAge = true) {
 test("a cue row dates its rest from the agent's own last output, without the word ago", () => {
   const html = row({ lastAssistantAt: ago(12 * 60_000), lastActivityAt: ago(0) })
   assert.match(html, /data-rail-rested-age/)
-  // 12 minutes, from lastAssistantAt — NOT "just now" off the later lastActivityAt a child bumped.
-  assert.match(html, />12 minutes</)
-  assert.doesNotMatch(html, />12 minutes ago</)
+  // 12m, from lastAssistantAt — NOT "just now" off the later lastActivityAt a child bumped.
+  assert.match(html, />12m</)
+  assert.doesNotMatch(html, />12m ago</)
   // The full phrase survives on the hover title, which has the room the column does not.
-  assert.match(html, /title="12 minutes ago"/)
+  assert.match(html, /title="12m ago"/)
 })
 
 test("the column is the CUE's alone — a running row carries no rest time", () => {
@@ -66,5 +66,5 @@ test("a thread that has never produced output falls back rather than printing no
   // No lastAssistantAt at all (a dispatch that has not spoken yet): lastActiveLabelAt falls through to
   // the tailer's activity, then to spawn — the column stays populated instead of leaving a hole in it.
   const html = row({ lastAssistantAt: undefined, lastActivityAt: undefined, spawnedAt: ago(3 * 60 * 60_000) })
-  assert.match(html, />3 hours</)
+  assert.match(html, />3hr</)
 })

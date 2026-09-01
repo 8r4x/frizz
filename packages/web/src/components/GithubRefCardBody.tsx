@@ -10,6 +10,7 @@ import {
   GitPullRequestDraft,
 } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
+import { AGE_LADDER_YEARS_FROM_DAYS, compactAge } from "../lib/activityTime.ts"
 import { PRIMER } from "../lib/primer.ts"
 
 // The CONTENTS of a GitHub hovercard — the panel GithubHovercards.tsx anchors under a `#123` or a
@@ -62,23 +63,18 @@ export function shortDate(iso: string | undefined, nowMs = Date.now()): string {
   return t.toLocaleDateString(undefined, { month: "short", day: "numeric", ...(sameYear ? {} : { year: "numeric" }) })
 }
 
-// GitHub's COARSE recency, which is a different vocabulary from lib/durationLabels' "1 hr 3 min ago":
-// a card says "2 weeks ago", never "358 hr ago". Anything past a year falls back to the date, because
-// "3 years ago" stops being information.
+// GitHub's COARSE recency: a card says `2w ago`, never `358hr ago`. The LADDER is the coarse part and
+// it is this function's own — anything past a year falls back to the date, because "1y ago" stops being
+// information about a two-year-old commit. The SPELLING is the app's, so `compactAge` carries every
+// reading under a year rather than this file keeping a second ladder that says the same spans in
+// different words (it spelled them out — "2 weeks ago" — until the 2026-08-31 sweep).
 export function coarseAgo(iso: string | undefined, nowMs = Date.now()): string {
   if (!iso) return ""
   const t = Date.parse(iso)
   if (!Number.isFinite(t)) return ""
-  const secs = Math.max(0, Math.floor((nowMs - t) / 1000))
-  const plural = (n: number, unit: string) => `${n} ${unit}${n === 1 ? "" : "s"} ago`
-  if (secs < 60) return "just now"
-  if (secs < 3600) return plural(Math.floor(secs / 60), "minute")
-  if (secs < 86_400) return plural(Math.floor(secs / 3600), "hour")
-  const days = Math.floor(secs / 86_400)
-  if (days < 7) return plural(days, "day")
-  if (days < 30) return plural(Math.floor(days / 7), "week")
-  if (days < 365) return plural(Math.floor(days / 30), "month")
-  return `on ${shortDate(iso, nowMs)}`
+  const days = Math.floor(Math.max(0, nowMs - t) / 86_400_000)
+  if (days >= AGE_LADDER_YEARS_FROM_DAYS) return `on ${shortDate(iso, nowMs)}`
+  return compactAge(iso, nowMs) ?? ""
 }
 
 // GitHub's five-block diffstat, MEASURED off github.com rather than designed from taste (2026-08-14,
