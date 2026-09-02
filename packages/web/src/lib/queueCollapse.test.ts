@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { collapseMiddleRuns, opensQueueSegment, queueCollapseSegments, segmentFolds, supersededAskIndices, survivesQueueCollapse } from "./queueCollapse.ts"
+import { carriesDoneRegistration, collapseMiddleRuns, opensQueueSegment, queueCollapseSegments, segmentFolds, supersededAskIndices, survivesQueueCollapse } from "./queueCollapse.ts"
 
 // The REAL Goal delivery frizz wrote into the maintainer's zod thread on 2026-08-12, verbatim — trailer,
 // the `<!-- frizz-wake:… -->` token and all.
@@ -82,6 +82,38 @@ test("the GOAL's own bump survives and cuts, exactly like every other wake", () 
 test("a message with no wake flag opens nothing, whatever its text says", () => {
   assert.equal(opensQueueSegment({ text: GOAL_TEXT, displayText: GOAL_DISPLAY }), false)
   assert.equal(opensQueueSegment({ text: "", boundary: "wake" }), false, "a background-task completion is not a wake DELIVERY")
+})
+
+// THE BURIED HANDOFF. The pullfrog `if-you-were-going-to-migrate` thread (2026-09-02): the worker wrote
+// its 2,329-char conclusion and called `mcp__frizz__done` in one breath — one projected message — then
+// appended a 340-char pointer note. The note, being the run's last prose, anchored the fold's close, and
+// the conclusion collapsed by default. The registration IS the sign-off, so the message carrying it is a
+// resting message and survives.
+test("the message carrying a successful done registration survives the collapse", () => {
+  const none = new Set<number>()
+  const m = { text: "It looks that way from the app-developer seat, but the field is bigger…", tools: [{ name: "mcp__frizz__done", status: "completed" }] }
+  assert.equal(carriesDoneRegistration(m), true)
+  assert.equal(survivesQueueCollapse(m, 2, none), true)
+})
+
+test("a REFUSED done registration does not — the sign-off did not stand", () => {
+  const none = new Set<number>()
+  const m = { text: "The report is written. I sign off with the finding summary.", tools: [{ name: "mcp__frizz__done", status: "failed" }] }
+  assert.equal(carriesDoneRegistration(m), false)
+  assert.equal(survivesQueueCollapse(m, 2, none), false)
+})
+
+test("ask and watch registrations are not sign-offs here — neither ends the turn", () => {
+  const none = new Set<number>()
+  for (const name of ["mcp__frizz__ask", "mcp__frizz__watch", "mcp__frizz__watch_pr"]) {
+    const m = { text: "Registering and continuing.", tools: [{ name, status: "completed" }] }
+    assert.equal(survivesQueueCollapse(m, 2, none), false, name)
+  }
+})
+
+test("a pending done registration does not survive — only the completed fact counts", () => {
+  const none = new Set<number>()
+  assert.equal(survivesQueueCollapse({ text: "Signing off.", tools: [{ name: "mcp__frizz__done" }] }, 2, none), false)
 })
 
 test("ordinary chatter collapses", () => {

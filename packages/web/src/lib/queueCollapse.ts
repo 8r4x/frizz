@@ -24,6 +24,26 @@ export interface CollapseMsgLike {
   wake?: boolean
   boundary?: "wake" | "compaction" | "rest"
   sourceId?: string
+  /** The message's tool calls, reduced to the two facts the sign-off check reads. Callers pass whole
+   *  transcript messages, whose TranscriptToolCall entries satisfy this structurally. */
+  tools?: readonly { name?: string; status?: string }[]
+}
+
+// The message that REGISTERED the thread's completion — a successful `mcp__frizz__done` call. Its prose
+// IS the handoff: a worker writes the conclusive write-up and calls the verb in the same breath, so the
+// projection coalesces both into one message. That message used to fold whenever ANY prose followed it,
+// because the run's closing anchor is simply the last prose in the run — and workers routinely append a
+// short pointer note after registering ("the report is in the message above…"), which stole the anchor
+// and buried the write-up it points at (maintainer 2026-09-02, pullfrog `if-you-were-going-to-migrate`:
+// a 340-char afterword anchored the run while the 2,329-char conclusion collapsed by default).
+//
+// Completed only. A REFUSED registration (`status: "failed"`) did not stand — the worker re-signs-off,
+// and that later message is the one carrying the handoff. `mcp__frizz__ask`/`watch` deliberately do NOT
+// count: neither ends the turn (a worker keeps working past both), and the ask already renders its own
+// answerable card at the rest it was asked at (questionAnchors), so the prose around them is mid-run
+// narration the fold is right to carry.
+export function carriesDoneRegistration(m: CollapseMsgLike): boolean {
+  return (m.tools ?? []).some((t) => t.name === "mcp__frizz__done" && t.status === "completed")
 }
 
 // A message's ```question fences, normalized — its identity as an ASK. The surrounding prose is
@@ -65,6 +85,12 @@ export function supersededAskIndices(messages: readonly CollapseMsgLike[]): Set<
 //   - A ```question. An ask the agent kept working past is a decision the human still owes; collapsing it
 //     left the card offering "Send answers" with no question in sight, and the same ask answerable one
 //     click away in the drawer. A SUPERSEDED copy is the exception — the newer one carries the decision.
+//   - The message carrying a successful DONE REGISTRATION (`carriesDoneRegistration`). It is a resting
+//     message in everything but the divider that marks one — the registration is the sign-off — so it
+//     falls under the maintainer's standing rule that every rested message is shown. It renders textOnly
+//     through the collapse branch like an open ask (NOT the lifted-wake ordinary path — that would paint
+//     the fold divider below prose it summarizes, the 2026-08-13 inversion), so its own tool band stays
+//     folded and counted while its prose survives.
 //   - A SCHEDULER WAKE (`wake: true` — a PR-watcher delivery, a timer, a watcher, AND the Goal's own bump).
 //     It names WHAT RE-INVOKED THE AGENT, and NOTHING ELSE on the card represents it. Hiding it left a
 //     card that showed a park on a PR watcher and then, with nothing in between, more work — reading as
@@ -100,6 +126,7 @@ export function supersededAskIndices(messages: readonly CollapseMsgLike[]): Set<
 // expansion a message it is already showing.
 export function survivesQueueCollapse(m: CollapseMsgLike, index: number, superseded: ReadonlySet<number>): boolean {
   if (hasQuestionBlock(m.text)) return !superseded.has(index)
+  if (carriesDoneRegistration(m)) return true
   return m.wake === true
 }
 

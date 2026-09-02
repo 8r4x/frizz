@@ -77,6 +77,12 @@ import "./styles.css"
 //                      more turns driven by the GOAL's own bump. Every rested message must render in full
 //                      — the answer above all — each run must get its own fold, and each bump must draw
 //                      its "Goal · at rest" hairline directly under the message it resumed.
+//   ?variant=donetail  THE BURIED HANDOFF (2026-09-02, pullfrog `if-you-were-going-to-migrate`): the
+//                      worker writes its conclusive write-up and calls `mcp__frizz__done` in one breath —
+//                      ONE projected message — then appends a short pointer note, which as the run's last
+//                      prose anchored the fold's close and collapsed the conclusion by default. The
+//                      done-carrying message must survive (textOnly, its call folded and counted), the
+//                      divider must sit ABOVE it, and the registered done card must draw at the tail.
 //
 // AND `?src=<url>` REPLAYS A REAL THREAD through the card, overriding the variant. Point it at a dump of
 // the server's own `threadTranscript` reply and the card renders the actual bytes that produced a report,
@@ -626,9 +632,44 @@ const stackedwakes: TranscriptMessage[] = [
   withId(boundaryEvent("rest", "Agent rested")),
 ]
 
+// THE REAL SHAPE, condensed from the thread that reported it: the projection coalesces the write-up and
+// the registration it punctuates into one message (raw stream order is text → tool_use, so the parts go
+// the same way), and the afterword is genuinely short — the whole reason it must not be the only prose
+// the fold leaves visible.
+const doneConclusion = [
+  "It looks that way from the app-developer seat, but the field is bigger than two vendors.",
+  "",
+  "**The two you named** are the ones with a generous free tier and instant provisioning, which is why they own the tutorial mindshare.",
+  "",
+  "**The hyperscalers** all host Postgres (RDS, Cloud SQL, Azure Flexible Server) — mature, but slow to provision and priced for steady-state production, not per-app experiments.",
+  "",
+  "**The specialists** round out the map: Crunchy Bridge on operational rigor, Timescale on time-series, Aiven on multi-cloud, and Fly/Railway/Render bundling Postgres beside the app runtime.",
+  "",
+  "So the honest summary: for the workflow this thread's design assumes — spin up a database per preview branch, pay nothing at idle — it really is a two-horse race today.",
+].join("\n")
+
+const donetail: TranscriptMessage[] = [
+  { sourceId: "u-cur", role: "user", text: "Wow, so it's really just Neon and Supabase letting people host Postgres, huh? That seems like a big market gap.", tools: [], parts: [] },
+  withId(asst("One quick check so I do not answer from a stale map of that market.", [
+    tool("WebSearch", { detail: "managed Postgres providers 2026" }),
+  ])),
+  withId({
+    role: "assistant",
+    text: doneConclusion,
+    tools: [tool("mcp__frizz__done")],
+    parts: [
+      { kind: "text" as const, text: doneConclusion },
+      { kind: "tools" as const, tools: [tool("mcp__frizz__done")] },
+    ],
+  }),
+  withId(asst("The market map is in the message above, and the design report is unchanged — this question needed no edits to it.")),
+  withId(boundaryEvent("rest", "Agent rested")),
+]
+
 const messages =
   replay?.messages ??
-  (variant === "goalwakes" ? goalwakes
+  (variant === "donetail" ? donetail
+  : variant === "goalwakes" ? goalwakes
   : variant === "prwakes" ? prwakes
   : variant === "single" ? single
   : variant === "bgshells" ? bgshells
@@ -684,6 +725,11 @@ const thread: ThreadViewModel = {
   watches: variant === "prwakes" || variant === "bgshells" || variant === "dispatches"
     ? [{ id: "github:demo:colinhacks/zod#6382", kind: "github", target: "colinhacks/zod#6382", state: "armed", createdAt: new Date(Date.now() - 37 * 60_000).toISOString() }]
     : [],
+  // The registered sign-off behind the `donetail` variant's tail card: a `thread_done` row is in no
+  // message, so the card only draws if the thread carries the synthesized fence (showsRegisteredDoneCard).
+  lastFence: variant === "donetail"
+    ? { kind: "done", registered: true, body: "- **Answered the market question** — the map is in the final message; the design report needed no edits." }
+    : undefined,
   lastActivityAt: new Date().toISOString(),
 } as unknown as ThreadViewModel
 

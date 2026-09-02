@@ -13,7 +13,7 @@ import { shouldSubmitStagedEnter } from "../lib/composerKeyboard.ts"
 import { hasQuestionBlock } from "../lib/questionBlocks.ts"
 import { showsRegisteredDoneCard } from "../lib/registeredDone.ts"
 import { RestedCard, showsRestedCard } from "./RestedCard.tsx"
-import { collapseMiddleRuns, opensQueueSegment, queueCollapseSegments, segmentFolds, supersededAskIndices, survivesQueueCollapse } from "../lib/queueCollapse.ts"
+import { carriesDoneRegistration, collapseMiddleRuns, opensQueueSegment, queueCollapseSegments, segmentFolds, supersededAskIndices, survivesQueueCollapse } from "../lib/queueCollapse.ts"
 import { pairAllAnswers, unrenderedAnswers } from "../lib/answersMessage.ts"
 import { lastHumanTurnIndex } from "../lib/messagePresentation.ts"
 import { questionsByAnchor } from "../lib/questionAnchor.ts"
@@ -1372,7 +1372,13 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
                 // built from `wakeSteer`, a sub-agent or background-shell completion divider — and
                 // messageHasRenderableText reports all of those as no prose at all, so the textOnly path
                 // would drop it on the floor rather than show it.
-                const liftedWake = inSpan && !isFirst && !isLast && !hasQuestionBlock(m.text) && survivesQueueCollapse(m, globalIdx, supersededAsks)
+                //
+                // The DONE-REGISTRATION message is the opposite case and is excluded: its content is
+                // prose (the conclusive handoff, coalesced with the `mcp__frizz__done` call), so it
+                // takes the collapse branch like an open ask — the ordinary path would render its tool
+                // band and defer this run's divider below the very work it summarizes (the 2026-08-13
+                // inversion). See lib/queueCollapse.carriesDoneRegistration.
+                const liftedWake = inSpan && !isFirst && !isLast && !hasQuestionBlock(m.text) && !carriesDoneRegistration(m) && survivesQueueCollapse(m, globalIdx, supersededAsks)
                 // THIS RUN'S WAKER — the background task or sub-agent whose completion re-invoked the
                 // agent while it was at rest. It takes the ordinary path too, and it must be handled
                 // BEFORE the summary bar below: the bar is emitted at the first row after the opening
