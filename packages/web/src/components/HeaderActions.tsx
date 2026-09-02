@@ -84,7 +84,7 @@ export function HeaderActions({
           be collapsed, and putting the closing half here is what makes the two share a position instead
           of the reader hunting an ArrowLeft at the far end of the header (maintainer 2026-09-02). */}
       {expand && <ExpandThreadLink slug={thread.id} />}
-      {collapse && <CollapseThreadLink />}
+      {collapse && <CollapseThreadLink slug={thread.id} />}
       {isSession ? (
         // A STALLED session (process gone, work unfinished) or one KILLED by an auto-resume usage limit
         // leads with recovery — Retry is the only exit/wait-state verb here; clearing a finished row is

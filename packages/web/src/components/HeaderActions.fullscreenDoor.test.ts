@@ -8,6 +8,7 @@ import type { ThreadView } from "@frizz/shared"
 import { HeaderActions } from "./HeaderActions.tsx"
 import { TooltipProvider } from "./Tooltip.tsx"
 import { store } from "../store.ts"
+import { clearFullscreenOrigin, rememberFullscreenOrigin } from "../lib/fullscreenHandoff.ts"
 
 // THE FULLSCREEN DOOR IS ONE SLOT, BOTH DIRECTIONS.
 //
@@ -73,13 +74,41 @@ test("a surface offers ONE direction — never both, never neither by accident",
   assert.ok(!neither.some((l) => l === "Open fullscreen" || l === "Exit fullscreen"), "the drawer header passes neither and mounts its own")
 })
 
-test("the collapse icon leads back to THIS project's board", () => {
+test("a COLD arrival at /full leads back to THIS project's board", () => {
+  const previous = store.board
+  clearFullscreenOrigin()
+  try {
+    store.board = { projectSlug: "acme" } as typeof store.board
+    assert.match(strip({ collapse: true }), /href="\/project\/acme"/, "a deep link, a bookmark or a reload has no surface to return to, so the queue is the destination")
+  } finally {
+    store.board = previous
+    clearFullscreenOrigin()
+  }
+})
+
+test("the collapse icon leads back to the surface the door was pressed in", () => {
   const previous = store.board
   try {
     store.board = { projectSlug: "acme" } as typeof store.board
-    assert.match(strip({ collapse: true }), /href="\/project\/acme"/, "a reader who opened /project/acme/thread/x/full lands back on acme's board")
+    // A thread read through a DRAWER: the door was pressed at the drawer's own address, and that is
+    // where leaving /full has to land. The board ROOT mounts no drawer, so going there both strands the
+    // reader and leaves the reverse view transition with nothing named `thread-chat` to shrink into —
+    // measured as a hard cross-fade at every width from 767 to 2560 before this existed.
+    rememberFullscreenOrigin("t", "/project/acme/thread/t")
+    assert.match(strip({ collapse: true }), /href="\/project\/acme\/thread\/t"/, "leaving /full returns to the drawer it was opened from")
+
+    // Keyed by slug, so a record left by another thread's door can never redirect this one.
+    clearFullscreenOrigin()
+    rememberFullscreenOrigin("someone-else", "/project/acme/thread/someone-else")
+    assert.match(strip({ collapse: true }), /href="\/project\/acme"/, "another thread's origin is not this thread's way out")
+
+    // A /full address is never remembered: the way out must not be a loop.
+    clearFullscreenOrigin()
+    rememberFullscreenOrigin("t", "/project/acme/thread/t/full")
+    assert.match(strip({ collapse: true }), /href="\/project\/acme"/, "a /full origin is refused, so the fallback stands")
   } finally {
     store.board = previous
+    clearFullscreenOrigin()
   }
 })
 

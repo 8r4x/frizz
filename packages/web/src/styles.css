@@ -1466,8 +1466,9 @@ a[href] {
   display: none;
 }
 
-/* THE FULLSCREEN DOOR'S VIEW TRANSITION, both directions. The door (and the /full page's return
-   arrow) navigate with react-router's `viewTransition`, which wraps the route swap in
+/* THE FULLSCREEN DOOR'S VIEW TRANSITION, both directions. Both halves of the door — the ⤢ that opens
+   /full and the ⤡ that leaves it, which stand in one slot in one strip — navigate with react-router's
+   `viewTransition`, which wraps the route swap in
    `document.startViewTransition` — and react-router re-arms the same transition for the browser-Back
    POP of a pair that transitioned. These rules style the three snapshot groups the swap produces.
    `thread-chat` is the SHARED element: forward, the drawer panel or queue card the door was clicked

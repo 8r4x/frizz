@@ -1,6 +1,6 @@
 import type { MouseEvent } from "react"
 import { Maximize2 } from "lucide-react"
-import { captureFullscreenEnterAnchor } from "../lib/fullscreenHandoff.ts"
+import { captureFullscreenEnterAnchor, rememberFullscreenOrigin } from "../lib/fullscreenHandoff.ts"
 import { spaNavigate } from "../lib/router.ts"
 import { prefersReducedMotion } from "../lib/sheet.ts"
 import { isPlainLeftClick, standaloneThreadHref } from "../lib/standaloneThreadRoute.ts"
@@ -36,6 +36,9 @@ export function ExpandThreadLink({ slug, size = 14, className, label = "Open ful
     const surface = event.currentTarget.closest<HTMLElement>("[data-vt-chat]")
     // Where they are in it, for /full to restore instead of jumping to the tail (lib/fullscreenHandoff).
     captureFullscreenEnterAnchor(surface, slug)
+    // And the address they are at, so the way OUT of /full leads back to this same surface rather than
+    // to the board root — which for a drawer-read thread mounts nothing to morph back into.
+    if (typeof location !== "undefined") rememberFullscreenOrigin(slug, location.pathname)
     if (animate && surface) {
       // Tag it as the transition's shared element — imperatively, so exactly ONE element ever carries
       // the name (a queue card and an open drawer can both be on screen; `view-transition-name` must be

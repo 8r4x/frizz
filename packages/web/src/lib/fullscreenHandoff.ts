@@ -120,3 +120,41 @@ export function takeFullscreenEnterAnchor(slug: string): FullscreenEnterAnchor |
 export function clearFullscreenEnterAnchor(): void {
   pending = null
 }
+
+// ─── WHERE THE READER CAME FROM ────────────────────────────────────────────────────────────────────
+//
+// The other thing the door has to carry. Leaving /full used to go to the board ROOT unconditionally —
+// the return arrow did it, and the collapse icon inherited it — which is right for a QUEUED thread,
+// whose board surface is a card sitting on that very page. It is wrong for every other thread: those
+// are read through a DRAWER, the board root does not mount one, and so the reverse view transition had
+// nothing named `thread-chat` to morph into and hard cross-faded instead. Measured on a snoozed
+// fixture at seven widths from 767 to 2560: the morph was skipped at every one, and the reader was
+// dropped on a board with their thread nowhere on it.
+//
+// The fix is not a new mechanism: `/thread/<slug>` is the drawer's OWN url, and BoardRoute already
+// re-mounts and names that surface when it is routed to (primeFullscreenReturn — the path built for
+// the browser Back button, which is why Back always morphed correctly while the button beside it did
+// not). So the door just has to remember the address it was pressed at and hand it back.
+//
+// One record, not a map: only the most recent door press can be the one being undone, and keying it by
+// slug means a stale record can never send the reader to some other thread's surface. It outlives the
+// scroll hand-off deliberately — a reader may sit on /full for an hour before collapsing it.
+let origin: { slug: string; path: string } | null = null
+
+/** Note the address the fullscreen door was pressed at, so the way out can lead back to it. */
+export function rememberFullscreenOrigin(slug: string, path: string): void {
+  // Never remember a /full address: that would make the way out a loop. In practice the door is never
+  // rendered on /full, so this is a guard against a future surface, not a case that happens today.
+  if (/\/full\/?$/.test(path)) return
+  origin = { slug, path }
+}
+
+/** The address to send a reader back to when they leave `slug`'s /full page, if the door noted one. */
+export function fullscreenOriginFor(slug: string): string | null {
+  return origin && origin.slug === slug ? origin.path : null
+}
+
+/** Test seam. */
+export function clearFullscreenOrigin(): void {
+  origin = null
+}

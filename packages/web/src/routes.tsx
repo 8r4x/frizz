@@ -107,7 +107,7 @@ function BoardRoute() {
   useProjectBinding(slug)
   useRouteToStore()
   // Returning from /full plays the fullscreen door's view transition in REVERSE (react-router re-arms
-  // it for the POP; the return arrow opts in). The reverse morph needs the thread's board surface
+  // it for the POP; the collapse icon opts in). The reverse morph needs the thread's board surface
   // mounted and named in THIS first commit — the one the transition's new-state snapshot reads — so
   // the priming is render-phase, the mirror of StandaloneRoute's render-phase drawer clear. A no-op
   // unless the previous render really was a /full page (see primeFullscreenReturn).

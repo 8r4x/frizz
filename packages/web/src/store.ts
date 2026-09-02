@@ -158,7 +158,7 @@ export const store = proxy({
   routeThreadSlug: null as string | null,
   // The slug whose BOARD surface (thread drawer or queue card) is currently wearing
   // `view-transition-name: thread-chat`, so the /full page's thread column has somewhere to morph
-  // back into when the fullscreen page is left for the board (browser Back, or the return arrow).
+  // back into when the fullscreen page is left for the board (browser Back, or the collapse icon).
   // Set render-phase by primeFullscreenReturn and cleared on a timer just past the animation — a
   // surface that KEPT the name would collide with the next door click's imperative tag, and duplicate
   // view-transition-names abort the whole transition.
@@ -309,7 +309,7 @@ export function resolveRoutedThread(): void {
 }
 
 // THE FULLSCREEN DOOR, PLAYED BACKWARDS. react-router re-arms the door's view transition for the POP
-// back out of /full (it remembers which path pairs transitioned), and the return arrow opts in
+// back out of /full (it remembers which path pairs transitioned), and the collapse icon opts in
 // explicitly — but the transition can only morph the /full thread column into a board surface that
 // EXISTS and IS NAMED in the board's FIRST commit, the one the new-state snapshot reads. Left to the
 // ordinary flow, the drawer arrives two effects later (applyPath parks the slug, resolveRoutedThread

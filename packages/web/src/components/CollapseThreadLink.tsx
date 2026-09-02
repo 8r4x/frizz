@@ -1,6 +1,7 @@
 import type { MouseEvent } from "react"
 import { Minimize2 } from "lucide-react"
 import { queueDestination, spaNavigate } from "../lib/router.ts"
+import { fullscreenOriginFor } from "../lib/fullscreenHandoff.ts"
 import { prefersReducedMotion } from "../lib/sheet.ts"
 import { isPlainLeftClick } from "../lib/standaloneThreadRoute.ts"
 import { HEADER_ICON_CLASS } from "../lib/headerIcon.ts"
@@ -20,11 +21,18 @@ import { Tooltip } from "./Tooltip.tsx"
 // need no code, and a plain left click becomes a react-router navigation through lib/router's
 // registered navigator. `data-standalone-return` is kept from the arrow — it names the FUNCTION, which
 // has not changed.
-export function CollapseThreadLink({ label = "Exit fullscreen" }: { label?: string }) {
-  // THIS project's queue, not the launching one's — and a BOARD, not the project picker. A bare "/"
-  // sent a reader who opened `/project/nub/thread/x/full` to whichever board the server was started
-  // from, and on the launching project it sent them to the grid.
-  const href = queueDestination("/")
+export function CollapseThreadLink({ slug, label = "Exit fullscreen" }: { slug: string; label?: string }) {
+  // BACK TO THE SURFACE THE DOOR WAS PRESSED IN, when the door noted one (lib/fullscreenHandoff).
+  // A thread read through a DRAWER has no surface on the board root, so landing there both stranded
+  // the reader and left the reverse morph with nothing named to shrink into — it cross-faded at every
+  // width. `/thread/<slug>` is that drawer's own address, and BoardRoute re-mounts and names it.
+  //
+  // The fallback is the queue, and it is THIS project's queue, not the launching one's — and a BOARD,
+  // not the project picker. A bare "/" sent a reader who opened `/project/nub/thread/x/full` to
+  // whichever board the server was started from, and on the launching project it sent them to the grid.
+  // It is what a COLD arrival at /full gets: a deep link, a bookmark, a reload — no door was pressed,
+  // so there is nowhere to go back to and the queue is the honest destination.
+  const href = fullscreenOriginFor(slug) ?? queueDestination("/")
   function onClick(event: MouseEvent<HTMLAnchorElement>) {
     if (!isPlainLeftClick(event)) return
     event.preventDefault()

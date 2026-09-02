@@ -125,7 +125,7 @@ export function primeRoute(path = location.pathname): void {
 // which is what the underlying <a href> would have done anyway.
 // `viewTransition` rides through to react-router's navigate, which wraps the route swap in
 // `document.startViewTransition` where the browser has it and falls back to an instant swap where it
-// doesn't. The fullscreen door and the /full page's return arrow pass it today; react-router re-arms
+// doesn't. Both halves of the fullscreen door pass it today; react-router re-arms
 // it on its own for the browser-Back POP of a pair that transitioned.
 export type SpaNavigateOptions = { replace?: boolean; viewTransition?: boolean }
 
