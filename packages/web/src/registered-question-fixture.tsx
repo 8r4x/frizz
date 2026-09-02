@@ -24,6 +24,8 @@ import "./styles.css"
 //                 (hasEarlier), so the asking rest is above the window. The marker must draw NOTHING, the
 //                 card must render ONCE at the head of the window, and the card-level "Send answers" must
 //                 stand down (the registered card carries its own).
+//   ?table=1    — an option whose body carries a TABLE, a blockquote and a code fence: the blocks whose
+//                 opaque panel fills clashed with a selected chip's accent tint (screenshot 2026-09-02).
 //   ?font=sans  — the other of the two fonts this app renders in; mono is the default and the wider.
 const params = new URLSearchParams(location.search)
 document.documentElement.dataset.font = params.get("font") === "sans" ? "sans" : "mono"
@@ -99,9 +101,50 @@ const GATES: RegisteredQuestionView = {
   },
 }
 
+// An option body carrying every BLOCK the prose surface renders — a table above all, which is the case
+// that broke inside a SELECTED chip (the accent tint behind opaque panel fills; screenshot 2026-09-02).
+const TABLE: RegisteredQuestionView = {
+  id: "qst_0005eeee",
+  askedAt: ago(2),
+  spec: {
+    question: "The skip warning fires on packages that were already built. How should it resolve?",
+    kind: "question",
+    options: [
+      {
+        label: "Leave it — the warning is annoying but the gate stays strict",
+        description: "Nothing changes; the warning keeps firing on every `nub add` until the lockfile is re-checked.",
+      },
+      {
+        label: "Fix it — judge the wait per package",
+        recommended: true,
+        description: [
+          "Kills the false warning, but a curated package would start building in a case where it is currently skipped — a real loosening of the supply-chain gate.",
+          "",
+          "Today a package qualifies for the curated build allowlist only if the graph as a whole came from an already-checked lockfile. Adding any new dependency makes that false for **every** package in the tree.",
+          "",
+          "Effect on `nub add esbuild`-style flows:",
+          "",
+          "| today | after |",
+          "| --- | --- |",
+          "| `WARN ignored build scripts for esbuild@0.24.0` | no warning; esbuild stays trusted |",
+          "| already-built packages keep working | same |",
+          "| a curated package is skipped after any add | a curated package may now build after an add |",
+          "",
+          "> The gate's criteria are unchanged; only the unit of judgment moves.",
+          "",
+          "```ts",
+          "const trusted = lockfileChecked(pkg.version) // per package, not per graph",
+          "```",
+        ].join("\n"),
+      },
+    ],
+  },
+}
+
 const questions = params.get("danger") === "1" ? [GATE]
   : params.get("tree") === "1" ? [TREE]
   : params.get("many") === "1" ? [SETTINGS, TREE, GATES]
+  : params.get("table") === "1" ? [TABLE]
   : [SETTINGS]
 
 const tail = "Both stores work. The choice is yours because it is the one thing here that is hard to reverse once there is data in it."

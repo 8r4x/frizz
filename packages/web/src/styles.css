@@ -1008,6 +1008,39 @@ a[href] {
   position: relative;
   z-index: 1;
 }
+/* Block chrome INSIDE an answer chip sits on a bg that changes with the chip's state — the card's own
+   panel-2 when neutral, accent/10 when selected, elevated on hover — so the prose surface's OPAQUE
+   fills fail in both directions: a panel-2 code chip or table header is invisible on the neutral chip
+   (the card fill IS panel-2) and reads as a foreign near-black slab on the selected tint (maintainer
+   2026-09-02: tables "look weird when selected"). Translucent fg/bg mixes keep the same one-step
+   contrast on every fill the chip can take. The percentages reproduce the prose surface's own steps
+   (panel-2 over bg ≈ 7% fg; border over panel-2 ≈ 9% fg), so a neutral chip looks unchanged. */
+[data-question-option] {
+  /* Nested boxes keep the 6px control radius (the @theme --block-radius comment states the rule);
+     the 12px outer arc read oversized inside a 6px chip. The copy button's concentric calc follows. */
+  --block-radius: 6px;
+}
+[data-question-option] .md-body code,
+[data-question-option] .md-inline code {
+  background: color-mix(in srgb, var(--color-fg) 8%, transparent);
+}
+[data-question-option] .md-body pre {
+  background: color-mix(in srgb, var(--color-bg) 60%, transparent);
+  border-color: color-mix(in srgb, var(--color-fg) 9%, transparent);
+}
+/* Higher-specificity re-reset: the chip's inline-code rule above outranks the base
+   `.md-body pre code { background: none }`, and fenced code must stay chipless. */
+[data-question-option] .md-body pre code {
+  background: none;
+}
+[data-question-option] .md-body table,
+[data-question-option] .md-body th,
+[data-question-option] .md-body td {
+  border-color: color-mix(in srgb, var(--color-fg) 9%, transparent);
+}
+[data-question-option] .md-body th {
+  background: color-mix(in srgb, var(--color-fg) 6%, transparent);
+}
 .md-body pre {
   background: var(--color-bg);
   border: 1px solid var(--color-border);
