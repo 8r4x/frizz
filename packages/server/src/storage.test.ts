@@ -1007,6 +1007,24 @@ test("a question is registered, answered, and delivered as three separate facts"
   }
 })
 
+// The delivery composes the Answers card the human reads back, and the question cards rendered in asked
+// order — so a batch answered in one click (one `settled_at` for every row, random `qst_…` ids) must come
+// back in asked order, not shuffled by the id tiebreak. Same bug as the 2026-08-28 rowid fix on the
+// question list, one statement over.
+test("a batch of answers is delivered in ASKED order, not shuffled by id", () => {
+  const s = store()
+  try {
+    const at = 1_700_000_000_000
+    // Ids deliberately out of lexicographic order relative to insertion, same askedAtMs across the batch
+    // (the router stamps one `now` per ask call) — an `id` tiebreak would read this back q_a, q_b, q_c.
+    for (const id of ["q_c", "q_a", "q_b"]) s.askThreadQuestion({ id, slug: "t", spec: "{}", askedAtMs: at })
+    for (const id of ["q_c", "q_a", "q_b"]) s.answerThreadQuestion(id, `{"${id}":"x"}`, at + 10)
+    assert.deepEqual(s.undeliveredSettlements().map((q) => q.id), ["q_c", "q_a", "q_b"])
+  } finally {
+    s.close()
+  }
+})
+
 test("withdrawn and dismissed are DIFFERENT settlements, and neither is deliverable", () => {
   const s = store()
   try {

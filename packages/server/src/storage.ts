@@ -1641,8 +1641,15 @@ export function createStorage(source: string | Database, projectId: string): Sto
   `)
   // Settled but not yet told to the worker. ANSWERED and DISMISSED, never WITHDRAWN: a withdrawal is the
   // worker's own act, so telling it about one would be reading its own move back to it.
+  //
+  // ASKED order, not settled order — the same trap as the rowid tiebreak above, one statement over. The
+  // delivery composes the Answers card the human reads back, and the question cards rendered in asked
+  // order; answering a card stamps ONE `settled_at` for the whole batch (router.answerQuestions) and
+  // `qst_…` is random, so `ORDER BY settled_at, id` read a batch back SHUFFLED against the questions —
+  // and against the board's in-flight copy of the same card, which composes from the asked-ordered
+  // listThreadQuestions (2026-09-02).
   const undeliveredSettlementsStmt = scope.prepare<[], ThreadQuestionRow>(
-    "SELECT * FROM thread_question WHERE project_id = @project_id AND state IN ('answered', 'dismissed') AND delivered = 0 ORDER BY settled_at, id",
+    "SELECT * FROM thread_question WHERE project_id = @project_id AND state IN ('answered', 'dismissed') AND delivered = 0 ORDER BY asked_at, rowid",
   )
   const markSettlementDeliveredStmt = scope.prepare(
     "UPDATE thread_question SET delivered = 1 WHERE project_id = @project_id AND id = ? AND delivered = 0",
