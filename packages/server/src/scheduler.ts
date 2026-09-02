@@ -2095,6 +2095,11 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     // forever with it — the unbounded wait this whole grammar exists to end (maintainer 2026-08-15).
     // The worker is TOLD, because a watcher that vanishes silently is the same stall in a new costume:
     // it would rest believing it is covered.
+    //
+    // AND THE WAKE STAYS, even though the wake is what the noise was made of. The fix was the CEILING,
+    // not this branch: an expiry now means the worker's own chosen duration genuinely ran out, which is
+    // real news and rare. Muting it instead would have bought quiet by making the failure silent —
+    // exactly the trade the paragraph above refuses.
     for (const w of deps.storage.expiredPrWatches(nowMs)) {
       const row = deps.storage.getSession(w.thread_slug)
       deps.storage.settlePrWatch(w.id, nowMs)

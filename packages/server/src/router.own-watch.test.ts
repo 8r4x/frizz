@@ -13,7 +13,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { BoardSnapshot, Settings } from "@frizz/shared"
-import { OWN_WATCH_MAX_ARMED } from "@frizz/shared"
+import { AWAITING_FOR_MAX_MS, OWN_WATCH_MAX_ARMED } from "@frizz/shared"
 import type { BoardManager } from "./board.ts"
 import { createRouter } from "./router.ts"
 import { createStorage, type SessionRow } from "./storage.ts"
@@ -159,6 +159,31 @@ test("`for` is required and an unparseable one is refused, never silently defaul
       /is not a duration/,
     )
     assert.deepEqual(h.storage.listThreadWatches("t", { armedOnly: true }), [])
+  } finally { h.close() }
+})
+
+// THE CEILING STAYS A DAY HERE, where a PR watcher now gets a year: a shell dies with its session, so a
+// wait on one standing longer than that is a wait on something already gone. What changed is that the
+// cap is SAID — a worker handed a day when it asked for a year, and told nothing, has no way to learn it.
+test("a `for` above the day ceiling is capped, and the worker is told rather than left to assume", async () => {
+  const h = harness({ bgShells: [shell()] })
+  try {
+    h.storage.upsertSession(row("t"))
+    const added = await h.router.addOwnWatch.handler({ input: { slug: "t", kind: "shell", target: "bzvtnt3ig", for: "365d" } })
+    assert.equal(added.clampedFrom, "365d")
+    const [stored] = h.storage.listThreadWatches("t", { armedOnly: true })
+    assert.equal(stored.expires_at - stored.created_at, AWAITING_FOR_MAX_MS)
+  } finally { h.close() }
+})
+
+test("a `for` inside the ceiling is left alone and reports no cap", async () => {
+  const h = harness({ bgShells: [shell()] })
+  try {
+    h.storage.upsertSession(row("t"))
+    const added = await h.router.addOwnWatch.handler({ input: { slug: "t", kind: "shell", target: "bzvtnt3ig", for: "45m" } })
+    assert.equal(added.clampedFrom, undefined)
+    const [stored] = h.storage.listThreadWatches("t", { armedOnly: true })
+    assert.equal(stored.expires_at - stored.created_at, 45 * 60_000)
   } finally { h.close() }
 })
 

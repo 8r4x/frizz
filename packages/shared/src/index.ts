@@ -402,6 +402,8 @@ export function parseAskUserQuestionAnswers(result: unknown, questions: readonly
 //   timers: [tmr_…, …]               timers it set                   → checked against thread_timer
 //   prs:    [owner/repo#123, …]      PR watchers it registered       → checked against its PR registry
 //   for:    2h                       REQUIRED. How long the park may stand (parseAwaitingDuration).
+//                                    Capped at a day — or at PR_WATCH_FOR_MAX_MS when every item is a
+//                                    `prs:` entry, because an external PR does not move on a day's clock.
 //   title:  Waiting on the CI run    OPTIONAL. The resting card's heading, in the worker's own words.
 //
 // THE FRONTMATTER IS REAL YAML (2026-08-24), parsed by the `yaml` package — the keys are PLURAL and take
@@ -696,16 +698,28 @@ export function isAwaitingItemKind(kind: string): kind is AwaitingItemKind {
  *  caught here — it is unrepresentable. */
 const AWAITING_DURATION_RE = /^(\d{1,5})(s|m|h|d)$/
 const DURATION_UNIT_MS: Record<string, number> = { s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000 }
-/** The park's ceiling. A worker may ask for less; anything longer is capped rather than refused, so a
- *  fat-fingered `for: 9999d` still parks — it just cannot disappear a thread for a decade. */
+/** The park's ceiling for a wait on the thread's OWN running work — a background shell, a sub-agent.
+ *  A worker may ask for less; anything longer is capped rather than refused, so a fat-fingered
+ *  `for: 9999d` still parks — it just cannot disappear a thread for a decade.
+ *
+ *  A DAY IS RIGHT FOR THIS KIND AND ONLY THIS KIND. A shell or a sub-agent lives inside the session
+ *  that launched it, so a wait on one that has stood for a day is almost always a wait on something
+ *  already dead. A PULL REQUEST is nothing like that and gets its own, far higher ceiling — see
+ *  PR_WATCH_FOR_MAX_MS. */
 export const AWAITING_FOR_MAX_MS = 24 * 60 * 60 * 1000
-/** Milliseconds, or null when the value is not a duration. */
-export function parseAwaitingDuration(value: string): number | null {
+/** Milliseconds as WRITTEN, uncapped — for a caller that has to know whether the ceiling bit. Every
+ *  wait applies one; none of them may apply it silently. */
+export function parseAwaitingDurationRaw(value: string): number | null {
   const m = AWAITING_DURATION_RE.exec(value.trim())
   if (!m) return null
   const ms = Number(m[1]) * DURATION_UNIT_MS[m[2]]
   if (!Number.isFinite(ms) || ms <= 0) return null
-  return Math.min(ms, AWAITING_FOR_MAX_MS)
+  return ms
+}
+/** Milliseconds capped at `maxMs`, or null when the value is not a duration. */
+export function parseAwaitingDuration(value: string, maxMs: number = AWAITING_FOR_MAX_MS): number | null {
+  const ms = parseAwaitingDurationRaw(value)
+  return ms === null ? null : Math.min(ms, maxMs)
 }
 
 // A user-chosen snooze is UI lifecycle state, not agent-authored transcript state. The browser
@@ -1612,13 +1626,28 @@ export const ThreadWatchView = z.object({
 }).strict()
 export type ThreadWatchView = z.infer<typeof ThreadWatchView>
 
+/** A PR watcher's own ceiling, and it is a YEAR — deliberately nothing like AWAITING_FOR_MAX_MS.
+ *
+ *  A shell dies with its session; a pull request in a repo nobody here controls does not. It sits
+ *  unreviewed for as long as its maintainers take, and a watcher shorter than that expires against a PR
+ *  that has not changed — which wakes the thread, produces nothing, and costs a re-arm. Measured on the
+ *  live board: a worker's PR into `vercel/ai` re-armed at the 24h ceiling four days running, four wakes,
+ *  zero maintainer activity (maintainer 2026-09-02: "for an external PR that we have no control over,
+ *  you could snooze basically for like a year … much easier just to let the user hit the snooze button").
+ *
+ *  It is a CEILING, not a recommendation for every PR — a worker watching CI on its own PR still wants
+ *  hours. What the ceiling buys is that the long wait is now REPRESENTABLE, so the guidance can ask for
+ *  it and the answer is no longer capped back to a day behind the worker's back. */
+export const PR_WATCH_FOR_MAX_MS = 365 * 24 * 60 * 60 * 1000
+
+/** What an old worker's `watch_pr` gets when its MCP binary predates `for` and cannot send one. Still
+ *  BOUNDED — the point of the field is that an unrenewed watcher eventually stops polling — but no
+ *  longer short enough to be its own source of wakes: a worker that cannot choose was re-arming every
+ *  6h forever, which is the exact noise the ceiling above exists to end. */
+export const PR_WATCH_DEFAULT_FOR_MS = 30 * 24 * 60 * 60 * 1000
+
 /** The ceiling on registered PR watchers per thread. A tool call in a loop cannot fill the table, and
  *  the refusal names the number so a worker drops one rather than retrying. */
-/** What an old worker's `watch_pr` gets when its MCP binary predates `for` and cannot send one.
- *  Bounded deliberately: long enough for an ordinary review round, short enough that a watcher nobody
- *  renews stops polling on its own. */
-export const PR_WATCH_DEFAULT_FOR_MS = 6 * 60 * 60 * 1000
-
 export const PR_WATCH_MAX_ARMED = 32
 
 /** One registered PR watcher, as the worker's own tool reads it back. */
@@ -1638,12 +1667,17 @@ export const AddOwnPrWatchInput = z.object({
   /** `owner/repo#123` or a PR URL. Parsed server-side; an unparseable ref is refused rather than stored,
    *  because a watcher that can never fire is worse than none — the worker rests believing it is covered. */
   target: z.string().trim().min(1).max(200),
-  /** How long to watch, as a DURATION (`30m`, `2h`, `3d` — parseAwaitingDuration).
+  /** How long to watch, as a DURATION (`2h`, `3d`, `180d` — parseAwaitingDuration, capped at
+   *  PR_WATCH_FOR_MAX_MS).
    *
    *  A PR nobody ever reviews would otherwise be polled forever, and a thread parked on it would wait
    *  forever with it — the same unbounded wait the awaiting fence's `for:` closes, one level down. A
    *  duration rather than an instant for the same reason it is one there: it cannot be written in the
    *  past (maintainer 2026-08-15, asking for it explicitly).
+   *
+   *  BOUNDED IS NOT THE SAME AS SHORT, and conflating them is what made this field a noise source. The
+   *  bound exists so a forgotten watcher stops polling eventually, which a year satisfies exactly as
+   *  well as a day — and a day spent it against every external PR, which does not move on that clock.
    *
    *  REQUIRED BY THE TOOL, OPTIONAL ON THE WIRE, and the asymmetry is deliberate. A worker's MCP server
    *  outlives every frizz restart, so a session dispatched before this existed still holds a binary that
@@ -1661,6 +1695,12 @@ export const AddOwnPrWatchResult = z.object({
   /** True when this exact PR was ALREADY watched by this thread, so the call registered nothing new.
    *  Re-registering after a compaction is the common case, and a duplicate would double every wake. */
   alreadyArmed: z.boolean(),
+  /** When this watcher runs out. Read back so the worker sees the duration it ACTUALLY got rather than
+   *  the one it asked for — on a re-registration that is the original expiry, which the call left alone. */
+  expiresAt: z.string(),
+  /** The `for:` the worker wrote, present ONLY when it exceeded the ceiling and was capped. A clamp
+   *  nobody is told about is a worker resting on a year of coverage it does not have. */
+  clampedFrom: z.string().optional(),
   watches: z.array(PrWatchView),
 }).strict()
 export type AddOwnPrWatchResult = z.infer<typeof AddOwnPrWatchResult>
@@ -1706,6 +1746,10 @@ export const AddOwnWatchInput = z.object({
   target: z.string().trim().min(1).max(200),
   /** REQUIRED, and a DURATION (`30m`, `2h`, `3d` — parseAwaitingDuration, capped at 24h).
    *
+   *  STILL A DAY, where a PR watcher now gets a year: this names a shell or a sub-agent, which lives
+   *  inside the session that launched it, so a wait standing longer than a day is one whose target is
+   *  almost certainly already gone.
+   *
    *  No default and no wire-level optionality, unlike `AddOwnPrWatchInput.for`: that field is optional
    *  only to keep working for sessions dispatched before it existed, and this RPC has no such sessions.
    *  On elapse the row is CANCELLED and the thread woken to re-decide, which is what stops a registration
@@ -1733,6 +1777,10 @@ export const AddOwnWatchResult = z.object({
   /** True when this exact (kind, target) was already watched, so the call registered nothing new and the
    *  existing expiry stands. Re-registering after a wake or a compaction is the common, correct case. */
   alreadyArmed: z.boolean(),
+  /** The `for:` the worker wrote, present ONLY when it exceeded the ceiling and was capped — the twin of
+   *  `AddOwnPrWatchResult.clampedFrom`, for the same reason: a silent clamp is a worker resting on
+   *  coverage it does not have. */
+  clampedFrom: z.string().optional(),
   watches: z.array(OwnWatchView),
 }).strict()
 export type AddOwnWatchResult = z.infer<typeof AddOwnWatchResult>

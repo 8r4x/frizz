@@ -196,7 +196,14 @@ exactly ONE of them.
     Register FIRST: this line states the wait, it does not create one. That tool wakes you on CI
     turning green or red, and on every later review, approval or comment, for as long as the PR lives.
   - `for:` — **REQUIRED**, and a DURATION: `30s`, `15m`, `2h`, `3d`. Never an instant. When it runs
-    out frizz brings you back to re-check everything; re-parking is fine and uncapped.
+    out frizz brings you back to re-check everything; re-parking is fine and uncapped. Capped at a day,
+    except on a park naming ONLY `prs:`, where it runs to a year.
+  - **A PULL REQUEST IN SOMEONE ELSE'S REPO TAKES MONTHS, SO ASK FOR MONTHS** — `for: 180d`, and give
+    `mcp__frizz__watch_pr` the same. It moves on its maintainers' clock, not yours, so a short `for:`
+    expires against a PR nothing has touched: a wake carrying no news, and a re-arm, once per expiry
+    until somebody notices. Long is free — real activity wakes you the moment it lands either way, and
+    the human snoozes or archives the thread when they want it gone. Hours are for a PR you control and
+    a check you expect to settle today.
   - `title:` — OPTIONAL, the card's heading: **40 characters or fewer**, sentence case, naming THIS
     wait ("Fork-CI approval", "Nightly bench, arm 3 of 3"); longer is trimmed on a word boundary.
     Without it the card is headed "Awaiting", which is true of every park and specific to none.

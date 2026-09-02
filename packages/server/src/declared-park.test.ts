@@ -15,8 +15,8 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { declaredWaitIds, hasDeclaredBackgroundPark, hasDeclaredWait } from "./board.ts"
-import { unaccountedItems } from "./awaiting.ts"
-import { isParkCorrection } from "@frizz/shared"
+import { parkExpiresAt, parkForMaxMs, readAwaitingPark, unaccountedItems } from "./awaiting.ts"
+import { AWAITING_FOR_MAX_MS, isParkCorrection, PR_WATCH_FOR_MAX_MS } from "@frizz/shared"
 import { createScheduler } from "./scheduler.ts"
 import type { FenceView, SessionTelemetry } from "./tailer.ts"
 import { mkdtempSync, rmSync } from "node:fs"
@@ -127,6 +127,59 @@ test("a park expires, so nothing parks forever", () => {
   assert.equal(hasDeclaredBackgroundPark(parked(["bash_1"], live), Date.parse(AT) + 60_000), true)
 })
 
+// THE FENCE'S OWN CEILING FOLLOWS WHAT IT NAMES. A park is one sentence about every item in it, so it
+// can only be as long as its shortest-lived kind — but a park naming NOTHING BUT PULL REQUESTS names no
+// short-lived kind at all. Capping that one at a day is what bumped a thread daily for four days against
+// an external PR nobody had touched: the watcher could be armed for months and the fence expired first.
+test("a park naming only PRs may stand for months; anything else is still capped at a day", () => {
+  const prs = { items: [{ kind: "pr" as const, value: "acme/app#391" }], forMs: 180 * 24 * 60 * 60_000 }
+  const at = Date.parse(AT)
+  assert.equal(parkForMaxMs(prs), PR_WATCH_FOR_MAX_MS)
+  assert.equal(parkExpiresAt(prs, at), at + 180 * 24 * 60 * 60_000, "the duration as written, uncapped")
+  // MIXED ⇒ THE LOW CEILING. The shell in the list is still a shell, and the sentence covers it too.
+  const mixed = { items: [...prs.items, { kind: "shell" as const, value: "bzvtnt3ig" }], forMs: prs.forMs }
+  assert.equal(parkForMaxMs(mixed), AWAITING_FOR_MAX_MS)
+  assert.equal(parkExpiresAt(mixed, at), at + AWAITING_FOR_MAX_MS)
+  // …and a year is a ceiling, not a floor: a PR park asking for hours gets hours.
+  assert.equal(parkExpiresAt({ ...prs, forMs: 2 * 60 * 60_000 }, at), at + 2 * 60 * 60_000)
+  // Above even the PR ceiling it is still capped rather than refused.
+  assert.equal(parkExpiresAt({ ...prs, forMs: 9999 * 24 * 60 * 60_000 }, at), at + PR_WATCH_FOR_MAX_MS)
+  // AND THE READ KEEPS `for:` AS WRITTEN. Clamping at parse time is what made the ceiling one number for
+  // every kind — the park has to reach parkExpiresAt uncapped for the rule above to have anything to say.
+  assert.equal(
+    readAwaitingPark([{ kind: "pr", value: "acme/app#391" }, { kind: "for", value: "180d" }]).forMs,
+    180 * 24 * 60 * 60_000,
+  )
+})
+
+// …and the same thing through the scheduler, which is what actually bumps a worker. A month into a
+// 180-day park on a REGISTERED external PR there is nothing to correct: the watcher is armed, the PR has
+// not moved, and waking the thread would produce exactly the empty wake this change exists to stop.
+test("a months-long PR park is not bumped a month in, where the same fence on a shell would be", async () => {
+  const monthAgo = new Date(Date.now() - 30 * 24 * 60 * 60_000).toISOString()
+  const h = parkHarness([{ kind: "pr", value: "acme/app#391" }, { kind: "for", value: "180d" }], {
+    restedAt: monthAgo,
+    prWatch: { owner: "acme", repo: "app", number: 391 },
+  })
+  try {
+    await h.s.tick()
+    assert.deepEqual(h.queued().map((r) => r.fence_id), [], "an armed watcher inside its own `for:` is a healthy park")
+  } finally { h.close() }
+})
+
+test("the day ceiling still bites a month-old park on a background shell", async () => {
+  const monthAgo = new Date(Date.now() - 30 * 24 * 60 * 60_000).toISOString()
+  const h = parkHarness([{ kind: "shell", value: "bzvtnt3ig" }, { kind: "for", value: "180d" }], {
+    restedAt: monthAgo, shells: [LIVE_SHELL],
+  })
+  try {
+    await h.s.tick()
+    const rows = h.queued()
+    assert.equal(rows.length, 1, "a shell does not outlive its session by a month, whatever the fence asked for")
+    assert.match(rows[0].fence_id, /^park:expired:/)
+  } finally { h.close() }
+})
+
 // A `pr-watch:` park is ALSO a declaration and it also cards — but it must never take the thread out of
 // the queue on its own. A PR whose reviews never arrive would vanish silently, which is the reason no
 // watcher has ever parked its thread (maintainer 2026-07-22, reaffirmed 2026-08-12). Own background work
@@ -167,7 +220,7 @@ test("own background work does both — it cards AND it leaves the queue", () =>
 // blocking call that starved its own notification, a timer written in the past. Each one left a thread
 // looking parked forever, and frizz said nothing.
 
-function parkHarness(hints: FenceView["hints"], opts: { shells?: any[]; agents?: any[]; restedAt?: string; body?: string; retired?: any[] } = {}) {
+function parkHarness(hints: FenceView["hints"], opts: { shells?: any[]; agents?: any[]; restedAt?: string; body?: string; retired?: any[]; prWatch?: { owner: string; repo: string; number: number } } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "frizz-park-"))
   const storage = createStorage(join(dir, "ui.db"), "p")
   storage.setSetting("signoffNudge", "off") // isolate SOURCE 12 from the nudge
@@ -181,8 +234,20 @@ function parkHarness(hints: FenceView["hints"], opts: { shells?: any[]; agents?:
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: restedAt, title_auto: 0,
     title: null, state: "open", meta: null, seen_at: null, transcript_id: null,
   } as SessionRow)
+  // Armed for a YEAR, so the watcher itself is never what settles in these tests — what is under test is
+  // the FENCE's ceiling, and a watcher expiring underneath it would enqueue its own wake and confuse it.
+  if (opts.prWatch) {
+    storage.armPrWatch({
+      id: "prw_park0000001", slug, ...opts.prWatch,
+      createdAtMs: Date.parse(restedAt), expiresAtMs: Date.parse(restedAt) + 365 * 24 * 60 * 60_000,
+    })
+  }
   const s = createScheduler({
     storage,
+    // Stubbed so an armed watcher never reaches the real `gh`. Nothing here polls for a verdict — every
+    // test in this file is about the fence — so a PR that never changes is exactly the right answer.
+    fetchPr: async () => undefined,
+    fetchGithubReview: async () => [],
     tailer: {
       get: () => ({
         turn: "idle",

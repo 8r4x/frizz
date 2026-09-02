@@ -271,7 +271,13 @@ const WATCH_PR = {
     "wait at all. This tool is the wait.\n\n" +
     "THE ```awaiting FENCE IS STILL WORTH WRITING, and it is a different job: it is how you come to REST " +
     "without frizz asking you for a handoff, and how the human sees what you are waiting for. Register " +
-    "the watcher with this tool, then name the same PR in your fence's `prs:` list.\n\n" +
+    "the watcher with this tool, then name the same PR in your fence's `prs:` list — and give the fence " +
+    "the same long `for:` you gave the watcher, or the fence expires first and bumps you anyway.\n\n" +
+    "GIVE AN EXTERNAL PR A LONG `for` — MONTHS, up to a year. A pull request into a repo nobody here " +
+    "controls moves on its maintainers' clock, not yours, and a short watcher on one expires against a " +
+    "PR that has not changed: a wake with nothing in it, and a re-arm. Long costs nothing — real " +
+    "activity still wakes you the instant it lands, and the human snoozes or archives the thread if " +
+    "they want it off the board.\n\n" +
     "REGISTERING IS IDEMPOTENT per pull request: asking twice returns the SAME id and tells you it was " +
     "already armed, so re-registering after a compaction is safe and is the right instinct. Use `list` " +
     "when you want to know what you are holding without changing anything — it answers with each PR's " +
@@ -299,10 +305,18 @@ const WATCH_PR = {
       for: {
         type: "string",
         description:
-          "REQUIRED for `add`. How long to watch, as a DURATION — `30m`, `2h`, `3d` (max 24h). Never an " +
-          "instant, and there is no default. A PR nobody ever reviews would otherwise be polled forever " +
-          "and hold your thread with it; the watcher settles itself when this runs out and tells you, " +
-          "and you re-register if you still care.",
+          "REQUIRED for `add`. How long to watch, as a DURATION — `2h`, `3d`, `180d` (max 365d). Never " +
+          "an instant, and there is no default. The watcher settles itself when this runs out and tells " +
+          "you, and you re-register if you still care.\n\n" +
+          "MATCH IT TO WHOSE PR IT IS, and the two cases are far apart. Your own PR, waiting on CI or on " +
+          "a review you expect today: hours. A PULL REQUEST IN A REPO NOBODY HERE CONTROLS — an upstream " +
+          "project, someone else's maintainers — takes as long as it takes, so give it MONTHS (`90d`, " +
+          "`180d`, `365d`). A short `for` on one of those does not make it get reviewed sooner; it just " +
+          "expires against a PR nothing has touched, wakes you for nothing, and costs a re-arm. That is " +
+          "not hypothetical — a watcher on an external PR re-armed at the old 24h ceiling four days " +
+          "running, with zero maintainer activity in between. Long is FREE here: real activity wakes you " +
+          "the moment it happens either way, and the human can snooze or archive the thread whenever " +
+          "they want it gone.",
       },
       id: {
         type: "string",
@@ -368,7 +382,9 @@ const WATCH = {
           "REQUIRED. How long to hold the wait, as a DURATION — `30m`, `2h`, `3d` (max 24h). Never an " +
           "instant, and there is no default: choose it for THIS wait. When it elapses the row is " +
           "cancelled and you are woken to re-decide, so an over-long guess costs a wait that outlives " +
-          "its reason and a too-short one costs one extra turn.",
+          "its reason and a too-short one costs one extra turn. The ceiling is a DAY here, unlike " +
+          "`watch_pr`'s year: a shell or a sub-agent dies with this session, so a wait on one that has " +
+          "stood for a day is a wait on something already gone.",
       },
     },
     required: ["kind", "target", "for"],
@@ -1300,8 +1316,13 @@ async function watch(args) {
     ? `Already watching \`${target}\` as ${id} — nothing new was registered, and its original expiry stands.`
     : `Watching \`${target}\` as ${id}. Your thread is held out of the queue until it finishes, and the ` +
       "registration survives your turn ending, a compaction and a frizz restart."
+  // A clamp is news here for the same reason it is on `watch_pr` — see that handler.
+  const clamped = result?.clampedFrom
+    ? `\n\nYOUR \`for: ${result.clampedFrom}\` WAS CAPPED at the 24h ceiling for a shell or a sub-agent — ` +
+      "the expiry listed below is what you actually hold."
+    : ""
   return (
-    `${head}\n\nWHEN \`for\` RUNS OUT the row is CANCELLED and you are woken to re-decide — register ` +
+    `${head}${clamped}\n\nWHEN \`for\` RUNS OUT the row is CANCELLED and you are woken to re-decide — register ` +
     `again if you still mean it.\n\nDROP IT the moment it stops mattering (\`unwatch\`, id \`${id}\`); ` +
     `you do NOT need to when the work simply finishes.\n\n${armedWatchList(result)}`
   )
@@ -1437,12 +1458,19 @@ async function watchPr(args) {
   const result = (await callRpc("addOwnPrWatch", { slug, target, for: typeof args.for === "string" ? args.for.trim() : "" }))?.result
   const id = result?.id ?? "(unknown)"
   const ref = result?.target ?? target
+  const until = result?.expiresAt ? ` until ${result.expiresAt}` : ""
   const head = result?.alreadyArmed
-    ? `Already watching ${ref} as ${id} — nothing new was registered, and you will be woken once per event.`
-    : `Watching ${ref} as ${id}. Frizz wakes you when CI passes or fails and on every later review or ` +
-      "comment, and the registration survives your turn ending, a compaction and a frizz restart."
+    ? `Already watching ${ref} as ${id}${until} — nothing new was registered, its original expiry stands, and you will be woken once per event.`
+    : `Watching ${ref} as ${id}${until}. Frizz wakes you when CI passes or fails and on every later ` +
+      "review or comment, and the registration survives your turn ending, a compaction and a frizz restart."
+  // A CLAMP IS NEWS. Silently handing back less coverage than was asked for is how a worker comes to
+  // rest believing it is watched for a year when it is watched for one day.
+  const clamped = result?.clampedFrom
+    ? `\n\nYOUR \`for: ${result.clampedFrom}\` WAS CAPPED at the ceiling — the expiry above is what you ` +
+      "actually hold. Nothing else about the watcher changed."
+    : ""
   return (
-    `${head}\n\nNAME IT IN YOUR \`\`\`awaiting FENCE TOO (\`prs: [${ref}]\`) — the watcher does the ` +
+    `${head}${clamped}\n\nNAME IT IN YOUR \`\`\`awaiting FENCE TOO (\`prs: [${ref}]\`) — the watcher does the ` +
     `waking, the fence is what lets you come to rest and shows the human what you are waiting for.\n\n` +
     `DROP IT when it stops mattering (\`action: "drop", id: "${id}"\`).\n\n${armedPrWatchList(result)}`
   )

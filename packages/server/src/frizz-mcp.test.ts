@@ -1142,6 +1142,45 @@ test("`watch_pr` registers, lists and drops against the CALLING thread", async (
   }
 })
 
+// THE CLAMP HAS TO REACH THE WORKER'S EYES, and the reply text is the only place it can. A `for` above
+// the ceiling is capped rather than refused — a fat-fingered `9999d` should still watch the PR — so
+// without this the worker reads "Watching …", rests, and believes it holds coverage it does not have.
+test("`watch_pr` reads back the expiry it actually got, and says so when the ceiling capped it", async () => {
+  const replies: any[] = [
+    { id: "prw_long01", target: "acme/app#391", alreadyArmed: false, expiresAt: "2027-03-01T00:00:00.000Z", watches: [] },
+    { id: "prw_cap001", target: "acme/app#392", alreadyArmed: false, expiresAt: "2027-09-02T00:00:00.000Z", clampedFrom: "9999d", watches: [] },
+  ]
+  const http = createServer((req, res) => {
+    req.on("data", () => {})
+    req.on("end", () => {
+      res.writeHead(200, { "content-type": "application/json" })
+      res.end(JSON.stringify({ result: replies.shift() ?? null }))
+    })
+  })
+  await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve))
+  const port = (http.address() as { port: number }).port
+  const stateDir = mkdtempSync(join(tmpdir(), "frizz-mcp-"))
+  writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ port }))
+  const rpc = startServer({ FRIZZ_STATE_DIR: stateDir, FRIZZ_THREAD_SLUG: "watching-thread" })
+  try {
+    rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
+    await rpc.next(1)
+
+    rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "watch_pr", arguments: { action: "add", target: "acme/app#391", for: "180d" } } })
+    const long = (await rpc.next(2)).result.content[0].text
+    assert.match(long, /until 2027-03-01T00:00:00\.000Z/)
+    assert.doesNotMatch(long, /WAS CAPPED/, "180d is inside the ceiling — there is no news here")
+
+    rpc.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "watch_pr", arguments: { action: "add", target: "acme/app#392", for: "9999d" } } })
+    const capped = (await rpc.next(3)).result.content[0].text
+    assert.match(capped, /YOUR `for: 9999d` WAS CAPPED/)
+    assert.match(capped, /until 2027-09-02T00:00:00\.000Z/, "…and names what it actually holds instead")
+  } finally {
+    rpc.kill()
+    http.close()
+  }
+})
+
 // `activity` IS THE ANSWER TO "I HAVE LOST MY IDS", so what it must do is print every kind of running
 // work with the exact string an ```awaiting fence names it by — and say so plainly when there is none,
 // because a fence naming nothing is not a park and a worker needs to be told that rather than left to

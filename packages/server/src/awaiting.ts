@@ -1,4 +1,4 @@
-import { AWAITING_FOR_MAX_MS, GithubWatchStatus, isAwaitingItemKind, parseAwaitingDuration, type AwaitingHint, type AwaitingItemKind } from "@frizz/shared"
+import { AWAITING_FOR_MAX_MS, GithubWatchStatus, isAwaitingItemKind, parseAwaitingDurationRaw, PR_WATCH_FOR_MAX_MS, type AwaitingHint, type AwaitingItemKind } from "@frizz/shared"
 
 // The PR-reference vocabulary shared by the PR-watching scheduler and the board. It lives here rather
 // than in scheduler.ts so a reader can resolve a ref without pulling in the whole waker; scheduler.ts
@@ -36,7 +36,9 @@ export interface AwaitingItem {
 
 export interface AwaitingPark {
   items: AwaitingItem[]
-  /** `for:` in ms, or null when it is missing or not a duration. NULL IS NOT A PARK. */
+  /** `for:` in ms AS WRITTEN, uncapped, or null when it is missing or not a duration. NULL IS NOT A
+   *  PARK. Uncapped here because the ceiling depends on what the park NAMES (parkForMaxMs), which this
+   *  field alone cannot know — `parkExpiresAt` is the one place it is applied. */
   forMs: number | null
 }
 
@@ -54,7 +56,7 @@ export function readAwaitingPark(hints: readonly AwaitingHint[]): AwaitingPark {
     if (isAwaitingItemKind(h.kind)) {
       if (value) items.push({ kind: h.kind, value })
     } else if (h.kind === "for") {
-      forMs = parseAwaitingDuration(value)
+      forMs = parseAwaitingDurationRaw(value)
     }
   }
   return { items, forMs }
@@ -109,11 +111,23 @@ export function parkIsHonoured(park: AwaitingPark, live: LiveActivity): boolean 
   return unaccountedItems(park.items, live).length === 0
 }
 
-/** When a park that landed at `fenceAtMs` runs out. Capped by the grammar itself, so this cannot
- *  return an instant beyond AWAITING_FOR_MAX_MS from the fence. */
+/** The ceiling this park's `for:` may reach, which depends on WHAT IT NAMES.
+ *
+ *  A park is one sentence about every item in it, so it can only be as long as its shortest-lived kind:
+ *  a shell or a sub-agent dies with the session, and a day is already generous for one. A park naming
+ *  nothing but PULL REQUESTS is a different object — an external PR sits unreviewed for as long as its
+ *  maintainers take — and capping that one at a day is what woke a thread daily for four days against a
+ *  PR nobody had touched. Mixed ⇒ the low ceiling, because the shell in the list is still a shell. */
+export function parkForMaxMs(park: AwaitingPark): number {
+  if (park.items.length === 0) return AWAITING_FOR_MAX_MS
+  return park.items.every((i) => i.kind === "pr") ? PR_WATCH_FOR_MAX_MS : AWAITING_FOR_MAX_MS
+}
+
+/** When a park that landed at `fenceAtMs` runs out. Capped by `parkForMaxMs`, so this cannot return an
+ *  instant beyond the ceiling the park's own items earn. */
 export function parkExpiresAt(park: AwaitingPark, fenceAtMs: number): number | null {
   if (park.forMs === null || !Number.isFinite(fenceAtMs)) return null
-  return fenceAtMs + Math.min(park.forMs, AWAITING_FOR_MAX_MS)
+  return fenceAtMs + Math.min(park.forMs, parkForMaxMs(park))
 }
 
 // ---- THE WATCHED-PR STATUS BOOK -------------------------------------------------------------------

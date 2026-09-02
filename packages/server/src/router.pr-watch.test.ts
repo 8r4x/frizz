@@ -14,7 +14,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { BoardSnapshot, Settings } from "@frizz/shared"
-import { PR_WATCH_MAX_ARMED } from "@frizz/shared"
+import { PR_WATCH_DEFAULT_FOR_MS, PR_WATCH_FOR_MAX_MS, PR_WATCH_MAX_ARMED } from "@frizz/shared"
 import type { BoardManager } from "./board.ts"
 import type { PrRef, PrProbe } from "./scheduler.ts"
 import { createRouter } from "./router.ts"
@@ -224,6 +224,50 @@ test("addOwnPrWatch: a PR the server's gh cannot read is refused with the reason
       (err: Error) => /`acme\/app#391` cannot be watched/.test(err.message) && /Could not resolve to a Repository/.test(err.message) && /gh auth status/.test(err.message),
     )
     assert.equal(h.storage.listPrWatches("t", { armedOnly: true }).length, 0)
+  } finally { h.close() }
+})
+
+// A YEAR IS REPRESENTABLE, and that is the whole point of the ceiling being its own constant. A pull
+// request in a repo nobody here controls moves on its maintainers' clock: capped at a day, a watcher on
+// one expired against an untouched PR every 24h — four wakes in four days on `vercel/ai#20002`, none of
+// them carrying any news (maintainer 2026-09-02).
+test("a months-long `for` on a PR watcher is honoured, not quietly cut back to a day", async () => {
+  const h = harness()
+  try {
+    h.storage.upsertSession(row("t"))
+    const added = await h.router.addOwnPrWatch.handler({ input: { slug: "t", target: "acme/app#391", for: "180d" } })
+    assert.equal(added.clampedFrom, undefined, "180d is under the ceiling, so nothing was capped")
+    const [stored] = h.storage.listPrWatches("t", { armedOnly: true })
+    const heldMs = (stored.expires_at ?? 0) - stored.created_at
+    assert.equal(heldMs, 180 * 24 * 60 * 60 * 1000)
+    assert.equal(added.expiresAt, new Date(stored.expires_at ?? 0).toISOString(), "…and the worker reads back what it got")
+  } finally { h.close() }
+})
+
+// CLAMPED, NOT REFUSED — a fat-fingered `9999d` should still watch the PR. But SAID: a worker handed a
+// day when it asked for a decade, and told nothing, rests believing it is covered.
+test("a `for` above the ceiling is capped, and the cap is reported rather than applied in silence", async () => {
+  const h = harness()
+  try {
+    h.storage.upsertSession(row("t"))
+    const added = await h.router.addOwnPrWatch.handler({ input: { slug: "t", target: "acme/app#391", for: "9999d" } })
+    assert.equal(added.clampedFrom, "9999d")
+    const [stored] = h.storage.listPrWatches("t", { armedOnly: true })
+    assert.equal((stored.expires_at ?? 0) - stored.created_at, PR_WATCH_FOR_MAX_MS)
+  } finally { h.close() }
+})
+
+// The legacy path: an MCP binary predating `for` cannot send one. It still gets a BOUND — an unrenewed
+// watcher must stop polling eventually — but no longer one short enough to be its own source of wakes.
+test("a worker that cannot send `for` gets the bounded default, and reads its expiry back", async () => {
+  const h = harness()
+  try {
+    h.storage.upsertSession(row("t"))
+    const added = await h.router.addOwnPrWatch.handler({ input: { slug: "t", target: "acme/app#391" } })
+    assert.equal(added.clampedFrom, undefined, "a default is not a clamp — the worker asked for nothing")
+    const [stored] = h.storage.listPrWatches("t", { armedOnly: true })
+    assert.equal((stored.expires_at ?? 0) - stored.created_at, PR_WATCH_DEFAULT_FOR_MS)
+    assert.equal(added.expiresAt, new Date(stored.expires_at ?? 0).toISOString())
   } finally { h.close() }
 })
 

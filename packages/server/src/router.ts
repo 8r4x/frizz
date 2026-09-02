@@ -82,7 +82,8 @@ import {
   isDirectSubAgent,
   DirectoryPickResult,
   ThreadLocation,
-  parseAwaitingDuration,
+  parseAwaitingDurationRaw,
+  AWAITING_FOR_MAX_MS,
   AddOwnPrWatchInput,
   AddOwnPrWatchResult,
   DropOwnPrWatchInput,
@@ -93,6 +94,7 @@ import {
   OwnPrWatchesResult,
   PR_WATCH_MAX_ARMED,
   PR_WATCH_DEFAULT_FOR_MS,
+  PR_WATCH_FOR_MAX_MS,
   type PrWatchView,
   AddOwnWatchInput,
   AddOwnWatchResult,
@@ -2468,7 +2470,12 @@ export function createRouter(ctx: AppContext) {
         // which reads to the operator as the watcher misfiring.
         const existing = armed.find((w) => w.owner === ref.owner && w.repo === ref.repo && w.number === ref.number)
         const target = `${ref.owner}/${ref.repo}#${ref.number}`
-        if (existing) return { id: existing.id, target, alreadyArmed: true, watches: armedPrWatchViews(input.slug) }
+        if (existing) {
+          // The ORIGINAL expiry, which this call left alone — the re-registration is a no-op and must
+          // read back as one, not as the duration it happened to pass.
+          const expiresAt = new Date(existing.expires_at ?? Date.now()).toISOString()
+          return { id: existing.id, target, alreadyArmed: true, expiresAt, watches: armedPrWatchViews(input.slug) }
+        }
         if (armed.length >= PR_WATCH_MAX_ARMED) {
           throw new Error(`this thread already watches ${armed.length} pull requests (the limit is ${PR_WATCH_MAX_ARMED}) — drop one first`)
         }
@@ -2477,10 +2484,14 @@ export function createRouter(ctx: AppContext) {
         // because refusing would break `watch_pr` for every session already running. A PRESENT-but-
         // unparseable one IS a bad one and is refused: the worker tried to choose and got it wrong,
         // and silently substituting a number would hide that.
-        const forMs = input.for === undefined ? PR_WATCH_DEFAULT_FOR_MS : parseAwaitingDuration(input.for)
-        if (forMs === null) {
-          throw new Error(`\`for: ${input.for}\` is not a duration — give one like \`30m\`, \`2h\` or \`3d\` (max 24h)`)
+        const asked = input.for === undefined ? PR_WATCH_DEFAULT_FOR_MS : parseAwaitingDurationRaw(input.for)
+        if (asked === null) {
+          throw new Error(`\`for: ${input.for}\` is not a duration — give one like \`2h\`, \`3d\` or \`180d\` (max 365d)`)
         }
+        // CLAMPED, NOT REFUSED — a fat-fingered `9999d` should still watch the PR. But the clamp is
+        // REPORTED: a worker told nothing rests believing it holds a year of coverage it does not have.
+        const forMs = Math.min(asked, PR_WATCH_FOR_MAX_MS)
+        const clampedFrom = input.for !== undefined && asked > PR_WATCH_FOR_MAX_MS ? { clampedFrom: input.for } : {}
         // REFUSED IF THE SERVER CANNOT READ IT — the same rule as an unparseable ref, for the same
         // reason: the poll runs the server's own `gh`, and a PR it cannot see (signed out, an SSO-gated
         // org, no such repo, no `gh` on its PATH) is a watcher that fails every minute in silence while
@@ -2500,7 +2511,7 @@ export function createRouter(ctx: AppContext) {
         ctx.storage.clearThreadDone(input.slug)
         ctx.storage.armPrWatch({ id, slug: input.slug, owner: ref.owner, repo: ref.repo, number: ref.number, createdAtMs: now, expiresAtMs: now + forMs })
         ctx.board.refresh()
-        return { id, target, alreadyArmed: false, watches: armedPrWatchViews(input.slug) }
+        return { id, target, alreadyArmed: false, expiresAt: new Date(now + forMs).toISOString(), ...clampedFrom, watches: armedPrWatchViews(input.slug) }
       },
     }),
 
@@ -2562,17 +2573,21 @@ export function createRouter(ctx: AppContext) {
         }
         // REQUIRED, and unparseable is an ERROR — unlike the PR watcher's optional `for`, which is optional
         // only for sessions whose MCP binary predates the field. This RPC has no such sessions.
-        const forMs = parseAwaitingDuration(input.for)
-        if (forMs === null) {
+        const asked = parseAwaitingDurationRaw(input.for)
+        if (asked === null) {
           throw new Error(`\`for: ${input.for}\` is not a duration — give one like \`30m\`, \`2h\` or \`3d\` (max 24h)`)
         }
+        // Clamped, not refused, and REPORTED — the same rule as the PR watcher above. The ceiling stays a
+        // day here because this names a shell or a sub-agent, which does not outlive its session.
+        const forMs = Math.min(asked, AWAITING_FOR_MAX_MS)
+        const clampedFrom = asked > AWAITING_FOR_MAX_MS ? { clampedFrom: input.for } : {}
         const now = Date.now()
         const id = `wch_${randomUUID().replace(/-/g, "").slice(0, 12)}`
         // A registration trumps a done — see setOwnThreadTimer.
         ctx.storage.clearThreadDone(input.slug)
         ctx.storage.armThreadWatch({ id, slug: input.slug, kind: input.kind, target, createdAtMs: now, expiresAtMs: now + forMs })
         ctx.board.refresh()
-        return { id, kind: input.kind, target, alreadyArmed: false, watches: armedOwnWatchViews(input.slug) }
+        return { id, kind: input.kind, target, alreadyArmed: false, ...clampedFrom, watches: armedOwnWatchViews(input.slug) }
       },
     }),
 
