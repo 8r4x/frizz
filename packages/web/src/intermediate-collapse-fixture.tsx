@@ -69,6 +69,10 @@ import "./styles.css"
 //   ?variant=priorrest TWO turns — an ask, a rest, a background wake, then a second turn ending in a
 //                      question and another rest. The window reaches back to the HUMAN's ask, so both
 //                      turns render; neither "Agent rested" rule may be drawn at either end.
+//   ?variant=loneanswer THE REGRESSION SHAPE (2026-09-02): a one-message first answer, rest-cut middle
+//                      rounds, and a one-line final run — so NO kept run folds, and the middle's first
+//                      index is a rest record. Both halves of that broke: the gate saw nothing to
+//                      collapse, and the divider emission keyed on an index that never renders.
 //   ?variant=goalwakes THE REGRESSION SHAPE (2026-08-16): a pointed question, the ANSWER, a rest, and two
 //                      more turns driven by the GOAL's own bump. Every rested message must render in full
 //                      — the answer above all — each run must get its own fold, and each bump must draw
@@ -464,6 +468,40 @@ const prwakes: TranscriptMessage[] = [
   withId(boundaryEvent("rest", "Agent rested")),
 ]
 
+// NEITHER KEPT RUN FOLDS, AND THE MIDDLE IS CUT BY RESTS — the shape that painted fifteen hours of a
+// real nub thread raw (maintainer 2026-09-02, `investigate-divergences-fix-this-and-all`: an "insane"
+// card at 15,756px). Two defects at once, so this variant pins both:
+//   1. The first run answers in ONE prose message (open === close, deliberately never folds) and the
+//      last run is one quiet status line (nothing hidden, never folds) — so the collapse gate, counting
+//      only the kept folding runs, read "nothing to collapse" while twelve rounds sat in the middle.
+//   2. Every middle run here is opened by a REST + a background-task completion, not a `wake:true`
+//      steer — so `middle.start` reaches back onto the rest record, which the render loop drops before
+//      the middle branch, and the exact-index divider emission never fired: the rounds vanished with
+//      NO line standing in for them.
+const loneanswer: TranscriptMessage[] = [
+  { sourceId: "u-cur", role: "user", text: "ci failing", tools: [], parts: [] },
+  withId(boundaryEvent("wake", "Background task «Building and testing the fix» finished")),
+  withId(asst("Fix pushed — the lockfile drift is gone and CI is restarted on the new head.", [
+    tool("Bash", { detail: "git push", desc: "Pushing the fix" }),
+    tool("Bash", { detail: "gh pr checks 837", desc: "Confirming CI restarted" }),
+  ])),
+  withId(boundaryEvent("rest", "Agent rested")),
+  withId(boundaryEvent("wake", "Background task «Re-running the full suite» finished")),
+  withId(asst("", [tool("Read", { detail: "target/test-output.log" })])),
+  withId(asst("", [tool("Bash", { detail: "gh pr checks 837", desc: "Reading the check runs" })])),
+  withId(asst("The full suite is green on the new head.", [tool("Bash", { detail: "git log -1", desc: "Recording the head" })])),
+  withId(boundaryEvent("rest", "Agent rested")),
+  withId(boundaryEvent("wake", "Background task «Watching the follow-up run» finished")),
+  withId(asst("", [tool("Bash", { detail: "gh run view 991 --json conclusion", desc: "Reading the run conclusion" })])),
+  withId(asst("Still green — nothing new to act on.", [tool("Bash", { detail: "gh pr view 837 --json mergeable", desc: "Re-checking mergeability" })])),
+  withId(boundaryEvent("rest", "Agent rested")),
+  prWake("nubjs/nub#837", [
+    { label: "approval", actor: "colinhacks", bot: false, at: new Date(Date.now() - 4 * 60_000).toISOString() },
+  ]),
+  withId(asst("That is the watcher confirming what I already verified — nothing changed; the merge is yours.")),
+  withId(boundaryEvent("rest", "Agent rested")),
+]
+
 // THE SHAPE THAT BROKE IT (maintainer 2026-08-16, zod thread
 // `dedupe-zod-6236-exactoptional-with-coercion-2-prs`): the human asks a pointed question, the agent
 // ANSWERS it and rests, and the GOAL — not a watcher — wakes it twice more. Every wake here is the Goal's
@@ -605,6 +643,7 @@ const messages =
   : variant === "humanpast" ? humanpast
   : variant === "stackedwakes" ? stackedwakes
   : variant === "priorrest" ? priorrest
+  : variant === "loneanswer" ? loneanswer
   : heavy)
 
 const thread: ThreadViewModel = {

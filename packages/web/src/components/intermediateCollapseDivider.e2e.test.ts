@@ -325,7 +325,36 @@ test("the collapsed intermediate run is a hairline divider that names its tool c
     assert.doesNotMatch(goalCard, /If further work towards the original task/, "the Goal's body stays out; only its hairline shows")
     assert.doesNotMatch(goalCard, /Agent rested/, "the rest divider is still never drawn")
 
-    // ---- 11. control: nothing intermediate, so no divider at all ----
+    // ---- 11. THE MIDDLE COLLAPSES EVEN WHEN NO KEPT RUN FOLDS, and its divider survives a rest-cut ----
+    // The 2026-09-02 regression (nub `investigate-divergences-fix-this-and-all`): a first run that
+    // answered in ONE message (deliberately never folds) and a one-line final run left the collapse
+    // gate counting zero folding segments — so it concluded there was nothing to collapse while twelve
+    // rounds and 149 tool calls sat in the middle, and the card painted fifteen hours of work raw at
+    // 15,756px. And separately: this middle's first hidden run is cut by a REST, which puts the rest
+    // record at the span's first index; the render loop drops rest records before the middle branch,
+    // so a divider emission keyed on that exact index never fired and the rounds vanished with no line
+    // standing in for them. Both defects reproduce on this one variant.
+    await page.goto(variant("loneanswer"), { waitUntil: "networkidle0" })
+    await page.waitForSelector('[data-wake-divider="middle-runs-summary"]', { timeout: 10_000 })
+    const loneLadder = await page.$$eval("[data-wake-divider]", (ns) =>
+      ns.map((n) => `${n.getAttribute("data-wake-divider")}: ${(n as HTMLElement).innerText.replace(/\s+/g, " ").trim()}`),
+    )
+    assert.deepEqual(
+      loneLadder.map((row) => row.replace(/ · \d+m ago$/, "")),
+      [
+        "event: Background task «Building and testing the fix» finished",
+        "middle-runs-summary: 2 more rounds · 5 tool calls · Click to expand",
+        "github: New approval from @colinhacks on nubjs/nub#837",
+      ],
+      `the middle folds on its own strength, with no intermediate-summary anywhere, got ${loneLadder.join(" | ")}`,
+    )
+    const loneCard = await page.evaluate(() => document.body.innerText)
+    assert.match(loneCard, /Fix pushed — the lockfile drift is gone/, "the one-message first answer renders in full")
+    assert.match(loneCard, /the merge is yours/, "the last run's status line renders in full")
+    assert.doesNotMatch(loneCard, /The full suite is green on the new head/, "the middle rounds are folded")
+    assert.doesNotMatch(loneCard, /Still green — nothing new to act on/)
+
+    // ---- 12. control: nothing intermediate, so no divider at all ----
     await page.goto(variant("single"), { waitUntil: "networkidle0" })
     await page.waitForFunction(() => document.querySelectorAll("[data-frizz-msg]").length > 0, { timeout: 10_000 })
     assert.equal(

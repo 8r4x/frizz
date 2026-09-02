@@ -856,8 +856,15 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
   }, [segments])
   // Collapse unless the reader has opted into the full log. Gated on there being something ABOVE the
   // first fold to anchor it — the human's ask, or a rest divider a wake-driven turn opens on.
+  //
+  // THE MIDDLE COUNTS AS SOMETHING TO COLLAPSE, independently of the kept runs. Counting only the kept
+  // folding segments meant a thread whose FIRST run answered in a single message (open === close, so it
+  // deliberately never folds) and whose LAST run was one quiet status line hid NOTHING — the gate read
+  // "nothing to fold" while twelve rounds and 149 tool calls sat between them, and the card painted
+  // every one in full (maintainer 2026-09-02, nub `investigate-divergences-fix-this-and-all`: an
+  // "insane" card that rendered fifteen hours of intermediate work raw).
   const collapseIntermediate =
-    !intermediateExpanded && (landedUserIdx >= 0 || restTurnStart > 0) && segments.length > 0
+    !intermediateExpanded && (landedUserIdx >= 0 || restTurnStart > 0) && (segments.length > 0 || middle !== undefined)
   // THE HUMAN'S LAST MESSAGE WINS, even when the agent has rested since. It used to be capped at the
   // current turn (`Math.max` with `restTurnStart`) on the reasoning that a closed turn is history the
   // drawer already holds — but with frizz driving threads across many rests, "the current turn" is a
@@ -1307,6 +1314,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
               // divider. The wake hairlines sit BETWEEN the segments, where the reader can read each one
               // against the work it caused. The pinned ask and loaded-earlier history render in full.
               const barEmitted = new Set<number>()
+              let middleEmitted = false
               coalescedVisible.forEach(({ message: m, messageIndex: globalIdx }, i) => {
                 if (m.queued) return
                 if (messageRendersNothing(m, hidesAwaiting(globalIdx))) return
@@ -1331,9 +1339,16 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
                 // lifted-wake and waker paths — because those are exactly what it is hiding: the
                 // maintainer asked for "all of the awakenings that happened in the middle" to go with the
                 // work, leaving the first rested message and the last one facing each other across one
-                // line. Emitted once, at the span's first index.
+                // line. Emitted once, at the FIRST row of the span that reaches this branch — NOT at
+                // `globalIdx === middle.start` exactly, because the row sitting at `middle.start` often
+                // never gets here: a middle whose first hidden run was cut by a REST puts the rest record
+                // there (collapseMiddleRuns reaches back one on purpose), and the rest-return above
+                // swallows it; coalescing can likewise absorb that index into an earlier entry. Keying on
+                // equality hid twelve rounds with NO divider standing in for them — the reader saw the
+                // first answer jump to the final status with nothing saying work happened in between.
                 if (collapseIntermediate && middle && globalIdx >= middle.start && globalIdx <= middle.end) {
-                  if (globalIdx === middle.start) {
+                  if (!middleEmitted) {
+                    middleEmitted = true
                     if (prevTailIsMeta !== null) out.push(<VSpace key="middle-runs-space" h={STEP} />)
                     out.push(
                       <MiddleRunsSummary
