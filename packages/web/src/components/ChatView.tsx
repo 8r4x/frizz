@@ -3,7 +3,7 @@ import { createPortal } from "react-dom"
 import { useSnapshot } from "valtio"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useVirtualizer } from "@tanstack/react-virtual"
-import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUp, Bot, Check, ChevronRight, FileText, HelpCircle, Hourglass, KeyRound, ListChecks, Loader2, Radar, TerminalSquare, X, type LucideIcon } from "lucide-react"
+import { AlertTriangle, ArrowDown, ArrowUp, Bot, Check, ChevronRight, FileText, HelpCircle, Hourglass, KeyRound, ListChecks, Loader2, Radar, TerminalSquare, X, type LucideIcon } from "lucide-react"
 import { awaitingFenceTitle, parseRecurringPrompt } from "@frizz/shared"
 import type { AskQuestion, AwaitingHint, BgShellView, PendingAsk, RegisteredQuestionView, SubAgentView, ThreadView as ThreadViewData, TranscriptEdit, TranscriptMessage, TranscriptPart, TranscriptTodo, TranscriptToolCall } from "@frizz/shared"
 import { store, threadBySlug, pushDrawer, pushSubAgentDrawer, pushBackgroundShellDrawer, showToast } from "../store.ts"
@@ -15,7 +15,6 @@ import { useMarkdownHtml, useInlineMarkdownHtml } from "../lib/useMarkdown.ts"
 import { splitComposerValue, splitProseAttachments } from "../lib/imagePaths.ts"
 import { localImageUrl } from "../lib/markdownTargets.ts"
 import { apiBase } from "../lib/base-path.ts"
-import { queueDestination } from "../lib/router.ts"
 import { DiffBlock, PathLink } from "./DiffBlock.tsx"
 import { LinkedHtml } from "./LinkedHtml.tsx"
 import { CodeBody } from "./CodeBody.tsx"
@@ -58,7 +57,6 @@ import { HeaderActions } from "./HeaderActions.tsx"
 import { ThreadLifecycleFooter, StateButton } from "./ThreadLifecycleFooter.tsx"
 import { AiRenameButton } from "./AiRenameButton.tsx"
 import { threadLifecycleAvailability } from "../lib/threadLifecycle.ts"
-import { Tooltip } from "./Tooltip.tsx"
 import { ToolDisclosureHeader } from "./ToolDisclosureHeader.ts"
 import { subAgentProfileCell } from "../lib/subAgentProfile.ts"
 import { FOREGROUND_MARK_AFTER_MS, foregroundToolIsRunning, hasRunningToolIndicator, isPendingForegroundTool, liveBackgroundOperationState } from "../lib/operationIndicators.ts"
@@ -97,10 +95,7 @@ import { LastActive } from "./LastActive.tsx"
 import { CopyTerminalCommandButton, useCopyTerminalCommand } from "./ExternalTerminalCommand.tsx"
 import { SignInModal } from "./SignInModal.tsx"
 import { PROVIDER_LABEL } from "../lib/signIn.ts"
-import { isPlainLeftClick } from "../lib/standaloneThreadRoute.ts"
 import { ExpandThreadLink } from "./ExpandThreadLink.tsx"
-import { spaNavigate } from "../lib/router.ts"
-import { prefersReducedMotion } from "../lib/sheet.ts"
 import { takeFullscreenEnterAnchor } from "../lib/fullscreenHandoff.ts"
 import { prependEarlierPage } from "../lib/transcriptPagination.ts"
 import { buildVirtualTranscriptMessageRows, earlierLoadGate, nextTailFollow, TAIL_FOLLOW_PX, type VirtualTranscriptMessageRow } from "../lib/virtualTranscript.ts"
@@ -1487,33 +1482,12 @@ export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue
       className={THREAD_HEADER_CLASS}
     >
       <div className={THREAD_HEADER_TITLE_CLASS}>
-        <div className="flex min-w-0 items-center gap-1.5">
-          {showReturnToQueue && (
-            <Tooltip label="Return to queue">
-              {/* THIS project's queue, not the launching one's — and a BOARD, not the project picker.
-                  A bare "/" sent a reader who opened `/project/nub/thread/x/full` to whichever board
-                  the server was started from (the same prefix-blind mistake the ↗ button that brought
-                  them here used to make), and on the launching project it sent them to the grid. */}
-              <a
-                href={queueDestination("/")}
-                aria-label="Return to queue"
-                data-standalone-return
-                onClick={(event) => {
-                  if (!isPlainLeftClick(event)) return
-                  event.preventDefault()
-                  // The fullscreen door's transition, played backwards: BoardRoute primes the reverse
-                  // morph's target (store.primeFullscreenReturn), so this opts the navigation in the
-                  // same way the door does. The browser Back button gets the same treatment for free —
-                  // react-router re-arms the transition for the POP of a pair that transitioned.
-                  spaNavigate(queueDestination("/"), { viewTransition: !prefersReducedMotion() })
-                }}
-                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60"
-              >
-                <ArrowLeft size={14} />
-              </a>
-            </Tooltip>
-          )}
-          <div className="min-w-0 flex-1 leading-tight">
+        {/* NOTHING BEFORE THE TITLE. The way out of /full used to be an ArrowLeft standing here, which
+            put a whole-thread verb at the one end of the header no other verb lives at, and said
+            "previous page" about a control whose job is to change how this thread is SHOWN. It is now
+            the closing half of the fullscreen door, in the door's own slot in the action strip below
+            (HeaderActions `collapse`). */}
+        <div className="min-w-0 leading-tight">
           {/* Keep the title's display wrapper content-sized. Long names still truncate inside the
               remaining header width, but short names do not claim the whole row as a click target. */}
           <div className="group/thread-title flex min-w-0 items-center gap-2">
@@ -1558,7 +1532,6 @@ export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue
             <AiRenameButton thread={thread} hidden={editingTitle} />
           </div>
           <LastActive at={lastActiveLabelAt(thread)} fallbackAt={thread.spawnedAt} className="mt-0.5 block truncate text-[11px] leading-tight text-muted/75" />
-          </div>
         </div>
       </div>
       {/* At constrained drawer widths, controls get their own deliberate row. This keeps the
@@ -1572,6 +1545,9 @@ export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue
           {showTerminalCommand && <CopyTerminalCommandButton slug={slug} />}
           <HeaderActions
             thread={thread}
+            // The /full page is the one surface with a fullscreen to LEAVE, and it leaves through the
+            // same slot it was entered by.
+            collapse={showReturnToQueue}
             onDoc={hasDoc ? () => pushDrawer("doc", thread.id) : undefined}
             onDone={() => markComplete.mutate(undefined, { onSuccess: onStatusApplied })}
             doneBusy={markComplete.isPending}

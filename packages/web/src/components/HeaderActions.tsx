@@ -10,6 +10,7 @@ import { HEADER_ICON_CLASS } from "../lib/headerIcon.ts"
 import { ReloadPluginsButton } from "./ReloadPluginsButton.tsx"
 import { RestartWorkerButton } from "./RestartWorkerButton.tsx"
 import { ExpandThreadLink } from "./ExpandThreadLink.tsx"
+import { CollapseThreadLink } from "./CollapseThreadLink.tsx"
 
 // The retry message + follow-up now live in lib/retrySession so the sidebar's hover-revealed Retry
 // shares this exact recovery path. Re-exported for existing importers.
@@ -35,6 +36,7 @@ export { STALLED_RETRY_MESSAGE } from "../lib/retrySession.ts"
 export function HeaderActions({
   thread,
   expand,
+  collapse,
   onDoc,
   onDone,
   onCollapse,
@@ -46,6 +48,7 @@ export function HeaderActions({
 }: {
   thread: ThreadView
   expand?: boolean // queue cards only → the fullscreen door (ExpandThreadLink); the drawer header mounts its own
+  collapse?: boolean // the /full page → the same door, closing (CollapseThreadLink). Never both.
   onDoc?: () => void // present only on the thread header → shows the frizz-document icon
   onDone: () => void // legacy Mark-as "done" path (parent-owned mutation)
   onCollapse?: () => void // queue cards → collapse/expand the card body to just its header
@@ -74,10 +77,14 @@ export function HeaderActions({
       <ReloadPluginsButton thread={thread} />
       <RestartWorkerButton thread={thread} />
       {onDoc && <IconBtn label="Frizz document" icon={FileText} size={14} onClick={onDoc} />}
-      {/* The fullscreen door — a real anchor to the thread's `/full` page that navigates IN PLACE on a
+      {/* THE FULLSCREEN DOOR, one slot, both directions — a real anchor that navigates IN PLACE on a
           plain click and leaves ⌘/middle/right-click to the browser. It replaced the ↗ "Open in new
-          tab" arrow on 2026-08-28; the drawer header (ChatView) mounts the same component. */}
+          tab" arrow on 2026-08-28; the drawer header (ChatView) mounts the expand half itself.
+          A surface can only ever offer ONE of these: the queue card can be expanded, the /full page can
+          be collapsed, and putting the closing half here is what makes the two share a position instead
+          of the reader hunting an ArrowLeft at the far end of the header (maintainer 2026-09-02). */}
       {expand && <ExpandThreadLink slug={thread.id} />}
+      {collapse && <CollapseThreadLink />}
       {isSession ? (
         // A STALLED session (process gone, work unfinished) or one KILLED by an auto-resume usage limit
         // leads with recovery — Retry is the only exit/wait-state verb here; clearing a finished row is
