@@ -241,10 +241,12 @@ export function ThreadSheet({ id, slug, depth, widthDepth, initiallyOpen }: { id
           }}
           // data-vt-chat: the fullscreen door tags this panel as the view transition's shared element
           // on the way to /full (see ExpandThreadLink) — the panel is what visibly becomes the page's
-          // thread column.
+          // thread column. On the way BACK the tag is declarative: while this slug is the primed
+          // return target (store.primeFullscreenReturn), the panel wears the name in its first
+          // commit, so the /full column has somewhere to morph back into.
           data-vt-chat
           className={`fixed right-0 top-0 overflow-hidden outline-none ${SHEET_PANEL_CLASS} ${shown ? "translate-x-0" : "translate-x-full"}`}
-          style={{ zIndex: 51 + depth * 2, width: sheetWidth(widthDepth) }}
+          style={{ zIndex: 51 + depth * 2, width: sheetWidth(widthDepth), viewTransitionName: drawerSnap.vtReturnTarget === slug ? "thread-chat" : undefined }}
         >
           <RadixDialog.Title className="sr-only">
             {route.kind === "found" ? `Thread: ${displayTitle(route.thread)}` : `Thread: ${slug}`}

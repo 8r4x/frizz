@@ -3,7 +3,7 @@ import { useSnapshot } from "valtio"
 import { ChevronsUpDown, Inbox } from "lucide-react"
 import type { ThreadView, BoardSnapshot, RegisteredQuestionView, TranscriptMessage } from "@frizz/shared"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { queueCardTargetY, showToast } from "../store.ts"
+import { queueCardTargetY, showToast, store } from "../store.ts"
 import { pageScrollY } from "../lib/pageScrollLock.ts"
 import { rpc } from "../api/rpc.ts"
 import { useBoard, asThreads, useTranscript } from "../hooks.ts"
@@ -683,6 +683,9 @@ function IntermediateSummary({ toolCount, onExpand }: { toolCount: number; onExp
 // memoized Message. `onResolve` takes the slug (stable useCallback in TodosView) so this card's props
 // never churn identity render-to-render.
 const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnresolve }: { thread: ThreadView; leaving: boolean; onResolve: (slug: string) => void; onUnresolve: (slug: string) => void }) {
+  // Tracks only vtReturnTarget (valtio re-renders on accessed keys alone), so the memo'd card
+  // re-renders just when a /full exit primes or clears it — see the root div's viewTransitionName.
+  const vtSnap = useSnapshot(store)
   const [collapsed, setCollapsed] = useState(false)
   // Higher-level (turn-level) collapse: the whole run of INTERMEDIATE steps between the pinned last
   // user message and the final agent message is hidden behind a single summary divider by default, so a
@@ -1103,7 +1106,14 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
     <div
       data-queue-card-root={thread.id}
       data-queue-leaving={leaving}
-      style={bottomScrollReserve ? { marginBottom: bottomScrollReserve } : undefined}
+      // viewTransitionName: while this thread is the primed return target of a /full exit
+      // (store.primeFullscreenReturn), the card is the reverse morph's destination — the /full
+      // column shrinks back into it. Inert otherwise; the forward direction tags imperatively
+      // instead (ExpandThreadLink), because only the clicked surface may wear the name.
+      style={{
+        ...(bottomScrollReserve ? { marginBottom: bottomScrollReserve } : null),
+        ...(vtSnap.vtReturnTarget === thread.id ? { viewTransitionName: "thread-chat" } : null),
+      }}
       // Enter (or ⌘/Ctrl-Enter) from the card at rest sends the staged answers, provided at least
       // one block is answered — the card-level twin of the Send answers button below. Every input
       // that owns the key itself (a question block's grid/free-text box, the composer with content)

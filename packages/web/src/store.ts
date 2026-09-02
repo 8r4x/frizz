@@ -156,6 +156,13 @@ export const store = proxy({
   // The router parks the slug here and App resolves it the first render the board is authoritative
   // (see resolveRoutedThread). Snoozed slugs keep the address bar on /thread/<slug> meanwhile.
   routeThreadSlug: null as string | null,
+  // The slug whose BOARD surface (thread drawer or queue card) is currently wearing
+  // `view-transition-name: thread-chat`, so the /full page's thread column has somewhere to morph
+  // back into when the fullscreen page is left for the board (browser Back, or the return arrow).
+  // Set render-phase by primeFullscreenReturn and cleared on a timer just past the animation — a
+  // surface that KEPT the name would collide with the next door click's imperative tag, and duplicate
+  // view-transition-names abort the whole transition.
+  vtReturnTarget: null as string | null,
   // Transient bottom-center toast (e.g. "Steer failed …" when an eager reply is rejected). `id` bumps per call so
   // repeat toasts re-trigger the fade. Rendered by <Toaster>; null when nothing is showing.
   toast: null as { id: number; text: string; spinner?: boolean; sticky?: boolean; duration?: number; link?: { label: string; slug: string } } | null,
@@ -298,6 +305,44 @@ export function resolveRoutedThread(): void {
     return
   }
   if (route.kind === "found" && route.thread.needsYou && scrollToQueueCard(slug)) return
+  pushDrawer("thread", slug, { routed: true })
+}
+
+// THE FULLSCREEN DOOR, PLAYED BACKWARDS. react-router re-arms the door's view transition for the POP
+// back out of /full (it remembers which path pairs transitioned), and the return arrow opts in
+// explicitly — but the transition can only morph the /full thread column into a board surface that
+// EXISTS and IS NAMED in the board's FIRST commit, the one the new-state snapshot reads. Left to the
+// ordinary flow, the drawer arrives two effects later (applyPath parks the slug, resolveRoutedThread
+// settles it) and no board surface ever wears the name, so Back played as a bare crossfade
+// (maintainer 2026-09-02: "when I hit the back button on full-screen view, it doesn't undo the
+// animation"). StandaloneRoute records its slug on every render; BoardRoute consumes it in a
+// render-phase initializer — the mirror of StandaloneRoute's own render-phase drawer clear.
+let lastStandaloneSlug: string | null = null
+export function noteStandaloneThreadRender(slug: string): void {
+  lastStandaloneSlug = slug
+}
+
+export function primeFullscreenReturn(routedSlug: string | undefined): void {
+  const slug = lastStandaloneSlug
+  lastStandaloneSlug = null
+  if (!slug) return
+  // Name whichever surface this slug renders as — ThreadSheet and the queue card both check this.
+  // Cleared well past the 200ms animation: clearing in an effect could beat the new-state capture
+  // and un-name the element mid-transition.
+  store.vtReturnTarget = slug
+  if (typeof window !== "undefined") {
+    window.setTimeout(() => {
+      if (store.vtReturnTarget === slug) store.vtReturnTarget = null
+    }, 600)
+  }
+  // The drawer itself, only when the return URL names this thread and the board can already say it
+  // is NOT queued (a queued thread's surface is its card, which the queue mounts in this same pass).
+  // The same painted-open push resolveRoutedThread would make — just in the commit the snapshot
+  // actually reads; applyPath then finds the layer already present and leaves it be.
+  if (routedSlug !== slug || !store.board) return
+  const route = resolveThreadRoute(store.board, slug)
+  if (route.kind !== "found" || route.thread.needsYou) return
+  if (store.drawers.some((d) => d.kind === "thread" && d.slug === slug && !d.closing)) return
   pushDrawer("thread", slug, { routed: true })
 }
 

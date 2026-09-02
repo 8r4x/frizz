@@ -10,7 +10,7 @@ import { Toaster } from "./components/Toaster.tsx"
 import { applyPath, registerNavigate } from "./lib/router.ts"
 import { innerPath } from "./lib/base-path.ts"
 import { feedIsBoundTo, rebindProject } from "./api/socket.ts"
-import { resetProjectState, store } from "./store.ts"
+import { noteStandaloneThreadRender, primeFullscreenReturn, resetProjectState, store } from "./store.ts"
 import { useProjectRailVisible } from "./lib/projectRail.ts"
 
 // THE ROUTE TREE — and, more to the point, the LAYOUT that outlives a navigation.
@@ -103,9 +103,15 @@ function useProjectBinding(slug: string | undefined) {
  * and `apiBase()` answers `/_frizz` for exactly that case.
  */
 function BoardRoute() {
-  const { slug } = useParams()
+  const { slug, thread } = useParams()
   useProjectBinding(slug)
   useRouteToStore()
+  // Returning from /full plays the fullscreen door's view transition in REVERSE (react-router re-arms
+  // it for the POP; the return arrow opts in). The reverse morph needs the thread's board surface
+  // mounted and named in THIS first commit — the one the transition's new-state snapshot reads — so
+  // the priming is render-phase, the mirror of StandaloneRoute's render-phase drawer clear. A no-op
+  // unless the previous render really was a /full page (see primeFullscreenReturn).
+  useState(() => primeFullscreenReturn(thread))
   return <App key={slug ?? "__launching__"} />
 }
 
@@ -163,6 +169,9 @@ function StandaloneRoute() {
   // A render-phase write (the useState initializer runs exactly once, before the children render)
   // means DrawerStack below already sees the empty stack in the same pass.
   useState(() => { if (store.drawers.length > 0) store.drawers = [] })
+  // Recorded every render, consumed by BoardRoute's mount: this is how the board knows its first
+  // render is the return leg of the fullscreen door and should prime the reverse morph's target.
+  noteStandaloneThreadRender(thread!)
   return (
     <>
       <StandaloneThreadPage slug={thread!} />

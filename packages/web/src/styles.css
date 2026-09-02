@@ -1433,13 +1433,16 @@ a[href] {
   display: none;
 }
 
-/* THE FULLSCREEN DOOR'S VIEW TRANSITION (board → /full). The door navigates with react-router's
-   `viewTransition`, which wraps the route swap in `document.startViewTransition`; these rules style
-   the three snapshot groups that swap produces. `thread-chat` is the SHARED element — the drawer
-   panel or queue card the door was clicked in (tagged at click time, ExpandThreadLink.tsx) morphs
-   into the /full page's thread column, which wears the name statically. `thread-rail` exists only on
-   /full, so it is always an ENTER: it slides in from the right, the direction it lives in. Everything
-   unnamed — the board, its sidebar, the drawer scrim — is the root group, which cross-fades.
+/* THE FULLSCREEN DOOR'S VIEW TRANSITION, both directions. The door (and the /full page's return
+   arrow) navigate with react-router's `viewTransition`, which wraps the route swap in
+   `document.startViewTransition` — and react-router re-arms the same transition for the browser-Back
+   POP of a pair that transitioned. These rules style the three snapshot groups the swap produces.
+   `thread-chat` is the SHARED element: forward, the drawer panel or queue card the door was clicked
+   in (tagged at click time, ExpandThreadLink.tsx) morphs into the /full thread column, which wears
+   the name statically; backward, the column morphs into whichever board surface the primed return
+   target names (store.primeFullscreenReturn). `thread-rail` exists only on /full, so it always
+   ENTERS or EXITS through its own right edge, the direction it lives in. Everything unnamed — the
+   board, its sidebar, the drawer scrim — is the root group, which cross-fades.
    Timings match the sheet family: 200ms, Tailwind's ease-out curve (cubic-bezier(0,0,0.2,1)). */
 ::view-transition-group(thread-chat),
 ::view-transition-group(thread-rail),
@@ -1458,6 +1461,16 @@ a[href] {
    navigation ever opts in, where the rail would exist on both sides and should morph, not replay. */
 ::view-transition-new(thread-rail):only-child {
   animation: frizz-vt-rail-in 200ms cubic-bezier(0, 0, 0.2, 1) both;
+}
+@keyframes frizz-vt-rail-out {
+  to {
+    opacity: 0;
+    translate: 48px 0;
+  }
+}
+/* The reverse leg (leaving /full for the board): the rail is old-only and exits the way it came in. */
+::view-transition-old(thread-rail):only-child {
+  animation: frizz-vt-rail-out 200ms cubic-bezier(0, 0, 0.2, 1) both;
 }
 /* The door checks prefers-reduced-motion before opting in at all; this is the backstop for any other
    caller of startViewTransition. `animation: none` completes every group instantly — a hard cut. */

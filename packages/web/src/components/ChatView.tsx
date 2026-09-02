@@ -100,6 +100,7 @@ import { PROVIDER_LABEL } from "../lib/signIn.ts"
 import { isPlainLeftClick } from "../lib/standaloneThreadRoute.ts"
 import { ExpandThreadLink } from "./ExpandThreadLink.tsx"
 import { spaNavigate } from "../lib/router.ts"
+import { prefersReducedMotion } from "../lib/sheet.ts"
 import { prependEarlierPage } from "../lib/transcriptPagination.ts"
 import { buildVirtualTranscriptMessageRows, earlierLoadGate, nextTailFollow, TAIL_FOLLOW_PX, type VirtualTranscriptMessageRow } from "../lib/virtualTranscript.ts"
 import { withoutRedundantRestDividers } from "../lib/restDividers.ts"
@@ -1443,7 +1444,11 @@ export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue
                 onClick={(event) => {
                   if (!isPlainLeftClick(event)) return
                   event.preventDefault()
-                  spaNavigate(queueDestination("/"))
+                  // The fullscreen door's transition, played backwards: BoardRoute primes the reverse
+                  // morph's target (store.primeFullscreenReturn), so this opts the navigation in the
+                  // same way the door does. The browser Back button gets the same treatment for free —
+                  // react-router re-arms the transition for the POP of a pair that transitioned.
+                  spaNavigate(queueDestination("/"), { viewTransition: !prefersReducedMotion() })
                 }}
                 className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60"
               >
