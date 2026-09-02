@@ -401,7 +401,7 @@ export function parseAskUserQuestionAnswers(result: unknown, questions: readonly
 //   agents: [<runtime agent id>, …]  sub-agents it dispatched        → checked against live telemetry
 //   timers: [tmr_…, …]               timers it set                   → checked against thread_timer
 //   prs:    [owner/repo#123, …]      PR watchers it registered       → checked against its PR registry
-//   for:    2h                       REQUIRED. How long the park may stand (parseAwaitingDuration).
+//   for:    2h                       REQUIRED. How long the park may stand (parseAwaitingDurationRaw).
 //                                    Capped at a day — or at PR_WATCH_FOR_MAX_MS when every item is a
 //                                    `prs:` entry, because an external PR does not move on a day's clock.
 //   title:  Waiting on the CI run    OPTIONAL. The resting card's heading, in the worker's own words.
@@ -448,7 +448,7 @@ export function parseAskUserQuestionAnswers(result: unknown, questions: readonly
 //                      ```question — that is what a question is for.
 //   `timer: <instant>` an absolute instant the worker computed. One was written 5h55m in the past; it
 //                      parsed, armed nothing, and stalled its thread for 5.5 hours. `for:` is a duration
-//                      precisely so this cannot be expressed (see parseAwaitingDuration).
+//                      precisely so this cannot be expressed (see parseAwaitingDurationRaw).
 //   `pr-watch: ref`    free text the poller armed from. A PR is now a registered watcher with an id.
 //   `watch: id`        superseded: a shell is named directly by its runtime handle.
 //   `ci:`/`session:`   legacy conditions nothing has fired for a long time.
@@ -715,11 +715,6 @@ export function parseAwaitingDurationRaw(value: string): number | null {
   const ms = Number(m[1]) * DURATION_UNIT_MS[m[2]]
   if (!Number.isFinite(ms) || ms <= 0) return null
   return ms
-}
-/** Milliseconds capped at `maxMs`, or null when the value is not a duration. */
-export function parseAwaitingDuration(value: string, maxMs: number = AWAITING_FOR_MAX_MS): number | null {
-  const ms = parseAwaitingDurationRaw(value)
-  return ms === null ? null : Math.min(ms, maxMs)
 }
 
 // A user-chosen snooze is UI lifecycle state, not agent-authored transcript state. The browser
@@ -1667,7 +1662,7 @@ export const AddOwnPrWatchInput = z.object({
   /** `owner/repo#123` or a PR URL. Parsed server-side; an unparseable ref is refused rather than stored,
    *  because a watcher that can never fire is worse than none — the worker rests believing it is covered. */
   target: z.string().trim().min(1).max(200),
-  /** How long to watch, as a DURATION (`2h`, `3d`, `180d` — parseAwaitingDuration, capped at
+  /** How long to watch, as a DURATION (`2h`, `3d`, `180d` — parseAwaitingDurationRaw, capped at
    *  PR_WATCH_FOR_MAX_MS).
    *
    *  A PR nobody ever reviews would otherwise be polled forever, and a thread parked on it would wait
@@ -1744,7 +1739,7 @@ export const AddOwnWatchInput = z.object({
    *  that is both the stronger check and the one that catches the real mistake: naming a sub-agent under
    *  `kind: "shell"`, which is what put two sub-agents under a "Background shells" heading on 2026-08-26. */
   target: z.string().trim().min(1).max(200),
-  /** REQUIRED, and a DURATION (`30m`, `2h`, `3d` — parseAwaitingDuration, capped at 24h).
+  /** REQUIRED, and a DURATION (`30m`, `2h`, `3d` — parseAwaitingDurationRaw, capped at 24h).
    *
    *  STILL A DAY, where a PR watcher now gets a year: this names a shell or a sub-agent, which lives
    *  inside the session that launched it, so a wait standing longer than a day is one whose target is
