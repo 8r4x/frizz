@@ -13,8 +13,9 @@ import "./styles.css"
 //
 // Two questions need a picture, so the sheet draws both:
 //   1. What the pinned BAND looks like at the top of the rail — unlabeled with a per-row pin mark
-//      (variant A, matching the label-less Rested/Active bands), vs a labeled PINNED header
-//      (variant B, matching Snoozed/Done).
+//      (variant A, matching the label-less Rested/Active bands), vs a labeled PINNED header — which
+//      drags Queue and Running labels with it (variant B; one labeled band above two bare ones would
+//      read as a header for all three).
 //   2. The hover ACTIONS — [pin] sitting beside the existing fullscreen door, and [unpin] on a row
 //      that is already pinned.
 //
@@ -104,32 +105,42 @@ function PromptBoxGhost() {
 
 // ── the pin verb, drawn as it would ship ──────────────────────────────────────────────────────────
 
+// ONE pin drawing everywhere (maintainer 2026-09-02: "use the solid pin icon to make sure that the
+// icons are consistent everywhere", after a tilted variant read badly): lucide's Pin, UPRIGHT, FILLED —
+// as the row mark, and as the hover verb. The unpin verb is PinOff with the same filled body; its slash
+// keeps the stroke, since that is the ink that says "off".
 const pinAction = (
-  <span className={ROW_ACTION_CLASS}><Pin size={12} /></span>
+  <span className={ROW_ACTION_CLASS}><Pin size={12} fill="currentColor" /></span>
 )
 const unpinAction = (
-  <span className={ROW_ACTION_CLASS}><PinOff size={12} /></span>
+  <span className={ROW_ACTION_CLASS}><PinOff size={12} fill="currentColor" /></span>
 )
 const expandAction = (
   <span className={ROW_ACTION_CLASS}><Maximize2 size={12} /></span>
 )
 
-// Variant A's row mark: a small filled pin in the rest-time column. Filled, because the outline Pin at
-// this size reads as a speck; TILTED, because the diagonal needle is what makes the silhouette read as
-// a pin at 11px (upright it reads as a blob); toned to the rest-time column it replaces.
-const pinMark = <Pin size={11} fill="currentColor" strokeWidth={0} className="rotate-45 text-muted/55" />
+// Variant A's row mark: the same solid pin, small, in the rest-time column, toned to the column it
+// replaces. Filled because the outline Pin at this size reads as a speck — but the STROKE stays on:
+// lucide's needle is a stroke-only line (`M12 17v5`) with no fill area, so strokeWidth 0 erases it and
+// leaves a headless blob.
+const pinMark = <Pin size={11} fill="currentColor" className="text-muted/55" />
 
 // ── the shared rail body below the pinned band (identical in both variants) ───────────────────────
 
-function RailBelowPinned() {
+// `labeled` is variant B's whole cost, drawn honestly (maintainer 2026-09-02: a labeled PINNED band
+// means the queue and running bands need labels too — one labeled band above two bare ones would read
+// as a header for all three). Variant A keeps the bands bare, split by rules, as the real rail is today.
+function RailBelowPinned({ labeled }: { labeled?: boolean }) {
   return (
     <>
       {/* THE CUE — queue-ordered, rest-time column. */}
+      {labeled && <Header label="Queue" count={3} />}
       <Row indicator={atRest} title="Fix the cache collision in the resolver" restedAge="2h 10m" />
       <Row indicator={atRest} title="Sweep the stale tmux vocabulary out of the seed scripts" restedAge="5h" />
       <Row indicator={atRest} title="Triage the dependabot queue" restedAge="1d 3h" />
       <Rule />
       {/* ACTIVE — spinning rows. */}
+      {labeled && <Header label="Running" count={2} />}
       <Row indicator={spinner} title="Port the v2 drivers to the new broker socket" />
       <Row indicator={spinner} title="Verify the relay pin mechanics on staging" />
       <Rule />
@@ -166,13 +177,13 @@ createRoot(document.getElementById("root")!).render(
         <Rule />
         <RailBelowPinned />
       </Panel>
-      <Panel title="B — labeled PINNED band" note="Matches Snoozed/Done instead: a header with a count, no per-row mark. Costs a labeled band at the top of a rail whose Rested/Active bands are deliberately label-less.">
+      <Panel title="B — every band labeled" note="A PINNED header with a count, no per-row mark — which commits the whole rail: one labeled band above two bare ones would read as a header for all three, so Queue and Running gain labels too.">
         <PromptBoxGhost />
         <Header label="Pinned" count={2} />
         <Row indicator={spinner} title="Frizz v2 launch checklist" />
         <Row indicator={atRest} title="Redesign the queue card actions" />
         <Rule />
-        <RailBelowPinned />
+        <RailBelowPinned labeled />
       </Panel>
       <Panel title="The hover verb, beside the fullscreen door" note="Every row: [pin] then [expand], in the existing action strip (the cue's rest time yields on hover, as it already does for Retry). A pinned row swaps in [unpin].">
         <div className="flex flex-col gap-6">
