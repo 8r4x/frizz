@@ -11,10 +11,10 @@ const baseUrl = process.env.FRIZZ_AGENT_ROW_INDICATORS_E2E_URL
 // its terminal status/duration through the meta slot (the suppression must never eat that).
 //
 // Since 2026-07-29 this also pins the row's SHAPE, which now mirrors the sub-agent lines under the
-// prompt box: the liveness MARK first, then the petite-caps "Agent", then the title, then the RUNTIME
-// right-justified at the far edge, then the chevron. The four facts that shape asserts — order, no
-// model/effort tag, one flush right-hand column, and no EMPTY mark slot once the child has resolved —
-// are each a thing the header used to get wrong.
+// prompt box: the liveness MARK first, then the petite-caps "Agent", then the title, then the READING
+// right-justified at the far edge, then the chevron. The four facts that shape asserts — order, no RAW
+// `frizz:` slug or bracketed tag, one flush right-hand column, and no EMPTY mark slot once the child
+// has resolved — are each a thing the header used to get wrong.
 test("an agent row mirrors the child-line shape and shows exactly one running indicator", {
   skip: !baseUrl,
   timeout: 60_000,
@@ -42,6 +42,14 @@ test("an agent row mirrors the child-line shape and shows exactly one running in
         const header = card.querySelector<HTMLElement>(".frizz-bash-header")!
         const [left, right] = Array.from(header.children) as HTMLElement[]
         const marks = card.querySelectorAll("[title='stale — no recent output'], [title^='rested —']")
+        // THE STATE READING is the LAST span before the chevron, not the first thing in the group: since
+        // 2026-08-27 the group leads with the resolved profile (`sonnet › medium`), which is neutral by
+        // design on every row. Sampling "whatever is first" therefore read the profile's gray and would
+        // have reported the failure red as missing while it was sitting one span over, untouched.
+        // The untracked row reports nothing at all, so its group is the chevron alone — sample that, as
+        // the old probe did, and let `hasReading` keep it out of the typography and tone assertions.
+        const spans = (Array.from(right.children) as HTMLElement[]).filter((el) => !el.matches("[data-tool-disclosure]"))
+        const stateEl = spans.at(-1) ?? (right.firstElementChild as HTMLElement)
         return {
           text: header.innerText.replace(/\s+/g, " ").trim(),
           indicators: card.querySelectorAll("[data-running-indicator]").length,
@@ -68,7 +76,7 @@ test("an agent row mirrors the child-line shape and shows exactly one running in
           // shipped with two competing treatments (lowercase sans vs petite-caps, one of them 1px off
           // the row's optical line) and a text assertion cannot see that.
           readingType: ((cs: CSSStyleDeclaration) => [cs.fontSize, cs.fontVariantCaps, cs.letterSpacing].join("/"))(
-            getComputedStyle(right.firstElementChild!),
+            getComputedStyle(stateEl),
           ),
           // The reading's own COLOUR, composited over black and sampled as sRGB bytes. This is how the
           // tone split between a stopped child and a failed one is pinned — the two read the same shape,
@@ -86,7 +94,7 @@ test("an agent row mirrors the child-line shape and shows exactly one running in
             ctx.fillRect(0, 0, 1, 1)
             const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data
             return [r, g, b]
-          })(getComputedStyle(right.firstElementChild!).color),
+          })(getComputedStyle(stateEl).color),
           rightEdge: Math.round(right.getBoundingClientRect().right * 10) / 10,
           chevronIsLast: right.lastElementChild!.matches("[data-tool-disclosure]"),
         }
@@ -117,8 +125,10 @@ test("an agent row mirrors the child-line shape and shows exactly one running in
     // dispatch cards reads its runtimes down a single edge instead of at each label's ragged end.
     assert.equal(new Set(rows.map((row) => row.rightEdge)).size, 1, "every row's reading must end at the same right edge")
 
-    // The model+effort profile is gone from the card entirely (it lives in the prompt box's own control
-    // and in this row's tooltip) — no row may render it as a bracketed tag again.
+    // The profile LEADS the reading on every row that has a child record, resolved to model+effort
+    // (`opus › high`) — the maintainer put it back on 2026-08-27 after `subagent_type` stopped carrying
+    // the model: "subagent dispatch cards should always show effort & model visible" (8b819995). What is
+    // still banned is the RAW shape it used to wear: the `frizz:opus-high` slug, and the bracketed tag.
     for (const row of rows) assert.doesNotMatch(row.text, /frizz:|\[.*\]/)
 
     // ONE READING, EIGHT ROWS. The slot is a single renderer (ChatView's ToolMetaReading, fed by
@@ -141,7 +151,7 @@ test("an agent row mirrors the child-line shape and shows exactly one running in
     // doubled by the meta badge.
     assert.equal(rows[0].indicators, 1)
     assert.doesNotMatch(rows[0].text, /running/)
-    assert.match(rows[0].rightText, /^(\d+m|<1m|\d+h( \d+m)?)$/)
+    assert.match(rows[0].rightText, /^opus › high · (\d+m|<1m|\d+h( \d+m)?)$/)
 
     // A quiet child: the flat stale mark carries the state (its tooltip says so), with no dot and no
     // "running" badge to contradict it.
@@ -153,13 +163,13 @@ test("an agent row mirrors the child-line shape and shows exactly one running in
     // stale one, and still reads its runtime.
     assert.equal(rows[2].indicators, 0)
     assert.match(String(rows[2].quietMark), /^rested — /)
-    assert.match(rows[2].rightText, /^(\d+m|<1m|\d+h( \d+m)?)$/)
+    assert.match(rows[2].rightText, /^opus › high · (\d+m|<1m|\d+h( \d+m)?)$/)
 
     // A completed child: no mark, no slot, just the bare runtime. A card that reports a runtime and shows
     // no liveness mark already says "it ran and stopped", so the verb is deliberately absent.
     assert.equal(rows[3].indicators, 0)
     assert.equal(rows[3].doneMarks, 0)
-    assert.equal(rows[3].rightText, "3m")
+    assert.equal(rows[3].rightText, "opus › high · 3m")
     assert.doesNotMatch(rows[3].text, /finished/)
 
     // A NON-nominal outcome keeps its verb — no mark can say it — but the WORD is the shared vocabulary,
@@ -169,10 +179,10 @@ test("an agent row mirrors the child-line shape and shows exactly one running in
     //     "done · 9ms" (maintainer: "this is way too scary looking") — hence both halves are pinned;
     //   • a FAILED child keeps the red the tool cards use for a real failure.
     assert.equal(rows[4].indicators, 0)
-    assert.equal(rows[4].rightText, "stopped · 41m")
+    assert.equal(rows[4].rightText, "sonnet › medium · stopped · 41m")
     assert.doesNotMatch(rows[4].text, /killed/)
     assert.equal(rows[5].indicators, 0)
-    assert.equal(rows[5].rightText, "failed · 12m")
+    assert.equal(rows[5].rightText, "sonnet › medium · failed · 12m")
     // The tones, sampled: the stop must be a NEUTRAL gray (r≈g≈b), the failure the red the tool cards own.
     const spread = (rgb: number[]) => Math.max(...rgb) - Math.min(...rgb)
     assert.ok(spread(rows[4].readingRgb) <= 24, `a stopped child must read neutral, not rgb(${rows[4].readingRgb})`)
@@ -327,8 +337,9 @@ test("a background shell card marks its liveness in the same slot as a dispatch 
     // A LIVE duration, not a bare verb: a pending foreground Bash ticks from the call's own timestamp
     // (useBashDuration), and this fixture row starts 42s in the past. The literal "running" this pinned
     // could only ever have held for a row with no `startedAt` — it was red before the ejection work and
-    // is corrected here rather than left asserting something the card has never done.
-    assert.match(shells[3].rightText, /^running · \d+ sec$/)
+    // is corrected here rather than left asserting something the card has never done. The unit is the
+    // house grammar's `s` (durationLabels.ts), never ` sec`.
+    assert.match(shells[3].rightText, /^running · \d+s$/)
 
     // ALIGNED, measured against the dispatch card: same slot position, same optical line, same class —
     // agents[0] is the live child, shells[0] the live shell.
