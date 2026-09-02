@@ -239,6 +239,10 @@ export function ThreadSheet({ id, slug, depth, widthDepth, initiallyOpen }: { id
             const initial = el?.querySelector<HTMLElement>("[data-dialog-initial-focus]") ?? el
             initial?.focus({ preventScroll: true })
           }}
+          // data-vt-chat: the fullscreen door tags this panel as the view transition's shared element
+          // on the way to /full (see ExpandThreadLink) — the panel is what visibly becomes the page's
+          // thread column.
+          data-vt-chat
           className={`fixed right-0 top-0 overflow-hidden outline-none ${SHEET_PANEL_CLASS} ${shown ? "translate-x-0" : "translate-x-full"}`}
           style={{ zIndex: 51 + depth * 2, width: sheetWidth(widthDepth) }}
         >

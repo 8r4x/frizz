@@ -94,7 +94,9 @@ export function FocusRail({ thread }: { thread: ThreadView }) {
     { head: "Edited files", rows: files.map((f) => <FileRow key={f.path} file={f} />) },
   ].filter((g) => g.rows.length > 0)
   return (
-    <aside data-focus-rail aria-label="Thread activity" className="flex h-full shrink-0 flex-col justify-center overflow-y-auto px-4 py-6" style={{ width: RAIL_WIDTH }}>
+    // `thread-rail` exists only on this page, so on the fullscreen door's view transition it has no
+    // old counterpart and plays the enter animation in styles.css (slides in from the right).
+    <aside data-focus-rail aria-label="Thread activity" className="flex h-full shrink-0 flex-col justify-center overflow-y-auto px-4 py-6 [view-transition-name:thread-rail]" style={{ width: RAIL_WIDTH }}>
       {groups.length === 0
         ? <div className="text-[11.5px] text-muted/50">Nothing running, watched or edited yet.</div>
         : <WaitGrid groups={groups} divider={false} />}

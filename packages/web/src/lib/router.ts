@@ -123,13 +123,18 @@ export function primeRoute(path = location.pathname): void {
 // where the hook throws. The route tree registers its navigate here (routes.tsx, both shells) and
 // leaves call there; with nothing registered (a bare test render) it falls back to a document load,
 // which is what the underlying <a href> would have done anyway.
-let registeredNavigate: ((path: string, options?: { replace?: boolean }) => void) | null = null
+// `viewTransition` rides through to react-router's navigate, which wraps the route swap in
+// `document.startViewTransition` where the browser has it and falls back to an instant swap where it
+// doesn't. Only the fullscreen door passes it today.
+export type SpaNavigateOptions = { replace?: boolean; viewTransition?: boolean }
 
-export function registerNavigate(navigate: ((path: string, options?: { replace?: boolean }) => void) | null): void {
+let registeredNavigate: ((path: string, options?: SpaNavigateOptions) => void) | null = null
+
+export function registerNavigate(navigate: ((path: string, options?: SpaNavigateOptions) => void) | null): void {
   registeredNavigate = navigate
 }
 
-export function spaNavigate(path: string, options?: { replace?: boolean }): void {
+export function spaNavigate(path: string, options?: SpaNavigateOptions): void {
   if (registeredNavigate) registeredNavigate(path, options)
   else if (typeof location !== "undefined") location.assign(path)
 }

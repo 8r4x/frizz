@@ -1,4 +1,4 @@
-import { useEffect } from "react"
+import { useEffect, useState } from "react"
 import { Outlet, createBrowserRouter, useLocation, useNavigate, useParams } from "react-router"
 import { App } from "./App.tsx"
 import { ProjectGrid } from "./components/ProjectGrid.tsx"
@@ -10,7 +10,7 @@ import { Toaster } from "./components/Toaster.tsx"
 import { applyPath, registerNavigate } from "./lib/router.ts"
 import { innerPath } from "./lib/base-path.ts"
 import { feedIsBoundTo, rebindProject } from "./api/socket.ts"
-import { resetProjectState } from "./store.ts"
+import { resetProjectState, store } from "./store.ts"
 import { useProjectRailVisible } from "./lib/projectRail.ts"
 
 // THE ROUTE TREE — and, more to the point, the LAYOUT that outlives a navigation.
@@ -154,6 +154,15 @@ function StandaloneRoute() {
   const { thread, slug } = useParams()
   useRegisterNavigate()
   useProjectBinding(slug)
+  // Any drawer stack left by the page we came from is cleared HERE, on this route's first render —
+  // deliberately NOT in the fullscreen door's click handler, and deliberately not in an effect. The
+  // door's navigation runs inside a view transition, which snapshots the OLD page two renders after
+  // the click — a click-time clear removed the very sheet the transition slides into place. And the
+  // NEW page is snapshotted at this render's commit, so an effect would be one paint too late: this
+  // page's own DrawerStack would be captured painting the thread's sheet over itself mid-transition.
+  // A render-phase write (the useState initializer runs exactly once, before the children render)
+  // means DrawerStack below already sees the empty stack in the same pass.
+  useState(() => { if (store.drawers.length > 0) store.drawers = [] })
   return (
     <>
       <StandaloneThreadPage slug={thread!} />

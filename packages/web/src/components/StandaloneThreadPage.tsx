@@ -137,7 +137,11 @@ export function StandaloneThreadPage({ slug }: { slug: string }) {
             <div className="hidden w-[var(--full-gutter)] shrink-0 md:block" aria-hidden="true" />
             <main
               data-standalone-thread
-              className="flex h-full w-[var(--full-thread-narrow)] min-w-0 shrink-0 flex-col overflow-hidden border-border bg-panel sm:border-x md:w-[var(--full-thread)]"
+              // `thread-chat` is the fullscreen door's shared view-transition element: the drawer
+              // panel / queue card the door was clicked in wears the same name (tagged at click time,
+              // ExpandThreadLink), and the browser morphs that surface into this column. Inert
+              // outside a transition — no navigation but the door's opts in.
+              className="flex h-full w-[var(--full-thread-narrow)] min-w-0 shrink-0 flex-col overflow-hidden border-border bg-panel sm:border-x md:w-[var(--full-thread)] [view-transition-name:thread-chat]"
             >
               {route.kind === "loading" ? (
                 <div className="flex flex-1 items-center justify-center" role="status" aria-label="Loading thread">

@@ -1,7 +1,7 @@
 import type { MouseEvent } from "react"
 import { Maximize2 } from "lucide-react"
-import { store } from "../store.ts"
 import { spaNavigate } from "../lib/router.ts"
+import { prefersReducedMotion } from "../lib/sheet.ts"
 import { isPlainLeftClick, standaloneThreadHref } from "../lib/standaloneThreadRoute.ts"
 import { HEADER_ICON_CLASS } from "../lib/headerIcon.ts"
 import { Tooltip } from "./Tooltip.tsx"
@@ -14,10 +14,12 @@ import { Tooltip } from "./Tooltip.tsx"
 //
 // A real anchor, so ⌘/middle/right-click and "copy link address" need no code; a plain left click is
 // intercepted into a react-router navigation (through lib/router's registered navigator, so this
-// needs no router context and renders in a bare test). `/full` lives in the same router as the board (routes.tsx),
-// so this is a route change, not a document load — and the drawer stack is cleared first, because the
-// fullscreen page mounts the same DrawerStack and would otherwise paint the thread's own sheet over
-// itself.
+// needs no router context and renders in a bare test). `/full` lives in the same router as the board
+// (routes.tsx), so this is a route change, not a document load — wrapped in a VIEW TRANSITION so the
+// chat surface visibly slides into its /full position instead of the page hard-cutting. The stack
+// clear that used to sit here (the fullscreen page mounts the same DrawerStack and would paint the
+// thread's own sheet over itself) moved to StandaloneRoute: the old page is snapshotted two renders
+// AFTER this click, so a click-time clear removed the very sheet the transition slides.
 export function ExpandThreadLink({ slug, size = 14, className, label = "Open fullscreen" }: { slug: string; size?: number; className?: string; label?: string }) {
   const href = standaloneThreadHref(slug)
   function onClick(event: MouseEvent<HTMLAnchorElement>) {
@@ -25,8 +27,17 @@ export function ExpandThreadLink({ slug, size = 14, className, label = "Open ful
     event.stopPropagation()
     if (!isPlainLeftClick(event)) return
     event.preventDefault()
-    store.drawers = []
-    spaNavigate(href)
+    const animate = !prefersReducedMotion()
+    if (animate) {
+      // Tag the chat surface this door sits in (the drawer's panel or the queue card's shell) as the
+      // transition's shared element — imperatively, so exactly ONE element ever carries the name (a
+      // queue card and an open drawer can both be on screen; `view-transition-name` must be unique).
+      // The /full page's thread column wears the same name statically, so the browser morphs one into
+      // the other. A sidebar-row door has no tagged ancestor — the column then simply fades in.
+      const surface = event.currentTarget.closest<HTMLElement>("[data-vt-chat]")
+      if (surface) surface.style.viewTransitionName = "thread-chat"
+    }
+    spaNavigate(href, { viewTransition: animate })
   }
   return (
     <Tooltip label={label}>

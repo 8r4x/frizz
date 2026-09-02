@@ -1128,6 +1128,10 @@ const QueueCard = memo(function QueueCard({ thread, leaving, onResolve, onUnreso
           sendAnswers()
         }
       }}
+      // data-vt-chat: the header's fullscreen door tags this card as the view transition's shared
+      // element on the way to /full (see ExpandThreadLink) — the card is what morphs into the page's
+      // thread column.
+      data-vt-chat
       className={`flex flex-col min-w-0 max-w-full ${BLOCK_RADIUS} border border-border-strong bg-panel shadow-lg shadow-black/25 transition-opacity ${resolving ? "opacity-40" : ""}`}
     >
       {/* Sticky-header CONTAINING BLOCK, deliberately EXCLUDING the footer: position:sticky is clamped
