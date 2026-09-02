@@ -223,7 +223,7 @@ test("gh calls time out and back off without a platform shell timeout", async ()
   const oldPath = process.env.PATH
   process.env.PATH = dir
   try {
-    await assert.rejects(gh(["api"], { attempts: 1, timeoutMs: 25 }), /timed out after 0\.025 seconds/)
+    await assert.rejects(gh(["api"], { attempts: 1, timeoutMs: 25 }), /timed out after 0\.025s/)
   } finally {
     process.env.PATH = oldPath
     rmSync(dir, { recursive: true, force: true })

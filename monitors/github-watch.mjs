@@ -72,7 +72,7 @@ function ghOnce(args, timeoutMs) {
       // Some broken credential helpers ignore SIGTERM. Do not let one wedged gh process hold a
       // monitor forever; a second, portable child-process kill keeps the watch bounded.
       setTimeout(() => kill("SIGKILL"), 1_000).unref()
-      fail(new Error(`gh timed out after ${timeoutMs / 1000} seconds`))
+      fail(new Error(`gh timed out after ${timeoutMs / 1000}s`))
     }, timeoutMs)
     child.stdout.on("data", (chunk) => { stdout += chunk })
     child.stderr.on("data", (chunk) => { stderr += chunk })
