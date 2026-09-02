@@ -1,5 +1,6 @@
 import type { MouseEvent } from "react"
 import { Maximize2 } from "lucide-react"
+import { captureFullscreenEnterAnchor } from "../lib/fullscreenHandoff.ts"
 import { spaNavigate } from "../lib/router.ts"
 import { prefersReducedMotion } from "../lib/sheet.ts"
 import { isPlainLeftClick, standaloneThreadHref } from "../lib/standaloneThreadRoute.ts"
@@ -28,14 +29,19 @@ export function ExpandThreadLink({ slug, size = 14, className, label = "Open ful
     if (!isPlainLeftClick(event)) return
     event.preventDefault()
     const animate = !prefersReducedMotion()
-    if (animate) {
-      // Tag the chat surface this door sits in (the drawer's panel or the queue card's shell) as the
-      // transition's shared element — imperatively, so exactly ONE element ever carries the name (a
-      // queue card and an open drawer can both be on screen; `view-transition-name` must be unique).
-      // The /full page's thread column wears the same name statically, so the browser morphs one into
-      // the other. A sidebar-row door has no tagged ancestor — the column then simply fades in.
-      const surface = event.currentTarget.closest<HTMLElement>("[data-vt-chat]")
-      if (surface) surface.style.viewTransitionName = "thread-chat"
+    // The chat surface this door sits in: the drawer's panel, or the queue card's shell. It is both
+    // what the transition morphs and what the reader's place is measured against, so it is read once
+    // whether or not the navigation animates — the scroll hand-off is continuity, not decoration, and a
+    // reader on reduced motion needs it more, not less.
+    const surface = event.currentTarget.closest<HTMLElement>("[data-vt-chat]")
+    // Where they are in it, for /full to restore instead of jumping to the tail (lib/fullscreenHandoff).
+    captureFullscreenEnterAnchor(surface, slug)
+    if (animate && surface) {
+      // Tag it as the transition's shared element — imperatively, so exactly ONE element ever carries
+      // the name (a queue card and an open drawer can both be on screen; `view-transition-name` must be
+      // unique). The /full page's thread column wears the same name statically, so the browser morphs
+      // one into the other. A sidebar-row door has no tagged ancestor — the column then simply fades in.
+      surface.style.viewTransitionName = "thread-chat"
     }
     spaNavigate(href, { viewTransition: animate })
   }

@@ -101,6 +101,7 @@ import { isPlainLeftClick } from "../lib/standaloneThreadRoute.ts"
 import { ExpandThreadLink } from "./ExpandThreadLink.tsx"
 import { spaNavigate } from "../lib/router.ts"
 import { prefersReducedMotion } from "../lib/sheet.ts"
+import { takeFullscreenEnterAnchor } from "../lib/fullscreenHandoff.ts"
 import { prependEarlierPage } from "../lib/transcriptPagination.ts"
 import { buildVirtualTranscriptMessageRows, earlierLoadGate, nextTailFollow, TAIL_FOLLOW_PX, type VirtualTranscriptMessageRow } from "../lib/virtualTranscript.ts"
 import { withoutRedundantRestDividers } from "../lib/restDividers.ts"
@@ -932,19 +933,75 @@ function VirtualizedThreadTranscript({
     loadEarlier()
   }, [loadEarlier, transcriptRef])
 
+  // Put a message back at a given HEIGHT ON SCREEN — window coordinates, not an offset within the
+  // scroller, because the hand-off measured the reader's place in a surface whose scroller starts
+  // somewhere else entirely.
+  //
+  // Deliberately NOT clamped into the pane. The anchor is the topmost message the reader could see, so
+  // it is usually running off the top of their view with the thing they are actually reading below it;
+  // pinning its top edge to the pane instead pushed the whole screen down by however much of it was
+  // already scrolled past — measured at 226px on a 900px window, which is the layout shift this is
+  // here to remove. Landing it exactly where it was leaves every line at the height it already had,
+  // and the part above the pane is clipped here exactly as it was clipped there.
+  const alignToScreenTop = useCallback((sourceId: string, screenTop: number) => {
+    const scroller = transcriptRef.current
+    if (!scroller) return
+    const node = Array.from(scroller.querySelectorAll<HTMLElement>("[data-transcript-source-id]"))
+      .find((element) => element.dataset.transcriptSourceId === sourceId)
+    if (!node) return
+    scroller.scrollTop += node.getBoundingClientRect().top - screenTop
+  }, [transcriptRef])
+
   useLayoutEffect(() => {
     if (!transcriptKey || rows.length === 0 || initialTranscriptKeyRef.current === transcriptKey) return
     initialTranscriptKeyRef.current = transcriptKey
     tailReadyRef.current = false
     readerMovedRef.current = false
     nearTopLoadArmedRef.current = true
-    const frame = requestAnimationFrame(() => {
-      virtualizer.scrollToEnd({ behavior: "instant" })
+    // THE FULLSCREEN HAND-OFF. The door records which message the reader had at the top of the card or
+    // drawer it was pressed in (lib/fullscreenHandoff); land on THAT instead of the tail, so expanding a
+    // thread reads as the same page getting bigger rather than a jump to the end of a conversation the
+    // reader was deliberately not at. Absent, stale, or aimed at a message this window does not hold,
+    // the tail is still the answer — and it always is when the reader could already see the end, which
+    // the capture side refuses to anchor on.
+    const handoff = takeFullscreenEnterAnchor(slug)
+    // The topmost message the reader had that THIS window can place. Anything above it is a row the
+    // board surface drew and this one does not.
+    const anchor = handoff?.candidates
+      .map((candidate) => ({ candidate, index: rows.findIndex((row) => row.kind === "message" && row.message.sourceId === candidate.sourceId) }))
+      .find((hit) => hit.index >= 0)
+    let frame = requestAnimationFrame(() => {
+      if (!anchor) {
+        virtualizer.scrollToEnd({ behavior: "instant" })
+        setAtEnd(true)
+        tailReadyRef.current = true
+        return
+      }
+      // Two steps, because the row is VIRTUAL: `scrollToIndex` gets it mounted (it may be thousands of
+      // estimated pixels away), then the align puts it at the exact height it had on the board. Release
+      // tail-follow first — `nextTailFollow` starts attached, so the settling growth below would
+      // otherwise read as content arriving under a reader at the bottom and haul the page back there.
+      virtualizer.scrollToIndex(anchor.index, { align: "start", behavior: "instant" })
+      followingTailRef.current = false
+      setAtEnd(false)
       tailReadyRef.current = true
-      setAtEnd(true)
+      // HOLD IT THERE WHILE THE TRANSCRIPT MEASURES. Every row above the anchor mounts at its 108px
+      // estimate and corrects to its real height — routinely 300-750px on this transcript — and each
+      // correction moves the anchor under the reader's eye. One align lands on estimates; re-aligning
+      // every frame through the restore window lands on the truth. Claim the scroller for the same
+      // span so syncTailFollow reconciles against a settled height rather than one in transit, and
+      // stop the moment the reader touches it — their gesture outranks the restore.
+      const until = performance.now() + ANCHOR_RESTORE_MS
+      anchorRestoreUntilRef.current = until
+      const hold = () => {
+        if (performance.now() >= until || performance.now() < readerScrollUntilRef.current) return
+        alignToScreenTop(anchor.candidate.sourceId, anchor.candidate.screenTop)
+        frame = requestAnimationFrame(hold)
+      }
+      hold()
     })
     return () => cancelAnimationFrame(frame)
-  }, [rows.length, transcriptKey, virtualizer])
+  }, [alignToScreenTop, rows.length, slug, transcriptKey, virtualizer])
 
   useLayoutEffect(() => {
     const anchor = pendingPrependAnchorRef.current
