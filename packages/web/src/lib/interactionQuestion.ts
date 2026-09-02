@@ -144,9 +144,11 @@ export function settledAskView(q: AskQuestion, answer: string | null | undefined
 }
 
 /** Map the card's staged answers back to typed interaction field values, using EXACTLY the fence
- *  card's own semantics so the two behave identically: for a single-select, free text OVERRIDES a
- *  chosen chip (which is why the chip visibly deselects as you type); for `multi`, free text COEXISTS
- *  with the toggled set and appends colour. Returns undefined when nothing was answered at all. */
+ *  card's own semantics so the two behave identically: for a single-select, the chosen chip IS the
+ *  answer while set (text left in the box beside it is an unselected draft — the box taking focus
+ *  clears the chip, so a non-null chip was picked last), and free text answers only when no chip is
+ *  chosen; for `multi`, free text COEXISTS with the toggled set and appends colour. Returns undefined
+ *  when nothing was answered at all. */
 export function interactionQuestionValues(
   questions: readonly InteractionQuestion[],
   answers: readonly BlockAnswer[],
@@ -168,14 +170,12 @@ export function interactionQuestionValues(
       if (entry.notesFieldId && text) values[entry.notesFieldId] = text
       return
     }
-    if (text) {
-      if (entry.notesFieldId) values[entry.notesFieldId] = text
-      return
-    }
     const chosen = answer.chosen
     if (entry.optionFieldId && chosen !== null && entry.optionValues[chosen] !== undefined) {
       values[entry.optionFieldId] = entry.optionValues[chosen]
+      return
     }
+    if (text && entry.notesFieldId) values[entry.notesFieldId] = text
   })
   return Object.keys(values).length > 0 ? (values as InteractionValues) : undefined
 }

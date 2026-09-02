@@ -77,11 +77,12 @@ export function toParsedQuestion(spec: AskedQuestion): { question: ParsedQuestio
 
 /** Which option a staged answer has taken, for the purpose of opening a branch. Only a SINGLE-select
  *  question can open one (a `multi` option cannot carry follow-ups — several picked options would open
- *  several branches at once, refused at registration), and typing free text OVERRIDES a chip exactly as
- *  it does everywhere else, so an override closes the branch too. */
+ *  several branches at once, refused at registration). The chip governs while set: focusing or typing
+ *  the free-text box clears `chosen` (the producers' shared contract), so text left in the box beside
+ *  a chosen chip is an unselected draft, not an override — the branch stays open. Committing to the
+ *  box closes it, because that commit is what nulls the chip. */
 function takenOption(spec: AskedQuestion, answer: BlockAnswer | undefined): number | null {
   if (!answer || spec.kind === "multi") return null
-  if (answer.text.trim()) return null
   return answer.chosen
 }
 
@@ -127,11 +128,13 @@ export function registeredAnswer(
   const build = (node: AskedQuestion, path: string): QuestionAnswer => {
     const answer = answers.get(path)
     const labels = (node.options ?? []).map((o) => o.label)
+    const taken = takenOption(node, answer)
     const chosen = node.kind === "multi"
       ? (answer?.chosenSet ?? []).slice().sort((a, b) => a - b).flatMap((i) => (labels[i] === undefined ? [] : [labels[i]]))
-      : takenOption(node, answer) !== null ? [labels[answer!.chosen!]].filter((l) => l !== undefined) : []
-    const text = answer?.text.trim()
-    const taken = takenOption(node, answer)
+      : taken !== null ? [labels[taken]].filter((l) => l !== undefined) : []
+    // Single-select: the text rides only when it IS the answer (no chip taken) — text beside a chosen
+    // chip is an unselected draft the human kept, not part of the reply. Multi: always colour on top.
+    const text = node.kind === "multi" || taken === null ? answer?.text.trim() : undefined
     const followUps = taken === null
       ? []
       : (node.options?.[taken]?.followUps ?? []).map((child, i) => build(child, childPath(path, taken, i)))

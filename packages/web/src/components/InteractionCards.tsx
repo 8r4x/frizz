@@ -232,17 +232,17 @@ function InteractionQuestionCard({
           interactive={delivery.actionsEnabled && !sent ? {
             answer: answers[index],
             onChip: (optIdx) => {
-              // SINGLE: picking a chip clears any typed override, mirroring the fence card exactly.
-              // OUTSIDE the updater — the store write wakes this component's own draft subscription,
-              // and a queued updater runs during render (see RegisteredQuestionCards).
-              if (entry.question.kind !== "multi") setText(entry, "")
+              // SINGLE: picking a chip makes it the answer; re-picking toggles off — mirroring the
+              // fence card exactly. The typed draft is never cleared (maintainer 2026-09-02): it stays
+              // in the box as an unselected draft, and interactionQuestionValues submits the chip
+              // while one is chosen (the box taking focus clears the chip via onText below).
               setPicks((prev) => prev.map((pick, i) => {
                 if (i !== index) return pick
                 if (entry.question.kind === "multi") {
                   const set = pick.chosenSet.includes(optIdx) ? pick.chosenSet.filter((v) => v !== optIdx) : [...pick.chosenSet, optIdx]
                   return { ...pick, chosenSet: set }
                 }
-                return { ...pick, chosen: optIdx }
+                return { ...pick, chosen: pick.chosen === optIdx ? null : optIdx }
               }))
             },
             onText: (text) => {

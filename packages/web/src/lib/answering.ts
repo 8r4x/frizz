@@ -241,13 +241,14 @@ export function useLiveAnswering(
     return map
   }, [openAsks])
   // Chip click. MULTI: toggle this option in/out of the set (kept in option order); freetext COEXISTS,
-  // so it's preserved. SINGLE: picking a chip clears that block's freetext (the chip becomes the
-  // answer); re-picking toggles off.
+  // so it's preserved. SINGLE: picking a chip makes it the answer; re-picking toggles off. The typed
+  // draft is NEVER cleared (maintainer 2026-09-02 — a click used to destroy it): it stays in the box as
+  // an unselected draft, and compose sends the chip while one is chosen (onText — which the card also
+  // fires when the box takes focus — clears the chip, so the text wins only when touched last).
   const onChip = useCallback(
     (identity: string, bi: number, optIdx: number) => {
       const blk = openByIdentity.get(identity)?.blocks[bi]
       const stateKey = `${identity}::${bi}`
-      if (blk?.kind !== "multi") draftStore.clear(keyFor(identity, bi))
       setAnswers((a) => {
         const cur = a[stateKey] ?? { chosen: null, text: "" }
         if (blk?.kind === "multi") {
@@ -256,13 +257,15 @@ export function useLiveAnswering(
           else set.add(optIdx)
           return { ...a, [stateKey]: { chosen: null, text: cur.text, chosenSet: [...set].sort((x, y) => x - y) } }
         }
-        return { ...a, [stateKey]: { chosen: cur.chosen === optIdx ? null : optIdx, text: "" } }
+        return { ...a, [stateKey]: { chosen: cur.chosen === optIdx ? null : optIdx, text: cur.text } }
       })
     },
-    [openByIdentity, keyFor],
+    [openByIdentity],
   )
-  // Typing. MULTI: freetext appends color on top of the toggled set — keep the set. SINGLE: typing
-  // overrides any chosen chip for that block.
+  // Typing. MULTI: freetext appends color on top of the toggled set — keep the set. SINGLE: the box
+  // taking over — a keystroke, or just focus (the card calls this with the text unchanged then) —
+  // moves the selection to the text, clearing any chosen chip. The counterpart of onChip keeping the
+  // text: whichever was touched last is the answer, and neither destroys the other.
   const onText = useCallback(
     (identity: string, bi: number, text: string) => {
       const blk = openByIdentity.get(identity)?.blocks[bi]

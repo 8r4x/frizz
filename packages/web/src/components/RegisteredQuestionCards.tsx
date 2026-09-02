@@ -202,11 +202,10 @@ export function RegisteredQuestionStack({
                 interactive={{
                   answer: answerFor(q, node.path),
                   onChip: (optIdx) => {
-                    // SINGLE: picking a chip clears any typed override, mirroring both other producers.
-                    // OUTSIDE the updater: the store write wakes this component's own draft
-                    // subscription, and React runs a queued updater during render — so from inside it
-                    // that write was a setState-in-render warning on every chip click after a keystroke.
-                    if (node.spec.kind !== "multi") draftStore.set(draftKey.question(projectDir, slug, q.id, node.path), "")
+                    // SINGLE: picking a chip makes it the answer; re-picking toggles off — mirroring
+                    // both other producers. The typed draft is never cleared (maintainer 2026-09-02):
+                    // it stays in the box as an unselected draft, and registeredAnswer submits the
+                    // chip while one is chosen (the box taking focus clears it via onText below).
                     setPicks((prev) => {
                       const next = new Map(prev)
                       const key = pickKey(q.id, node.path)
@@ -217,7 +216,7 @@ export function RegisteredQuestionStack({
                           : [...pick.chosenSet, optIdx]
                         next.set(key, { ...pick, chosenSet: set })
                       } else {
-                        next.set(key, { ...pick, chosen: optIdx })
+                        next.set(key, { ...pick, chosen: pick.chosen === optIdx ? null : optIdx })
                       }
                       return next
                     })

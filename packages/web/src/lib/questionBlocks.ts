@@ -17,12 +17,15 @@ import { insideFence } from "@frizz/shared"
 // two-option multiple choice they always were underneath.
 export type QuestionKind = "question" | "multi"
 
-// Per-question-block answer state (one per ```question block in a message). Grows ADDITIVELY so the
-// existing single-select semantics stay untouched: `chosen` is the selected chip index for a
-// single-select block (mutually exclusive with non-empty `text` — freetext overrides a chip). `chosenSet`
-// is the toggled-on option indices for a `multi` block, where freetext COEXISTS with the selection
-// (it appends color) rather than overriding it. Lives here (not in a component) so the shared answering
-// controller, the queue card, and the thread view all agree.
+// Per-question-block answer state (one per ```question block in a message). `chosen` is the selected
+// chip index for a single-select block, and while it is set the chip IS the answer. Chip and typed text
+// COEXIST as state — a chip click never destroys the typed draft, and re-clicking the chosen chip
+// toggles it off (maintainer 2026-09-02; a click used to clear the box). Exclusivity is kept by the
+// producers non-destructively: focusing or typing the free-text box clears `chosen`, so whichever was
+// touched LAST is the effective answer and the other half stays visible as an unselected draft.
+// `chosenSet` is the toggled-on option indices for a `multi` block, where freetext COEXISTS with the
+// selection (it appends color) rather than competing with it. Lives here (not in a component) so the
+// shared answering controller, the queue card, and the thread view all agree.
 export type BlockAnswer = { chosen: number | null; text: string; chosenSet?: number[] }
 
 // The interactivity handed to the shared Message renderer so a LIVE message's ```question blocks become
@@ -466,10 +469,12 @@ export function optionId(opt: string): string {
 }
 
 // Compose ONE block's final answer string from its selection + freetext — the single source of truth
-// shared by the send path and its tests. Single-select: freetext OVERRIDES the
-// chosen chip (else the chosen option's full text). Multi-select: the toggled options' letters in
-// option order ("A, C"), with any freetext appended as color ("A, C — and skip the flaky one");
-// selecting none but typing stays valid (freetext alone). Empty string ⇒ this block is unanswered.
+// shared by the send path and its tests. Single-select: the chosen chip IS the answer while set (text
+// left in the box beside it is an unselected draft — every producer clears `chosen` when the box takes
+// focus, so a non-null chip means it was picked last); no chip ⇒ the freetext. Multi-select: the
+// toggled options' letters in option order ("A, C"), with any freetext appended as color ("A, C — and
+// skip the flaky one"); selecting none but typing stays valid (freetext alone). Empty string ⇒ this
+// block is unanswered.
 export function composeBlockAnswer(block: ParsedQuestion, ans: BlockAnswer): string {
   const text = ans.text.trim()
   if (block.kind === "multi") {
@@ -482,5 +487,5 @@ export function composeBlockAnswer(block: ParsedQuestion, ans: BlockAnswer): str
     if (joined && text) return `${joined} — ${text}`
     return joined || text
   }
-  return text || (ans.chosen != null ? block.options[ans.chosen] ?? "" : "")
+  return ans.chosen != null ? block.options[ans.chosen] ?? "" : text
 }

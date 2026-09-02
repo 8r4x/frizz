@@ -262,7 +262,7 @@ function QuestionSection({ q }: { q: (typeof questions)[number] }) {
             setAnswer((a) =>
               q.kind === "multi"
                 ? { ...a, chosen: null, chosenSet: (a.chosenSet ?? []).includes(optIdx) ? (a.chosenSet ?? []).filter((i) => i !== optIdx) : [...(a.chosenSet ?? []), optIdx].sort((x, y) => x - y) }
-                : { chosen: a.chosen === optIdx ? null : optIdx, text: "" },
+                : { ...a, chosen: a.chosen === optIdx ? null : optIdx },
             ),
           onText: (text: string) => setAnswer((a) => (q.kind === "multi" ? { ...a, text } : { chosen: null, text })),
           onSubmit: () => setSent(composeBlockAnswer(parsed, answer)),

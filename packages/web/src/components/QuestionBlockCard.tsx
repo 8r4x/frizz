@@ -193,9 +193,11 @@ export function QuestionBlockCard({
               // the inline `(recommended: why)` rationale (or a legacy rec line) rides the chip's title.
               recommended={recIdx === i}
               recTitle={recIdx === i ? parsed.recommendedNote : undefined}
-              // MULTI: selected == toggled in the set (coexists with freetext). SINGLE: selected only
-              // while it's the effective answer — a freetext override clears it.
-              selected={isMulti ? chosenSet.includes(i) : chosen === i && !freetext.trim()}
+              // MULTI: selected == toggled in the set (coexists with freetext). SINGLE: selected while
+              // the chip is the staged answer — re-clicking it toggles it off, and the free-text box
+              // taking focus clears it (via onText). Text left in the box is an unselected draft, so it
+              // no longer gates the highlight.
+              selected={isMulti ? chosenSet.includes(i) : chosen === i}
               settledPick={settled?.chosenIdxs.includes(i) ?? false}
               disabled={!interactive}
               onClick={() => {
@@ -267,10 +269,12 @@ export function QuestionBlockCard({
               }
               // Styled as the FINAL option row (same shape as a chip) that SPANS both grid columns.
               // resize-none + overflow-hidden hand height control to the auto-grow effect (no manual
-              // drag handle, no inner scrollbar). Focus or content = the accent border (the selection
-              // lives HERE now); the tinted bg marks an actual answer.
+              // drag handle, no inner scrollbar). The tinted bg marks the EFFECTIVE answer: content
+              // with no chip chosen (a chosen chip beats the text, so text beside one is an unselected
+              // draft and the box goes quiet, exactly like an unselected chip). Focus always shows the
+              // accent border — the selection moves here the moment the box is entered.
               className={`col-span-full w-full resize-none overflow-hidden rounded-md border px-3 py-1.5 text-[12px] leading-snug text-fg/90 outline-none placeholder:text-muted/80 transition-colors ${
-                freetext.trim() ? "border-accent bg-accent/10" : "border-border bg-transparent hover:bg-panel-2 focus:border-accent"
+                freetext.trim() && (isMulti || chosen === null) ? "border-accent bg-accent/10" : "border-border bg-transparent hover:bg-panel-2 focus:border-accent"
               }`}
             />
           )}

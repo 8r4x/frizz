@@ -343,10 +343,14 @@ test("optionId extracts the leading letter/number identifier, uppercased", () =>
 
 // ---- composeBlockAnswer ----
 
-test("compose single-select: freetext overrides the chosen chip, else the chosen option text", () => {
+test("compose single-select: the chosen chip is the answer while set, else the freetext", () => {
   const blk = parseQuestionBlock("Pick one\nA. SQLite\nB. JSON", "question")
   assert.equal(composeBlockAnswer(blk, { chosen: 0, text: "" }), "A. SQLite")
-  assert.equal(composeBlockAnswer(blk, { chosen: 0, text: "actually neither" }), "actually neither")
+  // Text beside a chosen chip is an UNSELECTED DRAFT, not an override — a chip click no longer clears
+  // the box (2026-09-02), and the producers null `chosen` whenever the box takes focus, so a non-null
+  // chip means it was picked last and the reply is the chip.
+  assert.equal(composeBlockAnswer(blk, { chosen: 0, text: "actually neither" }), "A. SQLite")
+  assert.equal(composeBlockAnswer(blk, { chosen: null, text: "actually neither" }), "actually neither")
   assert.equal(composeBlockAnswer(blk, { chosen: null, text: "" }), "")
 })
 
@@ -354,7 +358,7 @@ test("compose a danger gate: same single-select semantics as any question", () =
   const blk = parseQuestionBlock("Ship it?\nA. Approve\nB. Hold", "question", true)
   assert.equal(composeBlockAnswer(blk, { chosen: 1, text: "" }), "B. Hold")
   // A MULTI-LINE freetext answer survives compose verbatim — the box takes newlines (2026-07-26).
-  assert.equal(composeBlockAnswer(blk, { chosen: 0, text: "Hold.\n\nRerun CI first." }), "Hold.\n\nRerun CI first.")
+  assert.equal(composeBlockAnswer(blk, { chosen: null, text: "Hold.\n\nRerun CI first." }), "Hold.\n\nRerun CI first.")
 })
 
 test("compose multi: selected letters in option order, freetext appends color", () => {

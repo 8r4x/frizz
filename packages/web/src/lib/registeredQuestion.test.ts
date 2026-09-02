@@ -105,9 +105,16 @@ test("a branch opened two deep keeps counting", () => {
   assert.deepEqual(liveQuestionNodes(deep, answers).map((n) => n.depth), [1, 2, 3])
 })
 
-test("typing free text OVERRIDES the chip, so it CLOSES the branch the chip had opened", () => {
+test("draft text beside a chosen chip does NOT close the branch — the chip governs while set", () => {
+  // A chip click no longer clears the box (2026-09-02), so this state is a picked chip with a leftover
+  // draft. Committing to the box instead nulls `chosen` (the producers' onText contract), and THAT is
+  // what closes the branch — pinned by the second assertion.
   const answers = new Map([[ROOT_PATH, { chosen: 0, chosenSet: [], text: "neither, actually" }]])
-  assert.deepEqual(liveQuestionNodes(TREE, answers).map((n) => n.path), [ROOT_PATH])
+  assert.deepEqual(
+    liveQuestionNodes(TREE, answers).map((n) => n.path),
+    [ROOT_PATH, childPath(ROOT_PATH, 0, 0), childPath(ROOT_PATH, 0, 1)],
+  )
+  assert.deepEqual(liveQuestionNodes(TREE, new Map([[ROOT_PATH, typed("neither, actually")]])).map((n) => n.path), [ROOT_PATH])
 })
 
 test("a multi question opens no branch — several picked options would open several at once", () => {
@@ -124,6 +131,11 @@ test("an unanswered ROOT yields nothing at all, whatever is staged below it", ()
 
 test("the payload restates the question and carries the worker's OWN label, not the lettered chip", () => {
   const built = registeredAnswer({ id: "qst_1", spec: STORE }, new Map([[ROOT_PATH, pick(0)]]))
+  assert.deepEqual(built, { questionId: "qst_1", question: "Where should the settings live?", chosen: ["SQLite"] })
+})
+
+test("draft text left beside a chosen chip stays out of the payload — the chip is the whole reply", () => {
+  const built = registeredAnswer({ id: "qst_1", spec: STORE }, new Map([[ROOT_PATH, { chosen: 0, chosenSet: [], text: "neither, actually" }]]))
   assert.deepEqual(built, { questionId: "qst_1", question: "Where should the settings live?", chosen: ["SQLite"] })
 })
 

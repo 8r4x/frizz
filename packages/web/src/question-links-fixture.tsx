@@ -82,7 +82,8 @@ function Live() {
         answer,
         onChip: (i) => {
           w.__chips!.push(i)
-          setAnswer((a) => ({ ...a, chosen: i, text: "" }))
+          // Toggle + keep the typed draft — the contract every real producer honours (2026-09-02).
+          setAnswer((a) => ({ ...a, chosen: a.chosen === i ? null : i }))
         },
         // SINGLE: the box taking over drops the pick — the contract every producer honours (BlockInteractive).
         onText: (text) => setAnswer(() => ({ chosen: null, text })),
