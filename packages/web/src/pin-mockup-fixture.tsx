@@ -14,8 +14,9 @@ import "./styles.css"
 // Two questions need a picture, so the sheet draws both:
 //   1. What the pinned BAND looks like at the top of the rail — unlabeled with a per-row pin mark
 //      (variant A, matching the label-less Rested/Active bands), vs a labeled PINNED header — which
-//      drags Queue and Running labels with it (variant B; one labeled band above two bare ones would
-//      read as a header for all three).
+//      drags a label onto the rest of the rail's top too: one ACTIVE band over queue + running,
+//      short-ruled between the groups (variant B; one labeled band above bare ones would read as a
+//      header for all of them).
 //   2. The hover ACTIONS — [pin] sitting beside the existing fullscreen door, and [unpin] on a row
 //      that is already pinned.
 //
@@ -128,19 +129,23 @@ const pinMark = <Pin size={11} fill="currentColor" className="text-muted/55" />
 // ── the shared rail body below the pinned band (identical in both variants) ───────────────────────
 
 // `labeled` is variant B's whole cost, drawn honestly (maintainer 2026-09-02: a labeled PINNED band
-// means the queue and running bands need labels too — one labeled band above two bare ones would read
-// as a header for all three). Variant A keeps the bands bare, split by rules, as the real rail is today.
+// means the bands above Snoozed need labels too — one labeled band above bare ones would read as a
+// header for all of them). The label is ONE band, "Active" over queue + running together (maintainer:
+// "merge queue and running into Active"), with a NON-FULLWIDTH rule between the two groups so the
+// split survives without claiming band rank. Variant A keeps the bands bare, split by full rules, as
+// the real rail is today.
 function RailBelowPinned({ labeled }: { labeled?: boolean }) {
   return (
     <>
+      {labeled && <Header label="Active" count={5} />}
       {/* THE CUE — queue-ordered, rest-time column. */}
-      {labeled && <Header label="Queue" count={3} />}
       <Row indicator={atRest} title="Fix the cache collision in the resolver" restedAge="2h 10m" />
       <Row indicator={atRest} title="Sweep the stale tmux vocabulary out of the seed scripts" restedAge="5h" />
       <Row indicator={atRest} title="Triage the dependabot queue" restedAge="1d 3h" />
-      <Rule />
+      {/* Inside a labeled Active band the queue/running split drops to a SHORT rule — inset to the
+          title column, a third of the rail — so it reads as a sub-division, not a band boundary. */}
+      {labeled ? <hr className="my-3 ml-5 w-1/3 border-border/50" /> : <Rule />}
       {/* ACTIVE — spinning rows. */}
-      {labeled && <Header label="Running" count={2} />}
       <Row indicator={spinner} title="Port the v2 drivers to the new broker socket" />
       <Row indicator={spinner} title="Verify the relay pin mechanics on staging" />
       <Rule />
@@ -177,7 +182,7 @@ createRoot(document.getElementById("root")!).render(
         <Rule />
         <RailBelowPinned />
       </Panel>
-      <Panel title="B — every band labeled" note="A PINNED header with a count, no per-row mark — which commits the whole rail: one labeled band above two bare ones would read as a header for all three, so Queue and Running gain labels too.">
+      <Panel title="B — labeled bands: PINNED, ACTIVE" note="A PINNED header with a count, no per-row mark — and one ACTIVE header over the queue and the running rows together, with a short inset rule between the two groups instead of a band-rank divider.">
         <PromptBoxGhost />
         <Header label="Pinned" count={2} />
         <Row indicator={spinner} title="Frizz v2 launch checklist" />
