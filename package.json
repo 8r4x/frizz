@@ -32,7 +32,7 @@
     "runtime"
   ],
   "scripts": {
-    "dev": "nub packages/server/src/dev.ts",
+    "dev": "node scripts/dev-plain.mjs",
     "frizz-dev:install": "nub scripts/install-global-cli.mjs",
     "frizz-dev:check": "nub scripts/install-global-cli.mjs --check",
     "frizz-dev:uninstall": "nub scripts/install-global-cli.mjs --uninstall",

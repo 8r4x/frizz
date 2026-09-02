@@ -1,2 +1,7 @@
 packages:
   - packages/*
+allowBuilds:
+  node-pty: true
+  '@parcel/watcher': true
+  esbuild: true
+  puppeteer: false
