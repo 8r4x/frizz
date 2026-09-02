@@ -2250,8 +2250,13 @@ export function createRouter(ctx: AppContext) {
         // a state: every edit in the footer panel rewrites this whole row (the text, the three triggers
         // and the cadence are one save), so re-firing on an unrelated cadence edit would quietly bin a
         // question the worker registered a moment ago.
+        //
+        // AND THE CANCELLATION WAKE GOES NOW, for answerQuestions' reason exactly: the human is right
+        // here, and up to a whole tick of the question card gone with nothing in its place read as a
+        // thread that rested without saying anything (maintainer 2026-09-02). The durable path is
+        // unchanged — the sweep just runs immediately.
         if (input.stopHook && input.prompt?.trim() && autonomousGoal(row) === undefined) {
-          cancelQuestionsForAutonomy(input.slug)
+          if (cancelQuestionsForAutonomy(input.slug) > 0) ctx.scheduler.kick()
         }
         ctx.board.refresh()
       },
@@ -2287,9 +2292,10 @@ export function createRouter(ctx: AppContext) {
         }
         // Same transition, same consequence: a worker arming its own Goal has said it will decide the
         // rest, and leaving its own questions on the human's board would be asking for answers it just
-        // announced it no longer needs.
+        // announced it no longer needs. Same immediate sweep, too — the cancellation wake is what tells
+        // the worker its questions are gone, and it should not sit a tick away.
         if (input.stopHook && input.prompt?.trim() && autonomousGoal(row) === undefined) {
-          cancelQuestionsForAutonomy(input.slug)
+          if (cancelQuestionsForAutonomy(input.slug) > 0) ctx.scheduler.kick()
         }
         ctx.board.refresh()
         return { replaced }

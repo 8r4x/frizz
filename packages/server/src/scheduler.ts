@@ -1686,13 +1686,19 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // answer was still in the outbox. The transcript then read: the worker's rest, "FRIZZ ASKED FOR A
       // SIGN-OFF", then the human's answer (maintainer 2026-08-27, on exactly that sequence). It also
       // spent one of the two nudges this thread will ever get on a thread that had done nothing wrong.
+      //
+      // A CANCELLATION ON ITS WAY IS THE SAME CASE FROM THE OTHER DIRECTION (2026-09-02): arming a Goal
+      // dismisses the open questions wholesale, which turned a rest that had signed off WITH a question
+      // into what this pass reads as a bare one — so the nudge took the rest ("you rested without a
+      // fence", to a worker whose question frizz itself had just cancelled) and the Goal stood down for
+      // it. The armed-rest flag scopes it to exactly the threads whose dismissals wake on their own.
       const questionRows = deps.storage.listThreadQuestions(row.slug)
       if (
         tele.lastFence ||
         tele.pendingQuestion ||
         registeredDoneFence(deps.storage.getThreadDone(row.slug), tele.lastUserAt) !== undefined ||
         questionRows.some((q) => q.state === "open") ||
-        answersInFlight(questionRows, tele.lastUserAt) !== undefined ||
+        answersInFlight(questionRows, tele.lastUserAt, row.recurring_on_rest === 1 && Boolean(row.recurring_prompt?.trim())) !== undefined ||
         deps.storage.listThreadWatches(row.slug, { armedOnly: true }).length > 0
       ) {
         if ((row.signoff_nudges ?? 0) > 0) deps.storage.resetSignoffNudges(row.slug)
@@ -2729,6 +2735,16 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // Per-rest, and that is what makes it free: every fact it reads rides the FINAL assistant message,
       // so the next word on the thread re-opens the trigger with nothing stored to clear.
       if (restMessageIsSignedOff(deps.storage, row.slug, tele, registeredPrWatchesOf(deps.storage, row.slug), armedTimerIdsOf(deps.storage, row.slug))) continue
+      // A SETTLEMENT WAKE OWNS THIS REST (2026-09-02). An answer the human just gave, or the questions
+      // this very Goal's arming cancelled, is already on its way through evalQuestionAnswers — a wake
+      // that ends the rest by itself, and whose message is the news. The Goal firing beside it is the
+      // two-deliveries-in-one-tick shape the reminder hold below exists for ("Redundant Dones"), so it
+      // stands down the same way and fires on the first rest the worker takes AFTER hearing the news.
+      // The flag may be hard true: this pass only runs for rows whose armed rest Goal is exactly the
+      // gate evalQuestionAnswers wakes dismissal-only settlements on. Bounded like the answer card is —
+      // the wake landing advances `lastUserAt` past the settlement, which both spends this hold and
+      // closes the rest above.
+      if (answersInFlight(deps.storage.listThreadQuestions(row.slug), tele.lastUserAt, true) !== undefined) continue
       // THE REMINDER TOOK THIS REST (2026-08-28). SOURCE 9 mints before this pass runs, and a rest it
       // claimed gets no Goal on top. The two used to go out in the same tick, 5 ms apart; the runtime
       // queued the second behind the first's turn, so a worker that answered the Goal with a ```done

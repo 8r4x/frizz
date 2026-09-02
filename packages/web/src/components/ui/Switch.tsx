@@ -61,7 +61,7 @@ export function Switch({ checked, onChange, disabled, label, size = "sm", testId
       // `onMouseDown` preventDefault: a switch in a popover beside a textarea would otherwise steal
       // focus on press, blurring the operator's caret out of the text they are editing for a control
       // that never needs focus to be clicked. (It also used to fire the Goal panel's blur-persist and
-      // double the round-trips; that panel batches behind a Save button now, but the focus theft alone
+      // double the round-trips; that panel batches until it is dismissed now, but the focus theft alone
       // keeps this here.)
       onMouseDown={(e) => e.preventDefault()}
       onClick={() => onChange(!checked)}

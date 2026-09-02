@@ -28,6 +28,10 @@ test("every ending with a card of its own keeps this one off", () => {
   // worker has not been handed the answer yet — so every OTHER rung is false and this one caught the
   // hole: a card saying nobody signed anything off, over a human who had just answered.
   assert.equal(showsRestedCard({ ...bare, answersInFlight: "Answers to earlier questions:\n1. “Q?” → A" }, text), false)
+  // …and the seconds after arming a Goal cancelled the questions: the same field carries the
+  // cancellation wake on its way, and a card claiming a bare rest of a thread that had asked is the
+  // exact render the maintainer reported (2026-09-02).
+  assert.equal(showsRestedCard({ ...bare, answersInFlight: "1 question you registered was CANCELLED without an answer. Decide it yourself and carry on — say which way you went in your write-up. Do not re-ask." }, text), false)
   assert.equal(showsRestedCard({ ...bare, awaitingBackground: true }, text), false)
   assert.equal(showsRestedCard({ ...bare, pendingInteraction: true }, text), false)
   assert.equal(showsRestedCard({ ...bare, limitPause: { window: "session", since: bare.lastAssistantAt! } as never }, text), false)

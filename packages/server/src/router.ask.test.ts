@@ -362,6 +362,37 @@ test("arming a Goal CANCELS the questions already open — a thread cannot be au
   } finally { h.close() }
 })
 
+test("arming over open questions runs the delivery sweep NOW — the cancellation wake must not sit a tick away", async () => {
+  const h = harness()
+  try {
+    h.storage.upsertSession(row("t"))
+    // No questions to cancel ⇒ nothing new for the sweep to carry ⇒ no kick. The rest pass finds the
+    // fresh Goal on its own tick, exactly as before.
+    await h.router.setOwnThreadRecurringPrompt.handler({
+      input: { slug: "t", prompt: "Keep going.", stopHook: true, heartbeat: false, postCompaction: false },
+    })
+    assert.equal(h.kicks(), 0, "arming with nothing to cancel kicks nothing")
+
+    // With a question open, the arming that cancels it also kicks: between the question card leaving
+    // the board and the cancellation wake landing there is otherwise a whole tick of bare rest, drawn
+    // as "Rested without a sign-off" over a thread that had asked (maintainer 2026-09-02).
+    h.storage.upsertSession(row("u"))
+    await h.router.ask.handler({ input: { slug: "u", questions: [simple()] } })
+    await h.router.setOwnThreadRecurringPrompt.handler({
+      input: { slug: "u", prompt: "Keep going.", stopHook: true, heartbeat: false, postCompaction: false },
+    })
+    assert.equal(h.kicks(), 1, "arming over an open question sweeps immediately")
+
+    // The footer panel's writer makes the same call through its own guard.
+    h.storage.upsertSession(row("v"))
+    await h.router.ask.handler({ input: { slug: "v", questions: [simple()] } })
+    await h.router.setThreadRecurringPrompt.handler({
+      input: { slug: "v", sessionId: "sid-v", prompt: "Keep going.", stopHook: true, heartbeat: false, postCompaction: false },
+    })
+    assert.equal(h.kicks(), 2, "the operator's save sweeps the same way")
+  } finally { h.close() }
+})
+
 test("a DANGER question survives the flip, exactly as it survives the human's ×", async () => {
   const h = harness()
   try {

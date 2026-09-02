@@ -433,6 +433,54 @@ test("a Goal and the reminder are due for one rest: the reminder goes, the Goal 
   } finally { void s.stop(); storage.close(); rmSync(dir, { recursive: true, force: true }) }
 })
 
+// ARMING A GOAL OVER AN OPEN QUESTION (maintainer 2026-09-02). The arming cancels the question for
+// autonomy (router.cancelQuestionsForAutonomy), which turned a rest that had signed off WITH a question
+// into what both sources read as a bare one: the reminder took it — "you rested without a fence", to a
+// worker whose question frizz itself had just cancelled — and the Goal stood down for it, while the
+// cancellation wake went out beside it as a second delivery. The dismissal-in-flight is a settlement on
+// its way (evalQuestionAnswers wakes on exactly this shape when the rest Goal is armed), so it holds
+// both sources the way an answer-in-flight already held the reminder, and the wake is the ONE delivery
+// the rest draws.
+test("a cancellation on its way holds BOTH sources — the wake is the one delivery the rest draws", async () => {
+  let lastUserAt = "2026-08-12T00:00:00.000Z"
+  let spokeAt = "2026-08-12T00:01:00.000Z"
+  const h = nudger({
+    get lastUserAt() { return lastUserAt },
+    get lastAssistantAt() { return spokeAt },
+    get lastActivityAt() { return spokeAt },
+  } as Partial<SessionTelemetry>)
+  try {
+    // The field sequence: the worker registered a question and rested; the operator armed a stop hook
+    // in the footer panel, whose handler cancelled the question and kicked the sweep.
+    h.storage.askThreadQuestion({
+      id: "qst_cancelled", slug: h.slug,
+      spec: JSON.stringify({ question: "SQLite or a JSON file?", kind: "question" }),
+      askedAtMs: Date.parse("2026-08-12T00:01:00.000Z"),
+    })
+    h.storage.setRecurringPromptBySlug(h.slug, {
+      prompt: "keep going", stopHook: true, heartbeat: false, postCompaction: false,
+      intervalMs: null, armedAt: "2026-08-12T00:02:00.000Z",
+    })
+    h.storage.dismissThreadQuestion("qst_cancelled", Date.parse("2026-08-12T00:02:00.000Z"))
+    await h.s.tick()
+    assert.equal(h.delivered.length, 1, "one delivery for this rest")
+    assert.match(h.delivered[0], /CANCELLED without an answer/, "and it is the cancellation wake")
+    assert.deepEqual(h.nudges(), [], "the reminder held — the worker did not rest bare, it asked")
+    // Per rest, not per tick: the settlement spends only when the wake LANDS (a user record), so a slow
+    // tailer cannot reopen the rest to either source in the meantime.
+    await h.s.tick()
+    assert.equal(h.delivered.length, 1, "neither source follows the wake onto the same rest")
+
+    // The wake lands and the worker rests bare again: the hold is spent, and the new rest is an
+    // ordinary bare one — the reminder's, per the pass order the tests around this one pin.
+    lastUserAt = "2026-08-12T00:03:00.000Z"
+    spokeAt = "2026-08-12T00:04:00.000Z"
+    await h.s.tick()
+    assert.equal(h.delivered.length, 2, "the hold is bounded by the wake landing")
+    assert.match(h.delivered[1], /without a fence/)
+  } finally { h.close() }
+})
+
 // THE FIELD SEQUENCE, END TO END, and the control that keeps the Goal a real trigger. Every rest here is
 // the AGENT'S (lastAssistantAt advances; frizz's own records are not modelled, which is the harder case
 // for the hold — see the previous test).

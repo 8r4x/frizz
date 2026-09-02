@@ -3,12 +3,14 @@ import test from "node:test"
 import type { ThreadView } from "@frizz/shared"
 import { draftIntervalSeconds, seedsDefaults } from "./RecurringPromptControl.tsx"
 
-// The Goal panel batches: nothing writes until Save (2026-08-31 — checking a trigger used to arm it
-// instantly, and the stop hook bumped the thread before the operator finished configuring). The draft is
-// still read at instants that never blur the minutes field — Enter in the textarea saves, Escape stashes
-// the unsaved draft after tearing the input out of the DOM — so the draft resolves the cadence from the
-// STRING the operator can see rather than from the last committed number, and this pins that resolution:
-// it is where the original bug lived (type 55 over a 25-minute schedule, press Escape, reopen ⇒ 25).
+// The Goal panel batches: nothing writes until the panel is LEFT (2026-09-02 — dismissal is the save
+// gesture; the 2026-08-31 Save button is gone, but the batching it bought stays, because checking a
+// trigger before that used to arm it instantly and the stop hook bumped the thread before the operator
+// finished configuring). The draft is read at instants that never blur the minutes field — Enter in the
+// textarea saves, Escape saves after tearing the input out of the DOM — so the draft resolves the
+// cadence from the STRING the operator can see rather than from the last committed number, and this
+// pins that resolution: it is where the original bug lived (type 55 over a 25-minute schedule, press
+// Escape, reopen ⇒ 25).
 
 test("a typed cadence wins over the last committed one", () => {
   assert.equal(draftIntervalSeconds("55", 1500), 55 * 60)
@@ -39,14 +41,15 @@ test("a cadence the field can only round is left exactly as stored", () => {
 
 // ---- The pre-filled default -----------------------------------------------------------------------
 // The panel opens on the standard sentence with EVERY TRIGGER OFF, so accepting it costs one switch plus
-// Save, and merely reading it costs nothing: an untouched open matches what `sent` was seeded with, so
-// the Save button stays dimmed with nothing to write (maintainer 2026-08-16 — "it should not
+// a click out, and merely reading it costs nothing: an untouched open matches what `sent` was seeded
+// with, so the dismissal computes "unchanged" and writes nothing (maintainer 2026-08-16 — "it should not
 // automatically arm anything"). It used to seed the stop hook on as well, which made simply opening the
 // panel arm the thread.
 //
 // The seed is still withheld on an ARCHIVED thread, and that branch outlived the change: the operator can
-// still EDIT the text there, and the Save that edit invites is the one the server refuses. All three
-// branches are driven in a real browser too; these pin them where a boot is not worth the cycle.
+// still EDIT the text there, and the write that edit invites on the way out is the one the server
+// refuses. All three branches are driven in a real browser too; these pin them where a boot is not worth
+// the cycle.
 const view = (over: Partial<ThreadView>) => ({ archived: false, ...over }) as ThreadView
 
 test("an unarmed, open thread opens pre-filled", () => {

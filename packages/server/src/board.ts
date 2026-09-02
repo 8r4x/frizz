@@ -7,7 +7,7 @@ import { homedir } from "node:os"
 import { join } from "node:path"
 import watcher from "@parcel/watcher"
 import type { BoardSnapshot, ThreadView, RuntimeState, ThreadRecurringPrompt } from "@frizz/shared"
-import { AskedQuestionSchema, BoardDiffer, PermissionMode, SnoozeUntil, ThreadSlug, isDirectSubAgent, questionAnswerMessage, type AskedQuestion, type PermissionMode as PermissionModeValue, type QuestionAnswer, type QuestionDismissal } from "@frizz/shared"
+import { AskedQuestionSchema, BoardDiffer, PermissionMode, SnoozeUntil, ThreadSlug, isDirectSubAgent, questionAnswerMessage, questionsCancelledWakeMessage, type AskedQuestion, type PermissionMode as PermissionModeValue, type QuestionAnswer, type QuestionDismissal } from "@frizz/shared"
 import type { Bus } from "./bus.ts"
 import type { Project } from "./project.ts"
 import { isHeadlessRow, isBrokerClaudeRow, sessionTitleLocked, type ThreadQuestionRow } from "./storage.ts"
@@ -442,8 +442,13 @@ export function safeQuestionAnswer(raw: string | null): QuestionAnswer | undefin
  *  is a whole delivery ahead of the transcript, so keying on it would reopen the same hole a second
  *  wide. The newest USER record is the honest test — frizz's delivery IS one — and it is the same test
  *  `registeredDoneFence` uses for the same reason. A dismissal alone shows nothing: nobody is being
- *  woken for it, so there is no arrival to bridge to. */
-export function answersInFlight(rows: readonly ThreadQuestionRow[], lastUserAt: string | undefined): string | undefined {
+ *  woken for it, so there is no arrival to bridge to — UNLESS `wakeOnDismissals` says one is. On an
+ *  AUTONOMOUS thread (a Goal armed on rest — the exact gate evalQuestionAnswers wakes on) the
+ *  cancellation wake IS coming, and without this the instant between arming the Goal and that wake
+ *  landing was the same hole all over again: the question card gone, nothing in its place, and the
+ *  residual "Rested without a sign-off" card claiming a bare rest of a thread that had asked
+ *  (maintainer 2026-09-02). The message is the wake's own bytes, exactly as for an answer. */
+export function answersInFlight(rows: readonly ThreadQuestionRow[], lastUserAt: string | undefined, wakeOnDismissals = false): string | undefined {
   const userAt = lastUserAt ? Date.parse(lastUserAt) : Number.NaN
   const answers: QuestionAnswer[] = []
   const dismissed: QuestionDismissal[] = []
@@ -459,7 +464,10 @@ export function answersInFlight(rows: readonly ThreadQuestionRow[], lastUserAt: 
     const parsed = safeQuestionAnswer(q.answer)
     if (parsed) answers.push(parsed)
   }
-  return answers.length > 0 ? questionAnswerMessage(answers, dismissed) : undefined
+  if (answers.length > 0) return questionAnswerMessage(answers, dismissed)
+  // questionAnswerMessage would compose the same cancellation wake for an empty answers list; calling
+  // the producer directly keeps this branch readable as what it is — frizz's own "nobody is coming".
+  return wakeOnDismissals && dismissed.length > 0 ? questionsCancelledWakeMessage(dismissed.length) : undefined
 }
 
 /** One armed `thread_watch` row, as the board reads it — the registry half of a wait, where
@@ -1313,7 +1321,10 @@ function sessionThreadView(
     const spec = safeQuestionSpec(q.spec)
     if (spec) questions.push({ id: q.id, spec, askedAt: new Date(q.asked_at).toISOString() })
   }
-  const inFlightAnswers = answersInFlight(questionRows, rawTele?.lastUserAt)
+  // The dismissal-only case counts as in flight EXACTLY when a cancellation wake is coming — an armed
+  // rest Goal with text, the same gate the scheduler's evalQuestionAnswers wakes on. Anything looser
+  // would also cover the human's own ×, which deliberately wakes nobody and has no arrival to bridge to.
+  const inFlightAnswers = answersInFlight(questionRows, rawTele?.lastUserAt, row.recurring_on_rest === 1 && Boolean(row.recurring_prompt?.trim()))
   const armedWatches: RegisteredWatch[] = storage.listThreadWatches(row.slug, { armedOnly: true }).map((w) => ({
     id: w.id,
     kind: w.kind,

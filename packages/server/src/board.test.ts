@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { questionAnswerMessage, type InteractionRequest } from "@frizz/shared"
+import { questionAnswerMessage, questionsCancelledWakeMessage, type InteractionRequest } from "@frizz/shared"
 import { answersInFlight, appServerTurnStalled, createBoard, deriveAwaitingBackground, deriveNeedsYou, degradeIfAwaitingAnswer, degradeIfNoTranscript, fenceWatchViews, hasDeclaredWait, hasParkedTimerWatch, hasRegisteredBackgroundPark, registeredDoneFence, resolveLimitPause, resolveSessionPermission, resolveSessionProfile, resolveSessionTitle, type RegisteredWatch } from "./board.ts"
 import { Bus } from "./bus.ts"
 import { createStorage, type ThreadQuestionRow } from "./storage.ts"
@@ -1994,6 +1994,18 @@ test("nothing in flight for a question nobody answered, or for a dismissal alone
   // A DISMISSAL WAKES NOBODY, so there is no arrival to bridge to — showing a card for one would leave
   // it on screen until the next unrelated turn.
   assert.equal(answersInFlight([askedRow({ state: "dismissed", answer: null })], undefined), undefined)
+})
+
+test("…UNLESS a wake is coming for the dismissals — the autonomy cancellation is in flight like an answer", () => {
+  // Arming a rest Goal cancels the open questions and evalQuestionAnswers wakes on exactly that shape,
+  // so on an autonomous thread the gap between arming and the wake landing is the same hole an answer
+  // in flight fills — the question card gone, the residual "Rested without a sign-off" card in its
+  // place (maintainer 2026-09-02). Same bytes as that wake, same spend: the worker receiving it.
+  const dismissed = askedRow({ state: "dismissed", answer: null })
+  assert.equal(answersInFlight([dismissed], undefined, true), questionsCancelledWakeMessage(1))
+  assert.equal(answersInFlight([dismissed], new Date(2000).toISOString(), true), undefined, "the wake landed")
+  // The flag widens ONLY the dismissal-alone case; answers keep their message with or without it.
+  assert.equal(answersInFlight([askedRow()], undefined, true), answersInFlight([askedRow()], undefined))
 })
 
 test("a dismissal RIDES an answer, and is named by its question rather than its id", () => {

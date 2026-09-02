@@ -40,7 +40,10 @@ export function showsRestedCard(thread: RestedCardThread | undefined, lastAssist
   if (thread.lastFence || thread.pendingQuestion || (thread.questions?.length ?? 0) > 0) return false
   // AN ANSWER IN FLIGHT IS NOT A BARE REST. The human answered a registered question and the worker has
   // not been handed it yet; the registered-question slot draws their answer for those seconds, and this
-  // card claiming nobody signed anything off is both wrong and the louder of the two.
+  // card claiming nobody signed anything off is both wrong and the louder of the two. The same field
+  // carries an autonomy CANCELLATION on its way (arming a stop-hook Goal dismisses the open questions,
+  // and the wake telling the worker is coming) — without it this card claimed a bare rest of a thread
+  // that had asked, in the seconds after the operator hit save (maintainer 2026-09-02).
   if (thread.answersInFlight) return false
   if (thread.pendingAsk || thread.pendingInteraction || thread.awaitingBackground || thread.limitPause || thread.providerFault) return false
   // Nothing said yet (a thread that has not produced an assistant record) is not a rest to describe.
