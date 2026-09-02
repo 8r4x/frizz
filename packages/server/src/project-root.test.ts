@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
 import {
+  chosenProjectRoot,
   discoverProjectRoot,
   ensureProjectIdFile,
   existingProjectId,
@@ -89,6 +90,56 @@ test("a plain directory under home with no markers at all is its own root", () =
     const dir = join(home, "notes")
     mkdirSync(dir, { recursive: true })
     assert.equal(discoverProjectRoot(dir, home), dir)
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+// The kirby bug (2026-09-02): ~/Documents was an adopted project, so picking a brand-new empty
+// folder anywhere under it "added" documents instead — the picker navigated to another project's
+// board, and no flow could create the new project at all.
+test("an explicit pick is not captured by an adopted plain-directory ancestor", () => {
+  const home = sandbox("chosen")
+  try {
+    const umbrella = join(home, "Documents")
+    const picked = join(umbrella, "projects", "kirby")
+    mkdirSync(picked, { recursive: true })
+    writeProjectIdFile(umbrella, UUID)
+    assert.equal(chosenProjectRoot(picked, home), picked)
+    // The launcher's cwd walk-up keeps sub-directory equivalence for the same tree.
+    assert.equal(discoverProjectRoot(picked, home), umbrella)
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+// The reason the walk-up exists at all: a folder inside a checkout is part of that checkout, and
+// making it a project of its own would fragment the repo. An explicit pick still resolves up.
+test("an explicit pick inside a checkout still adds the checkout", () => {
+  const home = sandbox("chosen-repo")
+  try {
+    const repo = join(home, "repo")
+    const picked = join(repo, "packages", "web")
+    mkdirSync(join(repo, ".git"), { recursive: true })
+    mkdirSync(picked, { recursive: true })
+    writeProjectIdFile(repo, UUID) // adopted AND a repository — the marker keeps the capture
+    assert.equal(chosenProjectRoot(picked, home), repo)
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("an explicit pick of an adopted root, or of any marked folder, is that folder", () => {
+  const home = sandbox("chosen-self")
+  try {
+    const adopted = join(home, "Documents")
+    mkdirSync(adopted, { recursive: true })
+    writeProjectIdFile(adopted, UUID)
+    assert.equal(chosenProjectRoot(adopted, home), adopted)
+    const manifest = join(home, "site")
+    mkdirSync(manifest, { recursive: true })
+    writeFileSync(join(manifest, "package.json"), "{}")
+    assert.equal(chosenProjectRoot(manifest, home), manifest)
   } finally {
     rmSync(home, { recursive: true, force: true })
   }

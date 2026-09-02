@@ -160,7 +160,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { ProjectCard, PROJECT_ICON_EXTENSIONS, PROJECT_ICON_MAX_BASE64_CHARS, queuedThread } from "@frizz/shared"
 import { imageDimensions } from "./image-header.ts"
 import { homedir } from "node:os"
-import { discoverProjectRoot, ensureProjectIdFile, existingProjectId, writeProjectIdFile } from "./project-root.ts"
+import { chosenProjectRoot, ensureProjectIdFile, existingProjectId, isHomeDirectory, writeProjectIdFile } from "./project-root.ts"
 import { resolveProjectLabel } from "./project-identity.ts"
 import { registerProject } from "./project-registry.ts"
 import { pickDirectory, pickImageFile } from "./directory-picker.ts"
@@ -538,9 +538,10 @@ export async function stopAndForgetRegisteredRuntime(
 /**
  * Register a folder as a project: the one implementation behind both the picker and a typed path.
  *
- * Everything it does is what the CLI already does on every launch — walk up to the project root,
- * mint or adopt `.frizz/.id`, write the index. It dispatches nothing, which is what makes it a
- * strictly smaller authority than running `frizz` in that directory.
+ * Almost everything it does is what the CLI already does on every launch — mint or adopt
+ * `.frizz/.id`, write the index — and it dispatches nothing, which is what makes it a strictly
+ * smaller authority than running `frizz` in that directory. The one deliberate divergence is the
+ * root: an explicit choice resolves through chosenProjectRoot, not the launcher's cwd walk-up.
  */
 /**
  * A registry entry as the grid and the rail see it.
@@ -576,11 +577,11 @@ function projectCard(entry: RegistryEntry, stale: boolean): ProjectCard {
   }
 }
 
-function addProjectAtPath(input: string): ProjectCard {
+export function addProjectAtPath(input: string, home = homedir()): ProjectCard {
   const typed = input.trim()
   if (!typed) throw new Error("Enter a folder path.")
   // `~` is what a person types; it is not a path any filesystem call understands.
-  const expanded = typed === "~" || typed.startsWith("~/") ? join(homedir(), typed.slice(1)) : typed
+  const expanded = typed === "~" || typed.startsWith("~/") ? join(home, typed.slice(1)) : typed
   const absolute = resolve(expanded)
   let stats: Stats
   try {
@@ -589,18 +590,22 @@ function addProjectAtPath(input: string): ProjectCard {
     throw new Error(`No folder at ${absolute}`)
   }
   if (!stats.isDirectory()) throw new Error(`That is a file, not a folder: ${absolute}`)
-  // Walk up exactly as the CLI does, so adding ~/repo/packages/web adds ~/repo.
-  const root = discoverProjectRoot(absolute)
+  // A folder INSIDE a checkout still adds the checkout, but an explicitly chosen folder is otherwise
+  // the project itself — an adopted plain-directory ancestor does not capture it (chosenProjectRoot).
+  const root = chosenProjectRoot(absolute, home)
+  // Minting an id in $HOME writes a project into ~/.frizz — Frizz's own state root — and every
+  // unmarked directory under home then resolves to it. The launcher refuses this; so does the grid.
+  if (isHomeDirectory(root, home)) throw new Error("The home folder cannot be a project — choose a folder inside it.")
   // SEEDED, exactly as the launcher seeds it: an established repository whose id lives only in
   // `git config frizz.id` keeps that id, so adding it from the grid finds its existing board instead
   // of minting a fresh one and orphaning every thread on it.
-  const id = ensureProjectIdFile(root, homedir(), existingProjectId(root))
+  const id = ensureProjectIdFile(root, home, existingProjectId(root))
   const remoteOwner = resolveProjectLabel(root)?.split("/")[0]
-  let registered = registerProject({ dir: root, id, remoteOwner })
+  let registered = registerProject({ dir: root, id, remoteOwner }, home)
   if (registered.action === "duplicate") {
     // A copied checkout brought another project's `.frizz/.id` with it; give it one of its own
     // rather than letting it adopt the original's threads.
-    registered = registerProject({ dir: root, id: writeProjectIdFile(root, randomUUID()), remoteOwner })
+    registered = registerProject({ dir: root, id: writeProjectIdFile(root, randomUUID()), remoteOwner }, home)
   }
   if (!registered.entry) throw new Error("Could not register that folder.")
   return projectCard(registered.entry, false)
@@ -3372,8 +3377,8 @@ export function createRouter(ctx: AppContext) {
      * Register a directory as a project, from the grid's phantom card.
      *
      * The same authority as running `frizz` in that directory, and strictly less: this registers and
-     * resolves an id, it dispatches nothing. Everything it does — walk up to the project root, mint or
-     * adopt `.frizz/.id`, write the index — is what the CLI already does on every launch.
+     * resolves an id, it dispatches nothing. The root comes from chosenProjectRoot — a folder inside
+     * a checkout adds the checkout, but an adopted plain-directory ancestor never captures the pick.
      */
     projectAdd: mutation({
       input: z.object({ path: z.string().min(1) }),

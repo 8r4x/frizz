@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync, utimesSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync, utimesSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { Hono } from "hono"
@@ -12,6 +12,7 @@ import { appendDelivery, parseDeliveryLedger, projectDeliveryLedger } from "./de
 import { Emitter } from "./bus.ts"
 import { createClaudeBackend } from "./backend/claude.ts"
 import {
+  addProjectAtPath,
   createRouter,
   completeRegisteredThread,
   completionConfirmationHold,
@@ -27,6 +28,8 @@ import {
   validateGithubDispatchProfile,
 } from "./router.ts"
 import { projectTranscriptPageAgentLifecycles } from "./transcript.ts"
+import { readProjectIdFile, writeProjectIdFile } from "./project-root.ts"
+import { registerProject } from "./project-registry.ts"
 import { createStorage, type AdoptionClaimRow, type SessionRow } from "./storage.ts"
 import type { AdoptionPaneLookup, PaneIdentity, PaneIdentity as PaneSnapshot } from "./adoption-recovery.ts"
 import type { AppContext } from "./context.ts"
@@ -1701,4 +1704,38 @@ test("a codex follow-up opens the ledger entry delivered — its receipt names t
   const after = parseDeliveryLedger(h.storage.getSession(slug)!.delivery_ledger)
   assert.equal(after.find((i) => i.id === "d-cdx")?.state, "delivered")
   h.storage.close()
+})
+
+// The kirby bug (2026-09-02): ~/Documents was itself an adopted project, so picking a brand-new
+// empty folder under it "added" documents — the picker navigated to another project's board, and no
+// flow could create the new project at all.
+test("projectAdd: a picked folder under an adopted plain directory becomes its own project", () => {
+  const home = mkdtempSync(join(tmpdir(), "frizz-add-"))
+  try {
+    const umbrella = join(home, "Documents")
+    const picked = join(umbrella, "projects", "kirby")
+    mkdirSync(picked, { recursive: true })
+    writeProjectIdFile(umbrella, "88abce4f-16e9-42b3-899d-2576382b2ff3")
+    registerProject({ dir: umbrella, id: "88abce4f-16e9-42b3-899d-2576382b2ff3" }, home)
+    const card = addProjectAtPath(picked, home)
+    assert.equal(card.path, realpathSync(picked))
+    assert.equal(card.slug, "kirby")
+    // The pick minted the folder's OWN id — it did not reopen or touch the umbrella's.
+    assert.ok(readProjectIdFile(picked))
+    assert.notEqual(readProjectIdFile(picked), readProjectIdFile(umbrella))
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+// Minting an id in $HOME writes a project into ~/.frizz, Frizz's own state root, and every unmarked
+// directory under home then resolves to it. The launcher refuses this (2026-08-06); the grid must too.
+test("projectAdd: the home directory itself is refused, and nothing is written", () => {
+  const home = mkdtempSync(join(tmpdir(), "frizz-add-home-"))
+  try {
+    assert.throws(() => addProjectAtPath(home, home), /home folder/u)
+    assert.equal(existsSync(join(home, ".frizz", ".id")), false)
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
 })

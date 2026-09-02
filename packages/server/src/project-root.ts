@@ -261,3 +261,23 @@ export function discoverProjectRoot(cwd = process.cwd(), home = homedir()): stri
   }
   return dir
 }
+
+/**
+ * The root an EXPLICIT choice adopts — the native picker and the grid's typed path, never a cwd.
+ *
+ * The walk-up above exists so a folder inside a checkout resolves to the checkout instead of
+ * fragmenting it, and that reasoning is about directories that are projects IN THEIR OWN RIGHT — a
+ * VCS root, a manifest root. An ancestor whose only claim is `.frizz/.id` — an adopted plain
+ * directory, e.g. ~/Documents opened as a project once — is no checkout, and letting it capture a
+ * pick turned "add ~/Documents/projects/kirby", a brand-new empty folder, into "reopen documents":
+ * the picker navigated to another project's board, and no flow could create the new project at all
+ * (2026-09-02). Someone who has pointed at a folder means THAT folder.
+ *
+ * A launch cwd still resolves through discoverProjectRoot unchanged — sub-directory equivalence for
+ * adopted plain directories is deliberate there, where the directory is incidental to the command.
+ */
+export function chosenProjectRoot(chosen: string, home = homedir()): string {
+  const dir = resolve(chosen)
+  const discovered = discoverProjectRoot(dir, home)
+  return discovered === dir || hasProjectMarker(discovered) ? discovered : dir
+}
