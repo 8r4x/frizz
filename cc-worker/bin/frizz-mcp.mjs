@@ -414,8 +414,12 @@ function questionSchema(depth) {
       description: {
         type: "string",
         description:
-          "ONE LINE of trade-off. What this option costs, or why it is the one to take. An option list " +
-          "with no trade-offs asks the human to reconstruct your reasoning before they can choose.",
+          "The trade-off, or the evidence — and it renders INSIDE the option, always visible, so this " +
+          "is where the human learns what they are choosing BEFORE they pick anything. One line for a " +
+          "simple fork. FULL MARKDOWN, over several lines, for one that deserves it: a list of " +
+          "consequences, a code block, the diff the option would produce, the exact message that would " +
+          "be posted. An option list with no trade-offs asks the human to reconstruct your reasoning " +
+          "before they can choose.",
       },
       recommended: {
         type: "boolean",
@@ -425,13 +429,10 @@ function questionSchema(depth) {
           "YOU ARE ASKING: you already know the answer, so implement it and say which way you went. " +
           "This is for the fork you genuinely cannot take yourself.",
       },
-      preview: {
-        type: "string",
-        description:
-          "Markdown revealed under this option when the human picks it — the diff it produces, the " +
-          "message that would be posted, the mockup. Use it when SEEING the outcome is what decides the " +
-          "question; skip it when the one-line trade-off already says everything.",
-      },
+      // `preview` (markdown revealed under the option once picked) is RETIRED from this schema
+      // (2026-09-01): detail that decides a choice must be visible before the choice, so it belongs in
+      // a rich `description` now. The server still ACCEPTS the field — an in-flight worker dispatched
+      // against the old schema keeps working, and the card folds it into the same always-visible body.
       ...(depth < ASK_MAX_DEPTH
         ? {
             followUps: {

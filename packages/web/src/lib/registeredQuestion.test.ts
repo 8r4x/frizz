@@ -42,11 +42,27 @@ test("a question with no options is free text, and the card renders its box unco
   assert.equal(question.recommendedIdx, null)
 })
 
-test("previews ride the options array, and are absent entirely when no option has one", () => {
+test("bodies ride the options array, and are absent entirely when no option has one", () => {
   const { question } = toParsedQuestion(STORE)
-  assert.equal(question.optionPreviews, undefined)
-  const withPreview = toParsedQuestion({ ...STORE, options: [{ label: "SQLite", preview: "```sql\nCREATE …\n```" }, { label: "JSON" }] })
-  assert.deepEqual(withPreview.question.optionPreviews, ["```sql\nCREATE …\n```", undefined])
+  assert.equal(question.optionBodies, undefined)
+  // A MULTI-LINE description is the option's body — the label line carries no em-dash join for it.
+  const rich = toParsedQuestion({ ...STORE, options: [{ label: "SQLite", description: "transactional\n\n- one more table in `ui.db`" }, { label: "JSON" }] })
+  assert.deepEqual(rich.question.options, ["A. SQLite", "B. JSON"])
+  assert.deepEqual(rich.question.optionBodies, ["transactional\n\n- one more table in `ui.db`", undefined])
+})
+
+test("a legacy preview folds into the body — after a body-shaped description, under a one-line one", () => {
+  // Stored rows and in-flight workers still write `preview`; it renders as part of the option now,
+  // never behind a pick (the reveal-on-select was retired 2026-09-01).
+  const legacy = toParsedQuestion({ ...STORE, options: [{ label: "SQLite", preview: "```sql\nCREATE …\n```" }, { label: "JSON" }] })
+  assert.deepEqual(legacy.question.optionBodies, ["```sql\nCREATE …\n```", undefined])
+  const both = toParsedQuestion({
+    ...STORE,
+    options: [{ label: "SQLite", description: "transactional", preview: "```sql\nCREATE …\n```" }],
+  })
+  // The one-line description keeps its em-dash join; the preview is the body under it.
+  assert.deepEqual(both.question.options, ["A. SQLite — transactional"])
+  assert.deepEqual(both.question.optionBodies, ["```sql\nCREATE …\n```"])
 })
 
 // ---- the static tree ----

@@ -12,7 +12,7 @@
 // A BRANCH NOT TAKEN CONTRIBUTES NOTHING. Deselecting an option does not blank its follow-ups' staged
 // answers (the human may come back), but they stop being live, so they never reach the payload: an
 // absent follow-up means "not asked", never "asked and skipped".
-import type { AskedQuestion, RegisteredQuestionView, QuestionAnswer } from "@frizz/shared"
+import type { AskedOption, AskedQuestion, RegisteredQuestionView, QuestionAnswer } from "@frizz/shared"
 import type { BlockAnswer, ParsedQuestion } from "./questionBlocks.ts"
 
 /** `A.`, `B.`, … then `AA.` past 26 — the same identifiers every other producer letters options with.
@@ -24,11 +24,17 @@ function optionLetter(index: number): string {
   return `${out}.`
 }
 
-/** The chip text for one option. A `description` is the fence convention's one-line trade-off, joined
- *  with the em dash the fence itself uses, so an option written either way renders identically. */
-function optionLine(index: number, label: string, description?: string): string {
-  const trade = description?.trim()
-  return `${optionLetter(index)} ${label}${trade ? ` — ${trade}` : ""}`
+/** How one option renders: the chip's LABEL LINE, and optionally a block-markdown BODY inside the chip.
+ *  A one-line `description` is the fence convention's trade-off, joined with the em dash the fence
+ *  itself uses, so an option written either way renders identically. A MULTI-LINE description is the
+ *  option's rich body instead — a list, a code block, a diff — always visible, because it is what the
+ *  human is choosing between. A legacy `preview` (reveal-on-select, retired 2026-09-01) folds into the
+ *  same body so stored questions keep rendering, just no longer behind a click. */
+function optionParts(index: number, opt: AskedOption): { line: string; body?: string } {
+  const trade = opt.description?.trim()
+  const inline = trade && !trade.includes("\n") ? trade : undefined
+  const body = [inline ? undefined : trade, opt.preview?.trim()].filter(Boolean).join("\n\n") || undefined
+  return { line: `${optionLetter(index)} ${opt.label}${inline ? ` — ${inline}` : ""}`, ...(body ? { body } : {}) }
 }
 
 /** One question of a registration that is CURRENTLY live — the root, or a follow-up whose parent option
@@ -55,17 +61,15 @@ export function childPath(parent: string, optionIndex: number, followUpIndex: nu
 export function toParsedQuestion(spec: AskedQuestion): { question: ParsedQuestion; optionLabels: string[] } {
   const options = spec.options ?? []
   const recommendedIdx = options.findIndex((o) => o.recommended)
+  const parts = options.map((o, i) => optionParts(i, o))
   return {
     question: {
       kind: spec.kind,
       danger: spec.danger === true,
       contextMd: spec.question,
-      options: options.map((o, i) => optionLine(i, o.label, o.description)),
+      options: parts.map((p) => p.line),
       recommendedIdx: recommendedIdx === -1 ? null : recommendedIdx,
-      // A preview is markdown the worker attached to ONE option — two diffs, the message that would be
-      // posted. It rides the option rather than the question, so it is parallel to `options` and the
-      // card reveals it under the option once that option is picked.
-      ...(options.some((o) => o.preview) ? { optionPreviews: options.map((o) => o.preview) } : {}),
+      ...(parts.some((p) => p.body) ? { optionBodies: parts.map((p) => p.body) } : {}),
     },
     optionLabels: options.map((o) => o.label),
   }

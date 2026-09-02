@@ -999,6 +999,15 @@ a[href] {
   position: relative;
   z-index: 1;
 }
+/* An option's markdown BODY can carry a code block (a diff, the message that would be posted), and a
+   wide one h-scrolls — which needs its pixels OUT from under the stretched button, or wheel/drag
+   scrolling targets the button and the overflow is unreachable. Unlike a link, a click here must still
+   pick the option: the chip's div-level onClick routes it (QuestionBlockCard's Chip), skipping only
+   links and real text selections. */
+[data-question-option] .md-body pre {
+  position: relative;
+  z-index: 1;
+}
 .md-body pre {
   background: var(--color-bg);
   border: 1px solid var(--color-border);

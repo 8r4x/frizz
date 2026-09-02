@@ -9,8 +9,9 @@ import "./styles.css"
 // Browser QA for a REGISTERED question on the queue card — a question a worker created with the `ask`
 // tool, which is a row rather than a fence in a message. It renders through the shared QuestionBlockCard
 // (RegisteredQuestionCards.tsx), so what is worth looking at here is what a registration adds: the ×,
-// the option PREVIEW that opens under a picked option, and the FOLLOW-UP tree that appears as the root
-// is answered.
+// the rich option BODY (full markdown inside the chip, visible before anything is picked — one option
+// below writes the new multi-line `description`, the other the retired `preview`, and they must render
+// the same), and the FOLLOW-UP tree that appears as the root is answered.
 //
 //   ?tree=1     — a root whose "Yes" carries two follow-ups. Pick A and watch them appear indented.
 //   ?danger=1   — the destructive gate: `risk` tone, and NO × (declining is an option INSIDE it).
@@ -37,13 +38,18 @@ const SETTINGS: RegisteredQuestionView = {
     options: [
       {
         label: "SQLite",
-        description: "transactional, and it is where sessions already live",
+        // The NEW shape: a multi-line description IS the option's body — full markdown, inside the
+        // chip, visible before anything is picked.
+        description: "Transactional, and it is where sessions already live.\n\n```sql\nCREATE TABLE setting (\n  key   TEXT PRIMARY KEY,\n  value TEXT NOT NULL\n);\n```\n\nMigrates with the rest of the schema; one more table in `ui.db`.",
         recommended: true,
-        // The ONE input affordance beyond select/multi/free-text, because it is the only one that
-        // changes a decision rather than decorating it.
-        preview: "```sql\nCREATE TABLE setting (\n  key   TEXT PRIMARY KEY,\n  value TEXT NOT NULL\n);\n```\nMigrates with the rest of the schema; one more table in `ui.db`.",
       },
-      { label: "A JSON file", description: "zero dependencies and hand-editable, but racy under concurrent writes", preview: "```json\n{ \"theme\": \"dark\", \"font\": \"mono\" }\n```\nOne file at `~/.frizz/settings.json`. Two servers writing it at once is the failure mode." },
+      {
+        label: "A JSON file",
+        description: "zero dependencies and hand-editable, but racy under concurrent writes",
+        // The RETIRED shape, still carried by stored rows: folds into the same always-visible body
+        // under the one-line trade-off, never behind a pick.
+        preview: "```json\n{ \"theme\": \"dark\", \"font\": \"mono\" }\n```\nOne file at `~/.frizz/settings.json`. Two servers writing it at once is the failure mode.",
+      },
     ],
   },
 }

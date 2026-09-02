@@ -222,11 +222,14 @@ export interface ParsedQuestion {
   // Prose that follows the option run (a worker often adds a "Note: …" footnote AFTER the choices).
   // Rendered BELOW the chips so the options stay answerable instead of the trailing prose swallowing them.
   trailingMd?: string
-  // Markdown attached to ONE option, parallel to `options`, revealed under that option once it is
-  // picked — two diffs, two mockups, the message that would actually be posted. Only a REGISTERED
-  // question (lib/registeredQuestion.ts) carries these: a fence has nowhere to write one, and a native
-  // tool call has no such field. Absent for the other two producers, so the card is unchanged there.
-  optionPreviews?: (string | undefined)[]
+  // Block markdown belonging to ONE option, parallel to `options`, rendered INSIDE that option's chip,
+  // ALWAYS — a multi-line description, a diff, a mockup, the message that would actually be posted.
+  // Until 2026-09-01 this was `optionPreviews`, revealed only once the option was PICKED — which put
+  // the detail that should inform a choice after the choice (maintainer: "you should just be rendering
+  // it as part of the answer before I click on it"). Only a REGISTERED question
+  // (lib/registeredQuestion.ts) carries these: a fence's options are one-liners by grammar, and a
+  // native tool call has no such field. Absent for the other two producers, so the card is unchanged there.
+  optionBodies?: (string | undefined)[]
   // Group headings INSIDE the option run, parallel to `options`: a worker who groups its choices
   // ("Thread / loom family:" over A–C, "Melee family:" over D–F) writes a prose line between them.
   // `optionHeadings[i]` is the prose that introduces option i (undefined for most). Present only when

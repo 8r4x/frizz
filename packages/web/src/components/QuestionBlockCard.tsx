@@ -180,6 +180,14 @@ export function QuestionBlockCard({
               {parsed.optionHeadings?.[i] && <OptionHeading md={parsed.optionHeadings[i]!} wrap={wrap} />}
             <Chip
               label={opt}
+              // The option's BODY — a multi-line trade-off, the diff, the mockup, the message that
+              // would actually be posted — rendered INSIDE the chip, ALWAYS, read-only cards included.
+              // It was `optionPreviews`, revealed only once the option was picked, until 2026-09-01:
+              // detail that decides a choice arrived after the choice, and content appearing under a
+              // click read as an accident (maintainer: "you should just be rendering it as part of the
+              // answer before I click on it").
+              bodyMd={parsed.optionBodies?.[i]}
+              wrap={wrap}
               multi={isMulti}
               // The recommendation renders INSIDE its option as a badge (not as a caption below);
               // the inline `(recommended: why)` rationale (or a legacy rec line) rides the chip's title.
@@ -205,15 +213,6 @@ export function QuestionBlockCard({
                 gridRef.current?.focus()
               }}
             />
-            {/* The option's PREVIEW — the diff, the mockup, the message that would actually be posted.
-                It is revealed by SELECTING the option rather than by hovering it: a staged-answer card
-                has no send-on-click, so picking an option is the cheap, reversible, keyboard-reachable
-                gesture, and a hover reveal would be unreachable on touch and gone the moment the
-                pointer moved to read it. Read-only cards show nothing — there is no selection to
-                reveal it with, and a settled question's preview is no longer a decision aid. */}
-            {parsed.optionPreviews?.[i] !== undefined && interactive && (isMulti ? chosenSet.includes(i) : chosen === i && !freetext.trim()) && (
-              <OptionPreview md={parsed.optionPreviews[i]!} wrap={wrap} />
-            )}
             </Fragment>
           ))}
           {/* The free-text answer IS the final option — but it SPANS THE FULL WIDTH (col-span-full)
@@ -318,19 +317,6 @@ function OptionHeading({ md, wrap }: { md: string; wrap?: boolean }) {
   )
 }
 
-// An option's PREVIEW, revealed under it while it is selected. Indented behind a left rule so it reads
-// as belonging TO the option rather than as a fourth choice, and muted-but-legible: it is reference
-// material for a decision, not the decision. Its own component for the same reason OptionHeading is —
-// the markdown parse has to be memoized per preview, and a hook cannot be called inside the options map.
-function OptionPreview({ md, wrap }: { md: string; wrap?: boolean }) {
-  const html = useMarkdownHtml(md)
-  return (
-    <div data-question-preview className="ml-3 border-l border-border pl-3">
-      <LinkedHtml className={`md-body text-[11.5px] text-fg/75${wrap ? ` ${QUEUE_WRAP}` : ""}`} html={html} />
-    </div>
-  )
-}
-
 // The free-text row's identifier: one past the last option ("A. B. C." → "D.", "1. 2." → "3.").
 function nextOptionId(options: string[]): string {
   const last = options[options.length - 1]?.match(/^\s*([A-Za-z]|\d+)([.)])\s/)
@@ -360,6 +346,8 @@ function nextOptionId(options: string[]): string {
 // to flatten links to spans (`inertInteractive`), which is why a file named in an option never opened.
 function Chip({
   label,
+  bodyMd,
+  wrap,
   selected,
   settledPick,
   disabled,
@@ -369,6 +357,11 @@ function Chip({
   onClick,
 }: {
   label: string
+  /** Block markdown rendered INSIDE the chip, under the label line, ALWAYS — the multi-line trade-off,
+   *  the diff, the message that would be posted. Part of the answer, so it shows before anything is
+   *  picked and survives into read-only and settled cards. */
+  bodyMd?: string
+  wrap?: boolean
   selected: boolean
   /** The recorded answer of a SETTLED ask named this option: the AnswersCard's quiet recessed
    *  treatment (inset panel, soft left rule) — a past choice, never the awaiting-you accent. */
@@ -379,14 +372,28 @@ function Chip({
   recTitle?: string
   onClick: () => void
 }) {
-  // Inline-only: a chip is one line, so no `<p>`/list block chrome. Raw `label` used to leak
-  // `**bold**`/backticks.
+  // Inline-only: the label line is one line, so no `<p>`/list block chrome. Raw `label` used to leak
+  // `**bold**`/backticks. The body below it is the opposite — FULL markdown, blocks and all.
   const labelHtml = useInlineMarkdownHtml(label)
+  const bodyHtml = useMarkdownHtml(bodyMd ?? "")
   const labelId = useId()
   return (
     <div
       data-question-option
       title={recTitle}
+      // The div-level click exists for the body's ELEVATED, non-link content — a code block sits above
+      // the stretched button so it can h-scroll (styles.css), which takes its pixels out of the
+      // button's hit area, and a click on the code you are reading must still pick the option. The
+      // guards keep it from double-firing or over-reaching: a click the BUTTON caught bubbles here
+      // with the button as target (closest matches, skip — a second call would un-toggle a multi), a
+      // link keeps its own click, and a text-selection drag inside the code block is reading, not
+      // choosing.
+      onClick={(e) => {
+        if (disabled) return
+        if ((e.target as Element).closest("a, button, .local-file-action, .local-file-code")) return
+        if (window.getSelection()?.toString()) return
+        onClick()
+      }}
       className={`relative flex items-start gap-2 rounded-md border px-3 py-1.5 text-[12px] leading-snug transition-colors ${
         selected
           ? "border-accent bg-accent/10 text-fg"
@@ -419,25 +426,34 @@ function Chip({
           {(selected || settledPick) && <Check size={10} strokeWidth={3} />}
         </span>
       )}
-      {/* The "Recommended" badge FLOATS to the top-right so the option text flows around it and reclaims
-          the full width on the lines below — instead of a flex sibling that permanently narrows the text
-          column. The badge must precede the label in source order for the float to take effect. */}
-      <span id={labelId} className="min-w-0 flex-1">
-        {recommended && (
-          // Optically centred on the option text's CAP BLOCK, not on its line box. Measured on the
-          // rendered page: the pill's ink centre sat 1.88px (sans) / 1.80px (mono) BELOW the label's,
-          // because a 9.5px pill inside a 12px line resolves a shorter line box and lands its baseline
-          // 1px low. Unlike the icon nudge this is font-INDEPENDENT — both sides scale with the same
-          // font — so it is a constant, and 2px lands on a whole device pixel at 2× DPR. `translate`
-          // (not a margin) so the float's exclusion area, and therefore the text wrap, is untouched.
-          // `pointer-events-none`: the transform makes the badge a stacking context that paints above
-          // the stretched button, and a click on the badge must still pick the option.
-          <span className="pointer-events-none float-right ml-2 mt-px -translate-y-[2px] rounded-full border border-border-strong px-1.5 py-px text-[9.5px] uppercase tracking-wide text-muted">
-            Recommended
-          </span>
+      <div className="min-w-0 flex-1">
+        {/* The label LINE is its own block (and the button's accessible name — the body is detail, not
+            name). The "Recommended" badge FLOATS to the top-right so the option text flows around it
+            and reclaims the full width on the lines below — instead of a flex sibling that permanently
+            narrows the text column. The badge must precede the label in source order for the float to
+            take effect. */}
+        <div id={labelId}>
+          {recommended && (
+            // Optically centred on the option text's CAP BLOCK, not on its line box. Measured on the
+            // rendered page: the pill's ink centre sat 1.88px (sans) / 1.80px (mono) BELOW the label's,
+            // because a 9.5px pill inside a 12px line resolves a shorter line box and lands its baseline
+            // 1px low. Unlike the icon nudge this is font-INDEPENDENT — both sides scale with the same
+            // font — so it is a constant, and 2px lands on a whole device pixel at 2× DPR. `translate`
+            // (not a margin) so the float's exclusion area, and therefore the text wrap, is untouched.
+            // `pointer-events-none`: the transform makes the badge a stacking context that paints above
+            // the stretched button, and a click on the badge must still pick the option.
+            <span className="pointer-events-none float-right ml-2 mt-px -translate-y-[2px] rounded-full border border-border-strong px-1.5 py-px text-[9.5px] uppercase tracking-wide text-muted">
+              Recommended
+            </span>
+          )}
+          <LinkedHtml as="span" className="md-inline" html={labelHtml} />
+        </div>
+        {/* The body inherits the chip's colour state (selected/read-only/settled) and steps down HALF
+            a size, not to the muted tone: it is the substance of the choice, not a caption on it. */}
+        {bodyMd !== undefined && (
+          <LinkedHtml className={`md-body mt-1.5 text-[11.5px] opacity-90${wrap ? ` ${QUEUE_WRAP}` : ""}`} html={bodyHtml} />
         )}
-        <LinkedHtml as="span" className="md-inline" html={labelHtml} />
-      </span>
+      </div>
     </div>
   )
 }

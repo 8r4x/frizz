@@ -1776,13 +1776,19 @@ export type AskQuestionKind = z.infer<typeof AskQuestionKind>
 
 export interface AskedOption {
   label: string
+  /** The trade-off, or the evidence. ONE LINE renders inline after the label (the fence's em-dash
+   *  join); MORE THAN ONE LINE renders as a full-markdown body INSIDE the option — a list, a code
+   *  block, the diff the option would produce — visible before the human picks anything, because a
+   *  detail that decides a choice is useless once the choice is already made. */
   description?: string
   /** Marks the one option the worker recommends. At most one per question — a second is refused, since
    *  "recommended" means nothing if it is on two of three choices. */
   recommended?: boolean
-  /** Markdown shown when this option is focused: two diffs, two mockups, the message that would be
-   *  posted. The ONE input affordance beyond select/multi-select/free text, because it is the only one
-   *  that changes a decision rather than decorating it. */
+  /** RETIRED 2026-09-01 (it revealed markdown under the option only once picked — detail that should
+   *  inform a choice arrived after the choice; maintainer: "you should just be rendering it as part of
+   *  the answer before I click on it"). Still ACCEPTED, never refused: stored rows and in-flight
+   *  workers carry it, and the card now folds it into the option's always-visible body. New workers
+   *  never see it — the `ask` tool schema no longer offers it; a rich `description` is the shape. */
   preview?: string
   /** Questions that become live only if the human picks THIS option — the static tree. A branch nobody
    *  took returns nothing, so an unpicked follow-up is not a question anyone owes an answer to. */
@@ -1813,7 +1819,9 @@ export const ASK_MAX_OPEN = 12
 
 const AskedOptionSchema: z.ZodType<AskedOption> = z.lazy(() => z.object({
   label: z.string().trim().min(1).max(120),
-  description: z.string().trim().max(400).optional(),
+  // 4000, not the one-line 400 it launched with: a description is allowed to BE the rich body now
+  // (the retired `preview`'s cap), since a multi-line one renders as the option's markdown body.
+  description: z.string().trim().max(4000).optional(),
   recommended: z.boolean().optional(),
   preview: z.string().max(4000).optional(),
   followUps: z.array(AskedQuestionSchema).max(ASK_MAX_PER_CALL).optional(),
