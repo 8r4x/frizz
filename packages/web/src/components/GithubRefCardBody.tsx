@@ -279,7 +279,20 @@ export function GithubRefCardBody({ card, nowMs = Date.now() }: { card: GithubRe
             <GitCommitHorizontal className="size-[1em] text-muted" aria-hidden />
           </span>
           <div className="min-w-0">
-            <div className="text-[14px] font-semibold leading-snug text-fg">{card.title}</div>
+            {/* The title is the card's click-through, like github.com's own hovercard. `tabIndex={-1}`
+                because the whole panel is `aria-hidden` and mouse-only (see GithubHovercards.tsx):
+                a tabbable anchor inside a hidden panel would be a focus target screen readers are
+                told does not exist. */}
+            <a
+              data-gh-title
+              href={card.url}
+              target="_blank"
+              rel="noreferrer noopener"
+              tabIndex={-1}
+              className="block text-[14px] font-semibold leading-snug text-fg hover:underline"
+            >
+              {card.title}
+            </a>
             {/* A commit message is NOT markdown, so its backticks stay LITERAL — which is exactly what
                 github.com does with the same text. Its hard wraps do NOT survive, for the same
                 reason: a message wrapped at 72 columns re-wrapped into a 360px card comes out as a
@@ -306,9 +319,18 @@ export function GithubRefCardBody({ card, nowMs = Date.now() }: { card: GithubRe
           <span className="underline decoration-border underline-offset-2">{card.repo}</span>
           {card.at ? ` on ${shortDate(card.at, nowMs)}` : ""}
         </div>
-        <div className="mt-1 text-[14px] font-semibold leading-snug text-fg">
+        {/* Title + number are ONE link, exactly as github.com draws it. `tabIndex={-1}` for the same
+            reason as the commit card's: the panel is aria-hidden, so nothing in it may take focus. */}
+        <a
+          data-gh-title
+          href={card.url}
+          target="_blank"
+          rel="noreferrer noopener"
+          tabIndex={-1}
+          className="mt-1 block text-[14px] font-semibold leading-snug text-fg hover:underline"
+        >
           {card.title} <span className="font-normal text-muted">{number}</span>
-        </div>
+        </a>
         <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2">
           <StatePill card={card} />
           {hasDiff ? <Diffstat additions={card.additions!} deletions={card.deletions!} /> : null}

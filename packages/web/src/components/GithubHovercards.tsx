@@ -45,7 +45,8 @@ export function GithubHovercards() {
   const openTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
   const closeTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
   // Set while the pointer is inside the card itself, so leaving the LINK does not close a card the
-  // reader has moved into (to click a label, or just to finish reading the excerpt).
+  // reader has moved into (to click the title through to GitHub, or just to finish reading the
+  // excerpt).
   const overCard = useRef(false)
 
   const clearTimers = useCallback(() => {
