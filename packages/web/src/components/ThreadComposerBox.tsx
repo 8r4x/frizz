@@ -3,7 +3,7 @@ import { useSnapshot } from "valtio"
 import type { Backend, ThreadSkill } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { restoreContextItems, store, takeContextItems } from "../store.ts"
-import { buildMessageWithContext, markerToken } from "../lib/composerContext.ts"
+import { buildMessageWithContext, hasToken } from "../lib/composerContext.ts"
 import { splitComposerValue } from "../lib/imagePaths.ts"
 import { useThreadComposerControls } from "../hooks/useThreadComposerControls.tsx"
 import { Composer } from "./Composer.tsx"
@@ -90,17 +90,17 @@ export function ThreadComposerBox({
   const slashSuggest = useMemo(() => () => fetchThreadSkills(slug), [slug])
   const [logoutFor, setLogoutFor] = useState<Backend | null>(null)
 
-  // The ⌘I roster and its markers. DELETING A TOKEN IS THE REMOVAL GESTURE: whenever the draft or
-  // the roster changes, any staged item whose `[^N]` no longer appears in the prose is dropped — so
-  // backspacing a reference out of the text retires its chip, exactly as the chip's × strips the
+  // The ⌘I roster and its tokens. DELETING A TOKEN IS THE REMOVAL GESTURE: whenever the draft or
+  // the roster changes, any staged item whose `@` token no longer appears in the prose is dropped —
+  // so backspacing a reference out of the text retires its chip, exactly as the chip's × strips the
   // reference out of the text. Terminates: the write only fires when something is actually dropped.
   const stagedContext = snap.composerContext[slug]
-  const contextMarkers = useMemo(() => stagedContext?.map((item) => item.marker) ?? [], [stagedContext])
+  const contextTokens = useMemo(() => stagedContext?.map((item) => item.token) ?? [], [stagedContext])
   useEffect(() => {
     const items = store.composerContext[slug]
     if (!items?.length) return
     const { prose } = splitComposerValue(message)
-    const kept = items.filter((item) => prose.includes(markerToken(item.marker)))
+    const kept = items.filter((item) => hasToken(prose, item.token))
     if (kept.length !== items.length) store.composerContext[slug] = kept
   }, [slug, message, stagedContext])
 
@@ -151,7 +151,7 @@ export function ThreadComposerBox({
     >
       <Composer
         context={<ComposerContextChips slug={slug} />}
-        contextMarkers={contextMarkers}
+        contextTokens={contextTokens}
         id={id}
         surface={surface}
         value={message}

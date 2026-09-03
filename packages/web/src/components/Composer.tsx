@@ -3,6 +3,7 @@ import { ArrowUp, FileText, Loader2, Paperclip, X } from "lucide-react"
 import { ATTACHMENT_ACCEPT, ATTACHMENT_MAX_BYTES, isAllowedAttachmentName, type ThreadSkill } from "@frizz/shared"
 import { showToast } from "../store.ts"
 import { joinComposerValue, splitComposerValue } from "../lib/imagePaths.ts"
+import { splitProseByTokens } from "../lib/composerContext.ts"
 import { shouldInterruptSubmitComposerEnter, shouldRestoreOptionEnterNewline, shouldSubmitComposerEnter } from "../lib/composerKeyboard.ts"
 import { queueComposerHandlesOptionEnter } from "../lib/queueComposerKeyboard.ts"
 import { RAIL_ACTION_OFFSET, RAIL_PAPERCLIP_OFFSET, RAIL_PAPERCLIP_PLAIN_OFFSET, RAIL_RESERVE_PLAIN, RAIL_RESERVE_WITH_ACTION, RAIL_SEND_OFFSET } from "../lib/iconRhythm.ts"
@@ -56,14 +57,15 @@ const SKILL_SOURCE_LABEL: Record<NonNullable<ThreadSkill["source"]>, string> = {
   plugin: "plugin",
 }
 
-// A staged context reference in the prose: the literal `[^N]` token the ⌘I flow splices in at the
-// caret (lib/composerContext.ts). The BACKDROP below paints a pill behind each staged token — the
-// token itself is ordinary textarea text, which is what lets it sit at ANY position in the prose,
-// wrap with it, and be edited like text (the previous chips-in-an-overlay system could only open the
-// first line, which put every reference at the box's start regardless of the caret — maintainer
-// 2026-09-02: "the context chip still shows up at the beginning of the prompt box instead of where
-// the cursor currently exists").
-const MARKER_SPLIT_RE = /(\[\^\d+\])/
+// A staged context reference in the prose is the literal `@guide.md:3` token the ⌘I flow splices in
+// at the caret (lib/composerContext.ts) — the chip's own label, so the text reads as the chip. The
+// BACKDROP below paints the pill behind each staged token; the token itself is ordinary textarea
+// text, which is what lets it sit at ANY position in the prose, wrap with it, and be edited like
+// text (the previous chips-in-an-overlay system could only open the first line, which put every
+// reference at the box's start regardless of the caret — maintainer 2026-09-02: "the context chip
+// still shows up at the beginning of the prompt box instead of where the cursor currently exists";
+// a numbered `[^1]` in between read as plumbing — 2026-09-03: "worse than just rendering the chip
+// inline").
 
 // Auto-grow: reset to auto, then snap to content height clamped at maxHeight.
 function snapHeight(el: HTMLTextAreaElement, maxHeight: number): void {
@@ -85,7 +87,7 @@ export function Composer({
   footer,
   leftAction,
   context,
-  contextMarkers,
+  contextTokens,
   slashSuggest,
   onInterruptSubmit,
 }: {
@@ -108,15 +110,15 @@ export function Composer({
   footer?: React.ReactNode
   // STAGED CONTEXT — the ⌘I selection legend (ThreadComposerBox passes ComposerContextChips),
   // rendered as a wrap row along the box's bottom edge beside the attachment tiles: one removable
-  // chip per staged item naming its `[^N]` reference and file. The references themselves live IN THE
-  // PROSE as text (see MARKER_SPLIT_RE above) — chips-in-an-overlay on the first line was the
+  // chip per staged item wearing the same label as its `@` reference. The references themselves live
+  // IN THE PROSE as text (see the note above) — chips-in-an-overlay on the first line was the
   // previous design, and it pinned every reference to the box's start regardless of the caret.
   // Renders nothing when nothing is staged.
   context?: React.ReactNode
-  // The `[^N]` numbers currently staged on this thread. Drives the backdrop pill behind each staged
-  // token in the prose (an unstaged `[^9]` the user happened to type stays plain text) and the
+  // The `@` tokens currently staged on this thread. Drives the backdrop pill behind each staged
+  // token in the prose (an unstaged `@thing` the user happened to type stays plain text) and the
   // atomic Backspace that deletes a whole token. Order-irrelevant; empty/omitted disables both.
-  contextMarkers?: number[]
+  contextTokens?: string[]
   // A small action rendered just LEFT of the send button (the dispatch composer's GitHub-picker icon).
   // Only surfaces that pass it get it; reply/queue composers omit it.
   leftAction?: React.ReactNode
@@ -283,31 +285,31 @@ export function Composer({
     // fonts.ready hook on every one of those renders for zero layout change.
   }, [value, maxHeight, Boolean(footer)])
 
-  // THE MARKER BACKDROP: a metrics-identical mirror of the prose, absolutely positioned behind the
+  // THE TOKEN BACKDROP: a metrics-identical mirror of the prose, absolutely positioned behind the
   // (transparent-backgrounded) textarea, in which everything renders as TRANSPARENT text except that
-  // each staged `[^N]` token gets a pill background. Because the mirror carries the same font,
+  // each staged `@` token gets a pill background. Because the mirror carries the same font,
   // padding, line height and wrapping as the textarea, the pill lands exactly under the token
   // wherever it sits — any line, any wrap — which is the whole trick: the pill is paint, the token is
   // text, and the textarea keeps owning editing, caret and selection. The pill decorations are
   // strictly zero-layout (background, box-shadow ring, and `-mx`/`px` pairs that cancel) so the
   // mirror's advance widths can never drift from the textarea's.
-  const stagedMarkers = useMemo(() => new Set(contextMarkers ?? []), [contextMarkers])
+  const stagedTokens = useMemo(() => contextTokens ?? [], [contextTokens])
   const backdropSegments = useMemo(() => {
-    if (stagedMarkers.size === 0) return null
-    const parts = prose.split(MARKER_SPLIT_RE)
-    if (!parts.some((part, i) => i % 2 === 1 && stagedMarkers.has(Number(part.slice(2, -1))))) return null
-    return parts.map((part, i) =>
-      i % 2 === 1 && stagedMarkers.has(Number(part.slice(2, -1))) ? (
+    if (stagedTokens.length === 0) return null
+    const runs = splitProseByTokens(prose, stagedTokens)
+    if (!runs.some((run) => run.token)) return null
+    return runs.map((run, i) =>
+      run.token ? (
         // The vertical pad is free (vertical padding on an inline box never moves layout); the
         // horizontal pad is bought back by the negative margin so the advance width is untouched.
         <span key={i} className="rounded bg-panel-2 py-0.5 -mx-0.5 px-0.5 ring-1 ring-inset ring-border">
-          {part}
+          {run.text}
         </span>
       ) : (
-        part
+        run.text
       ),
     )
-  }, [prose, stagedMarkers])
+  }, [prose, stagedTokens])
 
   // The mirror rides the textarea's own scroll position (a textarea at maxHeight scrolls its
   // content; the backdrop must pan with it or the pills detach from their tokens).
@@ -457,17 +459,18 @@ export function Composer({
         return
       }
     }
-    // A staged `[^N]` deletes as ONE token — the editor convention for a reference the user placed
+    // A staged `@` token deletes as ONE token — the editor convention for a reference the user placed
     // as a unit. Only a bare Backspace with a collapsed caret sitting immediately after a STAGED
-    // token (a hand-typed `[^9]` is ordinary text); a selection, a modifier, or any other position
-    // keeps native editing. The staged item itself is dropped by the caller's marker-presence sweep
-    // once the token is gone (ThreadComposerBox).
-    if (e.key === "Backspace" && !e.altKey && !e.ctrlKey && !e.metaKey && stagedMarkers.size > 0 && el.selectionStart === el.selectionEnd) {
+    // token (a hand-typed `@thing` is ordinary text); a selection, a modifier, or any other position
+    // keeps native editing. The staged item itself is dropped by the caller's token-presence sweep
+    // once the token is gone (ThreadComposerBox). The run split is the same one the backdrop uses,
+    // so the token that deletes is exactly the one wearing a pill.
+    if (e.key === "Backspace" && !e.altKey && !e.ctrlKey && !e.metaKey && stagedTokens.length > 0 && el.selectionStart === el.selectionEnd) {
       const caret = el.selectionStart
-      const token = el.value.slice(0, caret).match(/\[\^(\d+)\]$/)
-      if (token && stagedMarkers.has(Number(token[1]))) {
+      const last = splitProseByTokens(el.value.slice(0, caret), stagedTokens).at(-1)
+      if (last?.token) {
         e.preventDefault()
-        const start = caret - token[0].length
+        const start = caret - last.text.length
         setProse(el.value.slice(0, start) + el.value.slice(caret))
         requestAnimationFrame(() => el.setSelectionRange(start, start))
         return

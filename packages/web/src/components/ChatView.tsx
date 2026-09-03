@@ -30,7 +30,7 @@ import { fenceStandsFor, registeredStandingAt } from "../lib/questionShadow.ts"
 import { FrizzWake } from "./FrizzWake.tsx"
 import { RecurringPromptLine } from "./RecurringPromptLine.tsx"
 import { LinkifiedText } from "./LinkifiedText.tsx"
-import { contextChipLabel, parseSentContext, type SentContextItem } from "../lib/composerContext.ts"
+import { parseSentContext, splitProseByTokens, tokenLabel, type SentContextItem } from "../lib/composerContext.ts"
 import { AnswersCard } from "./AnswersCard.tsx"
 import { WakeDivider } from "./WakeDivider.tsx"
 import { useLiveAnswering, type LiveAnswering } from "../lib/answering.ts"
@@ -2981,26 +2981,26 @@ function SendMessageCard({ to, summary, body, type, status, durationMs }: { to?:
 
 // The user chat bubble, right-justified — plain and uncapped. Its own component so the unqueue /
 // deliver-now hooks stay out of memoized Message.
-// A sent message that carries ⌘I selected context (lib/composerContext.ts — inline `[^N]` references
-// over footnote definitions) renders as the HUMAN COMPOSED IT: the prose with a chip at each
+// A sent message that carries ⌘I selected context (lib/composerContext.ts — inline `@file:line`
+// references over definitions) renders as the HUMAN COMPOSED IT: the prose with a chip at each
 // reference, and the definitions dump hidden behind them. The serialized text underneath is untouched
 // — this is presentation over the same bytes the worker read (maintainer 2026-09-02: "The chip should
 // also render as a chip once I hit Enter"). Clicking a chip unfolds that item's quote (and comment)
 // under the prose; clicking again, or another chip, folds it. Everything stops propagation because
 // the QUEUED bubble is itself a click target (click-to-unqueue).
 function SentContextBody({ body, items }: { body: string; items: SentContextItem[] }) {
-  const [open, setOpen] = useState<number | null>(null)
-  const byMarker = useMemo(() => new Map(items.map((item) => [item.marker, item])), [items])
-  const openItem = open === null ? undefined : byMarker.get(open)
-  // Split keeps the `[^N]` delimiters at odd indexes; a marker with no definition (one the human
-  // typed by hand) falls through to plain text.
-  const parts = useMemo(() => body.split(/(\[\^\d+\])/), [body])
+  const [open, setOpen] = useState<string | null>(null)
+  const byToken = useMemo(() => new Map(items.map((item) => [item.token, item])), [items])
+  const openItem = open === null ? undefined : byToken.get(open)
+  // The same splitter the composer's backdrop uses, over the DEFINED tokens only — a `@thing` with
+  // no definition (one the human typed by hand) stays plain text.
+  const runs = useMemo(() => splitProseByTokens(body, [...byToken.keys()]), [body, byToken])
   return (
     <>
-      {parts.map((part, i) => {
-        const item = i % 2 === 1 ? byMarker.get(Number(part.slice(2, -1))) : undefined
-        if (!item) return <LinkifiedText key={i} text={part} />
-        const isOpen = open === item.marker
+      {runs.map((run, i) => {
+        const item = run.token ? byToken.get(run.token) : undefined
+        if (!item) return <LinkifiedText key={i} text={run.text} />
+        const isOpen = open === item.token
         return (
           <button
             key={i}
@@ -3009,7 +3009,7 @@ function SentContextBody({ body, items }: { body: string; items: SentContextItem
             aria-expanded={isOpen}
             onClick={(e) => {
               e.stopPropagation()
-              setOpen(isOpen ? null : item.marker)
+              setOpen(isOpen ? null : item.token)
             }}
             onKeyDown={(e) => e.stopPropagation()}
             // Baseline-aligned so the chip reads as part of the sentence; the dark-on-light tints are
@@ -3019,7 +3019,7 @@ function SentContextBody({ body, items }: { body: string; items: SentContextItem
               isOpen ? "border-bg/40 bg-bg/15" : "border-bg/25 bg-bg/[0.08] hover:bg-bg/15"
             }`}
           >
-            <span className="truncate">{contextChipLabel(item)}</span>
+            <span className="truncate">{tokenLabel(item.token)}</span>
           </button>
         )
       })}

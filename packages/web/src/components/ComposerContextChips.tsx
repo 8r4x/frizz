@@ -2,18 +2,18 @@ import { useEffect, useRef, useState, type ReactElement } from "react"
 import { useSnapshot } from "valtio"
 import { MessageSquare, X } from "lucide-react"
 import { removeContextItem, setContextComment, store } from "../store.ts"
-import { contextChipLabel, contextDisplayPath, markerToken, stripMarkerFromProse } from "../lib/composerContext.ts"
+import { contextDisplayPath, stripTokenFromProse, tokenLabel } from "../lib/composerContext.ts"
 import { draftKey, draftStore, useProjectDir, useThreadSessionId } from "../lib/drafts.ts"
 import { joinComposerValue, splitComposerValue } from "../lib/imagePaths.ts"
 
 // The staged SELECTED-CONTEXT items for a thread, as a LEGEND of chips along the prompt box's bottom
-// edge (Composer renders this node in its bottom band, beside the attachment tiles). Each chip names
-// its `[^N]` reference and the file it quotes — the reference itself lives in the PROSE, at whatever
-// position the caret held when ⌘I staged it (see FileViewerPanel and lib/composerContext.ts), so the
-// chips here are the roster, not the anchors. Clicking a chip pops a card above it — the quoted text
-// plus a comment box — so each item can carry a note the way a review comment does. The × removes the
-// item AND its `[^N]` token from the draft; deleting the token in the text removes the chip the same
-// way (ThreadComposerBox's marker sweep). The set serializes into the next send and clears with it.
+// edge (Composer renders this node in its bottom band, beside the attachment tiles). Each chip wears
+// the same `file:line` label as its `@` token in the PROSE — the token, at whatever position the
+// caret held when ⌘I staged it (see FileViewerPanel and lib/composerContext.ts), is the reference;
+// the chips here are the roster, not the anchors. Clicking a chip pops a card above it — the quoted
+// text plus a comment box — so each item can carry a note the way a review comment does. The ×
+// removes the item AND its token from the draft; deleting the token in the text removes the chip the
+// same way (ThreadComposerBox's token sweep). The set serializes into the next send and clears with it.
 export function ComposerContextChips({ slug }: { slug: string }): ReactElement | null {
   const snap = useSnapshot(store)
   const projectDir = useProjectDir()
@@ -21,13 +21,13 @@ export function ComposerContextChips({ slug }: { slug: string }): ReactElement |
   const items = snap.composerContext[slug]
   const [openId, setOpenId] = useState<number | null>(null)
   if (!items?.length) return null
-  const remove = (item: { id: number; marker: number }) => {
+  const remove = (item: { id: number; token: string }) => {
     removeContextItem(slug, item.id)
-    // The token comes out of the draft with the item — a `[^2]` left standing would read as a
-    // reference to nothing (and block its number from ever being reused in this draft).
+    // The token comes out of the draft with the item — an `@guide.md:3` left standing would read as
+    // a reference to nothing.
     const key = draftKey.followUp(projectDir, slug, sessionId)
     const { prose, attachments } = splitComposerValue(draftStore.get(key))
-    const next = stripMarkerFromProse(prose, item.marker)
+    const next = stripTokenFromProse(prose, item.token)
     if (next !== prose) draftStore.set(key, joinComposerValue(next, attachments.map((attachment) => attachment.path)))
   }
   return (
@@ -50,8 +50,7 @@ export function ComposerContextChips({ slug }: { slug: string }): ReactElement |
               title={contextDisplayPath(item.path, projectDir)}
               className="flex min-w-0 items-center gap-1 outline-none"
             >
-              <span className="shrink-0 font-mono-keep text-muted">{markerToken(item.marker)}</span>
-              <span data-context-label className="max-w-48 truncate font-mono-keep">{contextChipLabel(item)}</span>
+              <span data-context-label className="max-w-48 truncate font-mono-keep">{tokenLabel(item.token)}</span>
               {/* The comment marker: only once a note exists, so a bare quote stays a bare chip. */}
               {item.comment?.trim() && <MessageSquare size={10} aria-hidden="true" className="shrink-0 text-muted" />}
             </button>
@@ -62,15 +61,15 @@ export function ComposerContextChips({ slug }: { slug: string }): ReactElement |
                 remove(item)
                 if (isOpen) setOpenId(null)
               }}
-              aria-label={`Remove context ${contextChipLabel(item)}`}
+              aria-label={`Remove context ${tokenLabel(item.token)}`}
               // -mr-[3px] folds the button's own 2px of padding AND most of the X's dead space (lucide's
               // X paints the middle 12 of its 24 units, ~2px of box per side at size 10) into the
               // pill's, so the ✕ ink sits as far from the right border as the label ink does from the
               // left. Read off a dsf-8 scan of the pill's middle band, 2026-08-28: label→left border
               // 6.5px; ✕→right border 7.5px at -mr-0.5, 5.5px at -mr-1, 6.5px at -mr-[3px].
-              // -ml-0.5 is the same correction on the ✕'s LEFT: the marker→label ink gap reads 6.2px
-              // on the shared gap-1, but label→✕ read 8.24px (ink-gaps.mjs, dsf 4, 2026-09-02) —
-              // the ✕'s dead column again — so the pull evens the chip's internal rhythm at ~6.2.
+              // -ml-0.5 is the same correction on the ✕'s LEFT: label→✕ read 8.24px on the bare gap-1
+              // (ink-gaps.mjs, dsf 4, 2026-09-02) — the ✕'s dead column again — against the 6.2–6.5px
+              // every other gap in the pill reads, so the pull lands it at 6.24.
               className="shrink-0 rounded p-0.5 -ml-0.5 -mr-[3px] text-muted transition-colors hover:text-fg"
             >
               <X size={10} strokeWidth={2.5} />

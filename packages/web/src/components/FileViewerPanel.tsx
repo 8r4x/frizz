@@ -9,7 +9,7 @@ import { useLocalFileCodeLinks } from "../lib/localFileCode.ts"
 import { useMarkdownHtml } from "../lib/useMarkdown.ts"
 import { splitFrontmatter } from "../lib/frontmatter.ts"
 import { isLocalMarkdownFile, localFileDir } from "../lib/markdownTargets.ts"
-import { insertMarkerIntoProse, locateInSource, nextMarker } from "../lib/composerContext.ts"
+import { contextChipLabel, insertTokenIntoProse, locateInSource, uniqueToken } from "../lib/composerContext.ts"
 import { Frontmatter, FOOTER_STYLE, OpenAction } from "./MarkdownDrawer.tsx"
 import { SheetHeader } from "./ui/SheetHeader.tsx"
 
@@ -80,14 +80,15 @@ export function FileViewerPanel({ slug, path }: { slug: string; path: string }) 
   const title = resolved.split("/").filter(Boolean).pop() || resolved
 
   // ⌘I / Ctrl-I: stage the current selection (when it lives inside this panel) as a context item —
-  // splicing its `[^N]` footnote reference into the draft AT THE CARET — then FOCUS the composer
+  // splicing its `@file:line` token into the draft AT THE CARET — then FOCUS the composer
   // (maintainer 2026-08-31: "Hit Command-I, which adds the chip. Type immediately into the prompt
   // box."). A textarea keeps its own caret across blur, so the reference lands exactly where the
   // writer was typing (maintainer 2026-09-02: the chip landed "at the beginning of the prompt box
   // instead of where the cursor currently exists"), and prose can interleave with references —
-  // `… [^1] like so, and [^2] like this` — which is what lets the agent tie each comment to its
-  // selection. A bare ⌘I with no selection just focuses the box. Window-level, capture-phase: the
-  // selection owns no focusable element, so a local key handler would never see the chord.
+  // `… @guide.md:3 like so, and @guide.md:16 like this` — which is what lets the agent tie each
+  // comment to its selection. A bare ⌘I with no selection just focuses the box. Window-level,
+  // capture-phase: the selection owns no focusable element, so a local key handler would never see
+  // the chord.
   const projectDir = useProjectDir()
   const sessionId = useThreadSessionId(slug)
   useEffect(() => {
@@ -137,10 +138,12 @@ export function FileViewerPanel({ slug, path }: { slug: string; path: string }) 
       const ta = composerTextarea()
       const key = draftKey.followUp(projectDir, slug, sessionId)
       const { prose, attachments } = splitComposerValue(draftStore.get(key))
-      const marker = nextMarker(prose, store.composerContext[slug] ?? [])
-      const spliced = insertMarkerIntoProse(prose, caretIn(ta, prose), marker)
+      // The token is the chip's own label behind an `@` — what the human reads in the box is the
+      // reference itself, not a number pointing at one.
+      const token = uniqueToken(contextChipLabel({ path: resolved, ...(lines ?? {}) }), store.composerContext[slug] ?? [], prose)
+      const spliced = insertTokenIntoProse(prose, caretIn(ta, prose), token)
       draftStore.set(key, joinComposerValue(spliced.prose, attachments.map((attachment) => attachment.path)))
-      addContextItem(slug, { marker, path: resolved, text, ...(lines ?? {}) })
+      addContextItem(slug, { token, path: resolved, text, ...(lines ?? {}) })
       // Collapsing the selection is the acknowledgment — the reference appearing in the composer is
       // the payload, and a still-highlighted range invites a second ⌘I that would stage a duplicate.
       selection!.removeAllRanges()

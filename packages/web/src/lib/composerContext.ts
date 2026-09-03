@@ -1,19 +1,26 @@
 // SELECTED CONTEXT for a thread's composer — the ⌘I flow. A selection made in the /full file viewer
 // becomes a staged item (file, quoted text, best-effort line range, optional comment) ANCHORED BY A
-// FOOTNOTE MARKER `[^N]` spliced into the draft prose at the caret, and on send the items serialize
-// as footnote definitions under the prose. Markers-in-the-text is the load-bearing part (maintainer
-// 2026-09-02): the human interleaves chip, comment, chip, comment — so the agent can only know which
-// comment refers to which selection if the reference sits at its original position in the prose.
-// Text, not a side-channel: the worker reads the same transcript the human does, an inline `[^1]`
-// reads as the footnote it is, and a quoted block with a file name is something every harness
-// already understands.
+// MENTION TOKEN — `@guide.md:3`, the chip's own label behind an `@` — spliced into the draft prose at
+// the caret, and on send the items serialize as definitions under the prose, keyed by that same
+// token. The token IS the chip: a <textarea> cannot host a pill, so the reference is text the human
+// can read as-is, and the composer paints the pill behind it (Composer's backdrop). The first cut
+// used footnote markers, `[^1]`, and the maintainer read them as plumbing (2026-09-03: "rendering as
+// [^1] looks a little weird … worse than just rendering the chip inline. the footnote structure is an
+// INTERNAL detail") — so nothing numbered reaches the human anywhere now, and the wire carries the
+// same self-describing token the composer shows. Tokens-in-the-text is the load-bearing part
+// (2026-09-02): the human interleaves chip, comment, chip, comment, and the agent can only know
+// which comment refers to which selection if the reference sits at its original position. Text, not
+// a side-channel: the worker reads the same transcript the human does, and `@file:line` beside a
+// quoted block is the shape every coding agent already uses (see the prior-art report in the
+// dispatching thread's scratch directory — Zed, Copilot and Claude Code all key an inline mention
+// to a grouped tail this way).
 
 import { joinComposerValue, splitComposerValue } from "./imagePaths.ts"
 
 export interface ComposerContextItem {
   id: number
-  /** The footnote number anchoring this item: the `[^N]` token spliced into the draft prose. */
-  marker: number
+  /** The mention token anchoring this item in the draft prose: `@` + the chip label (+ `#n` when a duplicate). */
+  token: string
   /** Absolute path of the file the selection came from (the panel's canonical path). */
   path: string
   /** The selected text, verbatim. */
@@ -25,47 +32,92 @@ export interface ComposerContextItem {
   comment?: string
 }
 
-/** The literal token a marker renders as in the prose. */
-export function markerToken(marker: number): string {
-  return `[^${marker}]`
+/** The chip label a context item wears everywhere: `basename:12` / `basename:3-9` / `basename`. */
+export function contextChipLabel(item: { display?: string; path?: string; startLine?: number; endLine?: number }): string {
+  const source = item.display ?? item.path ?? ""
+  const base = source.split("/").filter(Boolean).pop() || source
+  if (item.startLine === undefined || item.endLine === undefined) return base
+  return item.startLine === item.endLine ? `${base}:${item.startLine}` : `${base}:${item.startLine}-${item.endLine}`
 }
 
-const MARKER_RE = /\[\^(\d+)\]/g
+/** The label a token shows: the token without its `@`. */
+export function tokenLabel(token: string): string {
+  return token.startsWith("@") ? token.slice(1) : token
+}
 
-/**
- * The next free footnote number: one past the highest `[^N]` visible in the prose OR staged on the
- * thread. The prose scan matters — after a failed-send restore or a hand-typed marker, reusing a
- * number would fuse two references into one.
- */
-export function nextMarker(prose: string, staged: readonly { marker: number }[]): number {
-  let max = 0
-  for (const item of staged) max = Math.max(max, item.marker)
-  for (const match of prose.matchAll(MARKER_RE)) max = Math.max(max, Number(match[1]))
-  return max + 1
+function escapeRe(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+}
+
+// A token ends where its label does: the next character may not extend it. `@a.md:3` must not
+// match inside `@a.md:30`, `@a.md:3-4` or `@a.md:3#2`; ordinary punctuation after it (`@a.md:3.`,
+// `@a.md:3,`) is the sentence's, not the token's.
+const TOKEN_BOUNDARY = "(?![0-9#]|-\\d)"
+
+/** Whether the prose carries this token as a whole reference (not as the prefix of a longer one). */
+export function hasToken(prose: string, token: string): boolean {
+  return new RegExp(escapeRe(token) + TOKEN_BOUNDARY).test(prose)
+}
+
+/** The first position of the token in the prose as a whole reference, or -1. */
+export function tokenIndex(prose: string, token: string): number {
+  const match = new RegExp(escapeRe(token) + TOKEN_BOUNDARY).exec(prose)
+  return match ? match.index : -1
 }
 
 /**
- * Splice `[^N]` into the prose at the caret, padding with a space on either side it would otherwise
- * glue to a word. Returns the new prose and the caret to restore — after the marker but before any
- * trailing pad, so typing straight on reads `[^1] comment` without a double space.
+ * The token for a fresh selection: `@` + its chip label, made unique against the tokens already
+ * staged or already in the prose (`@guide.md:3#2` for a second selection on the same line — two
+ * references must never fuse, and a hand-typed twin must not be mistaken for the staged one).
  */
-export function insertMarkerIntoProse(prose: string, caret: number, marker: number): { prose: string; caret: number } {
+export function uniqueToken(label: string, staged: readonly { token: string }[], prose: string): string {
+  const base = `@${label}`
+  const taken = (candidate: string) => staged.some((item) => item.token === candidate) || hasToken(prose, candidate)
+  if (!taken(base)) return base
+  for (let n = 2; ; n++) if (!taken(`${base}#${n}`)) return `${base}#${n}`
+}
+
+/**
+ * Splice a token into the prose at the caret, padding with a space on either side it would otherwise
+ * glue to a word. Returns the new prose and the caret to restore — after the token but before any
+ * trailing pad, so typing straight on reads `@guide.md:3 comment` without a double space.
+ */
+export function insertTokenIntoProse(prose: string, caret: number, token: string): { prose: string; caret: number } {
   const at = Math.max(0, Math.min(caret, prose.length))
   const before = prose.slice(0, at)
   const after = prose.slice(at)
   const lead = before && !/\s$/.test(before) ? " " : ""
   const trail = after && !/^\s/.test(after) ? " " : ""
-  const token = markerToken(marker)
   return { prose: `${before}${lead}${token}${trail}${after}`, caret: at + lead.length + token.length }
 }
 
 /**
- * Delete a marker's token from the prose (every occurrence, defensively), folding the spacing the
- * insert added so `a [^1] b` comes back as `a b`.
+ * Delete a token from the prose (every whole occurrence, defensively), folding the spacing the insert
+ * added so `a @guide.md:3 b` comes back as `a b`.
  */
-export function stripMarkerFromProse(prose: string, marker: number): string {
-  const token = markerToken(marker).replace(/[[\]^]/g, "\\$&")
-  return prose.replace(new RegExp(`( ?)${token}( ?)`, "g"), (_, lead: string, trail: string) => (lead && trail ? " " : ""))
+export function stripTokenFromProse(prose: string, token: string): string {
+  return prose.replace(new RegExp(`( ?)${escapeRe(token)}${TOKEN_BOUNDARY}( ?)`, "g"), (_, lead: string, trail: string) => (lead && trail ? " " : ""))
+}
+
+/**
+ * Cut prose into runs of plain text and whole staged tokens, in order — the ONE splitter the
+ * composer's backdrop and the transcript's chips both use, so a reference is a pill in exactly the
+ * same places on both surfaces. Longer tokens match first so `@a.md:3#2` is never read as
+ * `@a.md:3` + `#2`. An empty token set yields the prose as one plain run.
+ */
+export function splitProseByTokens(prose: string, tokens: readonly string[]): { text: string; token?: string }[] {
+  if (!tokens.length || !prose) return prose ? [{ text: prose }] : []
+  const alternation = [...new Set(tokens)].sort((a, b) => b.length - a.length).map(escapeRe).join("|")
+  const re = new RegExp(`(${alternation})${TOKEN_BOUNDARY}`, "g")
+  const runs: { text: string; token?: string }[] = []
+  let last = 0
+  for (const match of prose.matchAll(re)) {
+    if (match.index > last) runs.push({ text: prose.slice(last, match.index) })
+    runs.push({ text: match[0], token: match[0] })
+    last = match.index + match[0].length
+  }
+  if (last < prose.length) runs.push({ text: prose.slice(last) })
+  return runs
 }
 
 /**
@@ -120,29 +172,31 @@ export function contextDisplayPath(path: string, projectDir?: string | null): st
 
 function lineLabel(item: { startLine?: number; endLine?: number }): string {
   if (item.startLine === undefined || item.endLine === undefined) return ""
-  return item.startLine === item.endLine ? ` (line ${item.startLine})` : ` (lines ${item.startLine}-${item.endLine})`
+  return item.startLine === item.endLine ? `, line ${item.startLine}` : `, lines ${item.startLine}-${item.endLine}`
 }
 
 /**
- * The agent-facing serialization: one footnote DEFINITION per item — `[^N]: path (line L):` then the
- * selection as a blockquote, comments as plain lines after each quote. The `[^N]` references stay in
- * the prose where the human put them, so the definitions carry the marker rather than a positional
- * index. Blockquotes rather than a fence because the quoted text may itself contain any fence, and
- * because the transcript renders the sent message as markdown — quoted context reads as quotation.
+ * The agent-facing serialization: one DEFINITION per item — `@guide.md:3 (docs/guide.md, line 3):`
+ * then the selection as a blockquote, comments as plain lines after each quote. The `@` tokens stay
+ * in the prose where the human put them, so each definition opens with the very token the sentence
+ * used; the parenthesis spells the path and line range out in full for a reader that does not want
+ * to decode the label. Blockquotes rather than a fence because the quoted text may itself contain
+ * any fence, and because the transcript renders the sent message as markdown — quoted context reads
+ * as quotation.
  */
 export function serializeContextItems(items: ComposerContextItem[], projectDir?: string | null): string {
   if (!items.length) return ""
   const blocks = items.map((item) => {
     const quoted = item.text.replace(/\s+$/, "").split("\n").map((line) => `> ${line}`).join("\n")
     const comment = item.comment?.trim()
-    return `${markerToken(item.marker)}: ${contextDisplayPath(item.path, projectDir)}${lineLabel(item)}:\n${quoted}${comment ? `\n\nComment: ${comment}` : ""}`
+    return `${item.token} (${contextDisplayPath(item.path, projectDir)}${lineLabel(item)}):\n${quoted}${comment ? `\n\nComment: ${comment}` : ""}`
   })
   return `Selected context:\n\n${blocks.join("\n\n")}`
 }
 
 /**
- * Splice the serialized context into an outgoing composer value. Only items whose `[^N]` reference
- * still appears in the prose serialize — deleting the marker text IS the removal gesture. The value's
+ * Splice the serialized context into an outgoing composer value. Only items whose token still
+ * appears in the prose serialize — deleting the token text IS the removal gesture. The value's
  * TRAILING lines may be attachment paths (see imagePaths.ts) which several surfaces detect by their
  * trailing position — context goes after the prose but BEFORE those lines so they stay trailing.
  * Definitions follow the order the references appear in the prose, not staging order.
@@ -150,8 +204,8 @@ export function serializeContextItems(items: ComposerContextItem[], projectDir?:
 export function buildMessageWithContext(value: string, items: ComposerContextItem[], projectDir?: string | null): string {
   const { prose, attachments } = splitComposerValue(value)
   const present = items
-    .filter((item) => prose.includes(markerToken(item.marker)))
-    .sort((a, b) => prose.indexOf(markerToken(a.marker)) - prose.indexOf(markerToken(b.marker)))
+    .filter((item) => hasToken(prose, item.token))
+    .sort((a, b) => tokenIndex(prose, a.token) - tokenIndex(prose, b.token))
   const context = serializeContextItems(present, projectDir)
   if (!context) return value
   const body = prose.trimEnd() ? `${prose.trimEnd()}\n\n${context}` : context
@@ -160,9 +214,10 @@ export function buildMessageWithContext(value: string, items: ComposerContextIte
 
 // ── the receiving side: a SENT message parsed back into prose + items ────────────────────────────
 
-/** One context item recovered from a sent message's serialized footnote definitions. */
+/** One context item recovered from a sent message's serialized definitions. */
 export interface SentContextItem {
-  marker: number
+  /** The mention token, exactly as it appears in the body. */
+  token: string
   /** The path exactly as serialized (project-relative or absolute). */
   display: string
   startLine?: number
@@ -176,32 +231,26 @@ const HEADER = "Selected context:\n\n"
 
 /**
  * Recognize the serialization `buildMessageWithContext` produced inside a SENT message, so the
- * transcript can render the `[^N]` references as chips instead of showing the raw footnote dump.
- * Strict by design: anything that does not parse back exactly — including every pre-marker-era
- * message, whose definitions read `[1] path` — returns null and renders as the plain text it is.
+ * transcript can render the `@` references as chips instead of showing the raw definitions dump.
+ * Strict by design: anything that does not parse back exactly — including every message from the
+ * two earlier formats (`[1] path` and `[^1]: path`) — returns null and renders as the plain text it is.
  */
 export function parseSentContext(prose: string): { body: string; items: SentContextItem[] } | null {
   const at = prose.lastIndexOf(HEADER)
   if (at === -1) return null
   if (at !== 0 && prose.slice(at - 2, at) !== "\n\n") return null
   const body = prose.slice(0, Math.max(0, at - 2))
-  // Definition blocks are separated by a blank line followed by the next `[^N]: ` head — a comment
+  // Definition blocks are separated by a blank line followed by the next `@token (` head — a comment
   // paragraph inside a block also follows a blank line, so split on the lookahead, not on `\n\n`.
-  const blocks = prose.slice(at + HEADER.length).split(/\n\n(?=\[\^\d+\]: )/)
+  const blocks = prose.slice(at + HEADER.length).split(/\n\n(?=@\S+ \()/)
   const items: SentContextItem[] = []
   for (const block of blocks) {
     const lines = block.split("\n")
-    const head = lines[0]?.match(/^\[\^(\d+)\]: (.+):$/)
+    const head = lines[0]?.match(/^(@\S+) \((.+?)(?:, line (\d+)|, lines (\d+)-(\d+))?\):$/)
     if (!head) return null
-    let display = head[2]
-    let startLine: number | undefined
-    let endLine: number | undefined
-    const range = display.match(/ \((?:line (\d+)|lines (\d+)-(\d+))\)$/)
-    if (range) {
-      display = display.slice(0, -range[0].length)
-      startLine = Number(range[1] ?? range[2])
-      endLine = Number(range[1] ?? range[3])
-    }
+    const display = head[2]
+    const startLine = head[3] !== undefined ? Number(head[3]) : head[4] !== undefined ? Number(head[4]) : undefined
+    const endLine = head[3] !== undefined ? Number(head[3]) : head[5] !== undefined ? Number(head[5]) : undefined
     let i = 1
     const quote: string[] = []
     for (; i < lines.length && lines[i].startsWith(">"); i++) quote.push(lines[i].replace(/^> ?/, ""))
@@ -211,19 +260,11 @@ export function parseSentContext(prose: string): { body: string; items: SentCont
       if (lines[i] !== "" || !lines[i + 1]?.startsWith("Comment: ")) return null
       comment = lines.slice(i + 1).join("\n").slice("Comment: ".length)
     }
-    items.push({ marker: Number(head[1]), display, startLine, endLine, text: quote.join("\n"), comment })
+    items.push({ token: head[1], display, startLine, endLine, text: quote.join("\n"), comment })
   }
   if (!items.length) return null
   // The references must actually be in the body — a message that merely QUOTES a serialization (an
   // agent echoing one back, a human pasting one) keeps its honest plain-text rendering.
-  if (!items.every((item) => body.includes(markerToken(item.marker)))) return null
+  if (!items.every((item) => hasToken(body, item.token))) return null
   return { body, items }
-}
-
-/** The chip label a context item wears everywhere: `basename:12` / `basename:3-9` / `basename`. */
-export function contextChipLabel(item: { display?: string; path?: string; startLine?: number; endLine?: number }): string {
-  const source = item.display ?? item.path ?? ""
-  const base = source.split("/").filter(Boolean).pop() || source
-  if (item.startLine === undefined || item.endLine === undefined) return base
-  return item.startLine === item.endLine ? `${base}:${item.startLine}` : `${base}:${item.startLine}-${item.endLine}`
 }

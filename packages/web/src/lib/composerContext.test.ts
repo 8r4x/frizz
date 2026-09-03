@@ -4,16 +4,19 @@ import {
   buildMessageWithContext,
   contextChipLabel,
   contextDisplayPath,
-  insertMarkerIntoProse,
+  hasToken,
+  insertTokenIntoProse,
   locateInSource,
-  nextMarker,
   parseSentContext,
   serializeContextItems,
-  stripMarkerFromProse,
+  splitProseByTokens,
+  stripTokenFromProse,
+  tokenLabel,
+  uniqueToken,
   type ComposerContextItem,
 } from "./composerContext.ts"
 
-const item = (over: Partial<ComposerContextItem>): ComposerContextItem => ({ id: 1, marker: 1, path: "/repo/docs/guide.md", text: "some text", ...over })
+const item = (over: Partial<ComposerContextItem>): ComposerContextItem => ({ id: 1, token: "@guide.md:3", path: "/repo/docs/guide.md", text: "some text", startLine: 3, endLine: 3, ...over })
 
 test("a unique selection maps to its 1-based line range, whitespace-insensitively", () => {
   const source = "# Title\n\nFirst paragraph line one\ncontinues on line four.\n\nAnother paragraph.\n"
@@ -36,53 +39,81 @@ test("paths under the project display relative; others stay absolute", () => {
   assert.equal(contextDisplayPath("/repo/docs/guide.md", null), "/repo/docs/guide.md")
 })
 
-test("the next marker climbs past both the staged set and any token already in the prose", () => {
-  assert.equal(nextMarker("", []), 1)
-  assert.equal(nextMarker("plain prose", [{ marker: 2 }]), 3)
-  // A restored or hand-typed [^5] must never be reissued, or two references fuse.
-  assert.equal(nextMarker("see [^5] here", [{ marker: 2 }]), 6)
+test("the chip label is basename plus a compact line range, and the token is that label behind an @", () => {
+  assert.equal(contextChipLabel({ display: "docs/guide.md", startLine: 3, endLine: 4 }), "guide.md:3-4")
+  assert.equal(contextChipLabel({ path: "/repo/docs/guide.md", startLine: 2, endLine: 2 }), "guide.md:2")
+  assert.equal(contextChipLabel({ display: "docs/guide.md" }), "guide.md")
+  assert.equal(tokenLabel("@guide.md:3#2"), "guide.md:3#2")
 })
 
-test("a marker splices at the caret, padding only the sides that would glue to a word", () => {
-  assert.deepEqual(insertMarkerIntoProse("", 0, 1), { prose: "[^1]", caret: 4 })
-  assert.deepEqual(insertMarkerIntoProse("note.", 5, 1), { prose: "note. [^1]", caret: 10 })
-  // Mid-word: padded on both sides, caret before the trailing pad so typing on reads `[^1] x`.
-  assert.deepEqual(insertMarkerIntoProse("ab", 1, 2), { prose: "a [^2] b", caret: 6 })
-  // Already-spaced neighbourhood takes no extra padding on the spaced side.
-  assert.deepEqual(insertMarkerIntoProse("a b", 2, 1), { prose: "a [^1] b", caret: 6 })
+test("a token is unique against the staged set and the prose, by a #n suffix", () => {
+  assert.equal(uniqueToken("guide.md:3", [], ""), "@guide.md:3")
+  assert.equal(uniqueToken("guide.md:3", [{ token: "@guide.md:3" }], ""), "@guide.md:3#2")
+  // A hand-typed twin in the prose must not be mistaken for the staged reference.
+  assert.equal(uniqueToken("guide.md:3", [{ token: "@guide.md:3" }], "see @guide.md:3#2 too"), "@guide.md:3#3")
+})
+
+test("a token is only found as a whole reference", () => {
+  assert.equal(hasToken("see @guide.md:3.", "@guide.md:3"), true)
+  assert.equal(hasToken("see @guide.md:30", "@guide.md:3"), false)
+  assert.equal(hasToken("see @guide.md:3-4", "@guide.md:3"), false)
+  assert.equal(hasToken("see @guide.md:3#2", "@guide.md:3"), false)
+})
+
+test("a token splices at the caret, padding only the sides that would glue to a word", () => {
+  assert.deepEqual(insertTokenIntoProse("", 0, "@a.md:1"), { prose: "@a.md:1", caret: 7 })
+  assert.deepEqual(insertTokenIntoProse("note.", 5, "@a.md:1"), { prose: "note. @a.md:1", caret: 13 })
+  // Mid-word: padded on both sides, caret before the trailing pad so typing on reads `@a.md:1 x`.
+  assert.deepEqual(insertTokenIntoProse("ab", 1, "@a.md:1"), { prose: "a @a.md:1 b", caret: 9 })
+  // An already-spaced side takes no extra padding.
+  assert.deepEqual(insertTokenIntoProse("a b", 2, "@a.md:1"), { prose: "a @a.md:1 b", caret: 9 })
   // An out-of-range caret clamps to the end.
-  assert.deepEqual(insertMarkerIntoProse("hi", 99, 1), { prose: "hi [^1]", caret: 7 })
+  assert.deepEqual(insertTokenIntoProse("hi", 99, "@a.md:1"), { prose: "hi @a.md:1", caret: 10 })
 })
 
-test("stripping a marker folds the spacing its insert added", () => {
-  assert.equal(stripMarkerFromProse("a [^1] b", 1), "a b")
-  assert.equal(stripMarkerFromProse("[^1] lead", 1), "lead")
-  assert.equal(stripMarkerFromProse("tail [^1]", 1), "tail")
-  assert.equal(stripMarkerFromProse("a [^12] b", 1), "a [^12] b")
+test("stripping a token folds the spacing its insert added, and leaves longer tokens alone", () => {
+  assert.equal(stripTokenFromProse("a @a.md:1 b", "@a.md:1"), "a b")
+  assert.equal(stripTokenFromProse("@a.md:1 lead", "@a.md:1"), "lead")
+  assert.equal(stripTokenFromProse("tail @a.md:1", "@a.md:1"), "tail")
+  assert.equal(stripTokenFromProse("a @a.md:12 b", "@a.md:1"), "a @a.md:12 b")
 })
 
-test("serialization defines each footnote, quotes every line, and carries the comment", () => {
-  const out = serializeContextItems([item({ text: "line a\nline b", startLine: 3, endLine: 4, comment: "why is this here?" })], "/repo")
-  assert.equal(out, "Selected context:\n\n" + "[^1]: docs/guide.md (lines 3-4):\n> line a\n> line b\n\nComment: why is this here?")
+test("the splitter cuts prose into plain runs and whole staged tokens, longest token first", () => {
+  assert.deepEqual(splitProseByTokens("x @a.md:1 y @a.md:1#2.", ["@a.md:1", "@a.md:1#2"]), [
+    { text: "x " },
+    { text: "@a.md:1", token: "@a.md:1" },
+    { text: " y " },
+    { text: "@a.md:1#2", token: "@a.md:1#2" },
+    { text: "." },
+  ])
+  // An unstaged twin and a longer sibling both stay plain.
+  assert.deepEqual(splitProseByTokens("@a.md:10 and @b.md", ["@a.md:1"]), [{ text: "@a.md:10 and @b.md" }])
+  assert.deepEqual(splitProseByTokens("plain", []), [{ text: "plain" }])
+  assert.deepEqual(splitProseByTokens("", ["@a.md:1"]), [])
 })
 
-test("multiple items keep their own markers; a single line reads as one line; no comment, no Comment line", () => {
+test("serialization defines each token, quotes every line, and carries the comment", () => {
+  const out = serializeContextItems([item({ token: "@guide.md:3-4", text: "line a\nline b", startLine: 3, endLine: 4, comment: "why is this here?" })], "/repo")
+  assert.equal(out, "Selected context:\n\n" + "@guide.md:3-4 (docs/guide.md, lines 3-4):\n> line a\n> line b\n\nComment: why is this here?")
+})
+
+test("a single line reads as one line, no lines reads as the bare path, and no comment means no Comment line", () => {
   const out = serializeContextItems(
-    [item({ text: "a", startLine: 2, endLine: 2 }), item({ id: 2, marker: 2, text: "b" })],
+    [item({ text: "a" }), item({ id: 2, token: "@guide.md", text: "b", startLine: undefined, endLine: undefined })],
     "/repo",
   )
-  assert.equal(out, "Selected context:\n\n[^1]: docs/guide.md (line 2):\n> a\n\n[^2]: docs/guide.md:\n> b")
+  assert.equal(out, "Selected context:\n\n@guide.md:3 (docs/guide.md, line 3):\n> a\n\n@guide.md (docs/guide.md):\n> b")
 })
 
 test("context is spliced after the prose but before trailing attachment paths", () => {
-  const value = "Look at this [^1]\n/tmp/shot.png"
+  const value = "Look at this @guide.md:3\n/tmp/shot.png"
   const out = buildMessageWithContext(value, [item({ text: "quoted" })], "/repo")
-  assert.equal(out, "Look at this [^1]\n\nSelected context:\n\n[^1]: docs/guide.md:\n> quoted\n/tmp/shot.png")
+  assert.equal(out, "Look at this @guide.md:3\n\nSelected context:\n\n@guide.md:3 (docs/guide.md, line 3):\n> quoted\n/tmp/shot.png")
 })
 
 test("an item whose reference was deleted from the prose is dropped, and definitions follow prose order", () => {
-  const out = buildMessageWithContext("second [^2] then first [^1]", [item({}), item({ id: 2, marker: 2, text: "other" })], "/repo")
-  assert.equal(out, "second [^2] then first [^1]\n\nSelected context:\n\n[^2]: docs/guide.md:\n> other\n\n[^1]: docs/guide.md:\n> some text")
+  const out = buildMessageWithContext("second @guide.md:9 then first @guide.md:3", [item({}), item({ id: 2, token: "@guide.md:9", text: "other", startLine: 9, endLine: 9 })], "/repo")
+  assert.equal(out, "second @guide.md:9 then first @guide.md:3\n\nSelected context:\n\n@guide.md:9 (docs/guide.md, line 9):\n> other\n\n@guide.md:3 (docs/guide.md, line 3):\n> some text")
   assert.equal(buildMessageWithContext("no references here", [item({})], "/repo"), "no references here")
 })
 
@@ -92,31 +123,29 @@ test("with no staged items the value passes through untouched", () => {
 
 test("a sent message parses back into its body and items", () => {
   const sent = buildMessageWithContext(
-    "Fix this [^1] and mind the note [^2] please",
-    [item({ text: "line a\nline b", startLine: 3, endLine: 4 }), item({ id: 2, marker: 2, text: "quoted", startLine: 9, endLine: 9, comment: "careful" })],
+    "Fix this @guide.md:3-4 and mind the note @guide.md:9 please",
+    [item({ token: "@guide.md:3-4", text: "line a\nline b", startLine: 3, endLine: 4 }), item({ id: 2, token: "@guide.md:9", text: "quoted", startLine: 9, endLine: 9, comment: "careful" })],
     "/repo",
   )
   const parsed = parseSentContext(sent)
   assert.ok(parsed)
-  assert.equal(parsed.body, "Fix this [^1] and mind the note [^2] please")
+  assert.equal(parsed.body, "Fix this @guide.md:3-4 and mind the note @guide.md:9 please")
   assert.deepEqual(parsed.items, [
-    { marker: 1, display: "docs/guide.md", startLine: 3, endLine: 4, text: "line a\nline b", comment: undefined },
-    { marker: 2, display: "docs/guide.md", startLine: 9, endLine: 9, text: "quoted", comment: "careful" },
+    { token: "@guide.md:3-4", display: "docs/guide.md", startLine: 3, endLine: 4, text: "line a\nline b", comment: undefined },
+    { token: "@guide.md:9", display: "docs/guide.md", startLine: 9, endLine: 9, text: "quoted", comment: "careful" },
   ])
+  // A definition with no line range parses too.
+  const bare = parseSentContext("see @guide.md\n\nSelected context:\n\n@guide.md (docs/guide.md):\n> q")
+  assert.deepEqual(bare?.items, [{ token: "@guide.md", display: "docs/guide.md", startLine: undefined, endLine: undefined, text: "q", comment: undefined }])
 })
 
 test("what is not the serialization renders as the plain text it is", () => {
-  // The pre-marker era's format ([1], no definitions) must not half-parse.
+  // The two earlier formats must not half-parse.
   assert.equal(parseSentContext("notes\n\nSelected context:\n\n[1] docs/guide.md:\n> old style"), null)
+  assert.equal(parseSentContext("notes [^1]\n\nSelected context:\n\n[^1]: docs/guide.md (line 3):\n> footnote era"), null)
   // A definition whose reference is missing from the body is someone quoting the format, not sending it.
-  assert.equal(parseSentContext("no reference\n\nSelected context:\n\n[^1]: docs/guide.md:\n> quoted"), null)
+  assert.equal(parseSentContext("no reference\n\nSelected context:\n\n@guide.md:3 (docs/guide.md, line 3):\n> quoted"), null)
   // The header mid-sentence is prose.
-  assert.equal(parseSentContext("about Selected context:\n\n[^1]: docs/guide.md:\n> q"), null)
+  assert.equal(parseSentContext("about Selected context:\n\n@guide.md:3 (docs/guide.md, line 3):\n> q"), null)
   assert.equal(parseSentContext("plain message"), null)
-})
-
-test("the chip label is basename plus a compact line range", () => {
-  assert.equal(contextChipLabel({ display: "docs/guide.md", startLine: 3, endLine: 4 }), "guide.md:3-4")
-  assert.equal(contextChipLabel({ path: "/repo/docs/guide.md", startLine: 2, endLine: 2 }), "guide.md:2")
-  assert.equal(contextChipLabel({ display: "docs/guide.md" }), "guide.md")
 })
