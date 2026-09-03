@@ -68,7 +68,10 @@ export function ComposerContextChips({ slug }: { slug: string }): ReactElement |
               // pill's, so the ✕ ink sits as far from the right border as the label ink does from the
               // left. Read off a dsf-8 scan of the pill's middle band, 2026-08-28: label→left border
               // 6.5px; ✕→right border 7.5px at -mr-0.5, 5.5px at -mr-1, 6.5px at -mr-[3px].
-              className="shrink-0 rounded p-0.5 -mr-[3px] text-muted transition-colors hover:text-fg"
+              // -ml-0.5 is the same correction on the ✕'s LEFT: the marker→label ink gap reads 6.2px
+              // on the shared gap-1, but label→✕ read 8.24px (ink-gaps.mjs, dsf 4, 2026-09-02) —
+              // the ✕'s dead column again — so the pull evens the chip's internal rhythm at ~6.2.
+              className="shrink-0 rounded p-0.5 -ml-0.5 -mr-[3px] text-muted transition-colors hover:text-fg"
             >
               <X size={10} strokeWidth={2.5} />
             </button>
