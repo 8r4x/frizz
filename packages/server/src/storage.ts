@@ -149,11 +149,13 @@ export interface SessionRow {
   // and rollback-safe until the replacement generation reaches a proven idle composer.
   profile_pending_model?: string | null
   profile_pending_effort?: string | null
-  // When the OPERATOR last set model/effort (ISO). Sibling of permission_set_at: only setProfile (the
-  // codex-only setThreadProfile path) stamps it — never the tailer's observed write-back. The board
-  // prefers the saved model/effort over an older observed turn_context when this is newer, so a codex
-  // model/effort change shows on the composer selector immediately instead of snapping back to the
-  // stale value until the next turn. Null on pre-migration, never-set, and Claude rows.
+  // When the OPERATOR last set model/effort (ISO). Sibling of permission_set_at: only setProfile stamps
+  // it — never the tailer's observed write-back. Its PRESENCE is what separates a chosen pair from an
+  // observed one, and both readers turn on that: the board keeps the composer selector on the pick
+  // (resolveSessionProfile) and the write-back stays off the row entirely (observedProfileIfCurrentStmt).
+  // Both backends' setThreadProfile paths stamp it — the "codex-only" this used to claim was never true
+  // of the shipped router, and reading it that way is what let a claude pick be silently overwritten.
+  // Null on pre-migration rows and on any row whose profile nobody has set by hand.
   profile_set_at?: string | null
   profile_revision?: number
   // Versioned crash journal for an in-flight model/effort reattach. This remains populated while
@@ -1806,9 +1808,11 @@ export function createStorage(source: string | Database, projectId: string): Sto
   const agentSessionStmt = scope.prepare("UPDATE session SET agent_session_id = ? WHERE project_id = @project_id AND slug = ?")
   const codexRuntimeStmt = scope.prepare("UPDATE session SET codex_runtime = ? WHERE project_id = @project_id AND slug = ?")
   const claudeRuntimeStmt = scope.prepare("UPDATE session SET claude_runtime = ? WHERE project_id = @project_id AND slug = ?")
-  // Stamps profile_set_at alongside model/effort: the OPERATOR's set-time (the codex setThreadProfile
-  // path), which the board uses to outrank an older observed turn_context so a just-picked model/effort
-  // shows on the composer selector immediately (see resolveSessionProfile). Sibling of permissionModeStmt.
+  // Stamps profile_set_at alongside model/effort: the OPERATOR's set-time. Both backends' setThreadProfile
+  // paths write through here, and the stamp is what marks the pair as CHOSEN rather than observed — the
+  // board reads it to keep the composer selector on the pick (resolveSessionProfile), and the observed
+  // write-back reads it to stay off a row the operator has claimed (observedProfileIfCurrentStmt, which
+  // carries the account of what happened when it did not). Sibling of permissionModeStmt.
   const profileStmt = scope.prepare("UPDATE session SET model = ?, effort = ?, profile_set_at = ? WHERE project_id = @project_id AND slug = ?")
   // Stamps permission_set_at alongside the mode: this is the OPERATOR's set-time, which the board uses
   // to outrank an older observed telemetry reading (see resolveSessionPermission). The tailer's
@@ -1881,11 +1885,37 @@ export function createStorage(source: string | Database, projectId: string): Sto
       AND profile_revision = ? AND runtime_control = 'profile' AND runtime_control_revision = ?
       AND profile_pending_model = ? AND profile_pending_effort = ? AND profile_handoff IS ?
   `)
+  // ON A CLAUDE ROW THE WRITE-BACK ONLY EVER FILLS IN A PROFILE NOBODY CHOSE — it must never overwrite
+  // one the operator did choose, which is what the `profile_set_at IS NULL OR backend = 'codex'` clause
+  // fences. (`backend = 'codex'` is false for a NULL backend, so a migrated row is treated as claude —
+  // the same `row.backend ?? "claude"` convention every other reader uses.)
+  //
+  // THE ASYMMETRY IS THE WHOLE POINT, and it is about WHEN each backend can honour a pick. Codex takes
+  // model/effort per turn, so the very next turn runs on the new pair and the turn_context it writes is
+  // a true reading of the operator's choice having landed — observed authority is meaningful there, and
+  // the convergence it buys is deliberate (see resolveSessionProfile's tests). Claude fixes them at FORK
+  // time: the SDK takes them at query start, so setThreadProfile persists the intent and a live daemon
+  // goes on running what it was forked with (router.ts, and the bridge's `held ?? attach`). Every record
+  // that daemon writes carries the OLD model and is therefore a reading of a session that STRUCTURALLY
+  // cannot have honoured the pick — converging on it overwrites an instruction with a stale fact.
+  //
+  // Which is what it did, silently, until 2026-09-03: `opus` set on a live thread at 22:36:28 was back
+  // to `fable` before 22:40 (`profile_revision` 0 → 1), and the composer's selector reads the same row,
+  // so the pick simply vanished with nothing said. The identical write to the same thread once it had
+  // stopped emitting held indefinitely — which is the tell that the guard cannot be a timestamp test.
+  // "Skip while the pick is newer than the observation" lapses on the very next record a mid-turn thread
+  // writes, and the clobber lands anyway.
+  //
+  // COST, stated because it is real: on a claude row whose profile was set by hand, a model change frizz
+  // never made and cannot see — a worker's own `/model`, a provider substituting silently — is no longer
+  // learned back. The scheduler's model-scoped fallback is unaffected: it goes through setProfile
+  // (evalLimits), which re-stamps the target rather than needing to be observed.
   const observedProfileIfCurrentStmt = scope.prepare(`
     UPDATE session
     SET model = ?, effort = ?, profile_revision = profile_revision + 1
     WHERE project_id = @project_id AND slug = ? AND session_id = ? AND runtime_generation = ?
       AND runtime_control IS NULL AND profile_pending_model IS NULL AND profile_pending_effort IS NULL
+      AND (profile_set_at IS NULL OR backend = 'codex')
       AND (model IS NOT ? OR effort IS NOT ?)
   `)
   const beginRuntimeGenerationStmt = scope.prepare(`

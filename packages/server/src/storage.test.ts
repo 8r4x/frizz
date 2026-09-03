@@ -902,6 +902,48 @@ test("setProfile stamps the operator set-time; the observed write-back never tou
   assert.equal(s.getSession("pf")?.profile_set_at, setAt, "observed write-back leaves profile_set_at untouched")
 })
 
+test("the observed write-back never overwrites an operator's pick on a claude row, but still converges a codex one", () => {
+  const s = store()
+
+  // CLAUDE: model/effort are fixed at fork time, so a pick is a target for the NEXT fork and the daemon
+  // still running the old model keeps writing records that report it. Those readings must not take the
+  // pick back — which is what they did, silently, until 2026-09-03: `opus` set on a live thread reverted
+  // to `fable` within minutes, and the composer's selector reads the same row, so the pick just vanished.
+  // `backend` is not one of upsertSession's columns — it is its own write, exactly as dispatch does it.
+  s.upsertSession(row({ slug: "cl", model: "fable", effort: "xhigh" }))
+  s.setBackend("cl", "claude")
+  const claude = s.getSession("cl")!
+  const expectClaude = { sessionId: claude.session_id, generation: claude.runtime_generation ?? 0 }
+  assert.equal(
+    s.setObservedProfileIfCurrent("cl", expectClaude, { model: "opus", effort: "high" }),
+    true,
+    "with nobody having chosen, the transcript's reading is the only one there is",
+  )
+
+  s.setProfile("cl", "opus", "xhigh")
+  assert.equal(
+    s.setObservedProfileIfCurrent("cl", expectClaude, { model: "fable", effort: "xhigh" }),
+    false,
+    "the daemon's own reading cannot overwrite the pick made for the next fork",
+  )
+  assert.equal(s.getSession("cl")?.model, "opus")
+  assert.equal(s.getSession("cl")?.effort, "xhigh")
+
+  // CODEX takes model/effort per turn, so the next turn genuinely runs on the pick and the turn_context
+  // it writes is a true reading of that. Convergence there is deliberate — see resolveSessionProfile.
+  s.upsertSession(row({ slug: "cx", session_id: "sid-cx", model: "gpt-5.6-sol", effort: "low" }))
+  s.setBackend("cx", "codex")
+  const codex = s.getSession("cx")!
+  s.setProfile("cx", "gpt-5.6-sol", "low")
+  assert.equal(
+    s.setObservedProfileIfCurrent("cx", { sessionId: codex.session_id, generation: codex.runtime_generation ?? 0 }, { model: "gpt-5.6-sol", effort: "xhigh" }),
+    true,
+    "a codex row still converges on what its turn actually ran with",
+  )
+  assert.equal(s.getSession("cx")?.effort, "xhigh")
+  s.close()
+})
+
 // ---- thread_watch: a worker's registered wait on its own running work (2026-08-26) ----
 //
 // The registry that was retired on 2026-08-14 and is coming back for the reason its own retirement note

@@ -92,6 +92,45 @@ test("resolveSessionProfile: an eager operator model/effort change shows immedia
   )
 })
 
+test("resolveSessionProfile: a claude pick does not converge away, because there is nothing to converge on", () => {
+  const LATEST = "2026-07-09T12:00:00.000Z"
+  const EVEN_LATER = "2026-07-09T13:00:00.000Z"
+
+  // Claude fixes model/effort at FORK time, so a live daemon keeps running what it was forked with and
+  // every record it writes still reports the old model. Converging on those readings is what silently
+  // reverted a just-made pick in the composer seconds after the click (2026-09-03) — the codex rule
+  // above leaking onto a runtime whose next turn cannot honour the pick at all.
+  assert.deepEqual(
+    resolveSessionProfile(
+      row({ backend: "claude", model: "opus", effort: "xhigh", spawned_at: T0, profile_set_at: LATEST }),
+      tele({ model: "fable", effort: "xhigh", profileAt: EVEN_LATER }),
+    ),
+    { model: "opus", effort: "xhigh" },
+    "a newer record from the daemon still running the old model cannot take the pick back",
+  )
+
+  // An UNLABELLED row is claude by the same `row.backend ?? "claude"` convention every other reader uses.
+  assert.deepEqual(
+    resolveSessionProfile(
+      row({ model: "opus", effort: "xhigh", spawned_at: T0, profile_set_at: T0 }),
+      tele({ model: "fable", effort: "high", profileAt: EVEN_LATER }),
+    ),
+    { model: "opus", effort: "xhigh" },
+    "a migrated row with no backend is fenced as claude, not converged as codex",
+  )
+
+  // UNCHANGED where nobody chose: with no set-time the observation is the only reading there is, and it
+  // still supplies a profile the row never pinned.
+  assert.deepEqual(
+    resolveSessionProfile(
+      row({ backend: "claude", model: null, effort: null, spawned_at: T0 }),
+      tele({ model: "fable", effort: "high", profileAt: LATEST }),
+    ),
+    { model: "fable", effort: "high" },
+    "an unchosen claude profile is still filled in from what the transcript reports",
+  )
+})
+
 test("resolveSessionPermission: exposes only a persisted valid per-thread mode; legacy/unknown stays unknown", () => {
   assert.equal(resolveSessionPermission(row({ permission_mode: "bypassPermissions" })), "bypassPermissions")
   assert.equal(resolveSessionPermission(row({ permission_mode: null })), undefined)

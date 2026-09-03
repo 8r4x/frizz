@@ -1081,9 +1081,22 @@ export function resolveSessionProfile(
   // turn_context exists yet and the last one still reports the OLD profile. When the OPERATOR set the
   // profile AFTER that observed reading, prefer the saved intent so the visible composer selector shows
   // the pick immediately; a genuinely newer turn (observedAt > setAt) re-establishes observed authority,
-  // so it converges on its own. Claude never sets profile_set_at (setProfileTargetIfCurrent), so unchanged.
+  // so it converges on its own.
+  //
+  // ON CLAUDE THE PICK NEVER EXPIRES INTO AN OBSERVATION, because there is nothing for it to converge
+  // ON. Codex takes model/effort per turn, so a later turn_context is a true reading of the pick having
+  // landed. Claude fixes them at FORK time, so a live daemon goes on running what it was forked with and
+  // every record it writes reports the OLD model — a reading of a session that structurally cannot have
+  // honoured the pick. Converging on that is how a just-made choice silently reverted in the composer
+  // seconds after the click (measured 2026-09-03). This mirrors, exactly, the rule the stored row now
+  // keeps: observedProfileIfCurrentStmt in storage.ts fences the same case and carries the full account.
+  // Both halves say the same thing, so the row and the readout cannot disagree about a thread's target.
+  //
+  // The trade is stated on that statement: on a claude row with a hand-set profile, a model change frizz
+  // never made and cannot see is no longer learned back.
   const setAt = row.profile_set_at ? Date.parse(row.profile_set_at) : NaN
-  const supersededByOperatorSet = Number.isFinite(setAt) && setAt > observedAt
+  const operatorSetSticks = (row.backend ?? "claude") !== "codex"
+  const supersededByOperatorSet = Number.isFinite(setAt) && (operatorSetSticks || setAt > observedAt)
   const observedIsCurrent = Number.isFinite(observedAt) && Number.isFinite(spawnedAt) && observedAt >= spawnedAt && !supersededByOperatorSet
   const observedModel = tele?.model
     ? normalizeObservedThreadModel(row.backend ?? "claude", tele.model) ?? tele.model.trim()
