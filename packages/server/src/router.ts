@@ -1808,6 +1808,16 @@ export function createRouter(ctx: AppContext) {
               mayHaveLiveBackgroundWork(ctx.tailer.get(input.slug)),
             ),
           })
+          // `exited` records a deliberate stop (a dismiss, a retire, a hibernation). The bridge just
+          // accepted this send — it reconnected the live daemon or cold-resumed a dead one — so the stop
+          // is over, and the column has to say so. Nothing cleared it before: `beginRuntimeGeneration`
+          // is the only other writer of `exited = 0` and no path calls it, so a thread resumed by a
+          // follow-up kept `exited = 1` for as long as it then ran (four of them on 2026-09-03, each
+          // hours into a resumed task). The board derives a broker row's liveness live and never
+          // showed it, but every direct reader of the row — the CLI, a diagnostic, the next
+          // engineer — believed the column. Same CAS as every other row write: a replaced owner
+          // observes zero changes.
+          if (row.exited === 1) ctx.storage.setExitedIfCurrent(input.slug, row.session_id, row.runtime_generation ?? 0, false)
           // The ledger's RELIABILITY half died with the terminal transport — the stuck-composer flush and
           // the screen-inspected receipt were the only things it bought, and both were skipped for a
           // headless row even then; no delivery marker is stamped either, because nothing rewrites bytes

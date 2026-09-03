@@ -1181,6 +1181,31 @@ test("Restart worker retires the live process, carrying the continuation into th
   h.storage.close()
 })
 
+// `exited` records a deliberate stop, and a follow-up ends it: the bridge reconnects or cold-resumes
+// the worker, so a row that still read `exited = 1` afterwards was lying about a thread that then ran
+// for hours (four of them on 2026-09-03, resumed by a typed "continue"). The board never showed it —
+// a broker row's liveness is derived live — but the column is what every direct reader believes.
+test("followUp clears a stale `exited` stamp once the bridge has accepted the send", async () => {
+  const { h, slug, calls } = restartHarness()
+  h.storage.setExited(slug, true)
+  assert.equal(h.storage.getSession(slug)?.exited, 1, "precondition: the row records a deliberate stop")
+  await h.router.followUp.handler({ input: { slug, sessionId: `sid-${slug}`, message: "continue" } })
+  assert.equal(calls.length, 1, "the message reached the worker")
+  assert.equal(h.storage.getSession(slug)?.exited, 0, "and the stop it records is over")
+  h.storage.close()
+})
+
+test("followUp leaves `exited` alone when the bridge refuses the send", async () => {
+  const { h, slug } = restartHarness()
+  h.storage.setExited(slug, true)
+  ;(h.ctx as { claudeBroker?: unknown }).claudeBroker = {
+    followUp: async () => { throw new Error("the session broker is unavailable") },
+  }
+  await assert.rejects(h.router.followUp.handler({ input: { slug, sessionId: `sid-${slug}`, message: "continue" } }))
+  assert.equal(h.storage.getSession(slug)?.exited, 1, "nothing resumed, so the stop still stands")
+  h.storage.close()
+})
+
 // A restart RETIRES the sends the dead process was still holding. Reported 2026-08-01 by the
 // maintainer, who restarted a worker whose follow-ups had stopped arriving and found them still on
 // screen afterwards: "the old messages are still showing up as ghost bubbles". They are unreachable

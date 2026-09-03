@@ -929,6 +929,12 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
             Date.now(),
             (tailer.get(slug)?.subAgents ?? []).some((agent) => agent.state === "running"),
           ),
+        }).then(() => {
+          // A delivered wake resumed the worker (warm or cold), so a deliberate stop the row still
+          // records is over — the same correction the followUp RPC makes, for the same reason: no
+          // other path ever wrote `exited = 0` back, and a woken thread ran for hours under a column
+          // that called it exited (2026-09-03).
+          if (row.exited === 1) storage.setExitedIfCurrent(slug, row.session_id, row.runtime_generation ?? 0, false)
         })
       }
       resumeThread(
