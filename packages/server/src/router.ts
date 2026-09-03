@@ -138,7 +138,7 @@ import { openLocalFile, readLocalMarkdown, resolveOpenableFile, readLocalTextFil
 import { openableFileRoots } from "./project.ts"
 import { ghInstalled, ghAuthed, ghRepo, gitGithubRemote, listItems, hydrateIssue, hydratePr, renderGithubPrompt, effectiveTemplate, DEFAULT_GITHUB_PROMPT } from "./github.ts"
 import { createGithubHovercardService } from "./github-hovercard.ts"
-import { slugify, resolveSlug, resolveLegacyThreadFile, loadWorkerPrompt, scratchpadOrientation, frizzConfigBlock } from "./dispatch.ts"
+import { slugify, resolveSlug, resolveLegacyThreadFile, loadWorkerPrompt, scratchpadOrientation, frizzConfigBlock, workerDispatchPermission } from "./dispatch.ts"
 import { readCodexModels } from "./backend/codex-models.ts"
 import { codexSandbox } from "./backend/codex.ts"
 import type { CodexSandboxMode } from "./backend/codex-app-server.ts"
@@ -1742,7 +1742,11 @@ export function createRouter(ctx: AppContext) {
             // Rides through to the SDK as this input's uuid, which the SDK echoes back on the record
             // that delivers it — the ledger then correlates by identity rather than by text.
             deliveryId: input.deliveryId,
-            permissionMode: (row.permission_mode as ClaudePermissionMode | null) ?? undefined,
+            // A row with NO recorded mode (a terminal session promoted before adoptSession stamped one)
+            // must not fall through to the bridge's `"default"` — Claude's prompt-on-everything mode,
+            // which the worker's perm-policy hook defers call by call. It resumes at the same
+            // Settings-driven mode a dispatched worker launches with.
+            permissionMode: (row.permission_mode as ClaudePermissionMode | null) ?? workerDispatchPermission("claude", ctx.getSettings()),
             appendSystemPrompt,
             model: row.model ?? undefined,
             effort: row.effort ?? undefined,
