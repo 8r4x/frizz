@@ -1230,3 +1230,107 @@ test("protocol: close rejects new upgrades and drains an in-flight board keyfram
     await h.close()
   }
 })
+
+// ── the FILE topic ──────────────────────────────────────────────────────────────────────────────────
+// A reader subscribes to the file it shows; the server arms a watch through the injected seam and
+// pushes `file-changed` with the path AS SUBSCRIBED. What these pin: the frame carries no bytes and
+// the client's own key, an unsub releases the watch, a close releases every watch the connection
+// held, a refused path arms nothing and closes nothing, and the per-connection cap holds.
+
+function fakeWatcher() {
+  const armed = new Map<string, () => void>()
+  const released: string[] = []
+  return {
+    armed,
+    released,
+    watchFile(path: string, onChange: () => void): () => void {
+      if (path.includes("refused")) throw new Error("Local file is outside Frizz's trusted roots")
+      armed.set(path, onChange)
+      return () => {
+        armed.delete(path)
+        released.push(path)
+      }
+    },
+  }
+}
+
+test("file topic: a change on a subscribed file is pushed as file-changed with the subscribed path", async () => {
+  const fake = fakeWatcher()
+  const h = await startHarness({ watchFile: fake.watchFile })
+  try {
+    const c = await connectClient(h.port)
+    await c.next() // keyframe
+    c.ws.send(JSON.stringify({ t: "sub", topic: "file", path: "/repo/README.md" }))
+    await waitFor(() => fake.armed.has("/repo/README.md"), "the watch to arm")
+    assert.equal(h.appSocket.fileWatchCount, 1)
+    fake.armed.get("/repo/README.md")!()
+    assert.deepEqual(await c.next(), { t: "file-changed", path: "/repo/README.md" })
+
+    // A duplicate subscription is a no-op: one watch, and one frame per change.
+    c.ws.send(JSON.stringify({ t: "sub", topic: "file", path: "/repo/README.md" }))
+    await delay(50)
+    assert.equal(h.appSocket.fileWatchCount, 1)
+
+    c.ws.send(JSON.stringify({ t: "unsub", topic: "file", path: "/repo/README.md" }))
+    await waitFor(() => fake.released.length === 1, "the release")
+    assert.equal(h.appSocket.fileWatchCount, 0)
+    assert.equal(fake.armed.size, 0)
+    c.ws.close()
+  } finally {
+    await h.close()
+  }
+})
+
+test("file topic: a closed connection releases every watch it held", async () => {
+  const fake = fakeWatcher()
+  const h = await startHarness({ watchFile: fake.watchFile })
+  try {
+    const c = await connectClient(h.port)
+    await c.next()
+    c.ws.send(JSON.stringify({ t: "sub", topic: "file", path: "/repo/a.ts" }))
+    c.ws.send(JSON.stringify({ t: "sub", topic: "file", path: "/repo/b.ts" }))
+    await waitFor(() => fake.armed.size === 2, "both watches")
+    assert.equal(h.appSocket.fileWatchCount, 2)
+    c.ws.close()
+    await waitFor(() => fake.released.length === 2, "both releases")
+    assert.equal(h.appSocket.fileWatchCount, 0)
+  } finally {
+    await h.close()
+  }
+})
+
+test("file topic: a refused path arms nothing and leaves the socket open; the cap closes it", async () => {
+  const fake = fakeWatcher()
+  const h = await startHarness({ watchFile: fake.watchFile, maxFileWatchesPerConnection: 2 })
+  try {
+    const c = await connectClient(h.port)
+    await c.next()
+    c.ws.send(JSON.stringify({ t: "sub", topic: "file", path: "/etc/refused.md" }))
+    await delay(50)
+    assert.equal(fake.armed.size, 0)
+    assert.equal(c.ws.readyState, WebSocket.OPEN, "a refused watch is not a policy violation")
+
+    c.ws.send(JSON.stringify({ t: "sub", topic: "file", path: "/repo/a.ts" }))
+    c.ws.send(JSON.stringify({ t: "sub", topic: "file", path: "/repo/b.ts" }))
+    await waitFor(() => fake.armed.size === 2, "two watches under the cap")
+    c.ws.send(JSON.stringify({ t: "sub", topic: "file", path: "/repo/c.ts" }))
+    const [code] = (await once(c.ws, "close")) as [number]
+    assert.equal(code, 1008)
+    await waitFor(() => h.appSocket.fileWatchCount === 0, "the close to release the watches")
+  } finally {
+    await h.close()
+  }
+})
+
+test("file topic: a malformed file frame is rejected like any other", async () => {
+  const h = await startHarness({ watchFile: fakeWatcher().watchFile })
+  try {
+    const c = await connectClient(h.port)
+    await c.next()
+    c.ws.send(JSON.stringify({ t: "sub", topic: "file", path: "" }))
+    const [code] = (await once(c.ws, "close")) as [number]
+    assert.equal(code, 1008)
+  } finally {
+    await h.close()
+  }
+})

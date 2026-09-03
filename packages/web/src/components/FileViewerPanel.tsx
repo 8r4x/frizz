@@ -3,8 +3,9 @@ import { useQuery } from "@tanstack/react-query"
 import { closeFilePanel, addContextItem, store } from "../store.ts"
 import { draftKey, draftStore, useProjectDir, useThreadSessionId } from "../lib/drafts.ts"
 import { joinComposerValue, splitComposerValue } from "../lib/imagePaths.ts"
+import { useLiveLocalFile } from "../hooks.ts"
 import { useInnerHtml } from "../lib/innerHtml.ts"
-import { highlightedSource, localFileQuery } from "../lib/localFileQuery.ts"
+import { LOCAL_FILE_POLL_MS, highlightedSource, localFileQuery } from "../lib/localFileQuery.ts"
 import { useLocalFileCodeLinks } from "../lib/localFileCode.ts"
 import { useMarkdownHtml } from "../lib/useMarkdown.ts"
 import { splitFrontmatter } from "../lib/frontmatter.ts"
@@ -59,8 +60,13 @@ export function FileViewerPanel({ slug, path }: { slug: string; path: string }) 
   // Markdown reads through the reader gate (home-and-below, `.md` only) and renders; anything else
   // reads through the narrower project-only text gate and is source, full stop. The read itself lives
   // in lib/localFileQuery so the rail can PREWARM it on hover through the identical key.
+  //
+  // LIVE while open: the server watches the file and the socket invalidates this query on every save
+  // (useLiveLocalFile), so the panel follows a worker's edits as they land. The poll is the fallback
+  // for a socket that is not up; data stays on screen across a refetch, so neither path flickers.
   const markdown = isLocalMarkdownFile(path)
-  const body = useQuery(localFileQuery(path))
+  const live = useLiveLocalFile(path)
+  const body = useQuery({ ...localFileQuery(path), refetchInterval: live ? false : LOCAL_FILE_POLL_MS })
   // Canonical path from the server (symlinks resolved) — the base for relative links, the label, and
   // the path stamped on context items, exactly as in MarkdownDrawer.
   const resolved = body.data?.path ?? path

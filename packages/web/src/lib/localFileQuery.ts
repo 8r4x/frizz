@@ -12,21 +12,31 @@ import { resolveFileLanguage } from "./syntaxHighlight.ts"
 // Markdown reads through the reader gate (home-and-below, `.md` only); anything else reads through the
 // narrower project-only text gate. Either way the result carries the CANONICAL path (symlinks
 // resolved), which is what the panel labels, links relative to, and stamps on context items.
+// The key alone — what the socket's `file-changed` frame invalidates (api/socket.ts), keyed by the
+// path the reader subscribed with, which is the path it queried with.
+export function localFileQueryKey(path: string): readonly [string, string] {
+  return [isLocalMarkdownFile(path) ? "localMarkdown" : "localFile", path]
+}
+
 export function localFileQuery(path: string) {
   const markdown = isLocalMarkdownFile(path)
   return {
-    queryKey: [markdown ? "localMarkdown" : "localFile", path],
+    queryKey: localFileQueryKey(path),
     queryFn: async () => {
       if (markdown) return rpc.localMarkdown({ path })
       const read = await rpc.localFile({ path })
       return { path: read.path, markdown: read.text, truncated: read.truncated }
     },
-    // Long enough that a hover followed by a click is ONE read, short enough that re-opening a file a
-    // worker is actively editing shows the new bytes. The panel does not poll, so this is the only
-    // thing standing between the reader and a stale file.
+    // Long enough that a hover followed by a click is ONE read. Freshness while the file is OPEN is
+    // the live watch's job (useLiveLocalFile: the server pushes `file-changed`, the key above is
+    // invalidated, and the reader re-reads), so this only decides whether a re-open re-reads.
     staleTime: 5_000,
   }
 }
+
+// The reader's poll cadence when the /ws push is not live (a pre-/ws server, or the SSE fallback):
+// the same "read it again" on a clock instead of on a change, and never while the push is up.
+export const LOCAL_FILE_POLL_MS = 2_000
 
 // Highlighted source markup, memoised across mounts. hljs over a few thousand lines is a single
 // blocking task, and the one moment it must not run is while the viewer is sliding in — so the hover

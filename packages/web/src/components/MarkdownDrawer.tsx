@@ -3,8 +3,10 @@ import { useQuery } from "@tanstack/react-query"
 import { ExternalLink } from "lucide-react"
 import { showToast } from "../store.ts"
 import { rpc } from "../api/rpc.ts"
+import { useLiveLocalFile } from "../hooks.ts"
 import { copyTextToClipboard } from "../lib/clipboard.ts"
 import { useInnerHtml } from "../lib/innerHtml.ts"
+import { LOCAL_FILE_POLL_MS, localFileQuery } from "../lib/localFileQuery.ts"
 import { useLocalFileCodeLinks } from "../lib/localFileCode.ts"
 import { useMarkdownHtml } from "../lib/useMarkdown.ts"
 import { splitFrontmatter } from "../lib/frontmatter.ts"
@@ -74,7 +76,11 @@ export function Frontmatter({ lines }: { lines: string[] }) {
 }
 
 export function MarkdownDrawer({ id, path, title, depth, widthDepth }: { id: number; path: string; title: string; depth: number; widthDepth: number }) {
-  const body = useQuery({ queryKey: ["localMarkdown", path], queryFn: () => rpc.localMarkdown({ path }) })
+  // The same read (and key) as the /full split viewer, and LIVE the same way: the server watches the
+  // file while this drawer is open and the socket invalidates the query on each save; the poll covers
+  // a socket that is not up (useLiveLocalFile).
+  const live = useLiveLocalFile(path)
+  const body = useQuery({ ...localFileQuery(path), refetchInterval: live ? false : LOCAL_FILE_POLL_MS })
   // Base the relative links on the CANONICAL path the server resolved, not the one that was clicked:
   // a link through a symlinked directory would otherwise rebase its neighbours onto a directory the
   // gate never admitted, and every one of them would 404.

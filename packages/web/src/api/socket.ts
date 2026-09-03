@@ -8,6 +8,7 @@ import { reconcileLiveMessages, type PaginatedTranscriptData } from "../lib/tran
 import { invalidateInteractionQueries } from "./interaction-cache.ts"
 import { FRIZZ_ROUTE_PREFIX } from "@frizz/shared"
 import { apiBase, projectSlug } from "../lib/base-path.ts"
+import { localFileQueryKey } from "../lib/localFileQuery.ts"
 
 // The stage-2 multiplexed client: ONE WebSocket("/ws") carrying the board channel (keyframe + deltas +
 // notify, driven through the shared BoardStream) AND per-thread transcript push (replacing the 1.5s
@@ -37,6 +38,17 @@ let fellBack = false // committed to the SSE fallback — never touch /ws again 
 // Ref-counted so a drawer close doesn't unsubscribe a slug the main view still shows; the server holds one
 // subscription per connection per slug, so we send `sub` on 0→1 and `unsub` on 1→0.
 const subs = new Map<string, number>()
+
+// path → count of READERS showing that local file (the /full split viewer, and every Markdown drawer
+// stacked over it). Same ref-count discipline as `subs`: `sub` on 0→1, `unsub` on 1→0, replayed on
+// every (re)connect. The server answers a change with `file-changed`, and the handler below
+// invalidates the reader's query so it re-reads through its own gated RPC.
+const fileSubs = new Map<string, number>()
+// How many times this session has reached a live protocol (a keyframe on /ws). The first is the
+// initial connect; every later one is a reconnect, across which a change to an open file may have
+// gone unheard — so those re-read every open file once, and the first does not (the reader's own
+// mount read is at most seconds old).
+let liveGenerations = 0
 
 // Board seq-gap resync = reconnect the socket (mirror sse.ts): drop + immediately re-open; the connect
 // handshake re-sends a full keyframe with the current seq. Deliberately skips the backoff/failure counter.
@@ -117,6 +129,7 @@ function connect(): void {
       if (healthy) failures = 0
       if (healthy && msg.t === "event" && msg.event.type === "board") {
         protocolReady = true
+        liveGenerations++
         resubscribe() // replay subscriptions only after this generation delivered a valid base keyframe
       }
     } catch (err) {
@@ -260,6 +273,11 @@ function handle(msg: SocketServerMsg): boolean {
       })
       delete store.socketTranscriptFallbacks[msg.slug]
       return true
+    case "file-changed":
+      // A notice, not the bytes: the reader's query goes stale and refetches through the same gated
+      // read it mounted with, so nothing reaches the page that the read gate would not have admitted.
+      void qc?.invalidateQueries({ queryKey: localFileQueryKey(msg.path) })
+      return true
     case "payload-too-large":
       if (msg.channel === "board") {
         if (!store.socketBoardFallback) {
@@ -311,6 +329,12 @@ function resubscribe(): void {
   for (const slug of subs.keys()) {
     if (!store.socketTranscriptFallbacks[slug]) send({ t: "sub", topic: "transcript", slug })
   }
+  for (const path of fileSubs.keys()) {
+    send({ t: "sub", topic: "file", path })
+    // A reconnect may have slept through a change; one re-read per open file closes that gap. Not on
+    // the first connect, where the reader's own mount read just happened.
+    if (liveGenerations > 1) void qc?.invalidateQueries({ queryKey: localFileQueryKey(path) })
+  }
 }
 
 // ── Public API (used by useTranscript) ───────────────────────────────────────────────────────────────
@@ -331,6 +355,25 @@ export function unsubscribeTranscript(slug: string): void {
     send({ t: "unsub", topic: "transcript", slug })
   } else {
     subs.set(slug, n)
+  }
+}
+
+// A reader opened a local file: the first reader on a path sends `sub`; later ones bump the count.
+// Before the socket opens it is a no-op that resubscribe() replays, exactly as a transcript is.
+export function subscribeFile(path: string): void {
+  const n = (fileSubs.get(path) ?? 0) + 1
+  fileSubs.set(path, n)
+  if (n === 1) send({ t: "sub", topic: "file", path })
+}
+
+// The last reader on a path sends `unsub` and forgets it; the others decrement.
+export function unsubscribeFile(path: string): void {
+  const n = (fileSubs.get(path) ?? 0) - 1
+  if (n <= 0) {
+    fileSubs.delete(path)
+    send({ t: "unsub", topic: "file", path })
+  } else {
+    fileSubs.set(path, n)
   }
 }
 
@@ -361,6 +404,9 @@ export function retryTranscriptSocket(slug: string): void {
  */
 export function rebindProject(): void {
   subs.clear()
+  // Absolute paths do not collide across projects the way slugs do, but the file gate is the NEW
+  // project's, and the readers holding these are unmounting with the page they were on.
+  fileSubs.clear()
   stream.reset()
   dropWs()
   store.connection = "connecting"

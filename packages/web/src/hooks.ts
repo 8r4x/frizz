@@ -4,7 +4,7 @@ import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-quer
 import type { BoardSnapshot, InteractionRecord, ThreadView, TranscriptMessage } from "@frizz/shared"
 import { store, threadBySlug } from "./store.ts"
 import { rpc } from "./api/rpc.ts"
-import { retryTranscriptSocket, subscribeTranscript, unsubscribeTranscript } from "./api/socket.ts"
+import { retryTranscriptSocket, subscribeFile, subscribeTranscript, unsubscribeFile, unsubscribeTranscript } from "./api/socket.ts"
 import { mergeOptimistic, preserveMessageIdentity, isTranscriptStale, newestRenderedAt } from "./lib/transcript-sync.ts"
 import { pendingInteractionsKey } from "./api/interaction-cache.ts"
 import { reconcileLatestPage, type PaginatedTranscriptData } from "./lib/transcriptPagination.ts"
@@ -49,6 +49,21 @@ export function asThreads(threads: readonly unknown[]): ThreadView[] {
 // this to skip pull-based refetch paths that the push now covers.
 export function useSocketTranscripts(): boolean {
   return useSnapshot(store).socketTranscripts
+}
+
+// A READER'S LIVE HOLD on the local file it shows (the /full split viewer, the Markdown drawer). For
+// as long as the surface is mounted the server watches the file and pushes `file-changed`, which
+// invalidates the reader's query (api/socket.ts) — so a file a worker is editing re-renders as it is
+// saved instead of sitting at whatever it read on open (maintainer 2026-09-03: "it needs to be live").
+// Returns whether that push is up: without it (a pre-/ws server, the SSE fallback) the reader polls
+// on LOCAL_FILE_POLL_MS instead, which is the same "read it again" on a clock.
+export function useLiveLocalFile(path: string): boolean {
+  const live = useSnapshot(store).socketTranscripts
+  useEffect(() => {
+    subscribeFile(path)
+    return () => unsubscribeFile(path)
+  }, [path])
+  return live
 }
 
 export function ownedInteractionScope(thread: ThreadView | undefined): { slug: string; sessionId: string } | undefined {

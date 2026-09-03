@@ -114,8 +114,17 @@ export interface AppSocketDeps {
   boardSnapshot: () => Promise<BoardSnapshot>
   currentSeq: () => number
   readTranscript: (slug: string) => TranscriptMessage[]
+  /**
+   * Arm a live watch on a local file for the FILE topic: gate the path exactly as its read is gated,
+   * then call `onChange` after each settled burst of changes until the returned release runs. Throws
+   * for a path the gate refuses or a directory that cannot be watched — the subscription is then
+   * quietly dropped, because the reader's own read has already told the client why. Absent (a bare
+   * test harness), the topic is accepted and does nothing.
+   */
+  watchFile?: (path: string, onChange: () => void) => () => void
   /** Narrow test/operational seams; production uses the conservative exported defaults below. */
   maxLogicalFrameBytes?: number
+  maxFileWatchesPerConnection?: number
   maxOutputBufferBytes?: number
   maxConnections?: number
   maxSubscriptionsPerConnection?: number
@@ -182,6 +191,8 @@ export interface AppSocketServer {
   readonly transcriptCacheEntries: number
   readonly transcriptCacheBytes: number
   readonly pendingTranscriptRefreshes: number
+  // Live file watches held across every connection — a clean close must leave 0.
+  readonly fileWatchCount: number
 }
 
 const HEARTBEAT_MS = 10_000
@@ -190,6 +201,9 @@ export const APP_SOCKET_MAX_LOGICAL_FRAME_BYTES = 4 * 1_024 * 1_024
 export const APP_SOCKET_MAX_OUTPUT_BUFFER_BYTES = 4 * 1_024 * 1_024
 export const APP_SOCKET_MAX_CONNECTIONS = 64
 export const APP_SOCKET_MAX_SUBSCRIPTIONS = 32
+// One open document per reader, and the readers stack (a drawer over a drawer over the split viewer):
+// sixteen is far past what a page can show and far short of what an OS watch table minds.
+export const APP_SOCKET_MAX_FILE_WATCHES = 16
 export const APP_SOCKET_MAX_MESSAGES_PER_WINDOW = 120
 export const APP_SOCKET_MESSAGE_WINDOW_MS = 1_000
 export const APP_SOCKET_MAX_BUFFERED_KEYFRAME_EVENTS = 256
@@ -214,6 +228,7 @@ export function createAppSocketServer(deps: AppSocketDeps): AppSocketServer {
   const maxOutputBufferBytes = deps.maxOutputBufferBytes ?? APP_SOCKET_MAX_OUTPUT_BUFFER_BYTES
   const maxConnections = boundedCount(deps.maxConnections, APP_SOCKET_MAX_CONNECTIONS)
   const maxSubscriptions = deps.maxSubscriptionsPerConnection ?? APP_SOCKET_MAX_SUBSCRIPTIONS
+  const maxFileWatches = boundedCount(deps.maxFileWatchesPerConnection, APP_SOCKET_MAX_FILE_WATCHES)
   const maxMessagesPerWindow = deps.maxMessagesPerWindow ?? APP_SOCKET_MAX_MESSAGES_PER_WINDOW
   const messageWindowMs = deps.messageWindowMs ?? APP_SOCKET_MESSAGE_WINDOW_MS
   const maxBufferedKeyframeEvents = deps.maxBufferedKeyframeEvents ?? APP_SOCKET_MAX_BUFFERED_KEYFRAME_EVENTS
@@ -256,6 +271,69 @@ export function createAppSocketServer(deps: AppSocketDeps): AppSocketServer {
   // Per-slug signature of the last BROADCAST transcript — dedupes an unchanged re-read (a tailer tick that
   // advanced the file with records the transcript renderer ignores) so we don't push identical frames.
   const lastSig = new Map<string, string>()
+
+  // ── the FILE topic ─────────────────────────────────────────────────────────────────────────────────
+  // Per connection, the local files its readers have open, each holding the release of a live watch.
+  // Keyed by the path AS SUBSCRIBED: that is what the client keys its query by, so it is what the
+  // `file-changed` frame carries back. The watch itself is shared per canonical path underneath
+  // (local-file-watch.ts), so two readers on one file cost one OS watch.
+  const fileWatches = new WeakMap<WebSocket, Map<string, () => void>>()
+  let fileWatchCount = 0
+
+  function subscribeFile(ws: WebSocket, path: string): void {
+    let held = fileWatches.get(ws)
+    if (!held) {
+      held = new Map()
+      fileWatches.set(ws, held)
+    }
+    // A duplicate is a true no-op, as a duplicate transcript subscription is.
+    if (held.has(path)) return
+    if (held.size >= maxFileWatches) {
+      closeSocket(ws, 1008, "subscription limit exceeded")
+      return
+    }
+    const watchFile = deps.watchFile
+    if (!watchFile) return
+    let release: () => void
+    try {
+      release = watchFile(path, () => {
+        sendMsg(ws, { t: "file-changed", path })
+      })
+    } catch {
+      // The gate refused it, or its directory is gone. The reader's own read reports the same file in
+      // its own words; a watch that never arms is the right answer here, not a closed socket.
+      return
+    }
+    held.set(path, release)
+    fileWatchCount++
+  }
+
+  function unsubscribeFile(ws: WebSocket, path: string): void {
+    const held = fileWatches.get(ws)
+    const release = held?.get(path)
+    if (!held || !release) return
+    held.delete(path)
+    fileWatchCount--
+    try {
+      release()
+    } catch {
+      // A watch the OS already dropped has nothing left to release.
+    }
+  }
+
+  function dropFileWatches(ws: WebSocket): void {
+    const held = fileWatches.get(ws)
+    if (!held) return
+    fileWatches.delete(ws)
+    for (const release of held.values()) {
+      fileWatchCount--
+      try {
+        release()
+      } catch {
+        // As above.
+      }
+    }
+  }
 
   function closeSocket(ws: WebSocket, code: number, reason: string): void {
     if (ws.readyState === ws.CLOSED || ws.readyState === ws.CLOSING) return
@@ -875,6 +953,11 @@ export function createAppSocketServer(deps: AppSocketDeps): AppSocketServer {
         return
       }
       const msg = parsed.data
+      if (msg.topic === "file") {
+        if (msg.t === "sub") subscribeFile(ws, msg.path)
+        else unsubscribeFile(ws, msg.path)
+        return
+      }
       if (msg.t === "sub") {
         // A duplicate subscription is a true no-op: it consumes rate budget but cannot force another
         // disk read or transcript serialization.
@@ -899,6 +982,7 @@ export function createAppSocketServer(deps: AppSocketDeps): AppSocketServer {
       }
       clearInterval(heartbeat)
       cancelPendingSubscriptionPush(ws)
+      dropFileWatches(ws) // leak-guard for the OS watches, as removeConn is for the registry below
       const terminationTimer = terminationTimers.get(ws)
       if (terminationTimer) clearTimeout(terminationTimer)
       terminationTimers.delete(ws)
@@ -1035,6 +1119,9 @@ export function createAppSocketServer(deps: AppSocketDeps): AppSocketServer {
     },
     get pendingTranscriptRefreshes() {
       return pendingTranscriptRefreshes.size
+    },
+    get fileWatchCount() {
+      return fileWatchCount
     },
   }
 }

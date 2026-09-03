@@ -107,6 +107,20 @@ export function readLocalMarkdown(rawPath: string, roots: readonly string[]): Lo
   return { path, markdown: head.subarray(0, lastBreak > 0 ? lastBreak : head.length).toString("utf8"), truncated: true }
 }
 
+/**
+ * The path a LIVE WATCH of a file may attach to — exactly the gate its read passed, or nothing. A
+ * `.md` reads through the reader gate (home-and-below, and the canonical path must be Markdown too);
+ * everything else reads through the project-only text gate. A watch reveals only "this changed", but
+ * a file the reader is not allowed to read is not one it may be told about either.
+ */
+export function resolveWatchableLocalFile(rawPath: string, projectDir: string, openRoots: readonly string[]): string {
+  if (MARKDOWN_FILE_EXT.test(rawPath.trim())) {
+    const path = resolveLocalFile(rawPath, openRoots)
+    if (MARKDOWN_FILE_EXT.test(path)) return path
+  }
+  return resolveLocalFile(rawPath, [projectDir])
+}
+
 function defaultSpawn(command: string, args: readonly string[], options: SpawnOptions) {
   return spawn(command, [...args], options)
 }

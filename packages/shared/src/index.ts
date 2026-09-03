@@ -4282,10 +4282,22 @@ export type TermClientMsg = { t: "input"; d: string } | { t: "resize"; cols: num
 // subscription state, the shape excludes path separators/control text before it can reach transcript
 // lookup code. Foreign session ids are UUID-shaped and remain valid under this grammar.
 export const SocketTranscriptSlug = ThreadSlug
-export const SocketClientMsg = z.discriminatedUnion("t", [
+// A local file a reader has open — the /full split viewer's or the Markdown drawer's document. The
+// bound matches the read RPCs' own; the server gates the path exactly as it gates the read, so a
+// file the reader could not read is a file it cannot watch either.
+export const SocketFilePath = z.string().min(1).max(4096)
+const SocketTranscriptClientMsg = z.discriminatedUnion("t", [
   z.object({ t: z.literal("sub"), topic: z.literal("transcript"), slug: SocketTranscriptSlug }).strict(),
   z.object({ t: z.literal("unsub"), topic: z.literal("transcript"), slug: SocketTranscriptSlug }).strict(),
 ])
+// The FILE topic: "tell me when this file changes on disk". The server answers with `file-changed`
+// frames carrying the path AS SUBSCRIBED, and the reader re-reads through its gated RPC — the push is a
+// notice, never the bytes.
+const SocketFileClientMsg = z.discriminatedUnion("t", [
+  z.object({ t: z.literal("sub"), topic: z.literal("file"), path: SocketFilePath }).strict(),
+  z.object({ t: z.literal("unsub"), topic: z.literal("file"), path: SocketFilePath }).strict(),
+])
+export const SocketClientMsg = z.union([SocketTranscriptClientMsg, SocketFileClientMsg])
 export type SocketClientMsg = z.infer<typeof SocketClientMsg>
 
 // server -> client (hand-built by the server, parsed defensively by the client — a plain union, no zod):
@@ -4295,10 +4307,13 @@ export type SocketClientMsg = z.infer<typeof SocketClientMsg>
 //     to SSE once; a transcript overflow pauses only that subscription and leaves explicit HTTP refresh.
 //   - {t:"resource-limited"} rejects one transcript subscription when the process/origin read budget is
 //     exhausted. The board socket stays healthy and the client exposes an explicit retry instead of churn.
+//   - {t:"file-changed"} a subscribed local file changed on disk; `path` is the path the client
+//     subscribed with, so it keys straight back into the reader's query. No bytes ride this frame.
 //   - {t:"hb"}         10s heartbeat so the client's staleness watchdog works as it did over SSE
 export type SocketServerMsg =
   | { t: "event"; event: ServerEvent }
   | { t: "transcript"; slug: ThreadSlug; messages: TranscriptMessage[] }
+  | { t: "file-changed"; path: string }
   | { t: "payload-too-large"; channel: "board"; actualBytes: number; maxBytes: number }
   | { t: "payload-too-large"; channel: "transcript"; slug: ThreadSlug; actualBytes: number; maxBytes: number }
   | {
