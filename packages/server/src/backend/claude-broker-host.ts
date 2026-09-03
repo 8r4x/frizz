@@ -9,6 +9,7 @@ import { resolveDetachedDaemonEntry } from "../detached-daemons.ts"
 import type { BrokerRecord, ClaudeBrokerConfig } from "./claude-agent-broker.ts"
 import { claudeBrokerDiagnosticLogPath } from "./claude-broker-diagnostics.ts"
 import { frizzIpcPath } from "./ipc-path.ts"
+import type { WorkerMcpServers } from "./project-mcp-servers.ts"
 
 // The Claude Agent SDK REQUIRES an absolute `pathToClaudeCodeExecutable` (validateExecutablePath rejects
 // a bare name), unlike an execvp of the CLI, which resolves "claude" on PATH itself. When the dispatch layer
@@ -218,7 +219,7 @@ export interface ForkBrokerOptions {
   resume?: boolean
   /** The frizz worker environment (plugin + MCP + per-thread frizz vars) — see ClaudeBrokerConfig. */
   pluginDir?: string
-  mcpServers?: Record<string, { type?: "stdio"; command: string; args?: string[]; env?: Record<string, string> }>
+  mcpServers?: WorkerMcpServers
   allowedTools?: string[]
   workerEnv?: Record<string, string>
   /** Override the daemon entry (tests). Defaults to the bundled/sibling claude-agent-broker. */

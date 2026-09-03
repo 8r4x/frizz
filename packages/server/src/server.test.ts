@@ -284,11 +284,13 @@ test("buildClaudeCommand: pins session-id, permission mode, optional model/effor
     claudeBin: "sleep",
     workerPrompt: "", // disabled for the argv-shape assertion
   })
-  // NO --mcp-config / --allowedTools here: these dispatches carry no frizz-MCP descriptor, and frizz
-  // mounts nothing else (the always-on chrome-devtools mount was removed 2026-08-26 — dispatch.ts).
-  // Empty flags would be worse than absent ones, so claudeMcpFlags emits neither; dispatch.test.ts
-  // pins that, and this pins the argv POSITION the flags occupy when a descriptor IS supplied.
-  const TAIL_FLAGS = ["--disallowedTools=AskUserQuestion"]
+  // NO --mcp-config / --allowedTools here: these dispatches carry no frizz-MCP descriptor and no project
+  // servers, and frizz mounts nothing else (the always-on chrome-devtools mount was removed 2026-08-26 —
+  // dispatch.ts). Empty flags would be worse than absent ones, so claudeMcpFlags emits neither. What it
+  // ALWAYS emits is `--strict-mcp-config` (since 2026-09-03): with nothing to mount, the CLI must still
+  // not discover the operator's user-scope servers. dispatch.test.ts pins that; this pins the argv
+  // POSITION the MCP flags occupy — right before the disallowed-tools flag.
+  const TAIL_FLAGS = ["--strict-mcp-config", "--disallowedTools=AskUserQuestion"]
   assert.deepEqual(base, ["sleep", "--session-id", "uuid-1", "--permission-mode", "acceptEdits", ...TAIL_FLAGS, "hello"])
 
   const full = buildClaudeCommand({
@@ -313,7 +315,7 @@ test("buildClaudeCommand: pins session-id, permission mode, optional model/effor
     "--effort",
     "high",
   ])
-  // After the fixed head comes the disallowed-tools flag, then the system-prompt file flag.
+  // After the fixed head come the MCP flag and the disallowed-tools flag, then the system-prompt file flag.
   assert.deepEqual(full.slice(9, 9 + TAIL_FLAGS.length), TAIL_FLAGS)
   assert.equal(full[9 + TAIL_FLAGS.length], "--append-system-prompt-file")
   assert.equal(systemPromptOf(full), "WORKER_NORMS")
@@ -334,7 +336,7 @@ test("buildClaudeCommand: pins session-id, permission mode, optional model/effor
 
 test("buildClaudeResumeCommand: -r <sessionId> with the follow-up + worker system prompt", () => {
   const cmd = buildClaudeResumeCommand({ sessionId: "sid", permissionMode: "acceptEdits", message: "more", workerPrompt: "" })
-  assert.deepEqual(cmd, ["claude", "--permission-mode", "acceptEdits", "--disallowedTools=AskUserQuestion", "-r", "sid", "more"])
+  assert.deepEqual(cmd, ["claude", "--permission-mode", "acceptEdits", "--strict-mcp-config", "--disallowedTools=AskUserQuestion", "-r", "sid", "more"])
   // Resume re-carries the worker norms (system prompt is rebuilt per invocation) via the file flag.
   const dflt = buildClaudeResumeCommand({ sessionId: "sid", permissionMode: "auto", message: "m" })
   assert.ok(dflt.includes("--append-system-prompt-file"))

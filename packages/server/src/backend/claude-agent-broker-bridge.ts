@@ -24,6 +24,7 @@ import {
   type ClaudeAskSpec,
 } from "./claude-permission-interactions.ts"
 import { FRIZZ_MCP, claudeCompactionEnv, claudeCompactionWindowOf, claudeWorkerEnv } from "./types.ts"
+import type { WorkerMcpServers } from "./project-mcp-servers.ts"
 
 type BrokerMcpServers = NonNullable<ClaudeBrokerConfig["mcpServers"]>
 
@@ -34,7 +35,7 @@ type BrokerMcpServers = NonNullable<ClaudeBrokerConfig["mcpServers"]>
 // frizz mount, so a project whose plugin dir did not resolve behaves exactly as before.
 function withFrizzThreadSlug(servers: BrokerMcpServers | undefined, slug: string): BrokerMcpServers | undefined {
   const frizz = servers?.[FRIZZ_MCP.name]
-  if (!frizz) return servers
+  if (!frizz || !("command" in frizz)) return servers // only ever the stdio frizz mount; a remote entry has no env
   return { ...servers, [FRIZZ_MCP.name]: { ...frizz, env: { ...frizz.env, FRIZZ_THREAD_SLUG: slug } } }
 }
 
@@ -69,7 +70,7 @@ export interface ClaudeBrokerBridgeDeps {
    *  attach time). Absent ⇒ a bare SDK worker (the pre-cutover behavior). */
   workerEnv?: {
     pluginDir?: string
-    mcpServers?: Record<string, { type?: "stdio"; command: string; args?: string[]; env?: Record<string, string> }>
+    mcpServers?: WorkerMcpServers
     allowedTools?: string[]
     permDir?: string
   }

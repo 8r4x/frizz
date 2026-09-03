@@ -1,4 +1,5 @@
 import { join } from "node:path"
+import { projectMcpServers, type WorkerMcpServers } from "./project-mcp-servers.ts"
 import { buildClaudeCommand, buildClaudeResumeCommand, claudeWorkerEnvironment, workerPluginDir } from "../dispatch.ts"
 import { parseLine as parseClaudeRecord, applyRecord, isRealUserMessage, type TailState } from "../tailer.ts"
 import type { AgentBackend, BuiltCommand, FoldState, NormalizedEvent, ResumeOpts, SpawnOpts } from "./types.ts"
@@ -15,6 +16,9 @@ export interface ClaudeBackendOptions {
   // <sessionId>.jsonl. Injected by the composition layer so it matches the tailer's foreign-scan dir.
   logDir: string
   claudeBin?: string // injectable dispatch executable (tests use a stand-in)
+  // The servers a worker in `cwd` mounts besides frizz's own (project-mcp-servers.ts). Injectable so a
+  // test does not read the operator's real `~/.claude.json`.
+  resolveProjectMcpServers?: (cwd: string) => WorkerMcpServers
 }
 
 // Flatten a tool_result's `content` (an array of {type:"text", text} blocks, or a bare string) into
@@ -112,6 +116,7 @@ export function createClaudeBackend(opts: ClaudeBackendOptions): AgentBackend {
         workerPrompt: o.workerContract,
         extraSystemPrompt: o.extraSystemPrompt,
         frizzMcp: o.frizzMcp,
+        projectMcpServers: (opts.resolveProjectMcpServers ?? projectMcpServers)(o.cwd),
       })
       return { argv, env: claudeWorkerEnvironment(), prewrite: [] }
     },
@@ -128,6 +133,7 @@ export function createClaudeBackend(opts: ClaudeBackendOptions): AgentBackend {
         workerPrompt: o.workerContract,
         extraSystemPrompt: o.extraSystemPrompt,
         frizzMcp: o.frizzMcp,
+        projectMcpServers: (opts.resolveProjectMcpServers ?? projectMcpServers)(o.cwd),
       })
       return { argv, env: claudeWorkerEnvironment(), prewrite: [] }
     },

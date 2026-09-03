@@ -26,6 +26,7 @@ import { randomUUID } from "node:crypto"
 import { fileURLToPath } from "node:url"
 import { createClaudeQueryFactory } from "./claude-agent-sdk.ts"
 import { inheritWorkerEnvironment } from "./worker-env.ts"
+import { projectMcpServers, workerMcpServers, type WorkerMcpServers } from "./project-mcp-servers.ts"
 import { claudeCompactionWindowOf } from "./types.ts"
 import { createClaudeBrokerDiagnosticWriter, createClaudeBrokerExitWriter, type ClaudeBrokerExitReason } from "./claude-broker-diagnostics.ts"
 import { CLAUDE_BROKER_CAPABILITY_CANCEL_INPUT, CLAUDE_BROKER_CAPABILITY_LIST_SKILLS, CLAUDE_BROKER_CAPABILITY_RELOAD_PLUGINS, CLAUDE_BROKER_CAPABILITY_RENAME, CLAUDE_BROKER_CAPABILITY_STOP_TASK, CLAUDE_BROKER_CAPABILITY_SUBAGENT_STEER, CLAUDE_INPUT_DROP_DIAGNOSTIC_PREFIX } from "./claude-agent-sdk-protocol.ts"
@@ -59,7 +60,7 @@ export interface ClaudeBrokerConfig {
    *  the MCP servers; `workerEnv` carries the per-thread frizz vars the plugin hooks gate on (FRIZZ_THREAD,
    *  FRIZZ_PERM_DIR) — merged into the SDK env AFTER the ambient allowlist. */
   pluginDir?: string
-  mcpServers?: Record<string, { type?: "stdio"; command: string; args?: string[]; env?: Record<string, string> }>
+  mcpServers?: WorkerMcpServers
   allowedTools?: string[]
   workerEnv?: Record<string, string>
   /** When set, the daemon writes a discovery record here after its socket is listening. */
@@ -157,20 +158,26 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
     : undefined
 
   const factory = createClaudeQueryFactory({ enabled: true, executablePath: config.executablePath })
+  // The worker inherits frizz's environment minus frizz's own control plane (see worker-env.ts). The
+  // frizz worker vars it DOES need (FRIZZ_THREAD, FRIZZ_PERM_DIR) ride workerEnv and are merged on
+  // top — which is also what gives them THIS thread's values instead of the server's.
+  const env = { ...inheritWorkerEnvironment(config.env), ...(config.workerEnv ?? {}) }
   const handle = factory.start({
     cwd: config.cwd,
     session: config.resume ? { kind: "resume", sessionId: config.sessionId } : { kind: "new", sessionId: config.sessionId },
     permissionMode: config.permissionMode ?? "default",
-    // The worker inherits frizz's environment minus frizz's own control plane (see worker-env.ts). The
-    // frizz worker vars it DOES need (FRIZZ_THREAD, FRIZZ_PERM_DIR) ride workerEnv and are merged on
-    // top — which is also what gives them THIS thread's values instead of the server's.
-    env: { ...inheritWorkerEnvironment(config.env), ...(config.workerEnv ?? {}) },
+    env,
     persistSession: true, // write the tailer-readable transcript JSONL
     appendSystemPrompt: config.appendSystemPrompt,
     model: config.model,
     effort: config.effort,
     pluginDir: config.pluginDir,
-    mcpServers: config.mcpServers,
+    // The WHOLE MCP surface of this thread, and STRICT so the CLI discovers nothing else: the project's
+    // approved `.mcp.json` (and the operator's remote user-scope servers) under the frizz mount, which
+    // wins a name collision. Read at every fork, not once per project, so a `.mcp.json` edit reaches the
+    // next dispatch the way it reaches the next plain `claude`. project-mcp-servers.ts has the reasons.
+    mcpServers: workerMcpServers(projectMcpServers(config.cwd, { env }), config.mcpServers),
+    strictMcpConfig: true,
     allowedTools: config.allowedTools,
     // NO `disallowedTools` here, and the asymmetry with the argv path (WORKER_DISALLOWED_TOOLS →
     // `--disallowedTools=AskUserQuestion`) is DELIBERATE. That flag exists because a worker launched as

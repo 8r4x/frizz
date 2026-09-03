@@ -294,8 +294,10 @@ export function frizzMcpEnv(mcp: FrizzMcp): Record<string, string> {
 // ~6,400 prefix tokens on EVERY worker session, and most workers never open a page — and mounting a
 // browser nobody asked for is an opinion Frizz has no business holding. A project or an operator that
 // wants one brings it themselves, the same way they would in any other Claude Code or codex session:
-// a project `.mcp.json` (this repo has one, pinned `--headless --isolated`), or `claude mcp add
-// --scope user`. Do not re-add a mount here.
+// a project `.mcp.json` (this repo has one, pinned `--headless --isolated`). Since 2026-09-03 a worker
+// mounts under `--strict-mcp-config`, so `claude mcp add --scope user` reaches the operator's own
+// sessions but not the fleet — a user-scope stdio server was booting in every worker, twice over; see
+// project-mcp-servers.ts. Do not re-add a mount here.
 
 // The environment EVERY frizz Claude worker gets, on EVERY spawn path. Kept as one record with one
 // spread per call site (the bridge's `workerEnv` for the broker daemon, the SDK's key allowlist, and

@@ -20,6 +20,7 @@ import { PERM_DIR_ENV, permRequestDir, type Project } from "./project.ts"
 import type { SessionRow, Storage } from "./storage.ts"
 import type { BoardManager } from "./board.ts"
 import type { AgentBackend, BackendKind, BuiltCommand, FrizzMcp } from "./backend/types.ts"
+import { workerMcpServers, type WorkerMcpServers } from "./backend/project-mcp-servers.ts"
 import { FRIZZ_MCP, WORKER_DISALLOWED_TOOLS, claudeWorkerEnv, frizzMcpEnv } from "./backend/types.ts"
 // The lifted worker caps live beside the shared worker environment they belong to (backend/types.ts).
 // Re-exported here because this is where callers have always reached for them.
@@ -503,22 +504,23 @@ export function resolveFrizzMcp(
   }
 }
 
-// Claude flags that mount the frizz-injected MCP server via ONE inline `--mcp-config` JSON and
-// PRE-APPROVE its tools (`--allowedTools`) so a headless worker never blocks on a permission prompt
+// Claude flags that mount a worker's MCP servers via ONE inline `--mcp-config` JSON and PRE-APPROVE
+// the frizz server's tools (`--allowedTools`) so a headless worker never blocks on a permission prompt
 // it has nobody to answer. The argv is exec'd with NO shell in between, so the JSON travels literally.
-// The unified `frizz` server is the ONLY server frizz mounts, and only when its descriptor resolved —
-// frizz injects no browser and nothing else (see backend/types.ts). Whatever the PROJECT or the
-// operator configured themselves still loads: `--mcp-config` ADDS to the discovered `.mcp.json` /
-// user-scope servers rather than replacing them, which is what `--strict-mcp-config` would do and why
-// frizz never passes it.
+// The unified `frizz` server is the ONLY server frizz itself injects, and only when its descriptor
+// resolved — frizz injects no browser and nothing else (see backend/types.ts). Everything else a
+// worker mounts is the PROJECT's: since 2026-09-03 every worker runs under `--strict-mcp-config`, so
+// the CLI discovers no `.mcp.json` and no user-scope server on its own, and the project's approved
+// servers ride this same inline config (`project`, from project-mcp-servers.ts — which is also where
+// the reasons live: a user-scope stdio server was booting in EVERY worker, twice over).
 export interface ClaudeMcpStdioConfig { command: string; args?: string[]; env?: Record<string, string> }
-export interface ClaudeMcpConfig { mcpServers: Record<string, ClaudeMcpStdioConfig>; allowedTools: string[] }
+export interface ClaudeMcpConfig { mcpServers: WorkerMcpServers; allowedTools: string[] }
 
 // The structured frizz MCP mount, shared by the `claude` CLI argv (rendered to --mcp-config/
 // --allowedTools flags below) AND the broker SDK path (passed straight into query()'s mcpServers/
 // allowedTools). One source of truth so both forms mount the SAME servers with the SAME pre-approvals.
-export function claudeMcpConfig(mcp?: FrizzMcp): ClaudeMcpConfig {
-  const mcpServers: Record<string, ClaudeMcpStdioConfig> = {}
+export function claudeMcpConfig(mcp?: FrizzMcp, project?: WorkerMcpServers): ClaudeMcpConfig {
+  const mcpServers: WorkerMcpServers = {}
   const allowedTools: string[] = []
   if (mcp) {
     // command is the ABSOLUTE node path (process.execPath — the node running the frizz server), NOT bare
@@ -542,24 +544,31 @@ export function claudeMcpConfig(mcp?: FrizzMcp): ClaudeMcpConfig {
     // `mcp__frizz__spawn_thread`) is pre-approved, so adding one never needs an allow-list edit.
     allowedTools.push(`mcp__${FRIZZ_MCP.name}`)
   }
-  return { mcpServers, allowedTools }
+  // The project's servers underneath, frizz's on top: a project cannot shadow `frizz` by naming a server
+  // after it. Only the frizz server is pre-approved — a project server keeps the approval story it had.
+  return { mcpServers: workerMcpServers(project, mcpServers), allowedTools }
 }
 
 // The argv rendering of claudeMcpConfig above.
-export function claudeMcpFlags(mcp?: FrizzMcp): string[] {
-  const { mcpServers, allowedTools } = claudeMcpConfig(mcp)
-  // NOTHING mounted ⇒ NO flags. This became reachable when the always-on browser mount was removed
-  // (a checkout whose worker plugin does not resolve has no frizz descriptor either), and an empty
-  // `--allowedTools=` is not the same as omitting it — it hands the CLI one rule that is the empty
-  // string. Emit neither flag rather than two empty ones.
-  if (Object.keys(mcpServers).length === 0) return []
+export function claudeMcpFlags(mcp?: FrizzMcp, project?: WorkerMcpServers): string[] {
+  const { mcpServers, allowedTools } = claudeMcpConfig(mcp, project)
+  // `--strict-mcp-config` ALWAYS, even with nothing to mount: the flag is what keeps the operator's
+  // user-scope servers out of the worker, and a worker with no servers is still one that must not boot
+  // them. NOTHING mounted ⇒ no OTHER flags. That state became reachable when the always-on browser
+  // mount was removed (a checkout whose worker plugin does not resolve has no frizz descriptor either),
+  // and an empty `--allowedTools=` is not the same as omitting it — it hands the CLI one rule that is
+  // the empty string. Emit neither rather than two empty ones.
+  const argv = ["--strict-mcp-config"]
+  if (Object.keys(mcpServers).length === 0) return argv
   const config = JSON.stringify({ mcpServers })
   // ONE comma-joined `--allowedTools=` in EQUALS form: the flag is VARIADIC, so a space-separated
   // value with a positional right behind it (e.g. the minimal no-system-prompt argv, where the prompt
   // directly follows) would be swallowed as a second rule. The equals form binds exactly one token —
   // immune to argv reordering. Verified live: `claude -p --allowedTools=mcp__frizz <prompt>` runs the
   // tools unprompted with the prompt surviving as the positional.
-  return ["--mcp-config", config, `--allowedTools=${allowedTools.join(",")}`]
+  argv.push("--mcp-config", config)
+  if (allowedTools.length > 0) argv.push(`--allowedTools=${allowedTools.join(",")}`)
+  return argv
 }
 
 // A frizz worker runs under a dashboard, not a live chat, so a BLOCKING question tool would hang the
@@ -594,6 +603,7 @@ export function buildClaudeCommand(opts: {
   // orientation) — system-level so the visible transcript carries only the human's own words.
   extraSystemPrompt?: string
   frizzMcp?: FrizzMcp
+  projectMcpServers?: WorkerMcpServers
 }): string[] {
   const argv = [opts.claudeBin ?? "claude", "--session-id", opts.sessionId, "--permission-mode", workerPermissionMode(opts.permissionMode)]
   // NO 1M window here, deliberately. The broker spawn requests it (claude-context-window.ts), but only
@@ -609,7 +619,7 @@ export function buildClaudeCommand(opts: {
   if (effort.effort) argv.push("--effort", effort.effort)
   argv.push(...claudeUltracodeFlags(effort))
   if (opts.pluginDir) argv.push("--plugin-dir", opts.pluginDir)
-  argv.push(...claudeMcpFlags(opts.frizzMcp))
+  argv.push(...claudeMcpFlags(opts.frizzMcp, opts.projectMcpServers))
   argv.push(...workerDisallowedToolFlags())
   // The fixed worker norms live in the SYSTEM prompt: rebuilt on every invocation (incl. resume)
   // and immune to compaction, unlike a first user message.
@@ -690,6 +700,7 @@ export function buildClaudeResumeCommand(opts: {
   extraSystemPrompt?: string
   // The frizz MCP server must ride resume too (a resumed worker keeps the capability).
   frizzMcp?: FrizzMcp
+  projectMcpServers?: WorkerMcpServers
 }): string[] {
   const argv = [opts.claudeBin ?? "claude", "--permission-mode", workerPermissionMode(opts.permissionMode)]
   if (opts.model) argv.push("--model", opts.model)
@@ -698,7 +709,7 @@ export function buildClaudeResumeCommand(opts: {
   if (effort.effort) argv.push("--effort", effort.effort)
   argv.push(...claudeUltracodeFlags(effort))
   if (opts.pluginDir) argv.push("--plugin-dir", opts.pluginDir)
-  argv.push(...claudeMcpFlags(opts.frizzMcp))
+  argv.push(...claudeMcpFlags(opts.frizzMcp, opts.projectMcpServers))
   argv.push(...workerDisallowedToolFlags())
   // The system prompt is rebuilt per invocation — the resume must re-carry the worker norms too.
   // Same file-based path as buildClaudeCommand (see systemPromptFlags): inline would put the whole

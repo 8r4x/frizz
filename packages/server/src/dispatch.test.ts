@@ -55,7 +55,9 @@ test("Claude dispatch mounts the unified frizz MCP server, alone, and pre-approv
   const cfg = JSON.parse(cfgRaw)
   // `frizz` is the ONLY server frizz injects. A `chrome-devtools` mount rode every dispatch until
   // 2026-08-26; it cost ~6,400 prefix tokens of tool schema on a worker that mostly never opened a
-  // page, and a browser is the project's to bring (a `.mcp.json`, or `claude mcp add --scope user`).
+  // page, and a browser is the project's to bring — its `.mcp.json`, which rides this same inline config
+  // (next test but one); `claude mcp add --scope user` no longer reaches a worker at all.
+  assert.ok(argv.includes("--strict-mcp-config"), "a worker discovers no MCP scope on its own")
   assert.deepEqual(Object.keys(cfg.mcpServers), [FRIZZ_MCP.name])
   assert.deepEqual(cfg.mcpServers[FRIZZ_MCP.name], {
     command: process.execPath, // absolute node path, not bare "node" (worker PATH-independence)
@@ -106,10 +108,37 @@ test("Claude dispatch mounts NOTHING when no frizz-MCP descriptor resolved — n
   const argv = buildClaudeCommand({ sessionId: "no-mcp", permissionMode: "auto", prompt: "test", workerPrompt: "" })
   // With the browser mount gone this is a real state, and the flags must be ABSENT rather than empty:
   // `--allowedTools=` hands the CLI one rule that is the empty string, which is not the same as no
-  // rule at all. The worker still sees whatever the project's own `.mcp.json` configured — frizz adds
-  // to the discovered servers, it does not replace them (no `--strict-mcp-config`).
+  // rule at all. `--strict-mcp-config` is the one flag that stays: it is what keeps the operator's
+  // user-scope servers out of the worker, and a worker with nothing to mount still must not boot them
+  // (the project's own `.mcp.json` arrives through `projectMcpServers`, never through discovery).
+  assert.ok(argv.includes("--strict-mcp-config"))
   assert.ok(!argv.includes("--mcp-config"))
   assert.ok(!argv.some((a) => a.startsWith("--allowedTools")))
+})
+
+test("Claude dispatch mounts the project's approved servers under --strict-mcp-config, and frizz wins a name collision", () => {
+  const argv = buildClaudeCommand({
+    sessionId: "mcp-project",
+    permissionMode: "auto",
+    prompt: "test",
+    workerPrompt: "",
+    frizzMcp: { scriptPath: "/abs/plugin/bin/frizz-mcp.mjs", stateDir: "/home/.frizz/projects/pid" },
+    projectMcpServers: {
+      "chrome-devtools": { command: "npx", args: ["-y", "chrome-devtools-mcp@1.7.0", "--headless"] },
+      Neon: { type: "http", url: "https://mcp.neon.tech/mcp" },
+      [FRIZZ_MCP.name]: { command: "/not/frizz" },
+    },
+  })
+  assert.ok(argv.includes("--strict-mcp-config"))
+  const cfg = JSON.parse(argv[argv.indexOf("--mcp-config") + 1]!)
+  // The project's servers travel in the SAME inline config as the frizz mount — under strict mode that
+  // config is the whole MCP surface — and a project cannot shadow `frizz` by naming a server after it.
+  assert.deepEqual(Object.keys(cfg.mcpServers).sort(), ["Neon", "chrome-devtools", FRIZZ_MCP.name].sort())
+  assert.deepEqual(cfg.mcpServers["chrome-devtools"], { command: "npx", args: ["-y", "chrome-devtools-mcp@1.7.0", "--headless"] })
+  assert.deepEqual(cfg.mcpServers.Neon, { type: "http", url: "https://mcp.neon.tech/mcp" })
+  assert.equal(cfg.mcpServers[FRIZZ_MCP.name].args[0], "/abs/plugin/bin/frizz-mcp.mjs")
+  // Only the frizz server is pre-approved; a project server keeps whatever approval story it had.
+  assert.ok(argv.includes("--allowedTools=mcp__frizz"))
 })
 
 test("Claude worker surfaces share the canonical per-session scratch DIRECTORY path", () => {

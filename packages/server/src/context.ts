@@ -737,7 +737,8 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
         // The frizz worker environment — the SDK equivalent of the CLI argv's --plugin-dir / --mcp-config.
         // Computed ONCE here (constant per project) and applied on every broker fork so a broker worker
         // gets the frizz sub-agent profiles, the frizz MCP server (the only one frizz mounts), and the
-        // cc-worker hooks. A project's own `.mcp.json` servers load on top of these, not through them.
+        // cc-worker hooks. The project's own `.mcp.json` servers are merged in by the broker daemon at each
+        // fork (project-mcp-servers.ts): under `--strict-mcp-config` nothing mounts that frizz did not hand over.
         workerEnv: {
           pluginDir: workerPluginDir(),
           ...claudeMcpConfig(resolveFrizzMcp(frizzMcpTarget)),

@@ -1225,6 +1225,7 @@ function startHarness(
   env: Record<string, string | undefined> = {},
   callbacks: Pick<Parameters<ReturnType<typeof createClaudeQueryFactory>["start"]>[0], "canUseTool" | "onElicitation"> = {},
   session: Parameters<ReturnType<typeof createClaudeQueryFactory>["start"]>[0]["session"] = { kind: "new", sessionId: SESSION_ID },
+  extra: Partial<Parameters<ReturnType<typeof createClaudeQueryFactory>["start"]>[0]> = {},
 ): Harness {
   const dir = mkdtempSync(join(tmpdir(), "frizz-claude-sdk-"))
   const capturePath = join(dir, "capture.jsonl")
@@ -1243,6 +1244,7 @@ function startHarness(
       ...env,
     },
     ...callbacks,
+    ...extra,
     onDiagnostic(event) {
       diagnostics.push(event)
     },
@@ -1479,4 +1481,24 @@ test("mapTask bounds the background_tasks_changed level set", () => {
   // Past the cap the whole list degrades to absent rather than growing without bound.
   const huge = mapTask({ tasks: Array.from({ length: 400 }, (_, i) => ({ task_id: `k${i}` })) }, "level")
   assert.equal(huge.tasks, undefined)
+})
+
+test("strictMcpConfig hands the CLI --strict-mcp-config, and the mounted servers ride --mcp-config", { timeout: 10_000 }, async () => {
+  const harness = startHarness("strict-mcp", {}, {}, { kind: "new", sessionId: SESSION_ID }, {
+    strictMcpConfig: true,
+    mcpServers: { frizz: { command: process.execPath, args: ["/abs/frizz-mcp.mjs"] }, Neon: { type: "http", url: "https://mcp.example/mcp" } },
+  })
+  try {
+    await harness.handle.ready()
+    const records = await waitForCapture(harness.capturePath, (rows) => rows.some((row) => row.kind === "startup"))
+    const argv = (records.find((row) => row.kind === "startup") as CaptureRecord).argv as string[]
+    // The flag is the whole point: with it the CLI discovers no `.mcp.json` and no user-scope server.
+    assert.ok(argv.includes("--strict-mcp-config"), `argv had: ${argv.join(" ")}`)
+    // The SDK may pass the config inline or as a file it wrote; either way the servers we mounted are in it.
+    const value = argv[argv.indexOf("--mcp-config") + 1]!
+    const cfg = JSON.parse(value.trimStart().startsWith("{") ? value : readFileSync(value, "utf8"))
+    assert.deepEqual(Object.keys(cfg.mcpServers).sort(), ["Neon", "frizz"])
+  } finally {
+    await harness.close()
+  }
 })

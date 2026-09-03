@@ -50,6 +50,7 @@ import {
   type ClaudeTaskUsage,
 } from "./claude-agent-sdk-protocol.ts"
 import { inheritWorkerEnvironment } from "./worker-env.ts"
+import type { WorkerMcpServers } from "./project-mcp-servers.ts"
 import { redactCredentialSyntax } from "../credential-redaction.ts"
 import type { ThreadSkillSource } from "@frizz/shared"
 
@@ -106,8 +107,12 @@ export interface ClaudeQueryStartOptions {
   // (agents + hooks); `mcpServers` mounts the stdio MCP servers; `allowedTools` pre-approves them so a
   // headless worker never blocks on a tool it has nobody to approve.
   pluginDir?: string
-  mcpServers?: Record<string, { type?: "stdio"; command: string; args?: string[]; env?: Record<string, string> }>
+  mcpServers?: WorkerMcpServers
   allowedTools?: string[]
+  // Hand the CLI ONLY `mcpServers` (plus whatever the loaded plugin declares): it discovers no `.mcp.json`
+  // and no user-scope server by itself. This is just the seam; WHICH servers a worker gets is decided in
+  // project-mcp-servers.ts and applied by the broker daemon.
+  strictMcpConfig?: boolean
   // Tools taken away from the session outright — the SDK equivalent of the argv path's
   // `--disallowedTools=`. NOTHING passes it today: the broker deliberately keeps AskUserQuestion (it can
   // render the question as a dashboard card), which is the only tool that argv drops. Kept as the
@@ -968,10 +973,12 @@ function startClaudeQuery(executablePath: string, options: ClaudeQueryStartOptio
       // broker session gets the frizz sub-agent profiles + hooks, mount the frizz MCP server, and
       // pre-approve it. EMPTY is skipped, not passed: since frizz stopped mounting a browser (2026-08-26)
       // a resolved-nothing worker env is a real state, and `{}`/`[]` are truthy — handing the SDK an
-      // empty allowlist is not the same as handing it none. The project's own `.mcp.json` servers are
-      // loaded by settingSources, independently of this.
+      // empty allowlist is not the same as handing it none. The project's own `.mcp.json` servers arrive
+      // INSIDE `mcpServers` — the broker daemon merges them (project-mcp-servers.ts) — because
+      // `strictMcpConfig` stops the CLI discovering any MCP scope by itself.
       ...(options.pluginDir ? { plugins: [{ type: "local" as const, path: options.pluginDir }] } : {}),
       ...(options.mcpServers && Object.keys(options.mcpServers).length > 0 ? { mcpServers: options.mcpServers } : {}),
+      ...(options.strictMcpConfig ? { strictMcpConfig: true } : {}),
       ...(options.allowedTools?.length ? { allowedTools: options.allowedTools } : {}),
       ...(options.disallowedTools?.length ? { disallowedTools: [...options.disallowedTools] } : {}),
       persistSession: options.persistSession ?? false,

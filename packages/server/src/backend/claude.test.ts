@@ -240,7 +240,9 @@ test("createClaudeBackend: foldLine folds a Claude record into the tail state; a
 // builds (production path) must be BYTE-IDENTICAL to a direct legacy `buildClaude*` call (the path
 // dispatch/resume take when no backend is injected). Regression fence against future backend edits.
 test("createClaudeBackend: buildSpawn/buildResume argv == the legacy buildClaude* argv (byte-for-byte)", () => {
-  const backend = createClaudeBackend({ logDir: "/logs", claudeBin: "claude" })
+  // The stub keeps this fence hermetic: the production resolver reads the cwd's `.mcp.json` and the
+  // operator's config, and `/cwd` here is not a real project.
+  const backend = createClaudeBackend({ logDir: "/logs", claudeBin: "claude", resolveProjectMcpServers: () => ({}) })
   const spawnCases = [
     { sessionId: "u1", permissionMode: "acceptEdits" as const, model: "opus", effort: "high", extra: "SCRATCHPAD: x" },
     { sessionId: "u2", permissionMode: "auto" as const, model: undefined, effort: undefined, extra: undefined },
