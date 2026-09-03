@@ -1,27 +1,25 @@
-// LIVE end-to-end test of STEERING A SUB-AGENT through frizz's OWN chain: a real claude session
-// dispatched by the real broker bridge, a real background child, then `bridge.steerSubAgent()` — the
-// exact call the subAgentSteer RPC makes — and an assertion that the CHILD (not the parent) obeyed it.
+// LIVE measurement of the MID-TURN steer misdelivery — the regime `_live_broker_steer.mts` never
+// covered, and the one the operator actually hit (2026-09-02, thread 537f480c on nub: a steer typed
+// into a running child's drawer landed in the PARENT's conversation).
 //
-//   nub packages/server/src/backend/_live_broker_steer.mts
+//   nub packages/server/src/backend/_live_broker_steer_busy.mts
 //
-// WHY LIVE. Every claim under this feature is a claim about what a REAL CLI does with a
-// `parent_tool_use_id` on an input frame. Unit tests can only prove that frizz put the id on the wire
-// (claude-agent-broker-bridge.steer.test.ts does exactly that against a fake CLI). They cannot prove
-// the CLI ROUTES it, and the routing is the entire feature.
+// The original script proved addressed routing with the parent IDLE ("reply 'dispatched' and stop"),
+// and that is the only regime it proved. This one holds the parent MID-TURN: it dispatches the same
+// background child, then keeps the parent busy in a work loop while the steer goes out. What the CLI
+// (2.1.251) does with an addressed input while a main-thread turn is in flight is the entire question:
 //
-// SCOPE: this proves routing with the parent AT REST ("reply 'dispatched' and stop" below), which is
-// the only regime where the CLI honors the addressing at all. The other regime — the parent MID-TURN,
-// where the CLI absorbs the addressed frame into the parent's own running turn — is measured by
-// `_live_broker_steer_busy.mts`, and is why subAgentSteerable refuses while the thread is in-flight.
+//   · measured here: the frame is ENQUEUED on the main input queue (`queue-operation` enqueue in the
+//     parent JSONL) and then ABSORBED into the parent's own running turn (`reason:"absorbed_mid_turn"`)
+//     — the `parent_tool_use_id` addressing is dropped, the PARENT obeys the text, and the child never
+//     sees a byte of it.
 //
-// The differential is the point, and it is one variable:
-//   · the STEER carries parent_tool_use_id = the child's dispatch tool_use id  → must reach the CHILD
-//   · the CONTROL is an ordinary followUp, unaddressed                          → must reach the PARENT
-// Each writes a distinct token to a distinct file, so "who obeyed" is a filesystem fact rather than a
-// reading of prose. A run where BOTH tokens land in the same place is a FAILURE even if both files
-// exist — that is the misdelivery this feature's gate exists to prevent.
+// This script calls `bridge.steerSubAgent` DIRECTLY — deliberately below the router's
+// `subAgentSteerable` gate — so it stays a measurement of provider truth even after that gate learns
+// to refuse the mid-turn case. If a future CLI starts routing the addressed frame to the child
+// mid-turn, this script is what proves the gate can be relaxed.
 import { execFileSync } from "node:child_process"
-import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { randomUUID } from "node:crypto"
@@ -35,15 +33,12 @@ import { cwdSlug, type Project } from "../project.ts"
 import type { AgentBackend } from "./types.ts"
 
 const claudeBin = execFileSync("which", ["claude"], { encoding: "utf8" }).trim()
-const stateDir = mkdtempSync(join(tmpdir(), "steer-state-"))
-// REALPATH: claude slugifies the RESOLVED cwd, so a /var/folders temp dir lands under
-// -private-var-folders-… . Skipping this points the tailer at an empty log dir and the fold silently
-// sees nothing — which reads exactly like the bug under test.
-const cwd = realpathSync(mkdtempSync(join(tmpdir(), "steer-repo-")))
+const stateDir = mkdtempSync(join(tmpdir(), "steerbusy-state-"))
+// REALPATH: claude slugifies the RESOLVED cwd — see _live_broker_steer.mts.
+const cwd = realpathSync(mkdtempSync(join(tmpdir(), "steerbusy-repo-")))
 execFileSync("git", ["init", "-q", cwd])
 
-const CHILD_TOKEN = "CHILDSTEER7742"
-const PARENT_TOKEN = "PARENTSTEER9931"
+const STEER_TOKEN = "MIDTURNSTEER4471"
 const childFile = join(cwd, "child-obeyed.txt")
 const parentFile = join(cwd, "parent-obeyed.txt")
 
@@ -58,7 +53,6 @@ const storage = createStorage(join(stateDir, "ui.db"), "p")
 const claudeBackend = createClaudeBackend({ claudeBin, logDir: defaultLogDir(project) })
 const backendFor = (_kind?: string): AgentBackend => claudeBackend
 
-// EXACTLY context.ts's construction order — ingest first, tailer late-bound.
 let tailer!: Tailer
 const ingest = createClaudeRuntimeIngest({ nudge: () => { try { tailer.nudge?.() } catch { /* ignore */ } } })
 
@@ -77,7 +71,7 @@ tailer = createTailer({
   runtimeTasks: (sessionId) => ingest.tasks(sessionId),
 })
 
-const slug = "steer-live"
+const slug = "steer-busy-live"
 const sessionId = randomUUID()
 
 const CHILD_TASK = [
@@ -86,10 +80,13 @@ const CHILD_TASK = [
   "When the loop finishes, reply DONE.",
 ].join(" ")
 
+// The one variable versus _live_broker_steer.mts: the parent KEEPS WORKING after the dispatch, so the
+// steer arrives while its main-thread turn is in flight.
 const PROMPT = [
   "Use the Agent tool ONCE with subagent_type \"general-purpose\" and run_in_background true,",
   `description "steer target", prompt: "${CHILD_TASK}".`,
-  "After dispatching it, do NOT wait for it and do NOT dispatch anything else — reply \"dispatched\" and stop.",
+  "After dispatching it, do NOT wait for it. Instead, YOU must keep working: repeat 25 times — run the",
+  "Bash command `date`, then `sleep 4`. Do not stop early. When your own loop finishes, reply DONE.",
 ].join(" ")
 
 try {
@@ -103,7 +100,7 @@ try {
   storage.setClaudeRuntime(slug, "broker")
   tailer.tick()
 
-  // ---- wait until the TAILER itself reports a live, direct child (the RPC's own precondition) ----
+  // ---- wait until the tailer reports a live, direct child (the RPC's own precondition) ----
   let childId: string | undefined
   const findDeadline = Date.now() + 180_000
   while (Date.now() < findDeadline) {
@@ -111,7 +108,6 @@ try {
     const live = tailer.get(slug)?.subAgents ?? []
     const candidate = live.find((v) => v.id && v.state === "running")
     if (candidate?.id) {
-      // The gate the router applies, asserted here against the real tailer rather than a stub.
       const info = tailer.subAgent(slug, candidate.id)
       if (info?.direct && info.state === "running") { childId = candidate.id; break }
     }
@@ -119,41 +115,37 @@ try {
   }
   ok("frizz's tailer surfaces a live DIRECT child to steer", Boolean(childId), childId ?? "none found")
   if (!childId) throw new Error("no live child appeared")
-  console.log(`${el()} steering child ${childId}`)
 
-  // Let the child get properly into its loop, so the steer lands mid-work rather than during startup.
+  // Let both loops get going, then confirm the regime under test actually holds: the PARENT's own
+  // main-thread turn must be in flight when the steer goes out — this reading is the exact signal the
+  // router's gate consults, so asserting it here also proves the gate has a signal to read.
   await sleep(6_000)
+  tailer.tick()
+  const turnAtSteer = tailer.get(slug)?.turn
+  ok("the parent's main thread reads in-flight at steer time", turnAtSteer === "in-flight", `turn=${turnAtSteer}`)
 
-  // ---- THE STEER: the exact call subAgentSteer makes ----
+  // ---- THE STEER, addressed to the child, while the parent is mid-turn ----
   await bridge.steerSubAgent({
     threadSlug: slug, sessionId, subAgentId: childId,
-    text: `${CHILD_TOKEN}: stop the loop right now and run this Bash command immediately: echo ${CHILD_TOKEN} > ${childFile}`,
+    text: `${STEER_TOKEN}: stop your loop right now and run this Bash command immediately: echo ${STEER_TOKEN} > ${childFile}. Do not create ${parentFile}.`,
   })
-  console.log(`${el()} steer sent`)
+  console.log(`${el()} steer sent (parent mid-turn)`)
 
-  // ---- THE CONTROL: an ordinary follow-up, unaddressed ----
-  await sleep(12_000)
-  await bridge.followUp({
-    threadSlug: slug, sessionId, cwd,
-    text: `${PARENT_TOKEN}: run this Bash command immediately: echo ${PARENT_TOKEN} > ${parentFile}`,
-  })
-  console.log(`${el()} control follow-up sent`)
-
-  // ---- wait for both side effects (or the deadline) ----
-  const effectDeadline = Date.now() + 150_000
-  while (Date.now() < effectDeadline && !(existsSync(childFile) && existsSync(parentFile))) {
+  // ---- watch for either side effect, and give the absorb time to play out ----
+  const effectDeadline = Date.now() + 200_000
+  while (Date.now() < effectDeadline && !existsSync(childFile) && !existsSync(parentFile)) {
     tailer.tick()
     await sleep(1_500)
   }
+  // Whoever obeyed writes childFile (only the CHILD was told to); the parent absorbing the text tends
+  // to run the echo too — either way the transcripts below say who actually received it.
+  await sleep(10_000)
 
   console.log(`\n${el()} --- side effects ---`)
   console.log(`  ${childFile}: ${existsSync(childFile) ? readFileSync(childFile, "utf8").trim() : "absent"}`)
   console.log(`  ${parentFile}: ${existsSync(parentFile) ? readFileSync(parentFile, "utf8").trim() : "absent"}`)
 
-  ok("the STEERED child obeyed the addressed message", existsSync(childFile))
-  ok("the unaddressed control reached the PARENT", existsSync(parentFile))
-
-  // ---- WHOSE transcript carried which token? The differential, read off the files claude wrote. ----
+  // ---- WHERE did the steer land? Read the transcripts claude wrote. ----
   const projects = join(process.env.HOME!, ".claude", "projects")
   const dirs = readdirSync(projects).filter((d) => d.includes(cwd.replace(/[^a-zA-Z0-9]/g, "-").replace(/^-/, "")))
   const walk = (p: string, depth = 0): string[] => {
@@ -167,25 +159,36 @@ try {
     return out
   }
   let childSawSteer = false
-  let childSawControl = false
+  let parentEnqueued = false
+  let parentAbsorbed = false
   console.log("\n  --- transcript membership ---")
   for (const dir of dirs) {
     for (const file of walk(join(projects, dir))) {
       const body = readFileSync(file, "utf8")
-      const hasSteer = body.includes(CHILD_TOKEN)
-      const hasControl = body.includes(PARENT_TOKEN)
       const isSubagent = file.includes("/subagents/")
-      if (hasSteer || hasControl) console.log(`  ${isSubagent ? "CHILD " : "PARENT"} ${file.replace(projects, "…")} (${statSync(file).size}B) steer=${hasSteer} control=${hasControl}`)
-      if (isSubagent && hasSteer) childSawSteer = true
-      if (isSubagent && hasControl) childSawControl = true
+      if (!body.includes(STEER_TOKEN)) continue
+      if (isSubagent) childSawSteer = true
+      else {
+        for (const line of body.split("\n")) {
+          if (!line.includes(STEER_TOKEN)) continue
+          if (line.includes('"queue-operation"') && line.includes('"enqueue"')) parentEnqueued = true
+          if (line.includes("absorbed_mid_turn")) parentAbsorbed = true
+        }
+      }
+      console.log(`  ${isSubagent ? "CHILD " : "PARENT"} ${file.replace(projects, "…")} carries the steer token`)
     }
   }
-  ok("the steer appears in the CHILD's own transcript", childSawSteer)
-  ok("the CONTROL never leaked into the child", !childSawControl)
+
+  // THE MEASUREMENT. These assert the CLI's current (broken) behavior, so a run where the child DOES
+  // get the steer is a "failure" here — and the best possible news: it means the CLI routes addressed
+  // frames mid-turn now, and the router's mid-turn refusal can be retired.
+  ok("MISDELIVERY: the parent's main queue enqueued the addressed steer", parentEnqueued)
+  ok("MISDELIVERY: the steer was absorbed into the parent's own turn", parentAbsorbed)
+  ok("MISDELIVERY: the child never saw the steer", !childSawSteer)
 } finally {
   bridge.releaseSession(slug, sessionId, "session-deleted")
   bridge.close()
   tailer.stop?.()
-  console.log(`\n${failures === 0 ? "ALL PASS" : `${failures} FAILURE(S)`}  (stateDir ${stateDir}, cwd ${cwd})`)
+  console.log(`\n${failures === 0 ? "ALL PASS (misdelivery reproduced — the mid-turn gate is justified)" : `${failures} FAILURE(S) — re-measure before trusting the gate`}  (stateDir ${stateDir}, cwd ${cwd})`)
 }
 process.exit(failures === 0 ? 0 : 1)

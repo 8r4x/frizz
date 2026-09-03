@@ -43,6 +43,9 @@ function harness(subAgent: (slug: string, id: string) => SubAgentInfo, opts: {
   // The codex app-server bridge, for the CODEX shell route. Absent ⇒ no bridge, which is itself a case
   // worth pinning (the route must not fire and the Claude path must be reached unchanged).
   codexTerminate?: (input: { threadSlug: string; sessionId: string; processId: string; notice?: string }) => { terminated: boolean; noticeFailed: string | null }
+  // The PARENT's own folded turn state. Default absent — an unknown turn must not block a steer, or
+  // every test stub (and every thread the fold has no reading for) would refuse.
+  turn?: "in-flight" | "idle"
 } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "frizz-subagent-steer-"))
   const project: Project = { dir, id: "steer", name: "test", label: "test", stateDir: dir, cwdSlug: "test" }
@@ -58,7 +61,12 @@ function harness(subAgent: (slug: string, id: string) => SubAgentInfo, opts: {
   }
   const dismissals: { slug: string; id: string }[] = []
   const tailer: Tailer = {
-    get: opts.bgShells ? (() => ({ bgShells: opts.bgShells!.map((entry) => ({ state: "running", ...entry })) }) as unknown as ReturnType<Tailer["get"]>) : () => undefined,
+    get: (opts.bgShells || opts.turn)
+      ? (() => ({
+          ...(opts.turn ? { turn: opts.turn } : {}),
+          ...(opts.bgShells ? { bgShells: opts.bgShells.map((entry) => ({ state: "running", ...entry })) } : {}),
+        }) as unknown as ReturnType<Tailer["get"]>)
+      : () => undefined,
     foreignIds: () => [],
     subAgent,
     forget: () => {},
@@ -202,6 +210,36 @@ test("subAgentSteer refuses a NESTED child — this session's CLI never issued t
       /Only sub-agents this thread dispatched itself/,
     )
     assert.deepEqual(h.steers, [])
+  } finally {
+    h.cleanup()
+  }
+})
+
+test("subAgentSteer refuses while the PARENT's own turn is in flight — the CLI absorbs an addressed frame into that turn", async () => {
+  // Measured on claude 2.1.251 (_live_broker_steer_busy.mts): a steer sent mid-turn is enqueued on
+  // the MAIN input queue and absorbed into the parent's running turn (`absorbed_mid_turn`), addressing
+  // dropped — the parent obeys text the operator aimed at the child. The child itself is fine here;
+  // the parent's turn is the whole refusal.
+  const h = harness(() => RUNNING_DIRECT, { turn: "in-flight" })
+  try {
+    seed(h.storage, "t")
+    await assert.rejects(
+      () => h.router.subAgentSteer.handler({ input: { slug: "t", id: "toolu_child", message: "hello" } }),
+      /working on its own turn/,
+    )
+    assert.deepEqual(h.steers, [])
+  } finally {
+    h.cleanup()
+  }
+})
+
+test("subAgentSteer delivers when the parent's turn is explicitly idle — the gate only bites mid-turn", async () => {
+  const h = harness(() => RUNNING_DIRECT, { turn: "idle" })
+  try {
+    seed(h.storage, "t")
+    const result = await h.router.subAgentSteer.handler({ input: { slug: "t", id: "toolu_child", message: "hello" } })
+    assert.deepEqual(result, { delivered: true })
+    assert.equal(h.steers.length, 1)
   } finally {
     h.cleanup()
   }
@@ -550,6 +588,20 @@ test("subAgentTranscript reports steerability + the reason the drawer shows in p
     assert.match(String(live.stopNote), /Codex does not expose per-sub-agent interruption/)
   } finally {
     codex.cleanup()
+  }
+
+  // A running child under a MID-TURN parent keeps its Stop button but loses the prompt box, and the
+  // note says why — the transient case, cleared by the thread resting (the drawer re-reads on every
+  // transcript push, so the box comes back on its own).
+  const midTurn = harness(() => RUNNING_DIRECT, { turn: "in-flight" })
+  try {
+    seed(midTurn.storage, "t")
+    const busy = await midTurn.router.subAgentTranscript.handler({ input: { slug: "t", id: "toolu_child" } })
+    assert.equal(busy.steerable, false)
+    assert.match(String(busy.steerNote), /working on its own turn/)
+    assert.equal(busy.stoppable, true, "a mid-turn parent blocks steering, never stopping")
+  } finally {
+    midTurn.cleanup()
   }
 
   // A SETTLED child gets no note: its transcript already reads as finished, and a banner saying so

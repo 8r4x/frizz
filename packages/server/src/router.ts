@@ -940,9 +940,20 @@ export function createRouter(ctx: AppContext) {
   //  - the child must be RUNNING. `stale` means frizz has seen no output for a long while and the
   //    completion record was probably missed; addressing a finished child MISDELIVERS to the parent's
   //    main thread rather than failing, so "probably finished" has to be treated as finished.
+  //  - the PARENT's own main-thread turn must be IDLE. The CLI's addressed routing only exists at the
+  //    input boundary: an input frame arriving while a main-thread turn is IN FLIGHT is enqueued on
+  //    the main input queue — addressing and all — and then absorbed into the PARENT's running turn
+  //    (`queue-operation` enqueue → remove `reason:"absorbed_mid_turn"` in the session JSONL), so the
+  //    parent obeys text aimed at its child. Measured both ways on claude 2.1.251
+  //    (_live_broker_steer.mts: parent idle → the child and only the child obeyed;
+  //    _live_broker_steer_busy.mts: parent mid-turn → the parent absorbed it and the child never saw
+  //    it — the exact misdelivery the operator hit 2026-09-02). The fold's `turn` reading is the same
+  //    authority the board's working shimmer reads; "in-flight" here means a steer would be absorbed.
   //
   // A residual race remains and cannot be closed from outside the CLI: a child may settle between
-  // this check and the daemon's read of the frame, and there is no receipt to tell us. It is narrow
+  // this check and the daemon's read of the frame, and there is no receipt to tell us — and the same
+  // race exists in miniature for the turn gate (the parent may START a turn between this check and
+  // the daemon's read; the window is sub-second where the misdelivery it closes was open-ended). It is narrow
   // (a broker row retires a child on the SDK's own task_notification, not on a mtime timeout) and it
   // is the reason the drawer's composer disappears the instant the child stops running.
   // `note` is the sentence the drawer shows in place of the prompt box, and it is composed HERE —
@@ -960,6 +971,12 @@ export function createRouter(ctx: AppContext) {
     if (row.backend === "codex") return blocked("Codex runs its sub-agents inside its own process and exposes no way to address one, so this child can't be steered from here.")
     if (row.claude_runtime !== "broker" || !ctx.claudeBroker) {
       return blocked("Steering a sub-agent needs the Claude session broker; this thread predates it.")
+    }
+    // LAST, because it is the one transient refusal: the structural notes above are permanent facts
+    // about the child, while this one clears on its own the moment the thread rests — and the drawer
+    // re-reads steerability on every transcript push, so the prompt box comes back by itself.
+    if (ctx.tailer.get(slug)?.turn === "in-flight") {
+      return blocked("The thread is working on its own turn right now, and a steer sent mid-turn is delivered to the thread instead of this sub-agent. The box comes back when the thread rests.")
     }
     return { sessionId: row.session_id }
   }
@@ -1381,9 +1398,10 @@ export function createRouter(ctx: AppContext) {
     //
     // WHY THE GATE IS STRICT. Measured live: addressing a child that has ALREADY SETTLED does not
     // error and does not vanish — the CLI falls the message back onto the MAIN thread, where the
-    // parent obeys it as if the operator had typed it into the thread composer. So an ungated steer
-    // is not a no-op, it is a misdelivery. `subAgentSteerable` is the single predicate that decides,
-    // and the drawer's prompt box is rendered off the same answer.
+    // parent obeys it as if the operator had typed it into the thread composer. A steer sent while
+    // the parent's own turn is IN FLIGHT misdelivers the same way (absorbed into that turn — see the
+    // predicate). So an ungated steer is not a no-op, it is a misdelivery. `subAgentSteerable` is the
+    // single predicate that decides, and the drawer's prompt box is rendered off the same answer.
     subAgentSteer: mutation({
       input: z.object({ slug: ThreadSlug, id: z.string(), message: z.string().min(1), deliveryId: z.string().optional() }).strict(),
       output: z.object({ delivered: z.boolean() }),

@@ -24,14 +24,19 @@ import { SheetHeader } from "./ui/SheetHeader.tsx"
 //    conversation.
 //  · STEERING (only where it is real). A user message addressed with the child's dispatch tool_use id
 //    is routed by the CLI INTO that child's own conversation. Measured live against claude 2.1.220 /
-//    SDK 0.3.207: the child acted on it and only the CHILD's transcript carried the token, while the
-//    same session's unaddressed control reached only the main thread. It is also the ONLY channel —
-//    It works for a broker-backed Claude thread's OWN Agent-tool children, and not
-//    for a codex child or a grandchild. Critically, addressing a child that has
-//    already FINISHED does not fail — the CLI falls the message back onto the parent's main thread,
-//    where it lands as an instruction nobody aimed there. So the SERVER decides steerability, the box
-//    is rendered only off that answer, and where it is absent the drawer states the reason instead of
-//    offering an input that cannot deliver.
+//    SDK 0.3.207 and re-measured on 2.1.251: the child acted on it and only the CHILD's transcript
+//    carried the token, while the same session's unaddressed control reached only the main thread.
+//    It is also the ONLY channel — It works for a broker-backed Claude thread's OWN Agent-tool
+//    children, and not for a codex child or a grandchild. Two failure modes MISDELIVER rather than
+//    fail, and both land the operator's text on the parent's main thread as an instruction nobody
+//    aimed there: addressing a child that has already FINISHED, and addressing anything while the
+//    PARENT'S OWN TURN is in flight — there the CLI enqueues the frame on the main input queue and
+//    absorbs it into the running turn, addressing dropped (measured on 2.1.251,
+//    _live_broker_steer_busy.mts; hit live 2026-09-02). So the SERVER decides steerability — child
+//    running, direct, broker, parent's turn idle — the box is rendered only off that answer, and
+//    where it is absent the drawer states the reason instead of offering an input that cannot
+//    deliver. The mid-turn refusal is the transient one: the box returns by itself when the thread
+//    rests, because this transcript query re-runs on every board push.
 //  · STOPPING (where the provider has a control API). Claude's SDK exposes `stopTask(taskId)`, and its
 //    task registry is session-wide, so the drawer can stop direct children and descendants for a
 //    broker thread. This is deliberately separate from the × on a child row: × retires stale tracking;
