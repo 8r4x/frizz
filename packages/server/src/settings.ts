@@ -82,6 +82,9 @@ export const defaultSettings = (): Settings => ({
   // 500K tokens: half the 1M window every Claude worker is dispatched with. See the schema for why a
   // worker left to compact at 1M is the biggest single reason a Frizz thread out-spends the TUI.
   autoCompactWindow: 500_000,
+  // "auto" = the CLI's own tier (1h on a subscription). See the schema and claudePromptCacheEnv for
+  // when "5m" is the cheaper choice.
+  promptCacheTtl: "auto",
   // Hidden until asked for — see the schema for why.
   projectRail: false,
 })

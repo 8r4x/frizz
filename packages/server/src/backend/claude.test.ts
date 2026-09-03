@@ -4,7 +4,7 @@ import { join } from "node:path"
 import { createClaudeBackend, parseClaudeLine } from "./claude.ts"
 import { newTailState, computeTurn } from "../tailer.ts"
 import { buildClaudeCommand, buildClaudeResumeCommand, claudeWorkerEnvironment, loadWorkerPrompt, WORKER_MAX_CONCURRENT_SUBAGENTS, WORKER_MAX_SUBAGENTS, WORKER_MAX_WEB_SEARCHES, workerPluginDir } from "../dispatch.ts"
-import { CLAUDE_WORKER_ENV, claudeCompactionEnv, claudeCompactionWindowOf } from "./types.ts"
+import { CLAUDE_WORKER_ENV, claudeCompactionEnv, claudeCompactionWindowOf, claudePromptCacheEnv } from "./types.ts"
 
 // ---- parseClaudeLine: the normalized VIEW of a Claude JSONL line (codex-facing seam; NOT the
 // behavior-critical fold — that is foldLine → applyRecord, covered by tailer.test.ts). ----
@@ -294,6 +294,23 @@ test("claudeCompactionEnv: a positive integer window becomes CLAUDE_CODE_AUTO_CO
   assert.deepEqual(claudeCompactionEnv({ autoCompactWindow: 0 }), {})
   assert.deepEqual(claudeCompactionEnv({ autoCompactWindow: -1 }), {})
   assert.deepEqual(claudeCompactionEnv({ autoCompactWindow: 12.5 }), {})
+})
+
+// The cache tier: only the two values the CLI understands are passed, and each goes to the worker AND
+// its sub-agents. "auto" and garbage pass nothing, so the CLI keeps its own choice.
+test("claudePromptCacheEnv: 5m and 1h reach both the worker and its sub-agents, anything else passes nothing", () => {
+  assert.deepEqual(claudePromptCacheEnv({ promptCacheTtl: "5m" }), {
+    CLAUDE_CODE_PROMPT_CACHE_TTL: "5m",
+    CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL: "5m",
+  })
+  assert.deepEqual(claudePromptCacheEnv({ promptCacheTtl: "1h" }), {
+    CLAUDE_CODE_PROMPT_CACHE_TTL: "1h",
+    CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL: "1h",
+  })
+  assert.deepEqual(claudePromptCacheEnv({ promptCacheTtl: "auto" }), {})
+  assert.deepEqual(claudePromptCacheEnv({ promptCacheTtl: "10m" }), {})
+  assert.deepEqual(claudePromptCacheEnv({}), {})
+  assert.deepEqual(claudePromptCacheEnv(undefined), {})
 })
 
 // The same ceiling READ BACK OUT of the composed environment, which is how the number reaches the

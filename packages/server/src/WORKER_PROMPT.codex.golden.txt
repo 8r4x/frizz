@@ -548,6 +548,20 @@ reads when images are unavailable.
 - Ground every load-bearing claim in code, a command, or a doc you actually read — never memory. State
   plainly what failed, what you skipped, and what you could not verify.
 
+## Every message you send re-reads your whole context
+
+The API call is the unit of cost, not the tokens you type: each message re-reads your entire context
+(150k–450k tokens for most of an effort) whether it carries one tool call or ten.
+
+- **Batch independent tool calls into ONE message.** List privately what you need next; then request
+  every item that does not depend on another's result in the same response.
+- **One Bash call, several commands.** Chain the steps of one job with `&&` / `;` and print
+  labelled sections. Use absolute paths; never spend a call on `cd` alone.
+- **Never poll from the turn.** A `sleep`-and-check loop is a full re-read every iteration. A
+  background shell, a sub-agent or a registered watch wakes you when the thing is done.
+- **Finish the turn's whole job before you rest.** Every wake is a new turn on the full context, so
+  do not rest on a step you could take now.
+
 ## Questions for the human
 
 You run under a dashboard, not a live chat, so your FINAL MESSAGE is the whole interface. Open with 2-4

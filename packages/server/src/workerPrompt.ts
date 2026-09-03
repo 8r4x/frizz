@@ -349,6 +349,27 @@ const QUALITY_BAR = `## Quality bar
 - Ground every load-bearing claim in code, a command, or a doc you actually read — never memory. State
   plainly what failed, what you skipped, and what you could not verify.`
 
+// WHY THIS EARNS ITS TOKENS (the SIZING bar above): the API call is the unit of cost, and workers got
+// it measurably wrong. Across every worker transcript of 2026-09-03 (3,418 tool-calling messages), 83%
+// carried exactly ONE tool call, 2,104 were a Bash command whose next message was another Bash command,
+// and 1,732 Bash commands opened with `cd` because the shell's cwd resets between calls. Each of those
+// messages re-read a 150k–450k context ($0.10–$0.25 at list price) to run one command. Claude Code
+// injects its own one-line batching reminder each turn; that reminder carries no cost model, and the
+// pattern survived it. Rules only — the numbers live here.
+const TOKEN_ECONOMY = `## Every message you send re-reads your whole context
+
+The API call is the unit of cost, not the tokens you type: each message re-reads your entire context
+(150k–450k tokens for most of an effort) whether it carries one tool call or ten.
+
+- **Batch independent tool calls into ONE message.** List privately what you need next; then request
+  every item that does not depend on another's result in the same response.
+- **One Bash call, several commands.** Chain the steps of one job with \`&&\` / \`;\` and print
+  labelled sections. Use absolute paths; never spend a call on \`cd\` alone.
+- **Never poll from the turn.** A \`sleep\`-and-check loop is a full re-read every iteration. A
+  background shell, a sub-agent or a registered watch wakes you when the thing is done.
+- **Finish the turn's whole job before you rest.** Every wake is a new turn on the full context, so
+  do not rest on a step you could take now.`
+
 // The "human's OWN vocabulary" paragraph earns its tokens: workers kept shipping question cards whose
 // nouns were coined during the effort — lanes, tiers, phase/step numbers, plan-section references — so
 // the operator, who has only their original prompt, could not answer them cold. Identifiers are a
@@ -960,6 +981,7 @@ export function buildWorkerPrompt(kind: BackendKind = "claude", opts: { monitors
     AGENT_COMPLETION,
     VISUAL_EVIDENCE,
     QUALITY_BAR,
+    TOKEN_ECONOMY,
     QUESTIONS,
     STOP_CRITERION,
     lean ? null : TRIVIAL_PROMPTS,

@@ -19,6 +19,7 @@ import { CLAUDE_DISPATCH_PERMISSION_OPTIONS } from "../lib/options.ts"
 type NotifPerm = "default" | "granted" | "denied" | "unsupported"
 export const SETTINGS_HELP = {
   permissionMode: "The permission mode new Claude Code threads launch with. Auto runs safe actions and asks you to approve the risky ones in the thread. Bypass launches the worker with --dangerously-skip-permissions: it never asks, so nothing waits on you and nothing is checked either. Takes effect on the next thread you dispatch; to change a thread that already exists, use the picker beside its model in the prompt box. Codex threads always run with full workspace access and are unaffected.",
+  promptCacheTtl: "Which prompt-cache tier a new Claude thread writes to. A 1-hour entry costs twice the input price to write, a 5-minute entry 1.25 times; the hour only pays off when the thread's cache actually survives that long. Measured 2026-09-03: cache writes were half of a day's spend and the entries were lost every 15 to 30 minutes regardless, so 5 minutes was the cheaper tier. Automatic leaves the choice to Claude Code, which picks 1 hour on a subscription. Takes effect on the next thread you dispatch and on a thread that resumes after its worker exited.",
   autoCompactWindow: "How large a new Claude thread's conversation may grow, in tokens, before Claude Code compacts it. Frizz launches every Claude thread with the 1M context window, so without a ceiling a long thread keeps re-sending everything it has read on every turn; 500K halves that at the cost of an earlier summary. Takes effect on the next thread you dispatch and on a thread that resumes after its worker exited; a thread whose worker is already running keeps its current ceiling. A thread's context dial reads against the ceiling it was launched with, not the model's full window.",
   font: "Changes the interface reading font for this browser.",
   localFileOpener: "Chooses how vetted local artifact links open. Markdown files open in Frizz's own reader (which carries an Open action that uses this setting), and image clicks always use the OS default viewer.",
@@ -328,6 +329,14 @@ const AUTO_COMPACT_WINDOW_OPTIONS = [
   { value: "1000000", label: "1M tokens" },
 ]
 
+// The prompt-cache tiers Claude Code understands (CLAUDE_CODE_PROMPT_CACHE_TTL). "auto" passes nothing
+// and the CLI picks for itself — 1 hour on a subscription — so it is the server default (settings.ts).
+const PROMPT_CACHE_TTL_OPTIONS = [
+  { value: "auto", label: "Automatic (default)" },
+  { value: "5m", label: "5 minutes" },
+  { value: "1h", label: "1 hour" },
+]
+
 // "Claude" — what applies to Claude Code workers and nothing else. Two fields: the launch permission
 // mode for NEW Claude workers, and their compaction window. Only the two modes a headless worker can actually run in are
 // offered (see CLAUDE_DISPATCH_PERMISSION_OPTIONS); the server's workerDispatchPermission enforces the
@@ -363,6 +372,16 @@ function ClaudeSection({
           options={AUTO_COMPACT_WINDOW_OPTIONS}
           indicatorPosition="right"
           ariaLabel="Claude compaction window"
+        />
+      </SettingsField>
+      <SettingsField label="Prompt cache tier" help={SETTINGS_HELP.promptCacheTtl}>
+        <Select
+          variant="bordered"
+          value={draft.promptCacheTtl ?? "auto"}
+          onValueChange={(v) => setDraft({ ...draft, promptCacheTtl: v as Settings["promptCacheTtl"] })}
+          options={PROMPT_CACHE_TTL_OPTIONS}
+          indicatorPosition="right"
+          ariaLabel="Claude prompt cache tier"
         />
       </SettingsField>
     </div>

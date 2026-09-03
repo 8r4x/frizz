@@ -2640,6 +2640,12 @@ export const Settings = z.object({
   // Code caps to the model's real window. Optional so an old blob parses; defaultSettings pins 500_000
   // (maintainer 2026-08-26: "a default compaction window of 500k by default").
   autoCompactWindow: z.number().int().positive().optional(),
+  // The prompt-cache tier a NEW Claude worker writes to. "auto" leaves the CLI's own choice (1h on a
+  // subscription); "5m" and "1h" reach the worker as CLAUDE_CODE_PROMPT_CACHE_TTL (and the sub-agent
+  // twin). The 1h tier bills a cache write at 2x input against 1.25x for 5m; on 2026-09-03 cache
+  // writes were 51% of a day's spend while the entries were invalidated every 15–30 minutes anyway
+  // (see claudePromptCacheEnv). Optional so an old blob parses; defaultSettings pins "auto".
+  promptCacheTtl: z.enum(["auto", "5m", "1h"]).optional(),
   // The GitHub batch-dispatch prompt template (the picker's per-item worker prompt). Optional: when
   // unset OR blank the server falls back to its exported DEFAULT_GITHUB_PROMPT. Substitution tokens
   // the server fills: {repo} {n} {title} {url} {labels} {body}. The leading `THREAD: <slug>` tag is

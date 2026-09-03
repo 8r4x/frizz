@@ -468,6 +468,26 @@ export function claudeCompactionEnv(settings: { autoCompactWindow?: number } | u
   return { [CLAUDE_AUTO_COMPACT_WINDOW_ENV]: String(window) }
 }
 
+// The prompt-cache tier a Claude worker writes to, from Settings. Claude Code reads
+// CLAUDE_CODE_PROMPT_CACHE_TTL as "5m" or "1h"; unset, it picks 1h on a subscription within its usage
+// limits (the CLI's own help text for the variable, 2.1.259). The tiers differ in the WRITE price: a
+// 1h entry bills at 2x the input rate, a 5m entry at 1.25x. Measured 2026-09-03 across every worker:
+// cache writes were 51% of the day's spend, all on the 1h tier, while the per-session entries were
+// invalidated every 15–30 minutes by something outside the session (every active session in every
+// project lost its entry within the same minute, 61 times in one morning) — the hour of warmth was
+// paid for and rarely delivered. "auto" (or anything unrecognised) passes nothing, so the CLI keeps
+// its own choice. Composed into the environment of every fresh daemon fork beside the compaction
+// window; a daemon already running keeps the tier it was forked with. The sub-agent variable rides
+// along so a worker's helpers write to the same tier as their parent.
+export const CLAUDE_PROMPT_CACHE_TTL_ENV = "CLAUDE_CODE_PROMPT_CACHE_TTL"
+export const CLAUDE_SUBAGENT_PROMPT_CACHE_TTL_ENV = "CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL"
+
+export function claudePromptCacheEnv(settings: { promptCacheTtl?: string } | undefined): Record<string, string> {
+  const ttl = settings?.promptCacheTtl
+  if (ttl !== "5m" && ttl !== "1h") return {}
+  return { [CLAUDE_PROMPT_CACHE_TTL_ENV]: ttl, [CLAUDE_SUBAGENT_PROMPT_CACHE_TTL_ENV]: ttl }
+}
+
 // The ceiling READ BACK OUT of a composed worker environment — the same value `claudeCompactionEnv`
 // wrote, recovered where the number matters rather than the variable. Two callers, both of which must
 // agree with what the CLI is actually running under: the daemon stamps it onto its record at fork
