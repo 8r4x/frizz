@@ -47,6 +47,7 @@ function schedulerOver(h: ReturnType<typeof createIntegrationHarness>, forks: Fo
         slug,
         cwd: h.project.dir,
         row,
+        settings: { permissionMode: "bypassPermissions" },
         deliveryMessage: message,
         freshProcess: needsFreshProcessForLimit(h.tailer.get(slug)?.limitFault, h.clockMs(), mayHaveLiveBackgroundWork(h.tailer.get(slug))),
       })
