@@ -1744,8 +1744,11 @@ export function createRouter(ctx: AppContext) {
             deliveryId: input.deliveryId,
             // A row with NO recorded mode (a terminal session promoted before adoptSession stamped one)
             // must not fall through to the bridge's `"default"` — Claude's prompt-on-everything mode,
-            // which the worker's perm-policy hook defers call by call. It resumes at the same
-            // Settings-driven mode a dispatched worker launches with.
+            // which the worker's perm-policy hook defers call by call. It cold-resumes at the same
+            // Settings-driven mode a dispatched worker launches with. This shapes a FORK only: a daemon
+            // that outlived the upgrade is rebound as it is, and keeps its mode until the operator's
+            // permission control (or Restart worker) replaces the process. An explicitly persisted
+            // per-thread mode always wins over the floor.
             permissionMode: (row.permission_mode as ClaudePermissionMode | null) ?? workerDispatchPermission("claude", ctx.getSettings()),
             appendSystemPrompt,
             model: row.model ?? undefined,
