@@ -1,8 +1,9 @@
-import { FileDiff } from "lucide-react"
+import { FileDiff, Folder } from "lucide-react"
 import { useQueryClient } from "@tanstack/react-query"
 import { useSnapshot } from "valtio"
 import type { EditedFile, ThreadView } from "@frizz/shared"
-import { useTranscript } from "../hooks.ts"
+import { useProjectDir, useTranscript } from "../hooks.ts"
+import { editedFileTree, flattenEditedFileTree } from "../lib/editedFileTree.ts"
 import { openLocalPath } from "../lib/local-file-links.ts"
 import { prewarmLocalFile } from "../lib/localFileQuery.ts"
 import { useNowMs } from "../lib/liveClock.ts"
@@ -27,6 +28,13 @@ import { AgentRow, BgShellRow, GithubWatchRow, ON_CAP, TimerRow, WaitGrid, WaitR
 // server over the whole projection — the latest window the page renders rarely holds an Edit at all,
 // because a worker edits mid-effort and verifies at the end (server/edited-files.ts).
 //
+// THE FILES ARE A TREE (maintainer 2026-09-03), not a list: a directory row above the files it
+// holds, a small indent per level, and a chain of single-child directories folded into one row the
+// way GitHub's tree draws `packages/web/src` (lib/editedFileTree.ts). The flat list showed basenames
+// alone and twenty-two of them read as twenty-two names from nowhere. The tree's rows lay out by FLEX
+// inside one cell of the shared grid rather than as subgrid rows, because a subgrid cannot indent —
+// see ROW_FLEX in AwaitingBackgroundCard — and the file rows are still the card's own WaitRow.
+//
 // It floats on the page background and is VERTICALLY CENTERED like the sidebar, rather than pinned to
 // the top — the maintainer's call on the mockup's top-anchored version. The liveness readouts that
 // mockup led with (activity line, profile chips, context meter) were dropped on the same review: the
@@ -38,11 +46,44 @@ import { AgentRow, BgShellRow, GithubWatchRow, ON_CAP, TimerRow, WaitGrid, WaitR
 // truncated to "colinhacks/zod#…" — the one part of the ref that names the PR (2026-08-28).
 export const RAIL_WIDTH = 340
 
-function basenameOf(path: string): string {
-  return path.split("/").filter(Boolean).pop() ?? path
+// One level of the tree, in px. Tiny by request: at 12px type a level is well under an em, enough to
+// read as nesting beside a 12px mark without walking a deep path off the rail's right edge.
+const TREE_INDENT = 10
+
+function DirRow({ name, depth }: { name: string; depth: number }) {
+  return (
+    <div
+      data-file-dir={name}
+      className="flex items-baseline text-[12px] leading-5 text-muted/70"
+      style={{ paddingLeft: depth * TREE_INDENT }}
+    >
+      <span className="flex shrink-0"><Folder size={12} className={`${ON_CAP} text-muted/45`} /></span>
+      {/* ml-[5px], not the row's ml-1.5: lucide's folder inks 11 of its 12 box px, so 6px of box read
+          as 7.33px of ink (ink-gaps, dsf 6) against the card rows' 6.5 — and the file rows below it
+          are trimmed to the same 6.33 (see FileRow), so the tree's two glyph→name gaps agree. */}
+      <span className="ml-[5px] min-w-0 truncate" title={name}>{name}</span>
+    </div>
+  )
 }
 
-function FileRow({ file }: { file: EditedFile }) {
+function EditedFileTree({ files }: { files: readonly EditedFile[] }) {
+  const projectDir = useProjectDir()
+  const rows = flattenEditedFileTree(editedFileTree(files, projectDir))
+  return (
+    // ONE cell of the shared grid, holding its own column of rows: the tree's rows must not share the
+    // grid's tracks (the indent is the whole point), and a `gap-y-px` between them keeps the rhythm
+    // WaitGrid draws between its own rows.
+    <div data-edited-file-tree className="col-span-4 flex flex-col gap-y-px">
+      {rows.map((node) =>
+        node.kind === "dir"
+          ? <DirRow key={`d:${node.depth}:${node.name}`} name={node.name} depth={node.depth} />
+          : <FileRow key={node.file.path} file={node.file} name={node.name} depth={node.depth} />,
+      )}
+    </div>
+  )
+}
+
+function FileRow({ file, name, depth }: { file: EditedFile; name: string; depth: number }) {
   // EAGER READ ON HOVER (maintainer 2026-09-01): the pointer resting on a row is the earliest honest
   // signal that this file is the next one to open, and it buys the whole server round trip plus the
   // highlight pass before the click. The viewer then mounts against a warm cache and paints on the
@@ -60,10 +101,15 @@ function FileRow({ file }: { file: EditedFile }) {
     <WaitRow
       testKind="file"
       testId={file.path}
-      mark={<FileDiff size={12} className={`${ON_CAP} text-muted/60`} />}
-      // The basename is the name; the full path is the tooltip. A 340px rail truncates from the end,
-      // and a repo path truncated from the end lost exactly the part that names the file.
-      name={basenameOf(file.path)}
+      // -mr-[2px]: this glyph inks only 9 of its 12 box px (1.5px dead each side), so the row's ml-1.5
+      // drew 8.33px of ink to the name where the card's rows draw ~6.5 (ink-gaps, dsf 6). The trim
+      // lands it at 6.33, the same reading as the directory row above it.
+      mark={<FileDiff size={12} className={`${ON_CAP} -mr-[2px] text-muted/60`} />}
+      // The basename is the name and the directory row above it says where; the full path is the
+      // tooltip. A 340px rail truncates from the end, and a repo path truncated from the end lost
+      // exactly the part that names the file.
+      name={name}
+      indent={depth * TREE_INDENT}
       onOpen={() => openLocalPath(file.path)}
       onPrewarm={() => prewarmLocalFile(client, file.path)}
       title={file.path}
@@ -99,7 +145,8 @@ export function FocusRail({ thread }: { thread: ThreadView }) {
     { head: "Timers", rows: timers.map((w) => <TimerRow key={w.id} watch={w} now={now} />) },
     {
       head: "Edited files",
-      rows: files.map((f) => <FileRow key={f.path} file={f} />),
+      // One row of the grid, holding the whole tree (its own column, its own indents).
+      rows: files.length > 0 ? [<EditedFileTree key="tree" files={files} />] : [],
       count: files.length,
       collapsed: railFilesCollapsed,
       onToggle: () => (prefs.railFilesCollapsed = !prefs.railFilesCollapsed),

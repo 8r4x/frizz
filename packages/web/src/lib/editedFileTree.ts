@@ -1,0 +1,97 @@
+import type { EditedFile } from "@frizz/shared"
+
+// THE RAIL'S EDITED FILES AS A TREE (maintainer 2026-09-03: "maybe we could do a file tree here
+// instead. with a tiny indent per-level. would help organize this and show more context … you can
+// collapse paths if there's a chain of directories, similar to github").
+//
+// The flat list showed basenames alone — a 340px rail cannot hold a repo path, and truncating one
+// from the end lost the part that names the file — so twenty-two rows read as twenty-two names with
+// no idea where any of them lived. A tree gives each name its directory once, above it, and the
+// indent says how deep.
+//
+// A CHAIN OF DIRECTORIES WITH ONE CHILD EACH IS ONE ROW, joined with `/`, exactly as GitHub's file
+// tree draws `packages/web/src` when nothing branches off `packages` or `web`. A directory holding a
+// file as well as one subdirectory does branch — the file is a sibling — so it keeps its own row.
+//
+// Paths under the project directory are shown relative to it; anything else (a file under `~`, a
+// scratch file in /tmp) keeps its absolute path, rooted at `/`, and collapses the same way.
+//
+// Order is GitHub's: directories before files, each set alphabetical, case-insensitive — not the
+// list's most-recently-edited-first, because a tree that reorders itself on every save cannot be
+// read. Recency has to come back some other way if it is wanted; it was never what the tree is for.
+
+export type EditedFileTreeNode =
+  | { kind: "dir"; name: string; depth: number; children: EditedFileTreeNode[] }
+  | { kind: "file"; name: string; depth: number; file: EditedFile }
+
+type Dir = { dirs: Map<string, Dir>; files: Map<string, EditedFile> }
+
+function newDir(): Dir {
+  return { dirs: new Map(), files: new Map() }
+}
+
+// The path's segments as the tree should show them: project-relative when under the project
+// directory (never for the directory itself), else absolute with `/` as the first segment.
+export function editedFileSegments(path: string, projectDir?: string): string[] {
+  const clean = path.replace(/\/+$/, "")
+  if (projectDir) {
+    const root = projectDir.replace(/\/+$/, "")
+    if (clean.startsWith(root + "/")) return clean.slice(root.length + 1).split("/").filter(Boolean)
+  }
+  const parts = clean.split("/").filter(Boolean)
+  return clean.startsWith("/") ? ["/", ...parts] : parts
+}
+
+const byName = (a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: "base", numeric: true })
+
+function emit(dir: Dir, depth: number): EditedFileTreeNode[] {
+  const out: EditedFileTreeNode[] = []
+  for (const name of [...dir.dirs.keys()].sort(byName)) {
+    let node = dir.dirs.get(name)!
+    let label = name
+    // Collapse the chain: a directory whose only content is one directory lends its name to that
+    // child and disappears as a row. The `/` root never joins — `/Users` reads, `//Users` does not.
+    while (node.files.size === 0 && node.dirs.size === 1) {
+      const [childName, child] = [...node.dirs.entries()][0]
+      label = label === "/" ? `/${childName}` : `${label}/${childName}`
+      node = child
+    }
+    out.push({ kind: "dir", name: label, depth, children: emit(node, depth + 1) })
+  }
+  for (const name of [...dir.files.keys()].sort(byName)) {
+    out.push({ kind: "file", name, depth, file: dir.files.get(name)! })
+  }
+  return out
+}
+
+export function editedFileTree(files: readonly EditedFile[], projectDir?: string): EditedFileTreeNode[] {
+  const root = newDir()
+  for (const file of files) {
+    const segments = editedFileSegments(file.path, projectDir)
+    if (segments.length === 0) continue
+    let dir = root
+    for (const segment of segments.slice(0, -1)) {
+      let next = dir.dirs.get(segment)
+      if (!next) {
+        next = newDir()
+        dir.dirs.set(segment, next)
+      }
+      dir = next
+    }
+    dir.files.set(segments[segments.length - 1], file)
+  }
+  return emit(root, 0)
+}
+
+// The tree in row order — what the rail renders, top to bottom.
+export function flattenEditedFileTree(nodes: readonly EditedFileTreeNode[]): EditedFileTreeNode[] {
+  const out: EditedFileTreeNode[] = []
+  const walk = (list: readonly EditedFileTreeNode[]) => {
+    for (const node of list) {
+      out.push(node)
+      if (node.kind === "dir") walk(node.children)
+    }
+  }
+  walk(nodes)
+  return out
+}

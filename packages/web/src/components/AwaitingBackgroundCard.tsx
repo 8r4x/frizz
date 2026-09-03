@@ -333,6 +333,12 @@ export function watchStatusLine(status: GithubWatchStatus | undefined): string {
 // handle (medium). A gap is also a BOX distance, and two of the four cells are mostly empty box — so the
 // numbers here are INK, measured with the row's own probe at dsf 6, sans and mono.
 const ROW = "group relative col-span-4 grid grid-cols-subgrid items-baseline rounded-sm text-[12px] leading-5"
+// The same row laid out by FLEX, for a row that INDENTS (the rail's edited-files tree). Subgrid could
+// not do it: a subgrid item's padding is folded into the shared edge track, so one deep row would
+// have widened the mark column for every row and none of the names would have moved. In flex the
+// name is the `1fr` (flex-1), the status keeps its own width, and the chevron sits at the end —
+// the same four marks in the same order, at the same right edge.
+const ROW_FLEX = "group relative col-span-4 flex items-baseline rounded-sm text-[12px] leading-5"
 // ml-1.5 → 6.5px of ink between the mark and the name, which is the figure the old single-row layout was
 // measured and left at (a -1px "safety" trim made it worse). A lucide circle at 12 inks ~10 of its box,
 // so it behaves like a text run and needs no trim of its own.
@@ -369,11 +375,14 @@ function Chevron() {
   return <ChevronRight size={13} aria-hidden className={`${ON_CAP} ml-[3px] -mr-[4px] text-muted/35 transition-colors group-hover:text-muted/70`} />
 }
 
-export function WaitRow({ mark, name, status, onOpen, onPrewarm, href, ghRef, title, testKind, testId }: {
+export function WaitRow({ mark, name, status, onOpen, onPrewarm, href, ghRef, title, testKind, testId, indent }: {
   mark: ReactNode
   name: string
   status: ReactNode
   onOpen?: () => void
+  /** Left inset in px for a row in a TREE (the rail's edited files). Switches the row from the shared
+   *  subgrid to its own flex line — see ROW_FLEX for why subgrid cannot indent. */
+  indent?: number
   /** Fired when a pointer rests on the row, or the row's control takes focus — the row's chance to
    *  fetch what the click is about to need. Must be idempotent and silent: it runs on a HOVER. */
   onPrewarm?: () => void
@@ -387,6 +396,8 @@ export function WaitRow({ mark, name, status, onOpen, onPrewarm, href, ghRef, ti
   testKind: "github" | "shell" | "agent" | "timer" | "file"
   testId: string
 }) {
+  const tree = indent !== undefined
+  const nameClass = tree ? `${NAME} flex-1` : NAME
   const open = href
     ? (
       <a
@@ -398,7 +409,7 @@ export function WaitRow({ mark, name, status, onOpen, onPrewarm, href, ghRef, ti
         // The QUEUE card and the drawer both act on their own pointer-down; a row press must not reach
         // them, exactly as the ops strip's rows already stop it.
         onMouseDown={(e) => e.stopPropagation()}
-        className={`${NAME} ${STRETCH} group-hover:underline group-hover:decoration-fg/40 group-hover:underline-offset-2`}
+        className={`${nameClass} ${STRETCH} group-hover:underline group-hover:decoration-fg/40 group-hover:underline-offset-2`}
       >
         {name}
       </a>
@@ -410,12 +421,12 @@ export function WaitRow({ mark, name, status, onOpen, onPrewarm, href, ghRef, ti
         onClick={onOpen}
         onMouseDown={(e) => e.stopPropagation()}
         title={title}
-        className={`${NAME} ${STRETCH} text-left group-hover:underline group-hover:decoration-fg/40 group-hover:underline-offset-2`}
+        className={`${nameClass} ${STRETCH} text-left group-hover:underline group-hover:decoration-fg/40 group-hover:underline-offset-2`}
       >
         {name}
       </button>
     )
-    : <span className={NAME} title={title}>{name}</span>
+    : <span className={nameClass} title={title}>{name}</span>
   const interactive = !!(href || onOpen)
   return (
     <div
@@ -423,7 +434,8 @@ export function WaitRow({ mark, name, status, onOpen, onPrewarm, href, ghRef, ti
       data-wait-kind={testKind}
       onMouseEnter={onPrewarm}
       onFocus={onPrewarm}
-      className={`${ROW} ${interactive ? "cursor-pointer transition-colors hover:bg-fg/[0.045]" : ""}`}
+      style={tree ? { paddingLeft: indent } : undefined}
+      className={`${tree ? ROW_FLEX : ROW} ${interactive ? "cursor-pointer transition-colors hover:bg-fg/[0.045]" : ""}`}
     >
       <span className="flex shrink-0">{mark}</span>
       {open}
