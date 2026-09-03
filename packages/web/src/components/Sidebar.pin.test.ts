@@ -53,6 +53,18 @@ function pinIcon(html: string): string {
   return html.slice(at, html.indexOf("</svg>", at))
 }
 
+/** The class list of the element carrying `marker`, and the rendered size of the glyph inside it. */
+function slot(html: string, marker: string): { classes: string[]; glyph: string | undefined } {
+  const at = html.indexOf(marker)
+  assert.notEqual(at, -1, `the row renders ${marker}`)
+  const start = html.indexOf('class="', at) + 'class="'.length
+  const svg = html.indexOf("<svg", at)
+  return {
+    classes: html.slice(start, html.indexOf('"', start)).split(" ").filter(Boolean),
+    glyph: /width="(\d+)" height="(\d+)"/.exec(html.slice(svg))?.slice(1, 3).join("×"),
+  }
+}
+
 test("a row that can be pinned offers an OUTLINE pin, left of the fullscreen door", () => {
   const html = row({})
   assert.doesNotMatch(html, /data-rail-pin-mark/, "no mark in the column — the row is not pinned")
@@ -74,6 +86,24 @@ test("a pinned row wears the solid mark and offers the solid unpin RIGHTMOST, af
   // Nothing renders after the unpin inside the strip: its button is the strip's last child.
   const rest = html.slice(html.indexOf("</button>", pinAt) + "</button>".length)
   assert.ok(rest.startsWith("</div>"), `the unpin is the strip's last action, got: ${rest.slice(0, 40)}`)
+})
+
+// The GEOMETRY of that swap is pinned in the browser by railHoverNoShift.e2e.test.ts, which is where a
+// 4px jump actually shows up. This is the cheap half of the same contract: the mark and the unpin share
+// ONE box, so a future edit that resizes either has to change both deliberately rather than by drift.
+test("the mark wears the unpin's own box, so hovering swaps the glyph instead of moving it", () => {
+  const html = row(PINNED)
+  const mark = slot(html, "data-rail-pin-mark")
+  const unpin = slot(html, "data-sidebar-pin=")
+  for (const token of ["flex", "h-[19px]", "w-[19px]", "items-center", "justify-center"]) {
+    assert.ok(mark.classes.includes(token), `the mark wears the action box's ${token}: ${mark.classes.join(" ")}`)
+    assert.ok(unpin.classes.includes(token), `the unpin wears ${token}: ${unpin.classes.join(" ")}`)
+  }
+  // `self-start` is what puts the in-flow mark's top on the strip's `top-1`; without it the mark
+  // baseline-aligns in the title's row and lands wherever the font's metrics put it.
+  assert.ok(mark.classes.includes("self-start"), "the mark is pinned to the flex line's cross-start")
+  assert.equal(mark.glyph, unpin.glyph, "one glyph size, or the pin grows the moment the pointer arrives")
+  assert.equal(mark.glyph, "12×12")
 })
 
 test("on a pinned row that also offers Retry, the unpin still sits past Retry, at the far right", () => {

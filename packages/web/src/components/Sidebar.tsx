@@ -674,24 +674,37 @@ function RowRetryButton({ slug }: { slug: string }) {
 // lucide's needle is a stroke-only line (`M12 17v5`) with no fill area, so strokeWidth 0 would erase it
 // and leave a headless blob (measured on the pin mockup sheet, 2026-09-02).
 //
-// VERTICAL: `relative top-*`, NOT `vertical-align` — in this `items-baseline` row the span's flex
-// baseline is derived from the very svg a vertical-align would shift, so the flex realignment cancels
-// the nudge exactly (measured: ±0px of movement for any align value). Relative positioning applies
-// AFTER alignment, so it actually moves ink. The offset itself is the browser's, not a hand fit:
-// measured on the real rail (cap-band probe, 1440w, 2026-09-02), the pin's ink centre naturally rests
-// 5.5px above the title's baseline in both app fonts, so `calc(5.5px - 0.5cap)` drops it onto the cap
-// band's centre in whichever font is set. `text-[13px]` on the span is load-bearing: `cap` resolves
-// against the svg's OWN inherited size, and inheriting the row's default instead left 0.36px on the
-// table. Residual with both: 0.01px sans, 0.01px mono — RE-MEASURE rather than re-guess if the mark's
-// size or the rail's type scale moves.
+// IT WEARS THE HOVER STRIP'S OWN BOX, and that is the whole point: `h-[19px] w-[19px]` centring a 12px
+// glyph is exactly ROW_ACTION_CLASS's geometry, so the mark and the unpin button that replaces it on
+// hover occupy the SAME 19px slot and the pin does not move — it only swaps for the slashed glyph
+// (maintainer 2026-09-03: "it should be in the exact same place when you hover versus not hover").
+// The two coincide BY CONSTRUCTION, in both app fonts, at every rail width:
+//   HORIZONTAL — this box ends at the button's `pr-1.5` content edge and the strip is anchored
+//     `right-1.5` on the same row, so both right edges land on the same x.
+//   VERTICAL — `self-start` pins this box to the flex line's cross-start, which is the button's `pt-1`
+//     content top; the strip's `top-1` is that same offset from the row. Neither reading depends on the
+//     font's metrics, so nothing here needs re-fitting when the font setting flips.
+// It replaced a hand-placed `relative top-[calc(5.5px - 0.5cap)]` that sat an 11px mark on the title's
+// CAP band (0.01px residual in both fonts) — a better vertical in isolation, but its ink centre landed
+// 4.00px RIGHT of the unpin's and 0.09px (sans) / 0.66px (mono) above it, so the glyph jumped every
+// time the pointer arrived. This slot centres on the title's first LINE BOX instead, which is where the
+// door and Retry have always sat; an absolutely positioned strip cannot reach the in-flow baseline the
+// `cap` correction needs, so the whole slot agreeing beats one mark in it being sub-pixel more correct
+// at rest. What that costs, measured: the resting pin's ink now ends 4.5px inside the rest time's,
+// where the 11px mark ended 0.8px inside it — the hover square's own dead space, and the same inset the
+// door already had.
+//
+// `-ml-1` is a layout trim, not spacing: this slot is 8px wider than the 11px mark it replaced, and
+// without the trim the title's own box pays all of it. Giving 4px back leaves the ink gap from a filled
+// title line to the pin at 14.0px, against 14.29px before this change.
 function PinnedMark() {
   return (
     <span
       aria-hidden
       data-rail-pin-mark
-      className="shrink-0 text-[13px] text-muted/55 transition-opacity group-hover:opacity-0 group-focus-within:opacity-0"
+      className="-ml-1 flex h-[19px] w-[19px] shrink-0 items-center justify-center self-start text-muted/55 transition-opacity group-hover:opacity-0 group-focus-within:opacity-0"
     >
-      <Pin size={11} fill="currentColor" className="relative top-[calc(5.5px_-_0.5cap)]" />
+      <Pin size={12} fill="currentColor" />
     </span>
   )
 }
