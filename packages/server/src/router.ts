@@ -109,7 +109,6 @@ import {
   DismissQuestionsResult,
   AskedQuestionSchema,
   askedQuestionFaults,
-  ASK_MAX_OPEN,
   type AskedQuestion,
   type RegisteredQuestionView,
   DropOwnWatchInput,
@@ -2702,13 +2701,8 @@ export function createRouter(ctx: AppContext) {
         // free-text box, silently).
         const faults = input.questions.flatMap((q) => askedQuestionFaults(q))
         if (faults.length > 0) throw new Error(faults.join("\n"))
-        const open = ctx.storage.listThreadQuestions(input.slug, { openOnly: true })
-        if (open.length + input.questions.length > ASK_MAX_OPEN) {
-          throw new Error(
-            `this thread already has ${open.length} unanswered question(s); the limit is ${ASK_MAX_OPEN}. ` +
-            "Withdraw the ones you no longer need answered with `unask`, or decide them yourself.",
-          )
-        }
+        // NO CAP ON THE OPEN SET. Twelve was refused here until 2026-09-03 ("a worker holding more than
+        // this is refusing to decide"); the maintainer had it removed with the tool's other count caps.
         const now = Date.now()
         const registered = input.questions.map((spec) => {
           const id = `qst_${randomUUID().replace(/-/g, "").slice(0, 12)}`

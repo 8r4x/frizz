@@ -12,7 +12,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { AskedQuestion, BoardSnapshot, Settings } from "@frizz/shared"
-import { ASK_MAX_OPEN, AnswerQuestionsInput, AskInput, BURIED_ANSWERS_HEADER, parseQuestionsCancelledWake, questionAnswerMessage, questionsCancelledWakeMessage } from "@frizz/shared"
+import { AnswerQuestionsInput, AskInput, BURIED_ANSWERS_HEADER, parseQuestionsCancelledWake, questionAnswerMessage, questionsCancelledWakeMessage } from "@frizz/shared"
 import type { BoardManager } from "./board.ts"
 import { createRouter } from "./router.ts"
 import { createStorage, type SessionRow } from "./storage.ts"
@@ -170,18 +170,42 @@ test("a question takes as many options as the choice has, and a multi answer may
   } finally { h.close() }
 })
 
-test("the open set is bounded, and an archived thread refuses outright", async () => {
+test("the text caps carry the evidence, and an option takes more than four follow-ups", async () => {
   const h = harness()
   try {
     h.storage.upsertSession(row("t"))
-    for (let i = 0; i < ASK_MAX_OPEN; i++) {
-      await h.router.ask.handler({ input: { slug: "t", questions: [simple(`Q${i}?`)] } })
-    }
-    // A worker holding more than this outstanding is not asking, it is refusing to decide.
-    await assert.rejects(
-      () => h.router.ask.handler({ input: { slug: "t", questions: [simple("one more?")] } }),
-      new RegExp(`the limit is ${ASK_MAX_OPEN}`),
-    )
+    // 600 / 120 / 4000 characters and four follow-ups until 2026-09-03. The question is the whole card
+    // context, a label is a chip line that runs long, and a description is allowed to be a real diff —
+    // each of these is past its old cap and inside the new one.
+    const question = `Which? ${"evidence ".repeat(300)}`.trim()
+    const label = `Post the drafted comment as written ${"x".repeat(300)}`
+    const description = `\`\`\`diff\n${"+ a line of the diff\n".repeat(600)}\`\`\``
+    const followUps = Array.from({ length: 6 }, (_, i) => ({ question: `And ${i}?`, kind: "question" as const }))
+    assert.ok(question.length > 600 && label.length > 120 && description.length > 4000)
+    const input = AskInput.parse({ slug: "t", questions: [{ question, kind: "question", options: [{ label, description, followUps }, { label: "No" }] }] })
+    const { registered } = await h.router.ask.handler({ input })
+    assert.equal(registered[0].spec.options?.[0].followUps?.length, 6)
+    // …and the answer restates the long question, carries the long label, and answers all six branches.
+    const answers = AnswerQuestionsInput.parse({ slug: "t", answers: [{
+      questionId: registered[0].id, question, chosen: [label],
+      followUps: followUps.map((f) => ({ questionId: registered[0].id, question: f.question, chosen: [], text: "ok" })),
+    }] })
+    assert.equal(answers.answers[0].followUps?.length, 6)
+  } finally { h.close() }
+})
+
+test("the open set and the call are unbounded, and an archived thread refuses outright", async () => {
+  const h = harness()
+  try {
+    h.storage.upsertSession(row("t"))
+    // Four per call and twelve open were the caps until 2026-09-03 ("a worker holding more than this is
+    // refusing to decide"); the maintainer had both removed as arbitrary. Twenty in ONE call, through the
+    // zod boundary the handler skips, then one more on top.
+    const twenty = Array.from({ length: 20 }, (_, i) => simple(`Q${i}?`))
+    const { registered } = await h.router.ask.handler({ input: AskInput.parse({ slug: "t", questions: twenty }) })
+    assert.equal(registered.length, 20)
+    const more = await h.router.ask.handler({ input: { slug: "t", questions: [simple("one more?")] } })
+    assert.equal(more.open.length, 21)
 
     h.storage.upsertSession(row("gone", { state: "archived", archived: 1 }))
     await assert.rejects(

@@ -125,11 +125,16 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
       return followUps ? 1 + depth(followUps.items) : 1
     }
     assert.equal(depth(askQuestion), 3)
-    // The OPTION COUNT is unbounded at every level. `maxItems: 8` sat here until 2026-09-03; a `multi`
-    // over a long list is a real shape, so the schema must not advertise a cap the server no longer has.
+    // EVERY COUNT is unbounded — the questions per call, the options at every level, the follow-ups
+    // under every option. They carried `maxItems` of 4 / 8 / 4 until 2026-09-03, when the maintainer had
+    // the caps removed as arbitrary, so the schema must not advertise a bound the server no longer has.
+    // The one bound left is the DEPTH, pinned above.
+    assert.equal(list.result.tools[6].inputSchema.properties.questions.maxItems, undefined, "questions carry no maxItems")
     for (let node = askQuestion, level = 1; node; level++) {
       assert.equal(node.properties.options.maxItems, undefined, `options carry no maxItems at level ${level}`)
-      node = node.properties.options.items.properties.followUps?.items
+      const followUps = node.properties.options.items.properties.followUps
+      if (followUps) assert.equal(followUps.maxItems, undefined, `followUps carry no maxItems at level ${level}`)
+      node = followUps?.items
     }
     assert.deepEqual(list.result.tools[7].inputSchema.required, ["id"])
     assert.deepEqual(Object.keys(list.result.tools[7].inputSchema.properties), ["id"])

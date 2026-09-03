@@ -451,9 +451,10 @@ function questionSchema(depth) {
       // against the old schema keeps working, and the card folds it into the same always-visible body.
       ...(depth < ASK_MAX_DEPTH
         ? {
+            // No `maxItems` here either (four until 2026-09-03): the tree is bounded by its DEPTH, not
+            // by how many branches hang off one option.
             followUps: {
               type: "array",
-              maxItems: 4,
               description:
                 "Questions that become live ONLY if the human picks this option — the conditional " +
                 "branch. A branch nobody takes is never asked and never answered, so this is how you " +
@@ -550,10 +551,11 @@ const ASK = {
   inputSchema: {
     type: "object",
     properties: {
+      // No `maxItems` (four until 2026-09-03): "several at once is one call" above, and a cap here told
+      // a worker with six to batch them and then refused the batch.
       questions: {
         type: "array",
         minItems: 1,
-        maxItems: 4,
         description: "The questions to register, together. Each becomes its own card and its own row.",
         items: questionSchema(1),
       },
