@@ -18,6 +18,11 @@ export interface Prefs {
   // longest-waiting item first so the human cycles through everything; LIFO surfaces the most recently
   // active first. See groups.ts orderQueue.
   queueOrder: QueueDirection
+  // The fullscreen rail's "Edited files" group folded to its heading (maintainer 2026-09-03: "make
+  // Edited Files collapsible"). Open by default — the list is the rail's one non-wait group and the
+  // reason the page has a rail at all — and remembered here rather than in the store because a
+  // 22-file list a human folded once should stay folded on the next thread and the next reload.
+  railFilesCollapsed: boolean
 }
 
 function coerceQueueOrder(v: unknown, fallback: QueueDirection): QueueDirection {
@@ -38,6 +43,7 @@ export function parseStoredPrefs(raw: string | null): Prefs {
     compactDiffs: true,
     snoozePreset: DEFAULT_SNOOZE_PRESET,
     queueOrder: "fifo",
+    railFilesCollapsed: false,
     diffsRedefaulted: true,
   }
   try {
@@ -56,6 +62,7 @@ export function parseStoredPrefs(raw: string | null): Prefs {
       ...stored,
       snoozePreset: isSnoozePreset(stored.snoozePreset) ? stored.snoozePreset : fallback.snoozePreset,
       queueOrder: coerceQueueOrder(stored.queueOrder, fallback.queueOrder),
+      railFilesCollapsed: typeof stored.railFilesCollapsed === "boolean" ? stored.railFilesCollapsed : fallback.railFilesCollapsed,
     }
   } catch {
     return fallback

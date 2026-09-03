@@ -694,7 +694,44 @@ function awaitingWaitGroups(thread: Pick<ThreadView, "id" | "subAgents" | "bgShe
   ].filter((g) => g.rows.length > 0)
 }
 
-export function WaitGrid({ groups, divider }: { groups: ReadonlyArray<{ head: string; rows: ReactNode[] }>; divider: boolean }) {
+/** One group of the table. A group with `onToggle` is COLLAPSIBLE: its heading becomes the toggle,
+ *  wears the row count and a trailing caret, and hides its rows while `collapsed`. The fullscreen
+ *  rail's edited-files list is the one group that takes it (maintainer 2026-09-03) — a wait row is
+ *  never hidden, because a hidden live wait is the thing this table exists to stop. */
+export interface WaitGroup {
+  head: string
+  rows: ReactNode[]
+  count?: number
+  collapsed?: boolean
+  onToggle?: () => void
+}
+
+// The heading's caret TRAILS the label rather than leading it, so a collapsible heading's label sits
+// on the same left edge as every heading without one — the rail mixes both kinds in one grid, and the
+// awaiting card never has a caret at all. A chevron is mostly empty box, so its distance is set in INK:
+// the label→count gap reads wider than its `ml-1.5` because `tracking-wide` trails letter-space after
+// the last cap, and `ml-[5px]` is what puts the caret the same distance from the count. Measured with
+// scripts/ink-gaps.mjs at dsf 6 on the fullscreen rail — label→count / count→caret: sans 7.84 / 8.10px,
+// mono 8.10 / 7.42px. `ml-[3px]` read 6.10px in sans, visibly tighter than the gap before it.
+function GroupHeading({ group, first }: { group: WaitGroup; first: boolean }) {
+  const cls = `col-span-4 text-[10.5px] uppercase tracking-wide text-muted/45 ${first ? "" : "mt-2.5"}`
+  if (!group.onToggle) return <div className={cls}>{group.head}</div>
+  return (
+    <button
+      type="button"
+      onClick={group.onToggle}
+      aria-expanded={!group.collapsed}
+      onMouseDown={(e) => e.stopPropagation()}
+      className={`${cls} flex items-baseline rounded-sm text-left transition-colors hover:text-muted/80`}
+    >
+      <span>{group.head}</span>
+      {group.count !== undefined && <span className="ml-1.5 tabular-nums">{group.count}</span>}
+      <ChevronRight size={10} aria-hidden className={`${ON_CAP} ml-[5px] transition-transform ${group.collapsed ? "" : "rotate-90"}`} />
+    </button>
+  )
+}
+
+export function WaitGrid({ groups, divider }: { groups: ReadonlyArray<WaitGroup>; divider: boolean }) {
   if (groups.length === 0) return null
   return (
     <>
@@ -724,10 +761,8 @@ export function WaitGrid({ groups, divider }: { groups: ReadonlyArray<{ head: st
             {/* The heading spans all four tracks. `mt-*` on every group but the first: the gap between
                 a group and the one above it has to beat the gap between two rows, or the heading reads
                 as belonging to the rows above rather than the ones below. */}
-            <div className={`col-span-4 text-[10.5px] uppercase tracking-wide text-muted/45 ${i > 0 ? "mt-2.5" : ""}`}>
-              {g.head}
-            </div>
-            {g.rows}
+            <GroupHeading group={g} first={i === 0} />
+            {!g.collapsed && g.rows}
           </Fragment>
         ))}
       </div>

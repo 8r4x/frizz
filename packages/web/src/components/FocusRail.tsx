@@ -1,12 +1,14 @@
 import { FileDiff } from "lucide-react"
 import { useQueryClient } from "@tanstack/react-query"
+import { useSnapshot } from "valtio"
 import type { EditedFile, ThreadView } from "@frizz/shared"
 import { useTranscript } from "../hooks.ts"
 import { openLocalPath } from "../lib/local-file-links.ts"
 import { prewarmLocalFile } from "../lib/localFileQuery.ts"
 import { useNowMs } from "../lib/liveClock.ts"
+import { prefs } from "../lib/prefs.ts"
 import { PRIMER } from "../lib/primer.ts"
-import { AgentRow, BgShellRow, GithubWatchRow, ON_CAP, TimerRow, WaitGrid, WaitRow, liveAgents } from "./AwaitingBackgroundCard.tsx"
+import { AgentRow, BgShellRow, GithubWatchRow, ON_CAP, TimerRow, WaitGrid, WaitRow, liveAgents, type WaitGroup } from "./AwaitingBackgroundCard.tsx"
 
 // THE FULLSCREEN PAGE'S OPERATIONAL RAIL — what is going on in this thread, listed beside the transcript
 // (maintainer 2026-08-28): its live sub-agents, its running background shells, the pull requests and
@@ -85,13 +87,23 @@ export function FocusRail({ thread }: { thread: ThreadView }) {
   const shells = (thread.bgShells ?? []).filter((s) => s.state === "running")
   const prs = (thread.watches ?? []).filter((w) => w.kind === "github" && w.state === "armed")
   const timers = (thread.watches ?? []).filter((w) => w.kind === "timer" && w.state === "armed")
-  // The card's order — most-alive first — then the files, which are not a wait at all.
-  const groups = [
+  const { railFilesCollapsed } = useSnapshot(prefs)
+  // The card's order — most-alive first — then the files, which are not a wait at all. The files are
+  // also the one group that FOLDS (maintainer 2026-09-03): a worker that touched 22 files fills the
+  // rail with them, and the wait rows above are what the reader came for. The fold is a saved view
+  // preference (lib/prefs.ts), so it holds across threads and reloads.
+  const groups: WaitGroup[] = [
     { head: "Sub-agents", rows: agents.map((a) => <AgentRow key={a.id ?? a.label} agent={a} slug={thread.id} now={now} />) },
     { head: "Background shells", rows: shells.map((s) => <BgShellRow key={s.id ?? s.label} shell={s} slug={thread.id} now={now} />) },
     { head: "Pull requests", rows: prs.map((w) => <GithubWatchRow key={w.id} watch={w} />) },
     { head: "Timers", rows: timers.map((w) => <TimerRow key={w.id} watch={w} now={now} />) },
-    { head: "Edited files", rows: files.map((f) => <FileRow key={f.path} file={f} />) },
+    {
+      head: "Edited files",
+      rows: files.map((f) => <FileRow key={f.path} file={f} />),
+      count: files.length,
+      collapsed: railFilesCollapsed,
+      onToggle: () => (prefs.railFilesCollapsed = !prefs.railFilesCollapsed),
+    },
   ].filter((g) => g.rows.length > 0)
   return (
     // `thread-rail` exists only on this page, so on the fullscreen door's view transition it has no
