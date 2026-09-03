@@ -243,6 +243,9 @@ function parkHarness(hints: FenceView["hints"], opts: { shells?: any[]; agents?:
     })
   }
   const s = createScheduler({
+    // No quiet window here: this file pins its SOURCE, and hands one thread several wakes within a few
+    // clock minutes. The window and the merge are pinned in scheduler.test.ts.
+    wakeQuietWindowMs: 0,
     storage,
     // Stubbed so an armed watcher never reaches the real `gh`. Nothing here polls for a verdict — every
     // test in this file is about the fence — so a PR that never changes is exactly the right answer.
@@ -473,6 +476,7 @@ function loopHarness(body: string) {
   // The worker's own last word, advanced by `restAgain()` to model a wake that changes nothing.
   let restedAt = new Date(Date.now() - 60_000).toISOString()
   const s = createScheduler({
+    wakeQuietWindowMs: 0,
     storage,
     tailer: {
       get: () => ({

@@ -5,9 +5,9 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { wakeDeliveryToken } from "@frizz/shared"
 import { createStorage, type Storage, type SessionRow } from "./storage.ts"
-import { createScheduler, parsePrRef, ghPrViewArgs, evalRollup, parseGithubReviewActivities, isBotGithubActor, type GithubReviewActivity, type PrRef, type PrStatus } from "./scheduler.ts"
+import { createScheduler, parsePrRef, ghPrViewArgs, evalRollup, parseGithubReviewActivities, isBotGithubActor, MID_TURN_HOLD_MAX_MS, type GithubReviewActivity, type PrRef, type PrStatus } from "./scheduler.ts"
 import { createGithubReviewFetcher } from "./github-review.ts"
-import { createWakeDeliveryStore } from "./wake-store.ts"
+import { createWakeDeliveryStore, WAKE_QUIET_WINDOW_MS } from "./wake-store.ts"
 import type { Tailer, SessionTelemetry, FenceView, TurnState, BgShellView } from "./tailer.ts"
 
 // ---- pure helpers ----
@@ -175,6 +175,10 @@ function harness(): Harness {
           return review.result
         },
         log: () => {},
+        // NO QUIET WINDOW BY DEFAULT: the cases below pin what each SOURCE does, and most of them hand two
+        // or three wakes to one thread inside a few clock minutes. The window and the merge have their
+        // own cases, which set this explicitly — and one of them pins that production takes the constant.
+        wakeQuietWindowMs: 0,
         ...over,
       })
     },
@@ -1776,11 +1780,16 @@ test("limit: a limit wake and a timer wake for the same session get distinct del
   await s.tick() // neither is due: the limit is still closed and the timer has not been crossed
   h.clock.ms = SESSION_RESET_MS + 61_000
   await s.tick() // the limit resets and the timer comes due in the same pass
-  assert.deepEqual(h.resumes.map((r) => r.slug), ["a", "a"], "one thread, both sources")
+  // ONE TURN for both (2026-09-03): the two sources still mint two rows, and the merge folds the second
+  // into the first's delivery — see "coalesce" below. The uniqueness check is over the ROWS.
+  assert.deepEqual(h.resumes.map((r) => r.slug), ["a"], "one thread, both sources, one delivery")
   assert.match(h.resumes[0].message, /usage limit/)
-  const ids = createWakeDeliveryStore(h.storage.scope).list().map((d) => d.id)
+  assert.match(h.resumes[0].message, /re-check/, "the timer's text rides in the same delivery")
+  const rows = createWakeDeliveryStore(h.storage.scope).list()
+  const ids = rows.map((d) => d.id)
   assert.equal(ids.length, 2, "both sources armed their own wake for this session")
   assert.equal(new Set(ids).size, ids.length, "no delivery-id collision between the two wake sources")
+  assert.deepEqual(rows.map((d) => d.state), ["delivered", "delivered"], "both rows reach their own terminal state")
   h.storage.close()
 })
 
@@ -2314,10 +2323,11 @@ test("shell: a thread that signed off done is not woken when a shell it walked a
   assert.deepEqual(h.resumes, [], "a registered done is done")
 
   // CONTROL: the same rest with no sign-off at all is woken — the guard is the sign-off, not the shape.
-  // (A bare rest draws the sign-off nudge as well, its own news; only the shell's wake is counted.)
+  // (A bare rest draws the sign-off nudge as well, its own news; since 2026-09-03 the two ride in ONE
+  // delivery, so the shell's wake is counted by its text being there at all.)
   h.storage.clearThreadDone("d")
   await s.tick()
-  const shellWakes = (h.resumes as { message: string }[]).filter((r) => /dev server|bzvtnt3ig/.test(r.message) && !/without a fence/.test(r.message))
+  const shellWakes = (h.resumes as { message: string }[]).filter((r) => /dev server|bzvtnt3ig/.test(r.message))
   assert.equal(shellWakes.length, 1)
 })
 
@@ -2334,4 +2344,205 @@ test("shell: …unless the worker REGISTERED a wait on that shell — a registra
   assert.equal(h.resumes.length, 1, "the wake is the thing it registered for")
   assert.match(h.resumes[0].message, /dev server|bzvtnt3ig/)
   assert.notEqual(h.storage.getThreadWatch("wch_1")?.state, "armed", "and the row was settled first, as ever")
+})
+
+// ---- COALESCING: the quiet window and the merge ------------------------------------------------------
+//
+// A wake is a turn, and a turn re-reads a 150k–450k context on each of its 10–40 calls — $2–3 before
+// the worker does anything. Wake-triggered turns were 32% of a day's spend (2026-09-03), and the outbox
+// showed one thread woken six times in 40 minutes by one PR's review comments. So (wake-store.ts,
+// WAKE_QUIET_WINDOW_MS) a thread handed a wake inside the window holds its next ones, and
+// (scheduler.deliverDue) everything waiting for a thread goes out in ONE delivery when the window opens.
+// Timers are the vehicle below because they are the simplest source to arm on a clock; the merge does not
+// care which source a row came from.
+
+function coalesceHarness(): Harness {
+  const h = harness()
+  h.storage.setSetting("signoffNudge", "off") // a bare rest would otherwise draw the nudge into every frame
+  return h
+}
+
+test("coalesce: a burst of three wakes inside the quiet window is ONE delivery carrying all three, oldest first", async () => {
+  const h = coalesceHarness()
+  h.storage.upsertSession(row("b"))
+  h.tele.set("b", tele())
+  const s = h.make({ wakeQuietWindowMs: WAKE_QUIET_WINDOW_MS })
+  const t0 = h.clock.ms
+  armTimer(h, "b", t0, "first")
+  await s.tick()
+  assert.deepEqual(h.resumes.map((r) => r.message.split("\n")[0]), ["first"], "nothing was handed to the thread before, so the first wake goes out at once")
+
+  // Three more inside the window, a minute apart: each is minted, none is delivered.
+  for (const [i, prompt] of ["second", "third", "fourth"].entries()) {
+    h.clock.ms = t0 + (i + 1) * 60_000
+    armTimer(h, "b", h.clock.ms, prompt)
+    await s.tick()
+    assert.equal(h.resumes.length, 1, `${prompt}: held by the window`)
+  }
+  h.clock.ms = t0 + WAKE_QUIET_WINDOW_MS - 1_000
+  await s.tick()
+  assert.equal(h.resumes.length, 1, "still held one second before the window ends")
+
+  h.clock.ms = t0 + WAKE_QUIET_WINDOW_MS
+  await s.tick()
+  assert.equal(h.resumes.length, 2, "the window opens: one delivery for the three")
+  const merged = h.resumes[1].message
+  assert.match(merged, /held 3 wakes/)
+  const at = (needle: string) => { const i = merged.indexOf(needle); assert.ok(i >= 0, `${needle} is in the body`); return i }
+  assert.ok(at("### 1. one-off timer") < at("second") && at("second") < at("### 2.") && at("### 2.") < at("third") && at("third") < at("fourth"), "oldest first, each under its own heading")
+  assert.equal((merged.match(/⏱/g) ?? []).length, 1, "one clock at the foot, not one per part")
+  assert.match(merged, /⏱ [^\n]+\.$/, "and it is the last line")
+  // The rows stay separate, and every one reaches its own terminal state — which is what keeps
+  // evalTimers from re-minting any of them (their alarms are marked fired) and the per-fence dedupe true.
+  const rows = createWakeDeliveryStore(h.storage.scope).list()
+  assert.deepEqual(rows.map((d) => d.state), ["delivered", "delivered", "delivered", "delivered"])
+  assert.deepEqual(h.storage.listThreadTimers("b", { armedOnly: true }), [])
+  await s.tick()
+  assert.equal(h.resumes.length, 2, "nothing goes round again")
+  h.storage.close()
+})
+
+test("coalesce: identical events fold into one section that counts them", async () => {
+  const h = coalesceHarness()
+  h.storage.upsertSession(row("b"))
+  h.tele.set("b", tele())
+  const s = h.make({ wakeQuietWindowMs: WAKE_QUIET_WINDOW_MS })
+  const t0 = h.clock.ms
+  armTimer(h, "b", t0, "first")
+  await s.tick()
+  // Two alarms with the same prompt for the same instant: the same reason and the same body.
+  h.clock.ms = t0 + 60_000
+  armTimer(h, "b", h.clock.ms, "same thing")
+  armTimer(h, "b", h.clock.ms, "same thing")
+  armTimer(h, "b", h.clock.ms, "other thing")
+  await s.tick()
+  h.clock.ms = t0 + WAKE_QUIET_WINDOW_MS
+  await s.tick()
+  assert.equal(h.resumes.length, 2)
+  const merged = h.resumes[1].message
+  assert.match(merged, /held 3 wakes/)
+  assert.match(merged, /### 1\. one-off timer elapsed \([^)]+\) — 2 identical events/)
+  assert.equal((merged.match(/same thing/g) ?? []).length, 1, "said once, counted twice")
+  assert.match(merged, /### 2\. [^\n]+\n\nother thing/)
+  h.storage.close()
+})
+
+test("coalesce: an answer from the human is not held by the window, and goes out ALONE", async () => {
+  const h = coalesceHarness()
+  h.storage.upsertSession(row("q"))
+  h.tele.set("q", tele())
+  const s = h.make({ wakeQuietWindowMs: WAKE_QUIET_WINDOW_MS })
+  const t0 = h.clock.ms
+  armTimer(h, "q", t0, "first")
+  await s.tick()
+  h.clock.ms = t0 + 30_000
+  armTimer(h, "q", h.clock.ms, "second")
+  await s.tick()
+  assert.equal(h.resumes.length, 1, "the timer is held")
+
+  askQ(h, "q", "qst_1", "SQLite or a JSON file?")
+  h.clock.ms = t0 + 60_000
+  h.storage.answerThreadQuestion("qst_1", JSON.stringify({ questionId: "qst_1", question: "SQLite or a JSON file?", chosen: ["SQLite"] }), h.clock.ms)
+  await s.tick()
+  assert.equal(h.resumes.length, 2, "the answer is not held")
+  // ALONE: the chat reads this message by position (its first line must be the answers header, and every
+  // trailing line is the last answer's continuation), so the held timer does not ride on it.
+  assert.match(h.resumes[1].message, /^Answers to earlier questions:$/m)
+  assert.doesNotMatch(h.resumes[1].message, /second|held \d+ wakes/)
+  assert.equal(createWakeDeliveryStore(h.storage.scope).listOpen().length, 1, "the timer is still waiting")
+
+  h.clock.ms = t0 + WAKE_QUIET_WINDOW_MS
+  await s.tick()
+  assert.equal(h.resumes.length, 3)
+  assert.match(h.resumes[2].message, /^second/, "and goes out on the window it was given, on its own")
+  h.storage.close()
+})
+
+test("coalesce: a wake older than the window is delivered at once", async () => {
+  const h = coalesceHarness()
+  h.storage.upsertSession(row("b"))
+  h.tele.set("b", tele())
+  const s = h.make({ wakeQuietWindowMs: WAKE_QUIET_WINDOW_MS })
+  const t0 = h.clock.ms
+  armTimer(h, "b", t0, "first")
+  await s.tick()
+  h.clock.ms = t0 + WAKE_QUIET_WINDOW_MS + 60_000
+  armTimer(h, "b", h.clock.ms, "later")
+  await s.tick()
+  assert.deepEqual(h.resumes.map((r) => r.message.split("\n")[0]), ["first", "later"], "the window had already elapsed, so nothing waits")
+  h.storage.close()
+})
+
+test("coalesce: production takes the constant — the harness's 0 is the test's choice, not the default", async () => {
+  const h = coalesceHarness()
+  h.storage.upsertSession(row("b"))
+  h.tele.set("b", tele())
+  const s = h.make({ wakeQuietWindowMs: undefined })
+  const t0 = h.clock.ms
+  armTimer(h, "b", t0, "first")
+  await s.tick()
+  h.clock.ms = t0 + 60_000
+  armTimer(h, "b", h.clock.ms, "second")
+  await s.tick()
+  assert.equal(h.resumes.length, 1, "held by the default window")
+  h.clock.ms = t0 + WAKE_QUIET_WINDOW_MS
+  await s.tick()
+  assert.equal(h.resumes.length, 2)
+  h.storage.close()
+})
+
+test("coalesce: a mid-turn thread receives everything that piled up as ONE wake once its turn ends", async () => {
+  const h = coalesceHarness()
+  h.storage.upsertSession(row("m"))
+  h.watch("m", "acme/app#1")
+  h.watch("m", "acme/app#2")
+  armWatch(h, "m", { expiresAtMs: h.clock.ms + 60_000 })
+  // The shell is LIVE, so the watch runs to its expiry rather than settling silently as "target ended".
+  h.tele.set("m", { ...tele(undefined, "in-flight"), lastAssistantAt: iso(h.clock.ms), bgShells: [liveShell()] })
+  h.review.result = []
+  const s = h.make({ wakeQuietWindowMs: WAKE_QUIET_WINDOW_MS })
+  await s.tick() // baseline polls; nothing due
+  // A review lands on both PRs and the registered shell watch expires, all while the thread is working:
+  // three rows from two sources, none deliverable mid-turn (none is clock-driven).
+  h.clock.ms += 60_000
+  h.review.result = [{ id: "comment:c1", actor: "alice", at: iso(h.clock.ms), kind: "comment" }]
+  await s.tick()
+  h.clock.ms += 60_000
+  await s.tick()
+  assert.equal(h.resumes.length, 0, "not stepped on mid-turn")
+  const open = createWakeDeliveryStore(h.storage.scope).listOpen()
+  assert.equal(open.length, 3, JSON.stringify(open.map((d) => [d.reason, d.state])))
+
+  h.tele.set("m", { ...tele(), lastAssistantAt: iso(h.clock.ms) }) // the turn ends
+  h.clock.ms += 60_000
+  await s.tick()
+  assert.equal(h.resumes.length, 1, "one delivery for the three")
+  const merged = h.resumes[0].message
+  assert.match(merged, /held 3 wakes/)
+  assert.match(merged, /Your watch on the background shell `bzvtnt3ig` has expired/)
+  assert.match(merged, /acme\/app#1/)
+  assert.match(merged, /acme\/app#2/)
+  assert.ok(merged.indexOf("bzvtnt3ig") < merged.indexOf("acme/app#1"), "oldest first: the expiry was minted before the reports")
+  assert.deepEqual(createWakeDeliveryStore(h.storage.scope).list().map((d) => d.state), ["delivered", "delivered", "delivered"])
+  await s.tick()
+  assert.equal(h.resumes.length, 1, "nothing goes round again")
+  h.storage.close()
+})
+
+test("coalesce: the mid-turn hold has a ceiling — a wake held longer than MID_TURN_HOLD_MAX_MS goes out anyway", async () => {
+  const h = coalesceHarness()
+  const t0 = h.clock.ms
+  h.storage.upsertSession(snoozeRow("m", iso(t0), "resume the audit"))
+  h.tele.set("m", tele(undefined, "in-flight"))
+  const s = h.make()
+  await s.tick() // due now, held: the thread is busy
+  assert.equal(h.resumes.length, 0)
+  h.clock.ms = t0 + MID_TURN_HOLD_MAX_MS - 1_000
+  await s.tick()
+  assert.equal(h.resumes.length, 0, "still busy, still inside the ceiling")
+  h.clock.ms = t0 + MID_TURN_HOLD_MAX_MS
+  await s.tick()
+  assert.deepEqual(h.resumes.map((r) => r.message), ["resume the audit"], "released into the running turn's queue rather than starved")
+  assert.equal(createWakeDeliveryStore(h.storage.scope).list()[0]?.state, "delivered")
+  h.storage.close()
 })

@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { createHash, randomUUID } from "node:crypto"
-import { PARK_CORRECTION_NAMES_LEAD, PARK_CORRECTION_QUESTION_LEAD, PARK_CORRECTION_RETIRED_LEAD, parkExpiredWakeMessage, parkFinishedWakeMessage, prWatchExpiredWakeMessage, ownWatchExpiredWakeMessage, questionAnswerMessage, questionsCancelledWakeMessage, type QuestionAnswer, type QuestionDismissal, RETIRED_AWAITING_REPLACEMENT, retiredAwaitingKindsIn, compactionPromptMessage, limitResumeSteer, limitModelSwitchSteer, formatGithubWakeSteer, type GithubWatchStatus, prWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, liveOpsLines, wakeDeliveryToken, wakeTimeHeader, type QuotaSnapshot } from "@frizz/shared"
+import { PARK_CORRECTION_NAMES_LEAD, PARK_CORRECTION_QUESTION_LEAD, PARK_CORRECTION_RETIRED_LEAD, parkExpiredWakeMessage, parkFinishedWakeMessage, prWatchExpiredWakeMessage, ownWatchExpiredWakeMessage, questionAnswerMessage, questionsCancelledWakeMessage, type QuestionAnswer, type QuestionDismissal, RETIRED_AWAITING_REPLACEMENT, retiredAwaitingKindsIn, compactionPromptMessage, limitResumeSteer, limitModelSwitchSteer, formatGithubWakeSteer, type GithubWatchStatus, prWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, liveOpsLines, wakeDeliveryToken, wakeTimeHeader, stripWakeTimeHeader, type QuotaSnapshot } from "@frizz/shared"
 import { GITHUB_STATUS_SETTING, parkExpiresAt, parkIsHonoured, readAwaitingPark, unaccountedItems, type LiveActivity } from "./awaiting.ts"
 import type { SessionRow, Storage, ThreadQuestionRow } from "./storage.ts"
 import type { Tailer } from "./tailer.ts"
@@ -9,7 +9,7 @@ import type { SessionTelemetry } from "./tailer.ts"
 import type { LimitFault } from "./backend/types.ts"
 import { limitFaultResetKey, limitPauseIsStale, mayHaveLiveBackgroundWork, quotaWindowKeyFor, quotaWindowRecovered, scopedQuotaWindow, scopedQuotaWindowRecovered, textResetInstant } from "./backend/usage-limit.ts"
 import { claudeFallbackModel, claudeModelFromLimitName, claudeProfile, normalizeObservedThreadModel } from "./backend/thread-profiles.ts"
-import { createWakeDeliveryStore, type WakeDelivery } from "./wake-store.ts"
+import { createWakeDeliveryStore, WAKE_QUIET_WINDOW_MS, type WakeDelivery } from "./wake-store.ts"
 // The board owns the registered-done lifetime rule, and the waker must read it by exactly the same rule
 // or the two disagree about whether a thread is finished.
 import { answersInFlight, registeredDoneFence, safeQuestionAnswer, safeQuestionSpec } from "./board.ts"
@@ -984,6 +984,10 @@ export interface SchedulerDeps {
   wakeRuntimeState?: (slug: string, sessionId: string) => "alive" | "dead" | "unknown"
   // How long a sent wake waits for its transcript token before the runtime's survival alone confirms it.
   confirmGraceMs?: number
+  // The per-thread quiet window (wake-store.ts WAKE_QUIET_WINDOW_MS): how long after a wake is handed
+  // to a thread its next wake waits, so a burst of events costs one turn. Tests pass 0 to pin the
+  // behaviour of each source without the window in the way; production takes the constant.
+  wakeQuietWindowMs?: number
   tickMs?: number // how often to check (timers resolve at this cadence)
   deliveryLeaseMs?: number
   retryBaseMs?: number
@@ -1017,6 +1021,23 @@ const AWAITING_KEY_OF: Record<"shell" | "agent" | "timer" | "pr", string> = {
   shell: "shells", agent: "agents", timer: "timers", pr: "prs",
 }
 
+// ---- THE MID-TURN HOLD'S BOUND ------------------------------------------------------------------
+// A wake that is not clock-driven waits for the thread to come to rest (`isDeliverableNow`), and that
+// wait used to be unbounded: a thread whose turn reading never returned to idle — a fold that stalled, a
+// runtime whose last record is a tool_use that will never be answered — starved every wake queued behind
+// it, silently, for as long as the row lived. This is the ceiling. A held wake older than this goes out
+// even while the thread reads busy, into the runtime's queue exactly as a heartbeat does — which neither
+// aborts the running turn nor opens a new one (the CLI drains its queue at the next sampling boundary).
+// Ten minutes is long enough that an ordinary turn ends first and the rest-time delivery stays the rule;
+// short enough that a stuck reading costs one wake ten minutes rather than a thread its whole wait.
+export const MID_TURN_HOLD_MAX_MS = 10 * 60_000
+
+// The reason a deferred row carries while it is held. It is what tells `reconcileOutbox` that an
+// expired lease was NEVER SENT — a deferral happens before `resume` is called — as opposed to an
+// attempt that died with the socket write in flight, which is the one case a re-open on a busy thread
+// must never guess at.
+export const WAKE_HOLD_DEFERRAL = "delivery deferred until exact awaiting telemetry is idle and available"
+
 export function createScheduler(deps: SchedulerDeps): Scheduler {
   const now = deps.now ?? Date.now
   const fetchPr = deps.fetchPr ?? defaultFetchPr
@@ -1033,7 +1054,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   const confirmGraceMs = Math.max(1, deps.confirmGraceMs ?? 60_000)
   const deliveryBatchSize = Math.max(0, deps.deliveryBatchSize ?? 50)
   const deliveryOwner = randomUUID()
-  const outbox = createWakeDeliveryStore(deps.storage.scope)
+  const outbox = createWakeDeliveryStore(deps.storage.scope, { quietWindowMs: deps.wakeQuietWindowMs ?? WAKE_QUIET_WINDOW_MS })
 
   const reviewFailures = new Map<string, { signature: string; loggedAt: number; suppressed: number }>()
   let timer: NodeJS.Timeout | null = null
@@ -1257,13 +1278,28 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   //
   // `unknown` still defers on every source, this one included: telemetry we cannot read is not a thread
   // we can safely address.
-  function isDeliverableNow(item: WakeDelivery, context: DeliveryContext): boolean {
+  //
+  // AND THE HOLD HAS A CEILING (MID_TURN_HOLD_MAX_MS): a wake that has waited that long behind a busy
+  // reading goes out anyway, so a turn that never ends — or a reading that never says so — cannot starve
+  // the thread's whole queue. Measured from the row's creation, which is the instant the news existed.
+  function isDeliverableNow(item: WakeDelivery, context: DeliveryContext, nowMs: number): boolean {
     if (context === "current-idle") return true
+    if (context !== "current-busy") return false
     // The post-compaction trigger joins the mid-turn pair for the reason it exists at all: a compaction
     // happens WHILE the worker is working, and a re-grounding that waits for it to stop has missed the
     // window it was written for.
+    if (isHeartbeatFenceId(item.fenceId) || isTimerFenceId(item.fenceId) || isCompactFenceId(item.fenceId)) return true
+    return nowMs - item.createdAt >= MID_TURN_HOLD_MAX_MS
+  }
+
+  // The re-open gate's reading of the same ceiling. Only a row the scheduler itself DEFERRED qualifies —
+  // never one whose lease died around a `resume` call — because that is the one expired lease whose
+  // input provably never crossed the transport (see the reconcile branch that calls this).
+  function heldPastBound(item: WakeDelivery, context: DeliveryContext, nowMs: number): boolean {
     return context === "current-busy"
-      && (isHeartbeatFenceId(item.fenceId) || isTimerFenceId(item.fenceId) || isCompactFenceId(item.fenceId))
+      && item.sentAt === null
+      && item.lastError === WAKE_HOLD_DEFERRAL
+      && nowMs - item.createdAt >= MID_TURN_HOLD_MAX_MS
   }
 
   // Name the activity for the bump steer. A review carries a GitHub `state`, so an APPROVAL or a
@@ -2859,11 +2895,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       const context = deliveryContext(item)
       if (context === "confirmed") {
         outbox.confirm(item.id, nowMs)
-        settleSnooze(item)
-        settleSchedulePrompt(item)
-        settleRestPrompt(item)
-        settleCompactPrompt(item)
-        settleTimer(item)
+        settleDelivered(item)
+        confirmFrame(item, nowMs)
         continue
       }
       if (context === "superseded") {
@@ -2916,7 +2949,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // attempt landed, and the transcript check that would tell us (`confirmed`, above) cannot see a
       // message still sitting in the CLI's queue. A beat that arrives one rest late is the old
       // behaviour; a beat that arrives twice mid-turn is a new defect.
-      if (context !== "current-idle") continue
+      //
+      // THE ONE EXCEPTION IS A ROW THIS SCHEDULER DEFERRED and has now held past the ceiling: its
+      // `lastError` is the deferral's own text and `sentAt` is null, so nothing ever crossed the
+      // transport and re-opening it is not a guess. It is re-opened so `deliverDue` can send it into the
+      // busy thread's queue (isDeliverableNow's ceiling), which is the whole point of the bound.
+      if (context !== "current-idle" && !heldPastBound(item, context, nowMs)) continue
       const recovered = outbox.recoverExpired(
         item.id,
         nowMs,
@@ -2929,6 +2967,101 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         settleTimer(item)
         log(`waker: delivery EXHAUSTED for ${item.slug} after ${recovered.attempts} attempts — ${recovered.lastError ?? "unknown error"}`)
       }
+    }
+  }
+
+  // Every settle a DELIVERED wake owes its source. Repeated verbatim at the confirm, ack and frame
+  // paths below, so it is one list.
+  function settleDelivered(item: WakeDelivery): void {
+    settleSnooze(item)
+    settleSchedulePrompt(item)
+    settleRestPrompt(item)
+    settleCompactPrompt(item)
+    settleTimer(item)
+  }
+
+  // ---- THE MERGE: ONE THREAD, ONE TURN --------------------------------------------------------------
+  // A delivery is a turn, and a turn is the expensive unit (wake-store.ts, WAKE_QUIET_WINDOW_MS, for the
+  // numbers: $2–3 each at today's context sizes, 32% of a day's spend). The quiet window makes a thread's
+  // wakes WAIT together; this is what makes them GO together. When a claim passes its gates, every other
+  // pending row for the same thread and session is examined on its own terms — its own `deliveryContext`,
+  // so a row whose fence or rest was superseded settles as superseded and one already confirmed by the
+  // transcript settles as confirmed, exactly as they would have alone — and every row that could go out
+  // right now is LEASED beside the carrier (`adopt`, which ignores the quiet window: the carrier is
+  // leaving anyway) and folded into the carrier's message under its own reason line, in creation order.
+  //
+  // THE ROWS STAY SEPARATE. Only the message is merged: each companion keeps its own row, attempts,
+  // lease and terminal state, and every outcome of the one `resume` — deferred, abandoned, sent, acked
+  // — is applied to the whole frame, row by row. That is what keeps the two invariants that matter
+  // intact without a new state or column: the per-fence dedupe (a merged-away timer's row reaches
+  // `delivered` under its own fence id, so `evalTimers` finds it and never re-mints; a merged-away
+  // report's row is there for `undeliveredPrWatchReport` to see), and the settle hooks (a merged-away
+  // timer is marked fired, a merged-away snooze disarmed, by the same `settleDelivered` the carrier gets).
+  // A frame that is LOST — the process died before it read the frame — goes round again row by row and
+  // is simply re-merged by the next claim; nothing is delivered on the strength of a message that was
+  // composed and never read.
+  //
+  // AN ANSWER NEVER MERGES, as carrier or as companion. `questionAnswerMessage` is the human's own words
+  // in a shape the chat parses by position — its first line must be the answers header and every trailing
+  // line is read as the last answer's continuation — so wrapping it in a heading or appending anything
+  // after it would render frizz's prose inside the human's answer chip. It is exempt from the quiet
+  // window for the same reason it cannot wait: it goes out alone, at once.
+  function adoptCompanions(carrier: WakeDelivery, claimedAt: number): WakeDelivery[] {
+    if (isQuestionAnswerFenceId(carrier.fenceId)) return []
+    const adopted: WakeDelivery[] = []
+    for (const sibling of outbox.pendingFor(carrier.slug, carrier.sessionId)) {
+      if (sibling.id === carrier.id || isQuestionAnswerFenceId(sibling.fenceId)) continue
+      const context = deliveryContext(sibling)
+      if (context === "confirmed") {
+        outbox.confirm(sibling.id, now())
+        settleDelivered(sibling)
+        continue
+      }
+      if (context === "superseded") {
+        outbox.supersede(sibling.id, now(), "the exact awaiting fence or session was superseded before delivery")
+        settleSnooze(sibling)
+        continue
+      }
+      if (!isDeliverableNow(sibling, context, claimedAt)) continue
+      const leased = outbox.adopt(sibling.id, deliveryOwner, claimedAt, claimedAt + deliveryLeaseMs, maxDeliveryAttempts)
+      if (leased) adopted.push(leased)
+    }
+    return adopted
+  }
+
+  // The merged body: each wake's own message under its own reason line, oldest first, and ONE clock at
+  // the foot in place of the one each frizz-authored part carried (a stamp per section would put five
+  // clocks in one message; the display stripper is anchored to a single trailing one). Parts whose
+  // reason AND body are identical — the same review event reported by two polls, the same "CI passing"
+  // twice — fold into one section that says how many there were, rather than saying the same thing
+  // three times to a reader who pays per token to read it.
+  function mergedWakeMessage(frame: readonly WakeDelivery[], spokeAt: string | null | undefined): string {
+    const sections: { reason: string; body: string; count: number }[] = []
+    for (const part of frame) {
+      const body = stripWakeTimeHeader(part.message).trim()
+      const same = sections.find((s) => s.reason === part.reason && s.body === body)
+      if (same) same.count++
+      else sections.push({ reason: part.reason, body, count: 1 })
+    }
+    const lead = `Frizz held ${frame.length} wakes for this thread and is delivering them together, oldest first. Each is under its own heading; read all of them before acting on any.`
+    const body = sections.map((s, i) => `### ${i + 1}. ${s.reason}${s.count > 1 ? ` — ${s.count} identical events` : ""}\n\n${s.body}`)
+    return `${lead}\n\n${body.join("\n\n")}\n\n${wakeTimeHeader(now(), spokeAt)}`
+  }
+
+  // A frame confirmed by its carrier's token is confirmed whole. The merged delivery is ONE user record
+  // carrying ONE token — the carrier's — so a companion can never be confirmed by the transcript on its
+  // own; left to itself it would wait out the grace and be confirmed by the runtime's survival, or, if
+  // the process died inside the grace AFTER reading the frame, be sent again as lost. The companions are
+  // the rows still leased and marked sent at the same instant as the carrier: `deliverDue` stamps the
+  // whole frame with one `sentAt`.
+  function confirmFrame(carrier: WakeDelivery, nowMs: number): void {
+    if (carrier.sentAt === null) return
+    for (const d of outbox.listOpen()) {
+      if (d.id === carrier.id || d.slug !== carrier.slug || d.sessionId !== carrier.sessionId) continue
+      if (d.state !== "leased" || d.sentAt !== carrier.sentAt) continue
+      if (!outbox.confirm(d.id, nowMs)) continue
+      settleDelivered(d)
+      log(`waker: delivered ${d.slug} — ${d.reason} (in the same frame as: ${carrier.reason})`)
     }
   }
 
@@ -2945,11 +3078,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       const context = deliveryContext(item)
       if (context === "confirmed") {
         outbox.confirm(item.id, now())
-        settleSnooze(item)
-        settleSchedulePrompt(item)
-        settleRestPrompt(item)
-        settleCompactPrompt(item)
-        settleTimer(item)
+        settleDelivered(item)
         continue
       }
       if (context === "superseded") {
@@ -2957,16 +3086,27 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         settleSnooze(item)
         continue
       }
-      if (!isDeliverableNow(item, context)) {
+      if (!isDeliverableNow(item, context, claimedAt)) {
         const deferredAt = now()
         outbox.deferFailure(
           item.id,
           deliveryOwner,
           deferredAt,
           deferredAt + Math.max(deliveryLeaseMs, retryDelay(item.attempts)),
-          "delivery deferred until exact awaiting telemetry is idle and available",
+          WAKE_HOLD_DEFERRAL,
         )
         continue
+      }
+
+      // The frame: the carrier plus everything else waiting for this thread that may go out now, in
+      // creation order. One `resume`, one turn; see adoptCompanions.
+      const companions = adoptCompanions(item, claimedAt)
+      const frame = [...companions, item].sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))
+      const message = companions.length === 0
+        ? item.message
+        : mergedWakeMessage(frame, deps.tailer.get(item.slug)?.lastAssistantAt)
+      if (companions.length > 0) {
+        log(`waker: merged ${frame.length} wakes for ${item.slug} into one delivery — ${frame.map((d) => d.reason).join("; ")}`)
       }
 
       try {
@@ -2974,7 +3114,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         // by its runtime (measured: zero date injections across a whole session), so it has no way to
         // judge how long its own parks actually last — which is why `for:` values are guesses. This is
         // the one place every frizz wake passes through, so one line here reaches all of them.
-        await deps.resume(item.slug, item.message, item.id)
+        await deps.resume(item.slug, message, item.id)
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         const failedAt = now()
@@ -2984,22 +3124,26 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         // human, instead of deferring it back into the retry pool. Duck-typed so the scheduler stays
         // decoupled from resume.ts (see TerminalDeliveryError).
         if ((error as { terminalDelivery?: unknown })?.terminalDelivery === true) {
-          outbox.supersede(item.id, failedAt, message)
-          settleSnooze(item)
-          settleTimer(item)
+          for (const d of frame) {
+            outbox.supersede(d.id, failedAt, message)
+            settleSnooze(d)
+            settleTimer(d)
+          }
           log(`waker: delivery ABANDONED for ${item.slug} (terminal, no retry): ${message}`)
           continue
         }
         // A thrown non-terminal operation can still be ambiguous (for example, text reached the worker
         // before a later storage write failed). Keep the item leased through a confirmation window; recovery
         // checks the token/fence before making it retryable.
-        outbox.deferFailure(
-          item.id,
-          deliveryOwner,
-          failedAt,
-          failedAt + Math.max(deliveryLeaseMs, retryDelay(item.attempts)),
-          message,
-        )
+        for (const d of frame) {
+          outbox.deferFailure(
+            d.id,
+            deliveryOwner,
+            failedAt,
+            failedAt + Math.max(deliveryLeaseMs, retryDelay(d.attempts)),
+            message,
+          )
+        }
         log(`waker: delivery FAILED for ${item.slug} (attempt ${item.attempts} of ${maxDeliveryAttempts}): ${message}`)
         continue
       }
@@ -3016,6 +3160,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (runtime !== "unknown") {
         const sentAt = now()
         if (outbox.markSent(item.id, deliveryOwner, sentAt, sentAt + confirmGraceMs)) {
+          // The same stamp on every companion — it is what confirmFrame recognises the frame by.
+          for (const d of companions) outbox.markSent(d.id, deliveryOwner, sentAt, sentAt + confirmGraceMs)
           // THE NUDGE'S CAP IS SPENT AT SEND, not at confirmation, and this branch is why the cap
           // existed on paper only. Every wake to a live runtime leaves here, so the settle below was
           // unreachable in production — and the confirm path this hands to cannot make up for it,
@@ -3024,7 +3170,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           // nothing. `signoff_nudges` therefore stayed 0 forever while SIGNOFF_NUDGE_MAX was 2.
           // Counting here is also the honest anchor: the tokens are spent when the message is sent,
           // and confirmation is exactly what a thread failing every turn can never supply.
-          settleSignoffNudge(item)
+          for (const d of frame) settleSignoffNudge(d)
           log(`waker: sent ${item.slug} — ${item.reason}; confirming within ${Math.round(confirmGraceMs / 1000)}s`)
           checkpoint("after-delivery", item)
           continue
@@ -3038,16 +3184,17 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       const retried = item.attempts > 1 ? ` (on attempt ${item.attempts})` : ""
       log(`waker: delivered ${item.slug} — ${item.reason}${retried}`)
       checkpoint("after-delivery", item)
-      if (!outbox.acknowledge(item.id, deliveryOwner, now())) {
+      // Each row's ack is guarded on its own lease, so a companion whose lease another process took in
+      // the meantime keeps that process's authoritative state, exactly as the carrier does.
+      const acked = frame.filter((d) => outbox.acknowledge(d.id, deliveryOwner, now()))
+      if (!acked.includes(item)) {
         log(`waker: delivery acknowledgement lost ownership for ${item.slug}; preserving the authoritative terminal state`)
-        continue
       }
-      settleSnooze(item)
-      settleSchedulePrompt(item)
-      settleRestPrompt(item)
-      settleCompactPrompt(item)
-      settleTimer(item)
-      settleSignoffNudge(item)
+      for (const d of acked) {
+        settleDelivered(d)
+        settleSignoffNudge(d)
+      }
+      if (!acked.includes(item)) continue
       const acknowledged = outbox.get(item.id)
       if (acknowledged) checkpoint("after-ack", acknowledged)
     }

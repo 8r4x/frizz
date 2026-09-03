@@ -36,6 +36,9 @@ interface Fork { model?: string; effort?: string; text: string; freshProcess?: b
 // recompute freshProcess off the live tail, compose the wake. Only the socket underneath is a recorder.
 function schedulerOver(h: ReturnType<typeof createIntegrationHarness>, forks: Fork[]) {
   return createScheduler({
+    // No quiet window here: this file pins its SOURCE, and hands one thread several wakes within a few
+    // clock minutes. The window and the merge are pinned in scheduler.test.ts.
+    wakeQuietWindowMs: 0,
     storage: h.storage,
     tailer: h.tailer,
     now: () => h.clockMs(),

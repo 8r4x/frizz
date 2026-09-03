@@ -37,6 +37,9 @@ function fixture(tele: Partial<SessionTelemetry> = {}, opts: { now?: string; arc
   } as SessionRow)
   const delivered: string[] = []
   const s = createScheduler({
+    // No quiet window here: this file pins its SOURCE, and hands one thread several wakes within a few
+    // clock minutes. The window and the merge are pinned in scheduler.test.ts.
+    wakeQuietWindowMs: 0,
     storage,
     now: () => Date.parse(opts.now ?? T0),
     tailer: {
@@ -165,16 +168,18 @@ test("a fired timer is never delivered twice, on any later tick", async () => {
   } finally { f.close() }
 })
 
-test("several due timers all fire, each with its own text", async () => {
+test("several due timers all fire, each with its own text — in ONE delivery", async () => {
   const f = fixture({}, { now: "2026-08-04T12:30:00.000Z" })
   try {
     f.arm("tmr_a", "2026-08-04T12:10:00.000Z", "first thing")
     f.arm("tmr_b", "2026-08-04T12:20:00.000Z", "second thing")
     await f.s.tick()
-    assert.equal(f.delivered.length, 2)
-    // Order is the outbox's (its delivery ids are hashes), not the deadline's — two alarms due in the
-    // same tick are two independent promises, so what matters is that both texts went out intact.
-    assert.deepEqual(f.delivered.map((m) => m.split("\n")[0]).sort(), ["first thing", "second thing"])
+    // Two alarms due in the same tick are two independent promises, and since 2026-09-03 they ride in
+    // one delivery (scheduler.deliverDue's merge): a turn is the expensive unit, and what matters is that
+    // both texts went out intact and both rows settled.
+    assert.equal(f.delivered.length, 1)
+    assert.match(f.delivered[0], /first thing/)
+    assert.match(f.delivered[0], /second thing/)
     assert.deepEqual(f.armed(), [])
   } finally { f.close() }
 })

@@ -120,6 +120,9 @@ async function harness(target?: string) {
   const delivered: string[] = []
   const logs: string[] = []
   const s = createScheduler({
+    // No quiet window here: this file pins its SOURCE, and hands one thread several wakes within a few
+    // clock minutes. The window and the merge are pinned in scheduler.test.ts.
+    wakeQuietWindowMs: 0,
     storage,
     tailer,
     resume: async (_slug, message) => { delivered.push(message) },
@@ -251,6 +254,7 @@ test("a poll publishes a reading the BOARD can actually read, and the queue rule
   storage.armPrWatch({ id: "prw_1", slug: SLUG, owner: "acme", repo: "app", number: 391, createdAtMs: Date.parse(at), expiresAtMs: Date.parse(at) + 2 * 3600_000 })
   tailer.tick()
   const s = createScheduler({
+    wakeQuietWindowMs: 0,
     storage,
     tailer,
     resume: async () => {},
@@ -346,6 +350,7 @@ async function prHarness() {
   let clock = Date.now()
   const delivered: string[] = []
   const s = createScheduler({
+    wakeQuietWindowMs: 0,
     storage,
     tailer,
     resume: async (_slug, message) => { delivered.push(message) },
@@ -612,7 +617,7 @@ test("a fence naming a timer that was never registered is corrected, off a real 
     onChange: () => {}, paneDead: () => false,
   })
   const delivered: string[] = []
-  const s = createScheduler({ storage, tailer, resume: async (_slug, m) => { delivered.push(m) }, log: () => {} })
+  const s = createScheduler({ wakeQuietWindowMs: 0, storage, tailer, resume: async (_slug, m) => { delivered.push(m) }, log: () => {} })
   storage.setBackend(SLUG, "claude")
   storage.setClaudeRuntime(SLUG, "broker")
   tailer.tick()

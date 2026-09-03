@@ -212,6 +212,9 @@ function scheduler(
   if (opts.lastFiredAt) storage.stampRecurringRestFired(slug, storage.getSession(slug)!.recurring_armed_at!, opts.lastFiredAt)
   const delivered: string[] = []
   const s = createScheduler({
+    // No quiet window here: this file pins its SOURCE, and hands one thread several wakes within a few
+    // clock minutes. The window and the merge are pinned in scheduler.test.ts.
+    wakeQuietWindowMs: 0,
     storage,
     ...(opts.now ? { now: opts.now } : {}),
     tailer: {
@@ -372,6 +375,7 @@ function heartbeatScheduler(
   if (opts.lastFiredAt) storage.stampRecurringScheduleFired(slug, storage.getSession(slug)!.recurring_armed_at!, opts.lastFiredAt)
   const delivered: string[] = []
   const s = createScheduler({
+    wakeQuietWindowMs: 0,
     storage,
     ...(opts.now ? { now: opts.now } : {}),
     tailer: {
@@ -570,6 +574,7 @@ function compactScheduler(
   })
   const delivered: string[] = []
   const s = createScheduler({
+    wakeQuietWindowMs: 0,
     storage,
     ...(opts.now ? { now: opts.now } : {}),
     tailer: {

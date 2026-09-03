@@ -32,6 +32,9 @@ function nudger(tele: Partial<SessionTelemetry>, opts: { setting?: string; runti
   if (opts.setting) storage.setSetting("signoffNudge", opts.setting)
   const delivered: string[] = []
   const s = createScheduler({
+    // No quiet window here: this file pins its SOURCE, and hands one thread several wakes within a few
+    // clock minutes. The window and the merge are pinned in scheduler.test.ts.
+    wakeQuietWindowMs: 0,
     storage,
     tailer: {
       get: () => ({
@@ -400,6 +403,7 @@ test("a Goal and the reminder are due for one rest: the reminder goes, the Goal 
   let fence: SessionTelemetry["lastFence"]
   const delivered: string[] = []
   const s = createScheduler({
+    wakeQuietWindowMs: 0,
     storage,
     tailer: {
       get: () => ({

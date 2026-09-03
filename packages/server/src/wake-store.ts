@@ -3,6 +3,45 @@ import type Database from "./sqlite.ts"
 
 export type WakeDeliveryState = "pending" | "leased" | "delivered" | "superseded" | "exhausted"
 
+// ---- THE QUIET WINDOW ---------------------------------------------------------------------------
+// EVERY WAKE IS A NEW TURN, and a turn is the expensive unit. A wake lands as a fresh user message in a
+// Claude Code session whose context runs 150k–450k tokens; the turn re-reads all of it on every API call
+// and typically makes 10–40 calls, so one wake costs $2–3 at list price before the worker has done
+// anything useful. Measured on the maintainer's board 2026-09-03: wake-triggered turns were 32% of the
+// day's spend (pull-request watchers 20%, the worker's own shell/watch wakes 6%, usage-limit resumes
+// 6%), and the outbox showed the shape of the waste — one thread woken SIX times in 40 minutes by one
+// PR's review comments (13:08, 13:16, 13:25, 13:39, 13:44, …), each a turn; two threads watching the
+// same PR each woken on all eight of an hour's pushes; the limit resume restarting five threads within
+// twelve seconds.
+//
+// So a wake enqueued for a thread that was handed a wake less than this long ago is not claimable until
+// the window has elapsed: `next_attempt_at` is pushed out to `lastHandoff + window`, and everything that
+// arrives for the thread in the meantime waits beside it and is MERGED into the same delivery when the
+// window opens (scheduler.deliverDue). A burst then costs one turn instead of one per event. The
+// window is measured from the last HANDOFF — sent or delivered, whichever the store recorded — because
+// that is the instant the thread's turn began, and the turn is what is being rationed.
+//
+// Five minutes is the tradeoff between a worker hearing news promptly and a worker paying a turn per
+// event: a PR watcher's poll is already 60s, so news arrives at most four polls late, and a review
+// burst (the six-in-40-minutes case above) collapses into one or two turns instead of six.
+export const WAKE_QUIET_WINDOW_MS = 5 * 60_000
+
+/** Hint-key prefixes the quiet window does NOT hold. An answer from the human (`answers:`) is the one
+ *  delivery a worker is actually waiting on, and the human is sitting right there; a usage-limit
+ *  resume (`limit:`) is the thread coming back from a wall it did not choose, and holding it would
+ *  only lengthen the outage. Both still merge with anything already pending for the thread. */
+export const WAKE_QUIET_EXEMPT_HINT_PREFIXES = ["answers:", "limit:"] as const
+
+export function isQuietWindowExempt(hintKey: string): boolean {
+  return WAKE_QUIET_EXEMPT_HINT_PREFIXES.some((prefix) => hintKey.startsWith(prefix))
+}
+
+export interface WakeDeliveryStoreOptions {
+  /** How long after a handoff the thread's next wake waits; `WAKE_QUIET_WINDOW_MS` unless a test says
+   *  otherwise. Zero disables the hold (a wake is claimable the instant it is enqueued). */
+  quietWindowMs?: number
+}
+
 export interface WakeDeliveryInput {
   id: string
   slug: string
@@ -51,11 +90,22 @@ interface WakeDeliveryRow {
 }
 
 export interface WakeDeliveryStore {
+  /** Idempotent on the unique key (project, slug, session, fence id): a second enqueue of the same fence
+   *  returns the row that is already there, in whatever state it reached, and touches nothing — which is
+   *  what lets every source dedupe by fence id. A NEW row's `nextAttemptAt` is `now`, or the end of the
+   *  thread's quiet window if a wake was handed to it more recently than that (see WAKE_QUIET_WINDOW_MS). */
   enqueue(input: WakeDeliveryInput, now: number): { effect: "created" | "existing"; delivery: WakeDelivery }
   get(id: string): WakeDelivery | undefined
   list(): WakeDelivery[]
   listOpen(): WakeDelivery[]
+  /** The thread's pending rows in creation order, whether or not their `nextAttemptAt` has come — the
+   *  scheduler's merge reads this after a claim to find what else is waiting for the same thread. */
+  pendingFor(slug: string, sessionId: string): WakeDelivery[]
   claim(owner: string, now: number, leaseUntil: number, maxAttempts: number): WakeDelivery | undefined
+  /** Lease ONE NAMED pending row, exactly as `claim` would, except that its `nextAttemptAt` is not
+   *  consulted: the caller already holds a claimed wake for the same thread and is folding this one into
+   *  the same delivery, so the quiet window that was holding it has nothing left to hold it for. */
+  adopt(id: string, owner: string, now: number, leaseUntil: number, maxAttempts: number): WakeDelivery | undefined
   deferFailure(id: string, owner: string, now: number, retryAt: number, error: string): boolean
   recoverExpired(id: string, now: number, retryAt: number, maxAttempts: number, error: string): WakeDelivery | undefined
   acknowledge(id: string, owner: string, now: number): boolean
@@ -124,15 +174,28 @@ export function ensureWakeDeliverySchema(db: Database): void {
   `)
 }
 
-export function createWakeDeliveryStore(scope: ProjectScope): WakeDeliveryStore {
+export function createWakeDeliveryStore(scope: ProjectScope, options: WakeDeliveryStoreOptions = {}): WakeDeliveryStore {
   const db = scope.db
   ensureWakeDeliverySchema(db)
+  const quietWindowMs = Math.max(0, options.quietWindowMs ?? WAKE_QUIET_WINDOW_MS)
 
   const byId = scope.prepare<[string], WakeDeliveryRow>("SELECT * FROM wake_delivery WHERE project_id = @project_id AND id = ?")
   const all = scope.prepare<[], WakeDeliveryRow>("SELECT * FROM wake_delivery WHERE project_id = @project_id ORDER BY created_at, id")
   const open = scope.prepare<[], WakeDeliveryRow>(
     "SELECT * FROM wake_delivery WHERE project_id = @project_id AND state IN ('pending', 'leased') ORDER BY created_at, id",
   )
+  const pendingForStmt = scope.prepare<[string, string], WakeDeliveryRow>(
+    "SELECT * FROM wake_delivery WHERE project_id = @project_id AND thread_slug = ? AND session_id = ? AND state = 'pending' ORDER BY created_at, id",
+  )
+  // The thread's last HANDOFF: the newest instant any of its rows was sent to the runtime or filed as
+  // delivered. `sent_at` survives confirmation and supersession, and `delivered_at` is only ever set at
+  // or after it, so the scalar max of the pair per row, aggregated, is the instant the thread's most
+  // recent wake-turn began. Keyed on the slug alone: a session change is the same thread restarting, and
+  // it is the thread's turns that are being rationed.
+  const lastHandoffStmt = scope.prepare<[string], { at: number | null }>(`
+    SELECT MAX(MAX(COALESCE(delivered_at, 0), COALESCE(sent_at, 0))) AS at
+    FROM wake_delivery WHERE project_id = @project_id AND thread_slug = ?
+  `)
   const insert = scope.prepare(`
     INSERT INTO wake_delivery (
       project_id, id, thread_slug, session_id, fence_id, hint_key, message, reason, state, attempts,
@@ -140,7 +203,7 @@ export function createWakeDeliveryStore(scope: ProjectScope): WakeDeliveryStore 
       delivered_at, terminal_at
     ) VALUES (
       @project_id, @id, @slug, @sessionId, @fenceId, @hintKey, @message, @reason, 'pending', 0,
-      @now, NULL, NULL, NULL, @now, @now, NULL, NULL
+      @notBefore, NULL, NULL, NULL, @now, @now, NULL, NULL
     )
     ON CONFLICT DO NOTHING
   `)
@@ -166,6 +229,13 @@ export function createWakeDeliveryStore(scope: ProjectScope): WakeDeliveryStore 
       state = 'leased', attempts = attempts + 1, lease_owner = @owner, lease_until = @leaseUntil,
       last_error = NULL, sent_at = NULL, updated_at = @now
     WHERE project_id = @project_id AND id = @id AND state = 'pending' AND next_attempt_at <= @now AND attempts < @maxAttempts
+  `)
+  // `claim` minus the due check — see `adopt` on the interface.
+  const adoptStmt = scope.prepare(`
+    UPDATE wake_delivery SET
+      state = 'leased', attempts = attempts + 1, lease_owner = @owner, lease_until = @leaseUntil,
+      last_error = NULL, sent_at = NULL, updated_at = @now
+    WHERE project_id = @project_id AND id = @id AND state = 'pending' AND attempts < @maxAttempts
   `)
   const deferFailureStmt = scope.prepare(`
     UPDATE wake_delivery SET
@@ -208,7 +278,16 @@ export function createWakeDeliveryStore(scope: ProjectScope): WakeDeliveryStore 
   `)
 
   const enqueueTxn = db.transaction((input: WakeDeliveryInput, now: number) => {
-    const created = insert.run({ ...input, now }).changes === 1
+    // The quiet window, applied at enqueue and carried by `next_attempt_at` so `claim`'s due check and
+    // the durable-outbox invariants need no new state. Exempt keys are due at once; everything else is
+    // due at once too unless the thread was handed a wake inside the window, in which case it waits for
+    // the window to end — and is merged into whatever else waited with it when it does.
+    let notBefore = now
+    if (quietWindowMs > 0 && !isQuietWindowExempt(input.hintKey)) {
+      const lastHandoff = lastHandoffStmt.get(input.slug)?.at ?? 0
+      if (lastHandoff > 0) notBefore = Math.max(now, lastHandoff + quietWindowMs)
+    }
+    const created = insert.run({ ...input, now, notBefore }).changes === 1
     const row = byId.get(input.id)
     if (!row) throw new Error("wake delivery disappeared while it was being enqueued")
     if (
@@ -232,6 +311,10 @@ export function createWakeDeliveryStore(scope: ProjectScope): WakeDeliveryStore 
     if (claimStmt.run({ id: candidate.id, owner, now, leaseUntil, maxAttempts }).changes !== 1) return undefined
     return delivery(byId.get(candidate.id)!)
   })
+  const adoptTxn = db.transaction((id: string, owner: string, now: number, leaseUntil: number, maxAttempts: number) => {
+    if (adoptStmt.run({ id, owner, now, leaseUntil, maxAttempts }).changes !== 1) return undefined
+    return delivery(byId.get(id)!)
+  })
 
   return {
     enqueue: (input, now) => enqueueTxn.immediate(input, now),
@@ -241,7 +324,9 @@ export function createWakeDeliveryStore(scope: ProjectScope): WakeDeliveryStore 
     },
     list: () => all.all().map(delivery),
     listOpen: () => open.all().map(delivery),
+    pendingFor: (slug, sessionId) => pendingForStmt.all(slug, sessionId).map(delivery),
     claim: (owner, now, leaseUntil, maxAttempts) => claimTxn.immediate(owner, now, leaseUntil, maxAttempts),
+    adopt: (id, owner, now, leaseUntil, maxAttempts) => adoptTxn.immediate(id, owner, now, leaseUntil, maxAttempts),
     deferFailure: (id, owner, now, retryAt, error) => deferFailureStmt.run({
       id,
       owner,
