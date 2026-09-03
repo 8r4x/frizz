@@ -1069,6 +1069,13 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
         state: "open",
         meta: null,
         seen_at: null,
+        // The SAME launch mode a dispatched worker gets. The follow-up that triggered this promotion
+        // resumes the session with `row.permission_mode`, and a row with none fell through to the
+        // bridge's `"default"` — Claude's prompt-on-everything mode, which the worker's own perm-policy
+        // hook then DEFERS on every call (`restrictive-mode`), so each Edit became a card. Observed
+        // 2026-09-03 on a terminal session driven from the board: every frizz-sent turn ran at
+        // `default` while the human's own TUI on the same transcript sat at `auto`.
+        permission_mode: workerDispatchPermission(backend, deps.getSettings()),
       })
       deps.storage.setBackend(slug, backend)
       if (backend === "codex") deps.storage.setAgentSession(slug, externalId)
