@@ -4,10 +4,13 @@
 // (occlusion/clip/alignment/optical-center) against the live app.
 //
 // Usage:
-//   nub scripts/shot.mjs <url> [out.png] [evalExprOr@file] [--before=exprOr@file] [--w=1440] [--h=900] [--wait=1500]
-//     [--clip=<css selector>] [--pad=8] [--dsf=2]
+//   nub scripts/shot.mjs <url> [out.png] [evalExprOr@file] [--before=exprOr@file] [--hover=<css selector>]
+//     [--w=1440] [--h=900] [--wait=1500] [--clip=<css selector>] [--pad=8] [--dsf=2]
 //   evalExpr: a JS expression string evaluated in page context (completion value → printed as JSON).
 //   @file:    read the expression from a file (e.g. an occlusion routine).
+//   --hover:  park the pointer on that element (after --before, before the shot), so a surface that
+//             reveals on CSS :hover — a rail row's action strip — is photographed as the eye sees it.
+//             No in-page expression can enter that state; only a real pointer can.
 //   --clip:   shoot only that element's box (+ --pad px of margin) instead of the viewport, and --dsf
 //             raises the device pixel ratio — together they make a 27px row judgeable without zooming
 //             the page (a `zoom`/`transform` hack reflows this app's centered layout and moves the very
@@ -52,6 +55,7 @@ try {
     const expr = flags.before.startsWith("@") ? readFileSync(flags.before.slice(1), "utf8") : flags.before
     await page.evaluate(expr)
   }
+  if (flags.hover) await page.hover(flags.hover)
   if (out) {
     const clip = flags.clip
       ? await page.evaluate((sel, pad) => {

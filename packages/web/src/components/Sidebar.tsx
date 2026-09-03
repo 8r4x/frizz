@@ -61,8 +61,9 @@ import type { ReactElement, ReactNode } from "react"
  * the workpane sits where it will end up instead of jumping when the real sidebar mounts.
  */
 // A row's hover-revealed icon action: sized to the title's FIRST line (h-[19px]; the group's top-1
-// matches the row's pt-1) so it never exceeds the row height. An opaque `bg-panel` backing on the
-// group keeps the title's last words from bleeding through the overlay.
+// matches the row's pt-1) so it never exceeds the row height. Bare glyphs — the group draws no box
+// around them (its backing is the rail's own base colour under the row's hover wash; see the strip in
+// ThreadRow), and only the one under the pointer paints its own square.
 const ROW_ACTION_CLASS = "flex h-[19px] w-[19px] items-center justify-center rounded text-muted/70 outline-none transition-colors hover:bg-panel-2 hover:text-fg"
 
 export const SIDEBAR_COLUMN_CLASS =
@@ -443,6 +444,9 @@ export const ThreadRow = memo(function ThreadRow({
   // door to the in-drawer "Continue now" than waiting for the window). The queue card and drawer header
   // read the SAME helper, so no surface can disagree with the rail about which threads offer Retry.
   const canRestart = !legacy && offersRetry(t)
+  // A pinned row wears the mark in its right-edge column AND places the unpin verb rightmost in the
+  // hover strip; both read this one predicate so the two can never disagree.
+  const pinned = !legacy && isPinned(t)
   // A ROW IS ITS TITLE, AND NOTHING ELSE (maintainer 2026-08-19: "there should never ever be any fucking
   // thing in the sidebar except for the fucking title"). There is no subtitle line on any row, in any
   // state: not the fence's PR ref, not a snooze, not the legacy `.frizz` activity gloss, not a sub-agent
@@ -453,10 +457,18 @@ export const ThreadRow = memo(function ThreadRow({
   // from the AWAITING BLOCK deterministically (awaitingWaitClause) plus the worker's own handoff prose, so
   // the detail is available on demand and never spends a line of the rail. That is the same call that
   // hid the SNOOZED label (2026-08-03) and the worker's reason (2026-08-16), applied to the last of them.
+  //
+  // THE HOVER WASH IS AN `after:` PSEUDO PAINTED ABOVE THE ROW, not a background under it. The hover
+  // actions overlay the title's first line and need an opaque backing (a long title's last words would
+  // otherwise show through the glyphs); painting the wash on top lets that backing be the rail's plain
+  // base colour and still match the lit row exactly — in every state and every frame of the fade. As a
+  // `hover:bg-*` under the strip, the backing had to be a second, guessed colour, and it read as a
+  // darker box around the buttons (maintainer 2026-09-03). `pointer-events-none`, so it never shadows a
+  // click on the row or its actions; `rounded-md` because the row clips nothing.
   return (
     <div
       data-sidebar-item={t.id}
-      className={`group relative flex min-w-0 items-start rounded-md transition-[color,background-color,opacity] hover:bg-white/[0.04] ${legacy ? "opacity-80" : snoozed ? "opacity-65 hover:opacity-90 focus-within:opacity-90" : ""}`}
+      className={`group relative flex min-w-0 items-start rounded-md transition-[color,opacity] after:pointer-events-none after:absolute after:inset-0 after:rounded-md after:bg-white/[0.04] after:opacity-0 after:transition-opacity hover:after:opacity-100 ${legacy ? "opacity-80" : snoozed ? "opacity-65 hover:opacity-90 focus-within:opacity-90" : ""}`}
     >
       {/* The reading position owns a real, in-row rail rather than borrowing the status-icon column.
           The marker spans the row's complete visual height, including wrapped titles and subtitles,
@@ -527,7 +539,7 @@ export const ThreadRow = memo(function ThreadRow({
             {/* A pinned row wears the small solid pin in this same right-edge column (the cue's
                 rest-time spot — the approved mockup's variant A), and yields to the hover actions the
                 same way the rest time does. Never both: the pinned band passes no restedAge. */}
-            {!legacy && !restedAge && isPinned(t) && <PinnedMark />}
+            {pinned && !restedAge && <PinnedMark />}
           </span>
         </span>
       </button>
@@ -545,15 +557,36 @@ export const ThreadRow = memo(function ThreadRow({
       {/* THE ROW'S HOVER ACTIONS, pinned to the right edge over the title's first line — exactly where
           the cue's rest time sits, which yields to them on hover (maintainer 2026-08-28: the expand icon
           "should replace where the current time rest duration currently is"). Every row gets the
-          fullscreen door; a stalled/held row gets Retry beside it, rightmost, because recovery is the
-          verb the row is pointing at. */}
+          fullscreen door; a stalled/held row gets Retry after it, because recovery is the verb the row
+          is pointing at.
+
+          NO BOX around the strip (maintainer 2026-09-03: "drop the background color around the icon
+          buttons"). It still needs an OPAQUE backing — it overlays the title's first line, and a long
+          title's last words would show through the glyphs — so the backing is the rail's base colour
+          (`bg-bg`), with a short gradient off its left edge that dissolves the covered letters instead
+          of slicing one in half. Both are invisible because the row's hover wash paints ABOVE them (the
+          `after:` pseudo on the row), so the strip is exactly the row's colour whether hovered,
+          keyboard-focused or snoozed. The old opaque `bg-panel` pill sat UNDER the wash and read as a
+          darker box on the lit row. */}
       {!legacy && (
-        <div className="absolute right-1.5 top-1 hidden items-center gap-0.5 rounded bg-panel group-hover:flex group-focus-within:flex">
-          {/* Pin sits LEFT of the fullscreen door (the approved mockup's order). Not on a foreign row:
-              the server refuses to pin what it does not own, so no button rather than a throwing one. */}
-          {!foreign && <RowPinButton t={t} />}
+        <div className="absolute right-1.5 top-1 hidden items-center gap-0.5 bg-bg group-hover:flex group-focus-within:flex before:pointer-events-none before:absolute before:inset-y-0 before:right-full before:w-3 before:bg-linear-to-r before:from-transparent before:to-bg">
+          {/* The pin sits LEFT of the fullscreen door on a row that can be pinned (the approved mockup's
+              order). On a PINNED row the same button is the unpin and goes RIGHTMOST — after Retry too —
+              because it is the hover form of the mark in the row's right-edge column: the mark fades and
+              the unpin appears where it was (maintainer 2026-09-03: "unpin button should be far right for
+              pinned threads on hover"). Not on a foreign row: the server refuses to pin what it does not
+              own, so no button rather than a throwing one. */}
+          {/* MEASURED 2026-09-03 (scripts/ink-gaps.mjs on sidebar-pin-fixture, dsf 4): on the strip's
+              uniform 2px gap the OUTLINE pin's ink sat 12px from the door where door→Retry read 10px and
+              Retry→unpin 10.5px, because the pin is a narrow glyph (8×11 of ink in a 19px box, dead
+              6/5) and the door's ink is inset too (dead 5/4). The pin's box is trimmed 2px on its door
+              side so the strip reads ONE gap — pin→door 10px after the trim. The unpin needs no trim: it
+              is the strip's last mark and its 11px ink already sits 10.5px from Retry. RE-MEASURE rather
+              than re-guess if a glyph, its size or the gap changes. */}
+          {!foreign && !pinned && <RowPinButton t={t} className="-mr-0.5" />}
           <ExpandThreadLink slug={t.id} size={12} className={ROW_ACTION_CLASS} />
           {canRestart && <RowRetryButton slug={t.id} />}
+          {!foreign && pinned && <RowPinButton t={t} />}
         </div>
       )}
       {/* Live children render as SIBLING rows under this one, not inside it — see SubAgentRows, which
@@ -663,12 +696,14 @@ function PinnedMark() {
   )
 }
 
-// The pin/unpin verb — one of the row's hover actions, LEFT of the fullscreen door (the approved
-// mockup's order), on every row the server can pin: sessions frizz owns, in any state, because the pin
-// deliberately outranks Done and Snoozed alike. Solid pin for pin, the same solid body with the slash
-// for unpin, so every pin drawing on the rail is one icon (maintainer 2026-09-02: "use the solid pin
-// icon to make sure that the icons are consistent everywhere").
-function RowPinButton({ t }: { t: ThreadView }) {
+// The pin/unpin verb — one of the row's hover actions (ThreadRow places it: left of the fullscreen door
+// to pin, rightmost to unpin), on every row the server can pin: sessions frizz owns, in any state,
+// because the pin deliberately outranks Done and Snoozed alike. THE FILL IS THE STATE: an outline pin
+// offers to pin, and the solid body with the slash — the same solid pin the pinned row's mark wears —
+// offers to unpin, so a filled pin anywhere on the rail means "pinned" and nothing else (maintainer
+// 2026-09-02: "use the solid pin icon to make sure that the icons are consistent everywhere";
+// 2026-09-03: "the pin icon should be unfilled for unpinned threads").
+function RowPinButton({ t, className = "" }: { t: ThreadView; className?: string }) {
   const pinned = isPinned(t)
   const [busy, setBusy] = useState(false)
   return (
@@ -688,9 +723,10 @@ function RowPinButton({ t }: { t: ThreadView }) {
             .catch((error: unknown) => showToast(`${pinned ? "Unpin" : "Pin"} failed: ${String(error instanceof Error ? error.message : error).slice(0, 80)}`))
             .finally(() => setBusy(false))
         }}
-        className={`${ROW_ACTION_CLASS} disabled:opacity-50`}
+        // `className` carries a layout trim the strip decides per position (see ThreadRow's readings).
+        className={`${ROW_ACTION_CLASS} disabled:opacity-50 ${className}`}
       >
-        {pinned ? <PinOff size={12} fill="currentColor" /> : <Pin size={12} fill="currentColor" />}
+        {pinned ? <PinOff size={12} fill="currentColor" /> : <Pin size={12} />}
       </button>
     </Tooltip>
   )

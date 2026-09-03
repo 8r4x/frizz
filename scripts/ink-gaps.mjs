@@ -20,10 +20,12 @@
 //
 // Usage:
 //   node scripts/ink-gaps.mjs <url> "<sel-a>,<sel-b>,…" [--dsf=4] [--w=1100] [--h=700] [--wait=2200]
-//     [--pad=2] [--threshold=8] [--before=@/tmp/routine.js]
+//     [--pad=2] [--threshold=8] [--before=@/tmp/routine.js] [--hover=<css selector>]
 //
 // Selectors are measured in the order given (NOT document order), so the printed gaps follow the
-// strip left to right exactly as you name it.
+// strip left to right exactly as you name it. `--hover` parks the pointer on an element first (after
+// `--before`), for a strip that only exists on CSS :hover — a rail row's actions — which no in-page
+// expression can reveal.
 import { readFileSync } from "node:fs"
 import puppeteer from "puppeteer"
 
@@ -64,6 +66,7 @@ try {
     const expr = flags.before.startsWith("@") ? readFileSync(flags.before.slice(1), "utf8") : flags.before
     await page.evaluate(expr)
   }
+  if (flags.hover) await page.hover(flags.hover)
 
   const boxes = await page.evaluate((sels) => {
     return sels.map((sel) => {
