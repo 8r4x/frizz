@@ -2214,7 +2214,7 @@ const reportsOf = (h: Harness, slug: string) => h.storage.db
   .prepare("SELECT fence_id, state, sent_at FROM wake_delivery WHERE thread_slug = ? AND fence_id LIKE 'prwatch:%' ORDER BY created_at")
   .all(slug) as { fence_id: string; state: string; sent_at: number | null }[]
 
-test("pr-watch: reports do not pile up behind a busy thread — one waits, the cursor holds, and the next carries everything since", async () => {
+test("pr-watch: reports do not pile up behind a busy thread — the waiting report is RE-MINTED with everything since the last one read, and goes out once", async () => {
   const h = harness()
   h.watch("r", "acme/app#7")
   h.storage.upsertSession(row("r"))
@@ -2232,31 +2232,116 @@ test("pr-watch: reports do not pile up behind a busy thread — one waits, the c
   assert.equal(h.resumes.length, 0, "not deliverable mid-turn")
   assert.equal(reportsOf(h, "r").length, 1)
 
-  // bob comments while #1 still waits: NO second report — this is the pile-up — and the cursor stays
-  // where #1 left it, so bob is not lost either.
+  // bob comments while #1 still waits: #1 is superseded and #2 says alice AND bob — one undelivered
+  // report per watcher, saying everything since the last one the worker read. (Until 2026-09-03 the
+  // poll held the cursor instead, and bob followed as his own report, a second turn.)
   h.clock.ms += 60_000
   const c2: GithubReviewActivity = { id: "comment:c2", actor: "bob", at: iso(h.clock.ms), kind: "comment" }
   h.review.result = [c1, c2]
   await s.tick()
-  assert.equal(reportsOf(h, "r").length, 1, "one undelivered report per watcher")
+  assert.deepEqual(reportsOf(h, "r").map((r) => r.state), ["superseded", "leased"], "the waiting report is replaced, not joined")
+  const open = createWakeDeliveryStore(h.storage.scope).listOpen()
+  assert.equal(open.length, 1, "one undelivered report per watcher")
+  assert.match(open[0].message, /alice/)
+  assert.match(open[0].message, /bob/)
+  assert.ok(open[0].message.indexOf("alice") < open[0].message.indexOf("bob"), "in the order the conversation was written")
   assert.equal(h.resumes.length, 0)
 
-  // The thread rests, parked on the PR as a PR-watching worker does: #1 goes out, and it says alice —
-  // what it knew when it was minted.
+  // The thread rests, parked on the PR as a PR-watching worker does: the ONE report goes out.
+  h.tele.set("r", { ...tele(awaiting([{ kind: "pr", value: "acme/app#7" }])), lastAssistantAt: iso(h.clock.ms) })
+  h.clock.ms += 60_000
+  await s.tick()
+  assert.equal(h.resumes.length, 1)
+  assert.match(h.resumes[0].message, /alice/)
+  assert.match(h.resumes[0].message, /bob/)
+
+  // The next poll has nothing new: no report, nothing said twice.
+  h.clock.ms += 60_000
+  await s.tick()
+  assert.equal(h.resumes.length, 1)
+  assert.equal(reportsOf(h, "r").length, 2)
+
+  // And carol, after delivery, is her own report measured from what was sent — alice and bob are not
+  // repeated.
+  h.clock.ms += 60_000
+  const c3: GithubReviewActivity = { id: "comment:c3", actor: "carol", at: iso(h.clock.ms), kind: "comment" }
+  h.review.result = [c1, c2, c3]
+  await s.tick()
+  assert.equal(h.resumes.length, 2)
+  assert.match(h.resumes[1].message, /carol/)
+  assert.doesNotMatch(h.resumes[1].message, /alice|bob/)
+})
+
+test("pr-watch: a red report waiting is replaced by the green one on the new head — the worker hears the LATEST verdict, not red then green", async () => {
+  const h = harness()
+  h.watch("r", "acme/app#7")
+  h.storage.upsertSession(row("r"))
+  h.tele.set("r", { ...tele(undefined, "in-flight"), lastAssistantAt: iso(h.clock.ms) })
+  h.review.result = []
+  h.pr.result = { state: "OPEN", mergedAt: null, rollup: [{ status: "COMPLETED", conclusion: "SUCCESS" }], head: "abc" }
+  const s = h.make()
+  await s.tick() // baseline: CI green — which a fresh watcher announces, so report #1 (passing) waits
+  assert.equal(reportsOf(h, "r").length, 1)
+
+  // CI goes red on abc mid-turn: #1 is replaced by #2 (failing).
+  h.clock.ms += 60_000
+  h.pr.result = { state: "OPEN", mergedAt: null, rollup: [{ name: "unit", status: "COMPLETED", conclusion: "FAILURE" }], head: "abc" }
+  await s.tick()
+  assert.deepEqual(reportsOf(h, "r").map((r) => r.state), ["superseded", "leased"])
+  assert.match(createWakeDeliveryStore(h.storage.scope).listOpen()[0].message, /CI FAILED/)
+
+  // A push, and CI goes green on the new head while #2 still waits, with a review alongside: #3 says
+  // green AND the review; the red verdict it replaces is not news any more.
+  h.clock.ms += 60_000
+  h.pr.result = { state: "OPEN", mergedAt: null, rollup: [{ status: "COMPLETED", conclusion: "SUCCESS" }], head: "def" }
+  h.review.result = [{ id: "review:r1", actor: "alice", at: iso(h.clock.ms), kind: "review", reviewState: "APPROVED" }]
+  await s.tick()
+  assert.deepEqual(reportsOf(h, "r").map((r) => r.state), ["superseded", "superseded", "leased"])
+
+  h.tele.set("r", { ...tele(awaiting([{ kind: "pr", value: "acme/app#7" }])), lastAssistantAt: iso(h.clock.ms) })
+  h.clock.ms += 60_000
+  await s.tick()
+  assert.equal(h.resumes.length, 1)
+  assert.match(h.resumes[0].message, /CI PASSED/)
+  assert.doesNotMatch(h.resumes[0].message, /CI FAILED/)
+  assert.match(h.resumes[0].message, /approval/)
+})
+
+test("pr-watch: a report minted BEFORE the re-mint existed is held the old way until it is sent", async () => {
+  const h = harness()
+  h.watch("r", "acme/app#7")
+  h.storage.upsertSession(row("r"))
+  h.tele.set("r", { ...tele(undefined, "in-flight"), lastAssistantAt: iso(h.clock.ms) })
+  h.review.result = []
+  const s = h.make()
+  await s.tick()
+  h.clock.ms += 60_000
+  const c1: GithubReviewActivity = { id: "comment:c1", actor: "alice", at: iso(h.clock.ms), kind: "comment" }
+  h.review.result = [c1]
+  await s.tick()
+  assert.equal(reportsOf(h, "r").length, 1)
+  // A pre-upgrade cursor: what it says is not carried structurally, so it cannot be folded forward.
+  const watch = h.storage.listPrWatches("r")[0]
+  const cursor = JSON.parse(watch.cursor ?? "{}")
+  delete cursor.held
+  h.storage.setPrWatchCursor(watch.id, JSON.stringify(cursor))
+
+  h.clock.ms += 60_000
+  h.review.result = [c1, { id: "comment:c2", actor: "bob", at: iso(h.clock.ms), kind: "comment" }]
+  await s.tick()
+  assert.equal(reportsOf(h, "r").length, 1, "held: no second report, no supersession")
+  assert.equal(h.storage.listPrWatches("r")[0].cursor, JSON.stringify(cursor), "and no cursor write, so bob is measured after delivery")
+
   h.tele.set("r", { ...tele(awaiting([{ kind: "pr", value: "acme/app#7" }])), lastAssistantAt: iso(h.clock.ms) })
   h.clock.ms += 60_000
   await s.tick()
   assert.equal(h.resumes.length, 1)
   assert.match(h.resumes[0].message, /alice/)
   assert.doesNotMatch(h.resumes[0].message, /bob/)
-
-  // The next poll reports what happened since #1 — bob, and only bob.
   h.clock.ms += 60_000
   await s.tick()
   assert.equal(h.resumes.length, 2, "the held delta follows, as its own report")
   assert.match(h.resumes[1].message, /bob/)
-  assert.doesNotMatch(h.resumes[1].message, /alice/, "nothing is said twice")
-  assert.equal(reportsOf(h, "r").length, 2)
 })
 
 test("pr-watch: a merge supersedes the report still waiting — the worker hears 'merged', not 'CI failed' then 'merged'", async () => {
@@ -2267,21 +2352,23 @@ test("pr-watch: a merge supersedes the report still waiting — the worker hears
   h.review.result = []
   h.pr.result = { state: "OPEN", mergedAt: null, rollup: [{ status: "COMPLETED", conclusion: "SUCCESS" }], head: "abc" }
   const s = h.make()
-  await s.tick() // baseline: CI green, nothing to say
+  await s.tick() // baseline: CI green — which a fresh watcher announces, so report #1 (passing) waits
 
-  // CI goes red mid-turn: report #1 minted and held.
+  // CI goes red mid-turn: report #2 (failing) replaces #1 and is held. (Until the 2026-09-03 re-mint the
+  // red verdict was never minted behind the waiting green one, so the "not 'CI failed'" half of this
+  // case's name was vacuous; now the red report exists and the merge has to beat it.)
   h.clock.ms += 60_000
   h.pr.result = { state: "OPEN", mergedAt: null, rollup: [{ name: "unit", status: "COMPLETED", conclusion: "FAILURE" }], head: "abc" }
   await s.tick()
-  assert.equal(reportsOf(h, "r").length, 1)
-  assert.equal(reportsOf(h, "r")[0].state, "leased", "deferred behind the busy thread")
+  assert.deepEqual(reportsOf(h, "r").map((r) => r.state), ["superseded", "leased"])
+  assert.match(createWakeDeliveryStore(h.storage.scope).listOpen()[0].message, /CI FAILED/, "deferred behind the busy thread")
 
   // The PR merges (someone else fixed and landed it). The red report is dead news.
   h.clock.ms += 60_000
   h.pr.result = { state: "MERGED", mergedAt: iso(h.clock.ms), rollup: [], head: "abc" }
   await s.tick()
   const states = reportsOf(h, "r").map((r) => r.state)
-  assert.deepEqual(states, ["superseded", "leased"], "the waiting CI report is superseded by the merge report")
+  assert.deepEqual(states, ["superseded", "superseded", "leased"], "the waiting CI report is superseded by the merge report")
 
   // At rest the thread hears ONE thing.
   h.tele.set("r", { ...tele(awaiting([{ kind: "pr", value: "acme/app#7" }])), lastAssistantAt: iso(h.clock.ms) })

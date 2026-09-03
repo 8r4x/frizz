@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { createHash, randomUUID } from "node:crypto"
-import { PARK_CORRECTION_NAMES_LEAD, PARK_CORRECTION_QUESTION_LEAD, PARK_CORRECTION_RETIRED_LEAD, parkExpiredWakeMessage, parkFinishedWakeMessage, prWatchExpiredWakeMessage, ownWatchExpiredWakeMessage, questionAnswerMessage, questionsCancelledWakeMessage, type QuestionAnswer, type QuestionDismissal, RETIRED_AWAITING_REPLACEMENT, retiredAwaitingKindsIn, compactionPromptMessage, limitResumeSteer, limitModelSwitchSteer, formatGithubWakeSteer, type GithubWatchStatus, prWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, liveOpsLines, wakeDeliveryToken, wakeTimeHeader, stripWakeTimeHeader, type QuotaSnapshot } from "@frizz/shared"
+import { PARK_CORRECTION_NAMES_LEAD, PARK_CORRECTION_QUESTION_LEAD, PARK_CORRECTION_RETIRED_LEAD, parkExpiredWakeMessage, parkFinishedWakeMessage, prWatchExpiredWakeMessage, ownWatchExpiredWakeMessage, questionAnswerMessage, questionsCancelledWakeMessage, type QuestionAnswer, type QuestionDismissal, RETIRED_AWAITING_REPLACEMENT, retiredAwaitingKindsIn, compactionPromptMessage, limitResumeSteer, limitModelSwitchSteer, formatGithubWakeSteer, GithubWakeItem, type GithubWatchStatus, prWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, liveOpsLines, wakeDeliveryToken, wakeTimeHeader, stripWakeTimeHeader, type QuotaSnapshot } from "@frizz/shared"
 import { GITHUB_STATUS_SETTING, parkExpiresAt, parkIsHonoured, readAwaitingPark, unaccountedItems, type LiveActivity } from "./awaiting.ts"
 import type { SessionRow, Storage, ThreadQuestionRow } from "./storage.ts"
 import type { Tailer } from "./tailer.ts"
@@ -2117,15 +2117,38 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   // THE FENCE IS NOT CONSULTED HERE, deliberately. Registration is a tool call and watching is a fact;
   // the ```awaiting fence separately STATES what the thread waits on, and a thread with no fence at all
   // is woken exactly the same way.
-  interface PrWatchCursor { seen: string[]; checks?: string; report?: number }
+  type PrWatchChecks = NonNullable<Parameters<typeof prWatchWakeMessage>[0]["checks"]>
+  /** WHAT THE WATCHER'S LATEST REPORT SAYS, structurally — the inputs its message was built from — so a
+   *  poll that finds more news while that report is still waiting can mint one that says all of it
+   *  (see the re-mint in evalPrWatches). Written at every mint; read only while a report is undelivered. */
+  interface PrWatchHeld { items: GithubWakeItem[]; omitted: number; checks?: PrWatchChecks }
+  interface PrWatchCursor { seen: string[]; checks?: string; report?: number; held?: PrWatchHeld }
   const prWatchPolledAt = new Map<string, number>() // refKey → last fetch, shared across threads
+
+  function readPrWatchHeld(raw: unknown): PrWatchHeld | undefined {
+    if (!raw || typeof raw !== "object") return undefined
+    const h = raw as Record<string, unknown>
+    if (!Array.isArray(h.items)) return undefined
+    const items = h.items.flatMap((i: unknown) => (GithubWakeItem.safeParse(i).success ? [i as GithubWakeItem] : []))
+    const c = h.checks && typeof h.checks === "object" ? h.checks as Record<string, unknown> : undefined
+    const checks: PrWatchChecks | undefined = c && (c.verdict === "passing" || c.verdict === "failing")
+      ? {
+        verdict: c.verdict,
+        passed: Number(c.passed) || 0,
+        failed: Number(c.failed) || 0,
+        failing: Array.isArray(c.failing) ? c.failing.filter((x: unknown): x is string => typeof x === "string") : [],
+      }
+      : undefined
+    return { items, omitted: Number(h.omitted) || 0, ...(checks ? { checks } : {}) }
+  }
 
   function readPrWatchCursor(raw: string | null): PrWatchCursor {
     try {
       const parsed = raw ? JSON.parse(raw) : null
       if (!parsed || typeof parsed !== "object") return { seen: [] }
       const seen = Array.isArray(parsed.seen) ? parsed.seen.filter((x: unknown): x is string => typeof x === "string") : []
-      return { seen, checks: typeof parsed.checks === "string" ? parsed.checks : undefined, report: Number(parsed.report) || 0 }
+      const held = readPrWatchHeld(parsed.held)
+      return { seen, checks: typeof parsed.checks === "string" ? parsed.checks : undefined, report: Number(parsed.report) || 0, ...(held ? { held } : {}) }
     } catch {
       return { seen: [] }
     }
@@ -2224,11 +2247,21 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // them all: eleven went to one thread within two seconds the moment it rested (thread
       // `yeah-we-definitely-don-t-do-enough`, 2026-08-27 00:53), three of them "CI FAILED" with job
       // lists the later ones had already replaced — the same stale-second-wake shape as the Goal after
-      // the sign-off nudge (evalRestPrompts). While one report waits, this poll HOLDS THE CURSOR and
-      // mints nothing, so the report that follows delivery carries everything since the waiting one:
-      // nothing lost, nothing said twice. A merge or close is the exception, below — it supersedes the
-      // waiting report, because a worker that reads "CI failed" and then "merged" back to back starts
-      // fixing a PR that is gone.
+      // the sign-off nudge (evalRestPrompts). A merge or close supersedes the waiting report outright,
+      // below, because a worker that reads "CI failed" and then "merged" back to back starts fixing a
+      // PR that is gone.
+      //
+      // AND THE WAITING REPORT IS RE-MINTED, NOT HELD (2026-09-03). Until then this poll held the cursor
+      // while a report waited and minted nothing, so the report that followed delivery carried the
+      // delta — nothing lost, nothing said twice, but TWO TURNS for one stretch of activity, the first of
+      // them saying only what it knew when it was minted. With the quiet window (wake-store.ts) a report
+      // now routinely waits minutes, which made that second turn the common case rather than the busy-
+      // thread edge. So a poll that finds news while a report waits SUPERSEDES it and mints the next
+      // number saying everything since the last report the worker actually read: the union of what the
+      // waiting one said (`cursor.held`, its own structural inputs) and what is new — the LATEST verdict
+      // (a green run on the new head is the news; the red one it replaces is not), every review item
+      // either knew, capped the way one poll's burst is capped. The cursor advances on every poll as it
+      // always has, so nothing is re-evaluated and the report after delivery starts from what was sent.
       const waiting = undeliveredPrWatchReport(row.slug, w.id)
 
       // A MERGED OR CLOSED PR ends the watch. Report it once, then settle: there is nothing further to
@@ -2241,9 +2274,11 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         }), `pr-watch ${key} ${st.state}`, nowMs)
         continue
       }
-      // The hold itself: nothing below runs — no report, and no cursor write, so the next poll after
-      // delivery measures against the waiting report's own baseline.
-      if (waiting) continue
+      // A waiting report minted BEFORE the re-mint existed carries no `held`, so its words cannot be
+      // folded forward; that one is held the old way — no report, no cursor write — until it is sent, and
+      // the report after it carries the delta as before. Exactly the pre-upgrade behaviour, for exactly
+      // the rows written before the upgrade.
+      if (waiting && !cursor.held) continue
 
       // CI reaching a TERMINAL verdict, and only on the transition to it. `running` and `none` are not
       // news; going from either to green or red is the whole reason CI is watched.
@@ -2298,19 +2333,14 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         return Number.isFinite(landed) && landed > w.created_at
       })
       const named = fresh.slice(0, REVIEW_STEER_CAP)
-      const reviewSteer = fresh.length > 0
-        ? formatGithubWakeSteer({
-          ref: key,
-          omitted: fresh.length - named.length,
-          items: [...named].reverse().map((a) => ({
-            label: activityLabel(a),
-            actor: a.actor,
-            bot: isBotGithubActor(a),
-            ...(a.at ? { at: a.at } : {}),
-            ...(a.url ? { url: a.url } : {}),
-          })),
-        })
-        : undefined
+      // Oldest first from here on: the steer reads in the order the conversation was written.
+      const freshItems: GithubWakeItem[] = [...named].reverse().map((a) => ({
+        label: activityLabel(a),
+        actor: a.actor,
+        bot: isBotGithubActor(a),
+        ...(a.at ? { at: a.at } : {}),
+        ...(a.url ? { url: a.url } : {}),
+      }))
 
       const nextCursor: PrWatchCursor = {
         seen: acts ? [...new Set([...cursor.seen, ...acts.map((a) => a.id)])].slice(-REVIEW_SEEN_CAP) : cursor.seen,
@@ -2318,7 +2348,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         checks: stamp ?? cursor.checks,
         report: cursor.report ?? 0,
       }
-      if (!checksChanged && !reviewSteer) {
+      if (!checksChanged && fresh.length === 0) {
         // Nothing to say, but the baseline moved: record what was seen so the FIRST poll's backlog is
         // never re-reported, and so a later comment is measured against today rather than against the
         // registration.
@@ -2331,15 +2361,29 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // exactly the thing it was hiding UNTIL — so clear it here, the moment we enqueue, and the card
       // re-surfaces. A no-op when nothing was snoozed. (Ported from the fence poller this replaced.)
       deps.storage.setSnoozedUntil(row.slug, null)
-      const report = nextReport(cursor)
-      enqueuePrWatchWake(row, w.id, report, prWatchWakeMessage({
-        target: key,
+      // WHAT THIS REPORT SAYS: the fresh news on top of whatever the waiting report it replaces was going
+      // to say (nothing, when no report waits). The newest REVIEW_STEER_CAP items are named and the rest
+      // counted, exactly as one poll's own burst is.
+      const held = waiting ? cursor.held : undefined
+      const items = [...(held?.items ?? []), ...freshItems]
+      const carried: PrWatchHeld = {
+        items: items.slice(-REVIEW_STEER_CAP),
+        omitted: (held?.omitted ?? 0) + (fresh.length - named.length) + Math.max(0, items.length - REVIEW_STEER_CAP),
         ...(checksChanged && terminal
           ? { checks: { verdict: terminal, passed: st!.passed, failed: st!.failed, failing: st!.failing } }
-          : {}),
-        ...(reviewSteer ? { review: reviewSteer } : {}),
-      }), `pr-watch ${key}${checksChanged ? ` CI ${terminal}` : ""}${reviewSteer ? " review" : ""}`, nowMs)
-      deps.storage.setPrWatchCursor(w.id, JSON.stringify({ ...nextCursor, report }))
+          : held?.checks ? { checks: held.checks } : {}),
+      }
+      const review = carried.items.length > 0
+        ? formatGithubWakeSteer({ ref: key, items: carried.items, omitted: carried.omitted })
+        : undefined
+      const report = nextReport(cursor)
+      if (waiting) outbox.supersede(waiting.id, nowMs, `folded into report ${report}, which says this and everything since`)
+      enqueuePrWatchWake(row, w.id, report, prWatchWakeMessage({
+        target: key,
+        ...(carried.checks ? { checks: carried.checks } : {}),
+        ...(review ? { review } : {}),
+      }), `pr-watch ${key}${carried.checks ? ` CI ${carried.checks.verdict}` : ""}${review ? " review" : ""}`, nowMs)
+      deps.storage.setPrWatchCursor(w.id, JSON.stringify({ ...nextCursor, report, held: carried }))
     }
   }
 
