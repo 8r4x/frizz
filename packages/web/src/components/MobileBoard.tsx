@@ -496,8 +496,11 @@ export function MobileBoard() {
   const queue = useMemo(() => {
     const asks = sections.active.filter(needsAction)
     const rest = sections.active.filter((t) => !needsAction(t))
-    return [...asks, ...rest]
-  }, [sections.active])
+    // PINNED leads even the asks: the phone has no pinned band, so the human's shelf folds into the
+    // top of the one list rather than vanishing (a pinned thread is diverted OUT of `active` — and out
+    // of `snoozed`/`inactive` — by sectionThreads, so without this it would render nowhere).
+    return [...sections.pinned, ...asks, ...rest]
+  }, [sections.pinned, sections.active])
   const askCount = queue.filter(needsAction).length
 
   const rows = tab === "queue" ? queue : tab === "snoozed" ? sections.snoozed : sections.inactive

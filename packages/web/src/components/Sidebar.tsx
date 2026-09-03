@@ -1,12 +1,13 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { useSnapshot } from "valtio"
-import { Check, ChevronRight, CircleDashed, Clock, Ellipsis, Github, Hourglass, Loader2, RotateCcw, Timer } from "lucide-react"
+import { Check, ChevronRight, CircleDashed, Clock, Ellipsis, Github, Hourglass, Loader2, Pin, PinOff, RotateCcw, Timer } from "lucide-react"
 import type { BoardSnapshot, ThreadView } from "@frizz/shared"
-import { store, openThread, scrollToQueueCard, queueCardTargetY, pushSubAgentDrawer, QUEUE_CARD_VIEWPORT_TOP } from "../store.ts"
+import { store, openThread, scrollToQueueCard, queueCardTargetY, pushSubAgentDrawer, showToast, QUEUE_CARD_VIEWPORT_TOP } from "../store.ts"
+import { rpc } from "../api/rpc.ts"
 import { useBoard, asThreads } from "../hooks.ts"
 import { prefs } from "../lib/prefs.ts"
-import { sectionThreads, externalThreads, orderByInteraction, partitionActive, needsAction, displayTitle, titleIsProvisional, isSnoozed, parkedAwaitingHint, sessionIndicatorKind, offersRetry, futureSnoozedUntil, lastActiveLabelAt } from "../groups.ts"
+import { sectionThreads, externalThreads, orderByInteraction, partitionActive, needsAction, displayTitle, titleIsProvisional, isPinned, isSnoozed, parkedAwaitingHint, sessionIndicatorKind, offersRetry, futureSnoozedUntil, lastActiveLabelAt } from "../groups.ts"
 import { ageSpan, relativeAge, limitResumeClock } from "../lib/activityTime.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { BoxSpinner, STATUS_BOX } from "./BoxSpinner.tsx"
@@ -221,6 +222,26 @@ export function Sidebar() {
           <DispatchForm />
         </div>
         <div ref={railRef} data-sidebar-rail className="min-h-0 min-w-0 overflow-y-auto overflow-x-hidden max-[800px]:overflow-y-visible">
+          {/* PINNED — the human's shelf, at the very top, above the cue (maintainer 2026-09-02, variant
+              A of the pin mockups: unlabeled, each row wearing the small solid pin where the cue's rest
+              time would sit). These rows are OUT of the band system entirely — sectionThreads diverts
+              them before any band claims them, so a pinned thread stays here spinning, resting, snoozed
+              or Done alike — and the band is ordered by the pin instants, oldest first, never by
+              activity: it is an arrangement the human made, and nothing the threads do may shuffle it. */}
+          {sections.pinned.length > 0 && (
+            <section aria-label="Pinned">
+              {sections.pinned.map((t) => (
+                <div key={t.id}>
+                  <ThreadRow t={t} active={activeId === t.id} onQueueNavigate={navigateToQueueCard} />
+                  <SubAgentRows t={t} />
+                </div>
+              ))}
+              {/* The separating rule is drawn only when the Rested/Active section actually follows:
+                  Snoozed, Done and External each draw their OWN rule above themselves, so drawing one
+                  here too would double it whenever that section is empty. */}
+              {activeThreads.length > 0 && <hr className="my-3 border-border/50" />}
+            </section>
+          )}
           {/* RESTED + ACTIVE — always shown, NEVER collapsible (you can't hide your queue or your live
               work), no label. Two rule-separated bands (see groups.ts orderActive/partitionActive):
               RESTED — the cue — sits FIRST, right under the prompt box (maintainer 2026-08-08), in the
@@ -247,16 +268,17 @@ export function Sidebar() {
                 </>
               )
             })()
-          ) : (
+          ) : sections.pinned.length === 0 ? (
             // pl-5 matches ThreadRow's own content inset (its status-indicator column), so the
             // placeholder starts exactly where the rows it stands in for would — and lands within a
             // pixel of the Snoozed/Done labels, which clear the same width for their chevron. A
             // bare px-1.5 left it hanging 14px out at the rail's raw edge, alone against everything.
             // "open", not "active": this stands in for the Active AND Rested bands together, and it
             // renders only when BOTH are empty. Saying "no active threads" over a hidden queue would be
-            // the same conflation the vocabulary above exists to stop.
+            // the same conflation the vocabulary above exists to stop. Suppressed under a pinned band —
+            // the pinned rows ARE open threads, so the claim would be visibly false one band up.
             <div className="py-1 pl-5 pr-1.5 text-[11.5px] text-muted/50">No open threads</div>
-          )}
+          ) : null}
           {/* HELD — every deliberate clock/hourglass/timed wait, visibly de-emphasized and labeled so
               it cannot read as active work. COLLAPSIBLE, and collapsed by default (maintainer
               2026-08-04): nothing here is waiting on the rail's reader right now, so it opens as a
@@ -502,6 +524,10 @@ export const ThreadRow = memo(function ThreadRow({
                 which reads as a rendering fault rather than an affordance. The label gives way to it
                 on hover instead: the button is why you pointed at the row. */}
             {restedAge && <RestedAge t={t} yieldsToRetry />}
+            {/* A pinned row wears the small solid pin in this same right-edge column (the cue's
+                rest-time spot — the approved mockup's variant A), and yields to the hover actions the
+                same way the rest time does. Never both: the pinned band passes no restedAge. */}
+            {!legacy && !restedAge && isPinned(t) && <PinnedMark />}
           </span>
         </span>
       </button>
@@ -523,6 +549,9 @@ export const ThreadRow = memo(function ThreadRow({
           verb the row is pointing at. */}
       {!legacy && (
         <div className="absolute right-1.5 top-1 hidden items-center gap-0.5 rounded bg-panel group-hover:flex group-focus-within:flex">
+          {/* Pin sits LEFT of the fullscreen door (the approved mockup's order). Not on a foreign row:
+              the server refuses to pin what it does not own, so no button rather than a throwing one. */}
+          {!foreign && <RowPinButton t={t} />}
           <ExpandThreadLink slug={t.id} size={12} className={ROW_ACTION_CLASS} />
           {canRestart && <RowRetryButton slug={t.id} />}
         </div>
@@ -600,6 +629,68 @@ function RowRetryButton({ slug }: { slug: string }) {
         className={`${ROW_ACTION_CLASS} disabled:opacity-50`}
       >
         {busy ? <Loader2 size={13} className="animate-spin" /> : <RotateCcw size={13} />}
+      </button>
+    </Tooltip>
+  )
+}
+
+// THE PINNED ROW'S MARK — the small solid pin at the row's right edge, in the column the cue's rest
+// time occupies, muted to that column's weight. An IN-FLOW flex item (like RestedAge, unlike the hover
+// overlay) so a wrapping title breaks before it instead of running underneath, and it yields to the
+// hover actions the same way the rest time yields to Retry. The pin stays FILLED but keeps its stroke:
+// lucide's needle is a stroke-only line (`M12 17v5`) with no fill area, so strokeWidth 0 would erase it
+// and leave a headless blob (measured on the pin mockup sheet, 2026-09-02).
+//
+// VERTICAL: `relative top-*`, NOT `vertical-align` — in this `items-baseline` row the span's flex
+// baseline is derived from the very svg a vertical-align would shift, so the flex realignment cancels
+// the nudge exactly (measured: ±0px of movement for any align value). Relative positioning applies
+// AFTER alignment, so it actually moves ink. The offset itself is the browser's, not a hand fit:
+// measured on the real rail (cap-band probe, 1440w, 2026-09-02), the pin's ink centre naturally rests
+// 5.5px above the title's baseline in both app fonts, so `calc(5.5px - 0.5cap)` drops it onto the cap
+// band's centre in whichever font is set. `text-[13px]` on the span is load-bearing: `cap` resolves
+// against the svg's OWN inherited size, and inheriting the row's default instead left 0.36px on the
+// table. Residual with both: 0.01px sans, 0.01px mono — RE-MEASURE rather than re-guess if the mark's
+// size or the rail's type scale moves.
+function PinnedMark() {
+  return (
+    <span
+      aria-hidden
+      data-rail-pin-mark
+      className="shrink-0 text-[13px] text-muted/55 transition-opacity group-hover:opacity-0 group-focus-within:opacity-0"
+    >
+      <Pin size={11} fill="currentColor" className="relative top-[calc(5.5px_-_0.5cap)]" />
+    </span>
+  )
+}
+
+// The pin/unpin verb — one of the row's hover actions, LEFT of the fullscreen door (the approved
+// mockup's order), on every row the server can pin: sessions frizz owns, in any state, because the pin
+// deliberately outranks Done and Snoozed alike. Solid pin for pin, the same solid body with the slash
+// for unpin, so every pin drawing on the rail is one icon (maintainer 2026-09-02: "use the solid pin
+// icon to make sure that the icons are consistent everywhere").
+function RowPinButton({ t }: { t: ThreadView }) {
+  const pinned = isPinned(t)
+  const [busy, setBusy] = useState(false)
+  return (
+    <Tooltip label={pinned ? "Unpin — return this thread to the rail's bands" : "Pin — keep this thread at the very top"}>
+      <button
+        data-sidebar-pin={t.id}
+        aria-label={pinned ? "Unpin thread" : "Pin thread"}
+        disabled={busy}
+        // Same two guards as Retry: keep DOM focus off the button so the hover reveal doesn't outlive
+        // the pointer, and stop the press from reaching the row (which would also open the thread).
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={(e) => {
+          e.stopPropagation()
+          setBusy(true)
+          rpc
+            .setThreadPinned({ slug: t.id, sessionId: t.sessionId ?? "", pinned: !pinned })
+            .catch((error: unknown) => showToast(`${pinned ? "Unpin" : "Pin"} failed: ${String(error instanceof Error ? error.message : error).slice(0, 80)}`))
+            .finally(() => setBusy(false))
+        }}
+        className={`${ROW_ACTION_CLASS} disabled:opacity-50`}
+      >
+        {pinned ? <PinOff size={12} fill="currentColor" /> : <Pin size={12} fill="currentColor" />}
       </button>
     </Tooltip>
   )

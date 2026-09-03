@@ -327,6 +327,15 @@ export type SectionKey = "active" | "snoozed" | "inactive"
 // Thread-derived buckets, in render order.
 export const SECTION_ORDER: readonly SectionKey[] = ["active", "snoozed", "inactive"]
 
+// PINNED — the human lifted this thread out of the band system entirely (maintainer 2026-09-02). Not a
+// SectionKey on purpose: sectionOf stays the pure state-derivation it is, and the pin is a human
+// override applied ABOVE it (sectionThreads diverts these rows before sectionOf runs), the same
+// altitude as the foreign drop. Deliberately ignores state: the pin outranks Done, Snoozed and the
+// queue alike — that is the whole feature.
+export function isPinned(t: ThreadView): boolean {
+  return t.kind === "session" && t.foreign !== true && typeof t.pinnedAt === "string"
+}
+
 // A session process is "at rest" (off-turn) when the pane is idle or the session has exited — the gate
 // an awaiting excusal needs (a mid-turn worker is still working, never awaiting).
 function atRest(t: ThreadView): boolean {
@@ -829,14 +838,24 @@ export function partitionActive(active: readonly ThreadView[]): { running: Threa
 // Partition threads into the thread-derived sidebar sections. `active` is the Active+Rested section and
 // is banded by orderActive (spinning rows first, then the queue's own order); Snoozed and Done are plain
 // interaction recency.
-export type SectionedThreads = Record<SectionKey, ThreadView[]>
+// `pinned` rides beside the three SectionKey buckets rather than inside them (see isPinned): a pinned
+// row must be claimable by NO band, and keeping it out of the Record is what makes that true by
+// construction instead of by every band remembering to exclude it.
+export type SectionedThreads = Record<SectionKey, ThreadView[]> & { pinned: ThreadView[] }
 export function sectionThreads(threads: readonly ThreadView[], direction: QueueDirection = "fifo"): SectionedThreads {
-  const out: SectionedThreads = { active: [], snoozed: [], inactive: [] }
+  const out: SectionedThreads = { pinned: [], active: [], snoozed: [], inactive: [] }
   for (const t of threads) {
     if (t.kind === "session" && t.foreign === true) continue // foreign sessions never row (nor strip — dropped)
+    if (isPinned(t)) {
+      out.pinned.push(t)
+      continue
+    }
     const k = sectionOf(t)
     if (k) out[k].push(t)
   }
+  // Pin order, oldest pin first: the band is a shelf the human arranged, so nothing about the threads'
+  // own activity may reorder it. Slug tiebreak keeps two same-instant pins stable across renders.
+  out.pinned.sort((a, b) => (a.pinnedAt ?? "").localeCompare(b.pinnedAt ?? "") || a.id.localeCompare(b.id))
   out.active = orderActive(out.active, direction)
   out.snoozed = orderByInteraction(out.snoozed)
   out.inactive = orderByInteraction(out.inactive)

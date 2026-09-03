@@ -558,6 +558,24 @@ test("sectionThreads v2: Active bands rested-on-top (queue order) then running; 
   assert.equal("legacy" in s, false)
 })
 
+test("sectionThreads: a pin diverts a thread out of EVERY band onto the pinned shelf, in pin order", () => {
+  const s = sectionThreads([
+    thread({ id: "queued", kind: "session", state: "open", needsYou: true }),
+    // Pinned out of each band it would otherwise land in: running (Active), archived (Done), and a
+    // future user snooze (Snoozed). The pin outranks all three — that is the feature.
+    thread({ id: "pin-running", kind: "session", state: "open", runtime: "running", lastUserAt: "2026-09-02T02:00:00.000Z", pinnedAt: "2026-09-02T02:00:00.000Z" }),
+    thread({ id: "pin-done", kind: "session", state: "archived", pinnedAt: "2026-09-01T01:00:00.000Z" }),
+    thread({ id: "pin-snoozed", kind: "session", state: "open", snoozedUntil: "2126-01-01T00:00:00.000Z", pinnedAt: "2026-09-03T03:00:00.000Z" }),
+    // Foreign never rows, pinnedAt or not — the foreign drop sits ABOVE the pin diversion.
+    thread({ id: "term", kind: "session", foreign: true, pinnedAt: "2026-08-01T00:00:00.000Z" }),
+  ])
+  // Pin instants decide the shelf's order — oldest pin first — never the threads' own activity.
+  assert.deepEqual(s.pinned.map((t) => t.id), ["pin-done", "pin-running", "pin-snoozed"])
+  assert.deepEqual(s.active.map((t) => t.id), ["queued"])
+  assert.deepEqual(s.snoozed, [])
+  assert.deepEqual(s.inactive, [])
+})
+
 test("partitionActive: splits an ordered Active list into running/rested; queued stays rested; FIFO within rested", () => {
   // A queued thread that ALSO reads as actively running (spinning-yet-needs-you) still files under
   // rested so its queue card maps to a rested-band row.

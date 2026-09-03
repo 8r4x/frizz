@@ -52,6 +52,7 @@ import type {
   OwnThreadActivityResult,
   OwnThreadTimersResult,
   ThreadPluginReloadResult,
+  SetThreadPinnedInput,
   SetThreadSnoozeInput,
   TranscriptMessage,
   TranscriptPage,
@@ -174,6 +175,8 @@ export interface Api {
   // than completing whatever now owns the slug.
   completeThread(input: { slug: string; sessionId: string; terminateLive?: boolean }): Promise<{ needsConfirmation: boolean; hold?: CompletionHold }>
   setThreadSnooze(input: SetThreadSnoozeInput): Promise<void>
+  // Pin/unpin the thread out of the rail's band system (the pinned band at the top of the rail).
+  setThreadPinned(input: SetThreadPinnedInput): Promise<void>
   // THE RECURRING PROMPT, armed entirely from the footer panel: one text, and up to two triggers
   // (every rest, and/or every N minutes). Text, triggers and cadence travel together — they are one row.
   setThreadRecurringPrompt(input: SetThreadRecurringPromptInput): Promise<void>
@@ -363,6 +366,7 @@ export const PROCEDURES = {
   setThreadState: "mutation",
   completeThread: "mutation",
   setThreadSnooze: "mutation",
+  setThreadPinned: "mutation",
   setThreadRecurringPrompt: "mutation",
   setOwnThreadRecurringPrompt: "mutation",
   setOwnThreadTitle: "mutation",

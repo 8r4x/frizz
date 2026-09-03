@@ -32,6 +32,7 @@ import {
   TIMER_MAX_ARMED,
   type ThreadTimerView,
   ThreadPluginReloadResult,
+  SetThreadPinnedInput,
   SetThreadSnoozeInput,
   GithubStatus,
   GithubListInput,
@@ -2194,6 +2195,20 @@ export function createRouter(ctx: AppContext) {
         }
         // `until: null` is Wake now: setSnoozedUntil clears the instant and the bump it owed together.
         ctx.storage.setSnoozedUntil(input.slug, input.until, input.prompt ?? null)
+        ctx.board.refresh()
+      },
+    }),
+
+    // Pin/unpin: the human lifts a thread out of the rail's band system into the pinned band at the
+    // very top (or drops it back in). Same editability gate as the snooze, but NO archived refusal —
+    // the pin deliberately outranks Done, so a pinned thread that finishes stays pinned until unpinned.
+    setThreadPinned: mutation({
+      input: SetThreadPinnedInput,
+      handler: async ({ input }) => {
+        currentOwnedSession(input.slug, input.sessionId)
+        const thread = (await ctx.board.snapshot()).threads.find((candidate) => candidate.id === input.slug)
+        if (!thread || thread.kind !== "session" || thread.foreign) throw new Error(`thread ${input.slug} is not editable`)
+        ctx.storage.setPinnedAt(input.slug, input.pinned ? new Date().toISOString() : null)
         ctx.board.refresh()
       },
     }),

@@ -2294,6 +2294,11 @@ export const ThreadView = z.object({
   // AUTO-bump (the scheduler resumes the agent with exactly this text) rather than a reminder, which is
   // the distinction the held row's tooltip renders. Absent ⇒ the card merely re-surfaces.
   snoozePrompt: z.string().optional(),
+  // The instant the human PINNED this thread (absent = not pinned). A pinned thread leaves the rail's
+  // band system entirely — Rested/Active/Snoozed/Done — and holds the pinned band at the very top, in
+  // this instant's order. Lifecycle metadata like the snooze: written only by the pin/unpin verb, and
+  // it outranks every derived state (a pinned thread that finishes stays pinned).
+  pinnedAt: z.string().optional(),
   /** The EVENT snooze on the resting card is armed for this exact rest — the human has said "hide this
    *  until something reports". Distinct from `snoozedUntil`, which is a wall-clock park on the whole
    *  thread: this one has no deadline and clears itself when the thread comes to a NEW rest.
@@ -2812,6 +2817,15 @@ export const SetThreadSnoozeInput = z.object({
   prompt: SnoozePrompt.nullable().optional(),
 }).strict()
 export type SetThreadSnoozeInput = z.infer<typeof SetThreadSnoozeInput>
+
+// Pin/unpin a thread out of the rail's band system (the pinned band at the very top of the rail).
+// Session-guarded like the snooze: the verb lives on a row a stale tab may still be showing.
+export const SetThreadPinnedInput = z.object({
+  slug: ThreadSlug,
+  sessionId: z.string().min(1),
+  pinned: z.boolean(),
+}).strict()
+export type SetThreadPinnedInput = z.infer<typeof SetThreadPinnedInput>
 
 // The recurring prompt's OPERATOR half — the footer popover, arming and disarming in ONE call. The
 // text, the two triggers and the cadence are all views of one row, and splitting them into separate

@@ -78,6 +78,11 @@ export interface SessionRow {
   // came to a new rest because a sub-agent/shell returned. NULL = no event-snooze armed. Distinct from
   // snoozed_until (a wall-clock park owned by the scheduler); this one clears itself on the next rest.
   bg_snooze_rested_at?: string | null
+  // The instant the human PINNED this thread out of the rail's band system (null/absent = not pinned).
+  // Like Archive and the snooze it is lifecycle metadata the human owns — never inferred from a fence —
+  // and the instant doubles as the pinned band's order. It survives every state change (a pinned thread
+  // that finishes stays pinned); only the unpin verb clears it.
+  pinned_at?: string | null
   // The thread's RECURRING PROMPT — one piece of text with up to three independent triggers
   // (scheduler.ts SOURCES 4, 5 and 7). `recurring_armed_at` is the GENERATION: editing the text or the
   // cadence mints a new one, so a delivery already queued under the old settings reads as superseded.
@@ -555,6 +560,9 @@ export interface Storage {
   // Session-guarded park: writes only while the row is still this session+generation, so a stale card
   // cannot re-park a thread that has since been re-dispatched.
   setSnoozedUntilIfCurrent(slug: string, sessionId: string, generation: number, until: string | null): boolean
+  // Pin/unpin: the instant is the pinned band's order, null clears it. Unguarded like setSnoozedUntil —
+  // the RPC resolves the owning session first.
+  setPinnedAt(slug: string, at: string | null): void
   // Arm/clear the awaiting-background event-snooze. Session-guarded like the park above. `restedAt` is
   // the rest instant the card is snoozed FOR; the board re-surfaces it once rested_at moves past this.
   setBgSnoozeRestedAtIfCurrent(slug: string, sessionId: string, generation: number, restedAt: string | null): boolean
@@ -819,10 +827,11 @@ export type SessionLifecycleEvent =
 /**
  * Every table Frizz keeps for a project, in ONE database shared by every project (2026-08-27).
  *
- * Complete rather than additive: this schema is only ever created by this code, into a file this
- * code owns, so there is no older shape to reconcile with and no ALTER stack to keep in order. A
- * project's pre-unification file is read by `legacy-project-db.ts`, which still carries that stack,
- * and imported row by row by `frizz-db.ts`. Every table's first column is `project_id`, every
+ * Complete AS OF the 2026-08-27 unification: this schema is only ever created by this code, into a
+ * file this code owns, so there is no PRE-unification shape to reconcile with. Columns added since
+ * ride the short additive ALTER list in ensureStorageSchema below — an existing unified file cannot
+ * gain a column any other way. A project's pre-unification file is read by `legacy-project-db.ts`,
+ * which still carries the old ALTER stack, and imported row by row by `frizz-db.ts`. Every table's first column is `project_id`, every
  * natural key is prefixed with it, and every index leads with it — a tenant only ever asks for its
  * own rows (project-scope.ts), so that is the prefix every lookup has.
  *
@@ -848,6 +857,7 @@ export const STORAGE_SCHEMA = `
       snoozed_until TEXT,
       snooze_prompt TEXT,
       bg_snooze_rested_at TEXT,
+      pinned_at   TEXT,
       meta        TEXT,
       seen_at     TEXT,
       transcript_id TEXT,
@@ -1119,6 +1129,17 @@ export const STORAGE_TABLES = [
 /** Idempotent; run by every createStorage and by frizz-db.ts before an import. */
 export function ensureStorageSchema(db: Database): void {
   db.exec(STORAGE_SCHEMA)
+  // Columns added AFTER the 2026-08-27 unification. CREATE TABLE IF NOT EXISTS cannot add a column to
+  // a file that already exists, and every live install predates any column below — so each rides one
+  // additive ALTER here, exactly the stack the schema comment above says the unified file was born
+  // without. Keep the list append-only; the try/catch is the "already there" case.
+  for (const column of ["pinned_at TEXT"]) {
+    try {
+      db.exec(`ALTER TABLE session ADD COLUMN ${column}`)
+    } catch {
+      // duplicate column — the file already has it
+    }
+  }
 }
 
 /**
@@ -1433,6 +1454,7 @@ export function createStorage(source: string | Database, projectId: string): Sto
     WHERE project_id = @project_id AND slug = ? AND session_id = ? AND runtime_generation = ?
   `)
   const snoozedUntilStmt = scope.prepare("UPDATE session SET snoozed_until = ?, snooze_prompt = ? WHERE project_id = @project_id AND slug = ?")
+  const pinnedAtStmt = scope.prepare("UPDATE session SET pinned_at = ? WHERE project_id = @project_id AND slug = ?")
   // The session-guarded park. Deliberately leaves snooze_prompt alone: it parks an instant without
   // arming a scheduled bump, so a caller that wants both writes both.
   const snoozedUntilIfCurrentStmt = scope.prepare(`
@@ -2290,6 +2312,7 @@ export function createStorage(source: string | Database, projectId: string): Sto
       void snoozedUntilStmt.run(until, until === null ? null : prompt, slug),
     setSnoozedUntilIfCurrent: (slug, sessionId, generation, until) =>
       snoozedUntilIfCurrentStmt.run(until, slug, sessionId, generation).changes === 1,
+    setPinnedAt: (slug, at) => void pinnedAtStmt.run(at, slug),
     setBgSnoozeRestedAtIfCurrent: (slug, sessionId, generation, restedAt) =>
       bgSnoozeRestedAtIfCurrentStmt.run(restedAt, slug, sessionId, generation).changes === 1,
     setRecurringPromptIfCurrent: (slug, sessionId, generation, write) =>

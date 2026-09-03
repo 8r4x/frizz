@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { randomUUID } from "node:crypto"
 import Database from "./sqlite.ts"
-import { createStorage, sessionTitleLocked, type ProfileHandoffJournal, type Storage, type SessionRow } from "./storage.ts"
+import { createStorage, sessionTitleLocked, STORAGE_SCHEMA, type ProfileHandoffJournal, type Storage, type SessionRow } from "./storage.ts"
 
 function profileHandoff(
   nativeSessionId: string,
@@ -1055,5 +1055,39 @@ test("withdrawn and dismissed are DIFFERENT settlements, and neither is delivera
     assert.deepEqual(s.openThreadQuestions().map((q) => q.id), ["q_open"])
   } finally {
     s.close()
+  }
+})
+
+test("pinned_at: a pre-pin unified file gains the column, the pin persists, and Archive leaves it", () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-storage-pin-"))
+  const path = join(dir, "ui.db")
+  // THE FILE EVERY LIVE INSTALL HAS: a unified db created before the column existed. Built from the
+  // real DDL with the one line stripped, so the ALTER in ensureStorageSchema is what must add it back —
+  // CREATE TABLE IF NOT EXISTS alone would leave this file columnless and every session write throwing.
+  const prePin = new Database(path)
+  const stripped = STORAGE_SCHEMA.replace(/^\s*pinned_at\s+TEXT,\n/m, "")
+  assert.notEqual(stripped, STORAGE_SCHEMA, "the strip found the column line (keep this regex with the DDL)")
+  prePin.exec(stripped)
+  prePin.close()
+
+  const at = "2026-09-02T17:00:00.000Z"
+  let s = createStorage(path, "p")
+  try {
+    s.upsertSession(row({ slug: "pinned", state: "open" }))
+    s.setPinnedAt("pinned", at)
+    assert.equal(s.getSession("pinned")?.pinned_at, at)
+    s.close()
+
+    s = createStorage(path, "p")
+    assert.equal(s.getSession("pinned")?.pinned_at, at, "the pin survives a server restart byte-for-byte")
+    // The pin outranks Done: Archive clears a snooze (lifecycle above) but must NOT clear a pin — a
+    // pinned thread that finishes stays on the pinned shelf until the human unpins it.
+    s.setState("pinned", "archived")
+    assert.equal(s.getSession("pinned")?.pinned_at, at, "Archive leaves the pin in place")
+    s.setPinnedAt("pinned", null)
+    assert.equal(s.getSession("pinned")?.pinned_at, null, "unpin clears it")
+  } finally {
+    s.close()
+    rmSync(dir, { recursive: true, force: true })
   }
 })
