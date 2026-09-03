@@ -303,7 +303,9 @@ function MobileThreadRow({
               // A turn is still executing, so finishing it is a decision with a dialog behind it. A
               // swipe is not the place to answer that question — hand it back rather than guessing.
               clearArchived(t.id)
-              showToast("Still running — open the thread to finish it")
+              showToast(result.hold?.cutOff
+                ? "Cut off mid-turn — open the thread to retry it, or to mark it done anyway"
+                : "Still running — open the thread to finish it")
               return
             }
             showToast("Marked as done")

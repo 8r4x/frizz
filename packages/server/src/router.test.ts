@@ -761,6 +761,47 @@ test("completeRegisteredThread archives an inactive session without a confirmati
   }
 })
 
+// A worker that is DEAD but whose recorded turn never ended was cut off — a reboot, a signal, a crash
+// mid-tool-call. Its thread reads like the executing one, yet `live` is false, so the live hold was never
+// consulted and one click filed it under Done with its last tool call still open (2026-09-03: a reboot
+// cut eight nub workers off mid-turn and one of them was archived as ✓ Done — "a lot of cancelled sessions
+// got incorrectly marked as Done"). It is asked about now, and only the confirmation archives it.
+test("completeRegisteredThread asks before filing a cut-off worker as Done; the confirmation archives it", async () => {
+  const h = harness()
+  const slug = "cut-off-complete"
+  const saved = row(slug)
+  const dead = {
+    findExpectedAdoptionPane: () => ({ kind: "absent" as const }),
+    killExpectedAdoptionPane: () => false,
+    killSession: () => { throw new Error("a dead runtime must never be terminated") },
+    isLive: () => false,
+  }
+  const tele = { permPrompt: false, pendingQuestion: false, subAgents: [], bgShells: [] }
+  try {
+    h.storage.upsertSession(saved)
+    // The transcript's own reading: a tool call with no result stays in-flight, so the worker did not finish.
+    const asked = await completeRegisteredThread(h.storage, saved, false, dead, { ...tele, turn: "in-flight" })
+    assert.equal(asked.needsConfirmation, true, "a cut-off worker is asked about, exactly like an executing one")
+    assert.equal(asked.hold?.cutOff, true, "…and the dialog is told WHY: the worker is gone, not busy")
+    assert.equal(asked.hold?.turnInFlight, true)
+    assert.deepEqual([asked.hold?.subAgentCount, asked.hold?.bgShellCount], [0, 0], "a dead daemon's children are never claimed to be running")
+    assert.equal(h.storage.getSession(slug)?.state, "open", "nothing was archived on the refusal")
+
+    // The human's confirmation is the same word it is for the live case, and there is nothing to kill.
+    assert.deepEqual(await completeRegisteredThread(h.storage, saved, true, dead, { ...tele, turn: "in-flight" }), { needsConfirmation: false })
+    assert.equal(h.storage.getSession(slug)?.state, "archived")
+
+    // A dead worker at REST is finished business and archives in one click, as it always has.
+    const rested = row("rested-dead")
+    h.storage.upsertSession(rested)
+    assert.deepEqual(await completeRegisteredThread(h.storage, rested, false, dead, { ...tele, turn: "idle" }), { needsConfirmation: false })
+    assert.equal(h.storage.getSession("rested-dead")?.state, "archived")
+  } finally {
+    h.storage.close()
+    rmSync(h.dir, { recursive: true, force: true })
+  }
+})
+
 test("adoption teardown: forget/dismiss/stop kill only the finalized token + exact tuple", () => {
   const slug = "adopted-owner"
   const claim = finalizedClaim(slug)

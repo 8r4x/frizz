@@ -48,6 +48,12 @@ export function threadLifecycleAvailability(
 // caller reinstates the card + opens the dialog on a needsConfirmation reply — so this only ever errs
 // toward NON-optimistic (waiting), never toward skipping a dialog the server would have shown.
 export function completionArchivesImmediately(thread: ThreadView): boolean {
+  // A worker that was CUT OFF mid-turn — dead, its recorded turn never ended — is asked about too
+  // (router.cutOffHold): it is not finished, and Done would say it was. `crashed` is the board's reading
+  // of exactly that, and a slight superset of the server's (it also covers a dead daemon still tracking
+  // a sub-agent), which only ever errs toward waiting. Checked FIRST: a pending ask on a dead thread is
+  // still a dead thread.
+  if (thread.runtime === "exited" && thread.crashed) return false
   // Paused-for-a-human states are explicitly safe to stop on the server, regardless of any background work.
   if (thread.runtime === "perm-prompt" || thread.pendingAsk) return true
   // An executing (or still-spawning) turn always prompts.
@@ -89,6 +95,16 @@ export function completionHoldSummary(hold: CompletionHold | undefined): Complet
     trailer: "Marking it done will stop its agent session, then move it to Done.",
   }
   if (!hold) return generic
+  // Nothing is running and nothing will be stopped: the worker is already gone, mid-turn. The correction
+  // the human needs is that the thread is NOT finished — and that Retry, not Done, is the verb that
+  // picks it back up. No groups: a dead worker's children cannot be live, and the server names none.
+  if (hold.cutOff) {
+    return {
+      lead: "This session was cut off mid-turn — its worker ended before the turn finished, so the thread isn’t done.",
+      groups: [],
+      trailer: "Marking it done files it under Done as it is. Retry resumes it where it left off.",
+    }
+  }
   const groups = [
     holdGroup("agent", "sub-agent", hold.subAgents, hold.subAgentCount),
     holdGroup("shell", "background shell", hold.bgShells, hold.bgShellCount),

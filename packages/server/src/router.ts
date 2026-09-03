@@ -447,6 +447,26 @@ export function completionNeedsConfirmation(telemetry: SessionTelemetry | undefi
   return !!completionConfirmationHold(telemetry)
 }
 
+// The other half of the live guard above. A worker that is DEAD but whose recorded turn never ended was
+// CUT OFF — a reboot, a SIGTERM, a crash mid-tool-call — and its thread reads exactly like the executing
+// one: the same half-finished transcript, the same trailing tool call. `live` is false there, so the
+// live hold was never consulted and Mark-as-done archived it in ONE click with no dialog: the queue's
+// Stalled card, whose verb is Retry, became a ✓ Done row. Observed 2026-09-03: a reboot cut eight nub
+// workers off mid-turn and one was filed under Done with its last Bash call still open (maintainer:
+// "a lot of cancelled sessions got incorrectly marked as Done").
+//
+// The hold says only that the turn never finished. It names no ops, because a dead daemon's children
+// cannot be running and listing them as such would be a lie; and nothing is terminated on this path,
+// because there is nothing left to terminate — `terminateLive` is simply the human's confirmation, the
+// same word it is for the live case. `turn` is the transcript's own reading (computeTurn): a tool call
+// with no result, or a user record nothing answered, stays in-flight indefinitely — which is exactly the
+// evidence that the worker did not finish. A dead worker at REST (end_turn) holds nothing and archives
+// as before.
+export function cutOffHold(telemetry: SessionTelemetry | undefined): CompletionHold | undefined {
+  if (telemetry?.turn !== "in-flight") return undefined
+  return { turnInFlight: true, cutOff: true, unobservable: false, subAgents: [], subAgentCount: 0, bgShells: [], bgShellCount: 0 }
+}
+
 // A completion is intentionally stronger than an archive toggle. It first establishes whether the
 // *registered* runtime is still executing, and it only records Done after any necessary termination
 // has been proved. A live resting shell is stopped and archived in one click; an executing or
@@ -485,7 +505,9 @@ export async function completeRegisteredThread(
     ? appServerCodexTurnLive(codex, row)
     : false
 
-  const hold = live && !terminateLive ? completionConfirmationHold(telemetry) : undefined
+  // A live runtime is asked about when it is still working; a dead one when it never finished. The
+  // human's confirmation (`terminateLive`) clears both.
+  const hold = terminateLive ? undefined : live ? completionConfirmationHold(telemetry) : cutOffHold(telemetry)
   if (hold) return { needsConfirmation: true, hold }
   if (live) {
     // Ordering, both paths: TERMINATE FIRST, record Done only after. A stop that throws must leave the

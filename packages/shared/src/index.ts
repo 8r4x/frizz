@@ -306,6 +306,11 @@ export const CompletionHold = z.object({
   subAgentCount: z.number().default(0), // total live sub-agents (≥ subAgents.length)
   bgShells: z.array(CompletionHoldOp).default([]),
   bgShellCount: z.number().default(0), // total live background shells (≥ bgShells.length)
+  // The worker is DEAD and its recorded turn never ended — cut off by a reboot, a signal or a crash
+  // mid-tool-call (router.cutOffHold). Nothing is running, so nothing will be killed; the hold exists
+  // because the thread is not finished and Done would say it was. Optional rather than defaulted so it
+  // is absent (⇒ false) on every hold that is not this one, and a pre-change client reads them unchanged.
+  cutOff: z.boolean().optional(),
 })
 export type CompletionHold = z.infer<typeof CompletionHold>
 
@@ -1853,25 +1858,35 @@ export interface AskedQuestion {
 
 /** How deep a follow-up tree may go. Three: a question, a follow-up on the option taken, and one more.
  *  Past that the human is filling in a form rather than answering a question, and the worker should be
- *  deciding the rest itself. */
+ *  deciding the rest itself.
+ *
+ *  THE ONE COUNT THE TOOL STILL BOUNDS. The options per question, the questions per call, the
+ *  follow-ups per option and the open set per thread all carried caps (8 / 4 / 4 / 12) until
+ *  2026-09-03, when the maintainer had them removed as arbitrary ("what other stupid limits are
+ *  there?"). The depth stays only because the MCP schema INLINES the tree to exactly this depth — no
+ *  `$ref`, since some clients drop one (cc-worker/bin/frizz-mcp.mjs) — so it can be raised, never
+ *  unbounded. */
 export const ASK_MAX_DEPTH = 3
-/** How many root questions one `ask` call may register, and how many a thread may hold open. A worker
- *  with more than this outstanding is not asking, it is refusing to decide. */
-export const ASK_MAX_PER_CALL = 4
-export const ASK_MAX_OPEN = 12
 
 const AskedOptionSchema: z.ZodType<AskedOption> = z.lazy(() => z.object({
-  label: z.string().trim().min(1).max(120),
-  // 4000, not the one-line 400 it launched with: a description is allowed to BE the rich body now
-  // (the retired `preview`'s cap), since a multi-line one renders as the option's markdown body.
-  description: z.string().trim().max(4000).optional(),
+  // 400, not the 120 it launched with (2026-09-03): a label is a chip line, but "Post the drafted
+  // comment as written" plus its qualifier runs long, and the fence has no cap at all. The answer's
+  // `chosen` carries labels, so its per-item cap matches this one.
+  label: z.string().trim().min(1).max(400),
+  // 20000, not the 4000 the retired `preview` had (2026-09-03): a description is allowed to BE the rich
+  // body — a diff, a drafted comment, a table — and a real diff exceeds 4000.
+  description: z.string().trim().max(20000).optional(),
   recommended: z.boolean().optional(),
   preview: z.string().max(4000).optional(),
-  followUps: z.array(AskedQuestionSchema).max(ASK_MAX_PER_CALL).optional(),
+  // No count cap, like `options` (2026-09-03); the tree is bounded by ASK_MAX_DEPTH instead.
+  followUps: z.array(AskedQuestionSchema).optional(),
 }).strict())
 
 export const AskedQuestionSchema: z.ZodType<AskedQuestion> = z.lazy(() => z.object({
-  question: z.string().trim().min(1).max(600),
+  // 4000, not the 600 it launched with (2026-09-03): this field is the whole card context — everything
+  // the human needs to answer cold — and a question that carries its own evidence needs the room. The
+  // answer restates it, so QuestionAnswerSchema's cap matches.
+  question: z.string().trim().min(1).max(4000),
   header: z.string().trim().max(24).optional(),
   kind: AskQuestionKind,
   danger: z.boolean().optional(),
@@ -1920,7 +1935,9 @@ export function askedQuestionFaults(q: AskedQuestion): string[] {
 
 export const AskInput = z.object({
   slug: ThreadSlug,
-  questions: z.array(AskedQuestionSchema).min(1).max(ASK_MAX_PER_CALL),
+  // No cap on the count (four until 2026-09-03): the tool's own text says "several at once is one
+  // call — register them together", and a cap here told a worker with six to batch and then refused it.
+  questions: z.array(AskedQuestionSchema).min(1),
 }).strict()
 export type AskInput = z.infer<typeof AskInput>
 
@@ -1973,12 +1990,12 @@ export interface QuestionAnswer {
 
 const QuestionAnswerSchema: z.ZodType<QuestionAnswer> = z.lazy(() => z.object({
   questionId: z.string().min(1).max(64),
-  question: z.string().min(1).max(600),
+  question: z.string().min(1).max(4000),
   // No count cap: a `multi` may carry any number of options (see AskedQuestionSchema), and the human
-  // may pick every one of them.
-  chosen: z.array(z.string().max(200)),
+  // may pick every one of them. The per-item cap is the option label's.
+  chosen: z.array(z.string().max(400)),
   text: z.string().max(8000).optional(),
-  followUps: z.array(QuestionAnswerSchema).max(ASK_MAX_PER_CALL).optional(),
+  followUps: z.array(QuestionAnswerSchema).optional(),
 }).strict())
 
 export const AnswerQuestionsInput = z.object({
@@ -1986,7 +2003,7 @@ export const AnswerQuestionsInput = z.object({
   /** SUBMITTED AS A UNIT. The card sends whatever was answered in one call, because a per-question send
    *  would half-wake a turn: the worker would come back to a payload it cannot act on and would have to
    *  ask again for the rest. */
-  answers: z.array(QuestionAnswerSchema).min(1).max(ASK_MAX_OPEN),
+  answers: z.array(QuestionAnswerSchema).min(1),
 }).strict()
 export type AnswerQuestionsInput = z.infer<typeof AnswerQuestionsInput>
 
@@ -2000,7 +2017,7 @@ export type AnswerQuestionsResult = z.infer<typeof AnswerQuestionsResult>
 
 export const DismissQuestionsInput = z.object({
   slug: ThreadSlug,
-  ids: z.array(z.string().min(1).max(64)).min(1).max(ASK_MAX_OPEN),
+  ids: z.array(z.string().min(1).max(64)).min(1),
 }).strict()
 export type DismissQuestionsInput = z.infer<typeof DismissQuestionsInput>
 

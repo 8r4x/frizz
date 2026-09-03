@@ -79,11 +79,15 @@ test("completionArchivesImmediately mirrors the server's no-confirmation cases",
   const staleSub = { label: "child", startedAt: "2026-07-21T00:00:00Z", state: "stale" as const }
   const busyShell = { label: "watch", startedAt: "2026-07-21T00:00:00Z", state: "running" as const }
 
-  // Resting / exited / human-blocked → immediate (no dialog).
+  // Resting / exited-at-rest / human-blocked → immediate (no dialog).
   assert.equal(completionArchivesImmediately(thread({ runtime: "turn-idle" })), true)
-  assert.equal(completionArchivesImmediately(thread({ runtime: "exited", crashed: true })), true)
+  assert.equal(completionArchivesImmediately(thread({ runtime: "exited", crashed: false })), true)
   assert.equal(completionArchivesImmediately(thread({ runtime: "perm-prompt" })), true)
   assert.equal(completionArchivesImmediately(thread({ pendingAsk: { questions: [] } })), true)
+  // A worker cut off mid-turn (dead, turn never ended) is asked about (router.cutOffHold) — and a pending
+  // ask on it does not make it finished.
+  assert.equal(completionArchivesImmediately(thread({ runtime: "exited", crashed: true })), false)
+  assert.equal(completionArchivesImmediately(thread({ runtime: "exited", crashed: true, pendingAsk: { questions: [] } })), false)
   // A human-blocked shell is safe to stop even with live background work (server short-circuits on it).
   assert.equal(completionArchivesImmediately(thread({ runtime: "perm-prompt", subAgents: [busySub] })), true)
 
@@ -114,6 +118,15 @@ test("completionHoldSummary names the live sub-agents and shells, with counts", 
   assert.deepEqual(summary.groups[0].items, [{ label: "Audit the resolver", stale: false }])
   assert.deepEqual(summary.groups[1].items, [{ label: "Watch CI", stale: false }, { label: "vite dev", stale: true }])
   assert.match(summary.trailer, /stop the session and everything running under it/)
+})
+
+test("completionHoldSummary says a cut-off worker is gone, not busy, and points at Retry", () => {
+  const summary = completionHoldSummary(hold({ turnInFlight: true, cutOff: true }))
+  assert.match(summary.lead, /cut off mid-turn/)
+  assert.match(summary.lead, /isn’t done/)
+  assert.deepEqual(summary.groups, [], "nothing is running under a dead worker, so nothing is listed")
+  assert.match(summary.trailer, /Retry resumes it/)
+  assert.doesNotMatch(summary.trailer, /stop/, "nothing will be stopped — the copy must not promise a kill")
 })
 
 test("completionHoldSummary distinguishes a mid-turn agent from the work hanging off it", () => {
