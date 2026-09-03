@@ -96,10 +96,18 @@ export function FocusRail({ thread }: { thread: ThreadView }) {
   return (
     // `thread-rail` exists only on this page, so on the fullscreen door's view transition it has no
     // old counterpart and plays the enter animation in styles.css (slides in from the right).
-    <aside data-focus-rail aria-label="Thread activity" className="flex h-full shrink-0 flex-col justify-center overflow-y-auto px-4 py-6 [view-transition-name:thread-rail]" style={{ width: RAIL_WIDTH }}>
-      {groups.length === 0
-        ? <div className="text-[11.5px] text-muted/50">Nothing running, watched or edited yet.</div>
-        : <WaitGrid groups={groups} divider={false} />}
+    //
+    // The vertical centering is the CHILD's `my-auto`, never `justify-center` on this scroll container:
+    // centering the flex line clips whatever overflows it ABOVE the scroll origin, so a rail taller
+    // than the window lost its top padding and its first rows to pixels no scrollbar could reach
+    // (maintainer 2026-09-02, a 22-file list opening flush at the window edge). Auto margins center
+    // identically while there is room and collapse to zero when there is not.
+    <aside data-focus-rail aria-label="Thread activity" className="flex h-full shrink-0 flex-col overflow-y-auto px-4 [view-transition-name:thread-rail]" style={{ width: RAIL_WIDTH }}>
+      <div className="my-auto py-6">
+        {groups.length === 0
+          ? <div className="text-[11.5px] text-muted/50">Nothing running, watched or edited yet.</div>
+          : <WaitGrid groups={groups} divider={false} />}
+      </div>
     </aside>
   )
 }

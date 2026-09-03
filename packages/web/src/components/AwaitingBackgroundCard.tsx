@@ -707,10 +707,18 @@ export function WaitGrid({ groups, divider }: { groups: ReadonlyArray<{ head: st
           card and the light-gray statuses line up down one edge even across a heading. Per-group grids
           would each size their own name column and the statuses would step.
 
+          THE STATUS TRACK IS CAPPED AT HALF THE GRID — `fit-content(50%)`, not `auto` — because the
+          tracks are sized before the `1fr` name gets anything: a bare `auto` grows to the WIDEST status
+          in the whole shared grid, so one red PR's "2 failing, 1 in progress, 9 successful · view
+          failures" measured the track at 271px on the 308px fullscreen rail and truncated every file
+          name in the grid to its ellipsis (maintainer 2026-09-02, screenshot of a 22-file rail reading
+          "b…" down the column). Under the cap the wide status is the one that truncates — the reading
+          checkCountLine already orders severity-first for — and the names keep the other half.
+
           mt-3 UNCONDITIONALLY — 12px, and it is the WHOLE gap rather than an addition: CardContent's own
           mt-1 collapses into it, which is why an earlier mt-2 measured 8px and put the first row closer
           to the card title than to the row beneath it (measured, sans and mono, dsf 3). */}
-      <div className="mt-3 grid grid-cols-[auto_1fr_auto_auto] gap-y-px">
+      <div className="mt-3 grid grid-cols-[auto_1fr_fit-content(50%)_auto] gap-y-px">
         {groups.map((g, i) => (
           <Fragment key={g.head}>
             {/* The heading spans all four tracks. `mt-*` on every group but the first: the gap between
