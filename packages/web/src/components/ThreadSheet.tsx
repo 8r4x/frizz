@@ -11,6 +11,7 @@ import { SHEET_PANEL_CLASS, SHEET_SCRIM_CLASS, sheetWidth } from "../lib/sheet.t
 import { resolveThreadRoute } from "../lib/threadRouteState.ts"
 import { handleDialogEscape } from "../lib/selectOverlay.ts"
 import { DrawerInitialScrollCoordinator } from "../lib/drawerInitialScroll.ts"
+import { PANE_HEADER_HEIGHT_CLASS } from "../lib/paneHeaderHeight.ts"
 import { ThreadView } from "./ChatView.tsx"
 
 // One THREAD layer of the side-drawer stack: a right sheet (same slide/backdrop family as settings)
@@ -275,7 +276,7 @@ export function ThreadSheet({ id, slug, depth, widthDepth, initiallyOpen }: { id
 function MissingThread({ slug, onClose }: { slug: string; onClose: () => void }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <header className="flex h-12 shrink-0 items-center gap-3 border-b border-border bg-panel px-4">
+      <header className={`flex ${PANE_HEADER_HEIGHT_CLASS} shrink-0 items-center gap-3 border-b border-border bg-panel px-4`}>
         <span className="min-w-0 flex-1 truncate font-medium">Thread unavailable</span>
         <button type="button" aria-label="Close" data-dialog-initial-focus onClick={onClose} className="p-1 text-muted hover:text-fg">
           ×

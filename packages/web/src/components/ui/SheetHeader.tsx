@@ -1,7 +1,8 @@
 import { X } from "lucide-react"
 import type { ReactElement, ReactNode } from "react"
+import { PANE_HEADER_HEIGHT_CLASS } from "../../lib/paneHeaderHeight.ts"
 
-// The one side-sheet header bar. A fixed-height row (h-12 px-4) with an optional leading icon, the
+// The one side-sheet header bar. A fixed-height row (the pane-header height, px-4) with an optional leading icon, the
 // title (carrying optional inline `meta` — e.g. a background shell's "running 3 min" — and/or a stacked
 // `subtitle` line — e.g. a doc drawer's "<slug>.md"), optional trailing `actions` (settings' "● unsaved"),
 // and the lucide close button. Replaces six near-identical hand-rolled headers that had drifted in
@@ -27,7 +28,7 @@ export function SheetHeader({
   initialFocus?: boolean
 }): ReactElement {
   return (
-    <header className="flex h-12 shrink-0 items-center gap-2.5 border-b border-border bg-panel px-4">
+    <header className={`flex ${PANE_HEADER_HEIGHT_CLASS} shrink-0 items-center gap-2.5 border-b border-border bg-panel px-4`}>
       {icon}
       <div className="flex min-w-0 flex-1 flex-col justify-center">
         <div className="flex min-w-0 items-center gap-2">

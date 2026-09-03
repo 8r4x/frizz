@@ -75,7 +75,15 @@ export function AiRenameButton({ thread, hidden = false }: { thread: ThreadView;
         //
         // `title-refresh-offset` is the vertical half — a font-keyed nudge, because this mark rides
         // 0.72px HIGH under system-ui and 1.29px LOW under the mono stack (styles.css has the readings).
-        className={`title-refresh-offset -mx-[7px] flex h-6 w-6 shrink-0 items-center justify-center rounded-md outline-none transition-[color,background-color,opacity] focus-visible:opacity-100 group-hover/thread-title:opacity-100 ${
+        //
+        // `-my-3` is the vertical trim, and it is what keeps the 24px hover square from GROWING the
+        // title row it rides on: a margin box of zero height contributes nothing to the row, and
+        // `items-center` still centres the square on the title's own line box. Without it the row was
+        // 24px tall against a 15px title's 18.75px line (leading-tight) — which pushed the "Last active"
+        // line 2.6px down in the thread header and made that header 52.75px beside a 48px file viewer
+        // (2026-09-03, "headers should have consistent height"), and grew the queue card's title row by
+        // 3.4px the same way. The square now overhangs the line by ~2.6px a side, into empty band.
+        className={`title-refresh-offset -mx-[7px] -my-3 flex h-6 w-6 shrink-0 items-center justify-center rounded-md outline-none transition-[color,background-color,opacity] focus-visible:opacity-100 group-hover/thread-title:opacity-100 ${
           revealed ? "opacity-100" : "opacity-0"
         } ${
           rename.error
