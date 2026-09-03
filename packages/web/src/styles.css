@@ -3,6 +3,20 @@
 /* Dark, dense orchestration surface. Yellow accent = "awaiting you".
    Mono-forward type system (Cursor/Linear-flavored), 13px base. */
 @theme {
+  /* WHERE /full BECOMES TWO COLUMNS — the `split:` variant, used only by StandaloneThreadPage.
+     Below it the page is ONE thread column at the drawer's own width; at and above it the 50/50 rule
+     takes over (the thread column and the file pane are each a pure function of the page width, so
+     opening a file resizes nothing).
+     1200 is the width the maintainer specified the split AT — "600px of content, and then the file
+     takes up 600px" on a 1200px screen (2026-08-30) — and putting the switch exactly there is what
+     keeps that reading while giving every narrower window a readable transcript. It used to switch at
+     `md` (768), where the thread column collapsed from 720px to 384px on a single pixel of resize and
+     sat beside a 340px rail that usually reads "Nothing running, watched or edited yet".
+     `SPLIT_MIN_PX` in components/StandaloneThreadPage.tsx is the same number for the file-click gate —
+     change them together. They were 768 and 1000 and DISAGREED: between them the rail was on screen
+     while a file click still fell back to the overlay drawer. */
+  --breakpoint-split: 1200px;
+
   --color-bg: #0d0e10;
   --color-panel: #131519;
   --color-panel-2: #181b20;

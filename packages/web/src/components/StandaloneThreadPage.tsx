@@ -7,7 +7,7 @@ import { displayTitle } from "../groups.ts"
 import { resolveThreadRoute } from "../lib/threadRouteState.ts"
 import { projectHref } from "../lib/base-path.ts"
 import { standaloneThreadHref } from "../lib/standaloneThreadRoute.ts"
-import { SHEET_BASE_WIDTH, SHEET_CLOSE_MS } from "../lib/sheet.ts"
+import { SHEET_BASE_WIDTH, SHEET_CLOSE_MS, SPLIT_MIN_PX } from "../lib/sheet.ts"
 import type { ThreadView } from "@frizz/shared"
 import { ThreadView as ThreadViewSurface } from "./ChatView.tsx"
 import { DrawerStack } from "./DrawerStack.tsx"
@@ -35,7 +35,8 @@ import { useQuery } from "@tanstack/react-query"
 const PANE_W = `max(50%, calc(100% - ${SHEET_BASE_WIDTH}px))`
 const LAYOUT_VARS = {
   "--full-thread": `min(${SHEET_BASE_WIDTH}px, ${PANE_W})`,
-  // Below `md` there is no rail and no viewer, so the column simply takes the page under the cap.
+  // Below the split there is no rail and no viewer, so the column simply takes the page under the cap
+  // — which is the DRAWER's width, so the two surfaces agree and the morph between them is a translate.
   "--full-thread-narrow": `min(${SHEET_BASE_WIDTH}px, 100%)`,
   "--full-pane": PANE_W,
   "--full-gutter": `max(0px, calc((100% - min(${SHEET_BASE_WIDTH}px, ${PANE_W}) - ${RAIL_WIDTH}px) / 2))`,
@@ -73,7 +74,7 @@ export function StandaloneThreadPage({ slug }: { slug: string }) {
   // clicks; a panel already open stays (its layout degrades gracefully, and yanking it on resize
   // would lose the reader's place).
   useEffect(() => {
-    const wide = window.matchMedia("(min-width: 1000px)")
+    const wide = window.matchMedia(`(min-width: ${SPLIT_MIN_PX}px)`)
     const apply = () => { store.splitFileViewer = wide.matches }
     apply()
     wide.addEventListener("change", apply)
@@ -127,21 +128,28 @@ export function StandaloneThreadPage({ slug }: { slug: string }) {
             closed (the rail sits at its left and the remainder hangs off the page, clipped by the
             frame around the row), which is what lets its width be a constant.
 
-            A phone-width window still gets the old single column — the rail and the viewer need the
-            width they hide under, so below `md` the thread column takes the page. */}
+            A window NARROWER THAN THE SPLIT gets one column — the rail and the viewer need the width
+            they hide under, so below SPLIT_MIN_PX the thread column takes the page under its 720 cap,
+            which is exactly the drawer's width. */}
         <div className="h-full w-full overflow-hidden">
           <div
-            className="flex h-full w-full transition-transform duration-200 ease-out motion-reduce:transition-none"
+            // `justify-center` is for the SINGLE-column state only: below the split the gutter and the
+            // pane are both `hidden`, so without it a 720px column on a 1024px page would sit hard
+            // against the left edge with 304px of dead space beside it. Above the split the row is
+            // deliberately wider than the page (the closed pane hangs off the right, clipped by the
+            // frame) and centring it would drag that overflow back into view — so the split state
+            // takes `justify-start`, which is what it has always had.
+            className="flex h-full w-full justify-center transition-transform duration-200 ease-out motion-reduce:transition-none split:justify-start"
             style={{ ...LAYOUT_VARS, transform: fileOpen ? "translateX(calc(-1 * var(--full-gutter)))" : undefined }}
           >
-            <div className="hidden w-[var(--full-gutter)] shrink-0 md:block" aria-hidden="true" />
+            <div className="hidden w-[var(--full-gutter)] shrink-0 split:block" aria-hidden="true" />
             <main
               data-standalone-thread
               // `thread-chat` is the fullscreen door's shared view-transition element: the drawer
               // panel / queue card the door was clicked in wears the same name (tagged at click time,
               // ExpandThreadLink), and the browser morphs that surface into this column. Inert
               // outside a transition — no navigation but the door's opts in.
-              className="flex h-full w-[var(--full-thread-narrow)] min-w-0 shrink-0 flex-col overflow-hidden border-border bg-panel sm:border-x md:w-[var(--full-thread)] [view-transition-name:thread-chat]"
+              className="flex h-full w-[var(--full-thread-narrow)] min-w-0 shrink-0 flex-col overflow-hidden border-border bg-panel sm:border-x split:w-[var(--full-thread)] [view-transition-name:thread-chat]"
             >
               {route.kind === "loading" ? (
                 <div className="flex flex-1 items-center justify-center" role="status" aria-label="Loading thread">
@@ -157,7 +165,7 @@ export function StandaloneThreadPage({ slug }: { slug: string }) {
                 its width either way. */}
             {thread
               ? <SidePane slug={slug} thread={thread} />
-              : <div className="hidden w-[var(--full-pane)] shrink-0 md:block" aria-hidden="true" />}
+              : <div className="hidden w-[var(--full-pane)] shrink-0 split:block" aria-hidden="true" />}
           </div>
         </div>
         {/* The SAME drawer stack the queue mounts. Without it every drill-in this page renders — a
@@ -200,7 +208,7 @@ function SidePane({ slug, thread }: { slug: string; thread: ThreadView }) {
   return (
     <div
       data-side-pane
-      className="relative hidden h-full w-[var(--full-pane)] min-h-0 min-w-0 shrink-0 grow-0 overflow-hidden md:block"
+      className="relative hidden h-full w-[var(--full-pane)] min-h-0 min-w-0 shrink-0 grow-0 overflow-hidden split:block"
     >
       <div inert={panel ? true : undefined} className="h-full min-h-0">
         <FocusRail thread={thread} />
