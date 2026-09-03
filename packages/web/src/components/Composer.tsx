@@ -56,39 +56,14 @@ const SKILL_SOURCE_LABEL: Record<NonNullable<ThreadSkill["source"]>, string> = {
   plugin: "plugin",
 }
 
-// The inline context row's grid (see the `context` prop). The chip is 20px tall so it sits inside a
-// 13px/leading-relaxed text line (21.125px) with a hair of air above and below. Two gaps, because a
-// pill paints its whole box and a letter does not: chip→chip is 6px of box AND of ink (the border is
-// the ink), while the prose's first glyph carries its own side bearing, so the text-side gap gives
-// that bearing back. Measured 2026-08-28 in the running app (scan of the first line at dsf 4): with
-// both at 6px the eye read 6.00px chip→chip against 7.00px chip→"H" in sans and 6.50px in mono; at 5px
-// the text side reads 6.00 / 5.50 — inside the ±0.75px noise floor of a bearing that differs per
-// letter anyway.
-export const CONTEXT_CHIP_HEIGHT = 20
-const CONTEXT_CHIP_GAP = 6
-const CONTEXT_TEXT_GAP = 5
-
-// Where the BASELINE of a line set in `source`'s font falls, as px from that line box's top. A
-// zero-height inline-block sits with its bottom on the baseline, so a hidden mirror line carrying one
-// reads the offset straight off the resolved font — whichever family the setting picked, and whatever
-// its ascent/descent turn out to be. Measured, not looked up, because those metrics are exactly what
-// differ between the two font settings (2026-08-28 readings in the comment at the call site).
-function baselineOffset(host: HTMLElement, source: CSSStyleDeclaration): number {
-  const mirror = document.createElement("div")
-  mirror.style.cssText = "position:absolute;top:0;left:0;visibility:hidden;pointer-events:none;white-space:nowrap"
-  mirror.style.fontFamily = source.fontFamily
-  mirror.style.fontSize = source.fontSize
-  mirror.style.fontWeight = source.fontWeight
-  mirror.style.lineHeight = source.lineHeight
-  mirror.textContent = "Hg"
-  const probe = document.createElement("span")
-  probe.style.cssText = "display:inline-block;width:0;height:0;vertical-align:baseline"
-  mirror.appendChild(probe)
-  host.appendChild(mirror)
-  const offset = probe.getBoundingClientRect().top - mirror.getBoundingClientRect().top
-  mirror.remove()
-  return offset
-}
+// A staged context reference in the prose: the literal `[^N]` token the ⌘I flow splices in at the
+// caret (lib/composerContext.ts). The BACKDROP below paints a pill behind each staged token — the
+// token itself is ordinary textarea text, which is what lets it sit at ANY position in the prose,
+// wrap with it, and be edited like text (the previous chips-in-an-overlay system could only open the
+// first line, which put every reference at the box's start regardless of the caret — maintainer
+// 2026-09-02: "the context chip still shows up at the beginning of the prompt box instead of where
+// the cursor currently exists").
+const MARKER_SPLIT_RE = /(\[\^\d+\])/
 
 // Auto-grow: reset to auto, then snap to content height clamped at maxHeight.
 function snapHeight(el: HTMLTextAreaElement, maxHeight: number): void {
@@ -110,6 +85,7 @@ export function Composer({
   footer,
   leftAction,
   context,
+  contextMarkers,
   slashSuggest,
   onInterruptSubmit,
 }: {
@@ -130,19 +106,17 @@ export function Composer({
   // Rendered INSIDE the box along its bottom edge (the dispatch form's inline mode/model/effort
   // readouts). The textarea auto-grows above it; the footer strip is always reserved.
   footer?: React.ReactNode
-  // STAGED CONTEXT — the ⌘I selection chips (ThreadComposerBox passes ComposerContextChips) — laid
-  // INLINE with the text: the chips open the first line and the prose flows on after the last one,
-  // the way an @-mention token sits in a chat box. A row of pills above the text inside the border was
-  // tried first and read as a LABEL of the box, not as part of the message (maintainer 2026-08-27:
-  // "they should be inline chips inside of the prompt box"; 2026-08-28: "this is just rendering as a
-  // label"). A <textarea> cannot host inline elements, so the node renders in an overlay pinned to the
-  // textarea's text origin and the textarea gets a matching `text-indent` (first line only — exactly
-  // the line the chips occupy) plus enough extra top padding for any chip rows that wrapped above it.
-  // CONTRACT for the node: each chip is a `[data-context-chip]` element `CONTEXT_CHIP_HEIGHT` px tall
-  // whose text is a `[data-context-label]`; Composer owns the row (wrap, gaps, line pitch) and
-  // positions the PILLS so the centred label's baseline meets the prose's. Renders nothing when
-  // nothing is staged.
+  // STAGED CONTEXT — the ⌘I selection legend (ThreadComposerBox passes ComposerContextChips),
+  // rendered as a wrap row along the box's bottom edge beside the attachment tiles: one removable
+  // chip per staged item naming its `[^N]` reference and file. The references themselves live IN THE
+  // PROSE as text (see MARKER_SPLIT_RE above) — chips-in-an-overlay on the first line was the
+  // previous design, and it pinned every reference to the box's start regardless of the caret.
+  // Renders nothing when nothing is staged.
   context?: React.ReactNode
+  // The `[^N]` numbers currently staged on this thread. Drives the backdrop pill behind each staged
+  // token in the prose (an unstaged `[^9]` the user happened to type stays plain text) and the
+  // atomic Backspace that deletes a whole token. Order-irrelevant; empty/omitted disables both.
+  contextMarkers?: number[]
   // A small action rendered just LEFT of the send button (the dispatch composer's GitHub-picker icon).
   // Only surfaces that pass it get it; reply/queue composers omit it.
   leftAction?: React.ReactNode
@@ -309,113 +283,40 @@ export function Composer({
     // fonts.ready hook on every one of those renders for zero layout change.
   }, [value, maxHeight, Boolean(footer)])
 
-  // INLINE CONTEXT geometry. The overlay sits on the textarea's text origin (its paddings, read from
-  // the computed style so the rail reserve and the footer variant both stay honest) and shrinks to
-  // fit its chips up to the text column's width, so a long set wraps. The textarea then takes
-  // `text-indent` = the last chip's right edge + the text gap, and, when the chips wrapped, extra
-  // top padding = every row but the last, so the LAST row shares the first text line. Each chip row
-  // is pitched exactly one text line (row-gap = line − chip), which is what keeps that arithmetic in
-  // the line grid. Re-measured on any change under the overlay — a chip added, removed, or grown (the
-  // comment marker) — because once the row is wrapped at full width, a chip joining the LAST row
-  // changes neither the overlay's width nor its height, so a ResizeObserver alone would miss it; the
-  // resize path still covers a rewrap from the column narrowing.
-  //
-  // VERTICAL: two constraints, one knob. The label must read as ONE LINE with the prose (the eye
-  // aligns inline text by baseline — an 11px label centred in a pill centred on the line floats
-  // 1.87px above the 13px prose's baseline in sans, 0.87px in mono; maintainer 2026-08-28: "it
-  // doesn't feel vertically aligned with the plain text"), and the label must sit CENTRED in its
-  // pill (translating the pill's ink down to fix the first broke the second; maintainer, later that
-  // day: "it needs to be vertically centered … within the fucking chip"). So the ink stays centred —
-  // plain items-center, no transforms — and the PILL'S position is the knob: the overlay's top is set
-  // so the centred label's baseline lands on the prose's, both probed from the resolved fonts. The
-  // pill runs ~1-2px below the line box's bottom (into the leading; the next line's ascenders start
-  // ~6px down, so nothing collides), which is the honest cost of wrapping an 11px label around a
-  // 13px line's baseline.
-  useLayoutEffect(() => {
-    const el = taRef.current
-    const overlay = contextRef.current
-    if (!el) return
-    if (!overlay) {
-      el.style.textIndent = ""
-      el.style.paddingTop = ""
-      return
-    }
-    let frame: number | undefined
-    const measure = () => {
-      frame = undefined
-      const chips = overlay.querySelectorAll<HTMLElement>("[data-context-chip]")
-      el.style.paddingTop = ""
-      const cs = getComputedStyle(el)
-      const padTop = parseFloat(cs.paddingTop)
-      const line = parseFloat(cs.lineHeight)
-      overlay.style.left = cs.paddingLeft
-      overlay.style.maxWidth = `calc(100% - ${cs.paddingLeft} - ${cs.paddingRight})`
-      // Centred on the line until a chip exists to probe; the real position lands below.
-      overlay.style.top = `${padTop + (line - CONTEXT_CHIP_HEIGHT) / 2}px`
-      overlay.style.rowGap = `${Math.max(0, line - CONTEXT_CHIP_HEIGHT)}px`
-      const last = chips[chips.length - 1]
-      if (!last) {
-        el.style.textIndent = ""
-      } else {
-        const label = chips[0].querySelector<HTMLElement>("[data-context-label]")
-        if (label) {
-          // TWO constraints, solved together (maintainer 2026-08-30: "the content needs to be
-          // vertically aligned internally to the chip, and the chip itself … optically with the other
-          // plain text"): the PILL BOX centres on the label's INK, and the label's BASELINE lands on
-          // the prose's. One placement cannot do both — a pill placed so the naturally-centred label
-          // hits the baseline wears its ink ~1.3px high (measured, sans, dsf 6) — so the pill takes
-          // the first rule and the label is nudged inside it by a computed var the chip consumes
-          // (`--ctx-ink-shift`, a transform, so it never feeds back into these very measurements —
-          // which still zero it first, because getBoundingClientRect reads transforms).
-          overlay.style.setProperty("--ctx-ink-shift", "0px")
-          const proseBaseline = baselineOffset(overlay, cs)
-          const lcs = getComputedStyle(label)
-          const labelBaselineInChip = (label.getBoundingClientRect().top - chips[0].getBoundingClientRect().top)
-            + baselineOffset(overlay, lcs)
-          const probe = document.createElement("canvas").getContext("2d")
-          let capAscent = 8
-          if (probe) {
-            probe.font = lcs.font
-            capAscent = probe.measureText("H").actualBoundingBoxAscent
-          }
-          const top = padTop + proseBaseline - capAscent / 2 - CONTEXT_CHIP_HEIGHT / 2
-          overlay.style.top = `${top.toFixed(2)}px`
-          overlay.style.setProperty("--ctx-ink-shift", `${(padTop + proseBaseline - top - labelBaselineInChip).toFixed(2)}px`)
-        }
-        const box = overlay.getBoundingClientRect()
-        el.style.textIndent = `${Math.round(last.getBoundingClientRect().right - box.left + CONTEXT_TEXT_GAP)}px`
-        const above = Math.max(0, Math.round(box.height - CONTEXT_CHIP_HEIGHT))
-        if (above > 0) el.style.paddingTop = `${padTop + above}px`
-      }
-      snapHeight(el, maxHeight)
-    }
-    measure()
-    // Same Chromium loop rule as the width observer above: never write layout inside the callback.
-    const schedule = () => {
-      if (frame !== undefined) cancelAnimationFrame(frame)
-      frame = requestAnimationFrame(measure)
-    }
-    const resizes = new ResizeObserver(schedule)
-    resizes.observe(overlay)
-    const mutations = new MutationObserver(schedule)
-    mutations.observe(overlay, { childList: true, subtree: true, characterData: true })
-    return () => {
-      if (frame !== undefined) cancelAnimationFrame(frame)
-      resizes.disconnect()
-      mutations.disconnect()
-    }
-  }, [Boolean(context), maxHeight, Boolean(footer)])
+  // THE MARKER BACKDROP: a metrics-identical mirror of the prose, absolutely positioned behind the
+  // (transparent-backgrounded) textarea, in which everything renders as TRANSPARENT text except that
+  // each staged `[^N]` token gets a pill background. Because the mirror carries the same font,
+  // padding, line height and wrapping as the textarea, the pill lands exactly under the token
+  // wherever it sits — any line, any wrap — which is the whole trick: the pill is paint, the token is
+  // text, and the textarea keeps owning editing, caret and selection. The pill decorations are
+  // strictly zero-layout (background, box-shadow ring, and `-mx`/`px` pairs that cancel) so the
+  // mirror's advance widths can never drift from the textarea's.
+  const stagedMarkers = useMemo(() => new Set(contextMarkers ?? []), [contextMarkers])
+  const backdropSegments = useMemo(() => {
+    if (stagedMarkers.size === 0) return null
+    const parts = prose.split(MARKER_SPLIT_RE)
+    if (!parts.some((part, i) => i % 2 === 1 && stagedMarkers.has(Number(part.slice(2, -1))))) return null
+    return parts.map((part, i) =>
+      i % 2 === 1 && stagedMarkers.has(Number(part.slice(2, -1))) ? (
+        // The vertical pad is free (vertical padding on an inline box never moves layout); the
+        // horizontal pad is bought back by the negative margin so the advance width is untouched.
+        <span key={i} className="rounded bg-panel-2 py-0.5 -mx-0.5 px-0.5 ring-1 ring-inset ring-border">
+          {part}
+        </span>
+      ) : (
+        part
+      ),
+    )
+  }, [prose, stagedMarkers])
 
-  // A textarea at maxHeight SCROLLS, and the overlay is pinned to the box, not the text — so it rides
-  // along with the scroll and is clipped at its own top edge, exactly as the first line of prose is.
+  // The mirror rides the textarea's own scroll position (a textarea at maxHeight scrolls its
+  // content; the backdrop must pan with it or the pills detach from their tokens).
   const syncContextScroll = () => {
     const el = taRef.current
-    const overlay = contextRef.current
-    if (!el || !overlay) return
-    const y = el.scrollTop
-    overlay.style.transform = y > 0 ? `translateY(${-y}px)` : ""
-    overlay.style.clipPath = y > 0 ? `inset(${y}px 0 0 0)` : ""
+    const backdrop = contextRef.current
+    if (el && backdrop) backdrop.scrollTop = el.scrollTop
   }
+  useLayoutEffect(syncContextScroll)
 
   // The browser BLURS a focused element the instant it becomes `disabled`, so every `busy` window
   // evicts the caret and the user must re-click the box to keep typing. A focusout whose target is
@@ -556,6 +457,22 @@ export function Composer({
         return
       }
     }
+    // A staged `[^N]` deletes as ONE token — the editor convention for a reference the user placed
+    // as a unit. Only a bare Backspace with a collapsed caret sitting immediately after a STAGED
+    // token (a hand-typed `[^9]` is ordinary text); a selection, a modifier, or any other position
+    // keeps native editing. The staged item itself is dropped by the caller's marker-presence sweep
+    // once the token is gone (ThreadComposerBox).
+    if (e.key === "Backspace" && !e.altKey && !e.ctrlKey && !e.metaKey && stagedMarkers.size > 0 && el.selectionStart === el.selectionEnd) {
+      const caret = el.selectionStart
+      const token = el.value.slice(0, caret).match(/\[\^(\d+)\]$/)
+      if (token && stagedMarkers.has(Number(token[1]))) {
+        e.preventDefault()
+        const start = caret - token[0].length
+        setProse(el.value.slice(0, start) + el.value.slice(caret))
+        requestAnimationFrame(() => el.setSelectionRange(start, start))
+        return
+      }
+    }
     if (queueComposerHandlesOptionEnter(surface, e.key, e.altKey)) {
       // Option-Enter inserts a newline EXPLICITLY (Claude Code muscle memory). Merely exempting it
       // from submit is not enough: on macOS Chrome, Option-Enter in a textarea inserts nothing
@@ -687,50 +604,62 @@ export function Composer({
           ))}
         </div>
       )}
+      {/* The textarea and its marker backdrop share one box: the wrapper is a plain block (no layout
+          change from the bare textarea), the mirror fills it behind the transparent-backgrounded
+          textarea, and the padding/typography class string is IDENTICAL on both by construction —
+          any drift between them detaches every pill from its token. */}
+      <div className="relative">
+        {backdropSegments && (
+          <div
+            ref={contextRef}
+            aria-hidden
+            data-composer-context-backdrop
+            className={`pointer-events-none absolute inset-0 select-none overflow-hidden whitespace-pre-wrap [overflow-wrap:break-word] px-3.5 ${footer ? "py-2.5 pb-3" : `py-2.5 ${railAction ? RAIL_RESERVE_WITH_ACTION : RAIL_RESERVE_PLAIN}`} text-[13px] leading-relaxed text-transparent`}
+          >
+            {backdropSegments}
+          </div>
+        )}
+        <textarea
+          id={id}
+          ref={taRef}
+          onScroll={backdropSegments ? syncContextScroll : undefined}
+          data-surface={surface}
+          value={prose}
+          autoFocus={autoFocus}
+          disabled={busy}
+          onChange={(e) => setProse(e.target.value)}
+          onKeyDown={onKeyDown}
+          onPaste={(e) => {
+            // Any file item claims the whole paste (preventDefault) — deliberately. An image paste
+            // usually carries a junk text/html or filename text/plain fallback that must NOT be
+            // inserted as text. Known trade-off: a genuinely mixed text+file clipboard loses its text
+            // half; revisit only with a heuristic that can tell the fallback from real prose.
+            const files = [...e.clipboardData.items].filter((i) => i.kind === "file").map((i) => i.getAsFile()!).filter(Boolean)
+            if (files.length) {
+              e.preventDefault()
+              void takeFiles(files)
+            }
+          }}
+          placeholder={placeholder}
+          rows={1}
+          spellCheck={false}
+          style={{ minHeight, maxHeight }}
+          // With a footer strip the box is an INSET-FOOTER layout: the strip below already reserves the
+          // vertical band the floating buttons occupy, so the text runs FULL width (no right rail carved
+          // out of every line). Without a footer the box is a single compact row and the right padding is
+          // what keeps text from sliding under the floating paperclip/send buttons. `relative` keeps the
+          // caret and text painting above the marker backdrop behind it.
+          className={`relative block w-full resize-none bg-transparent px-3.5 ${footer ? "py-2.5 pb-3" : `py-2.5 ${railAction ? RAIL_RESERVE_WITH_ACTION : RAIL_RESERVE_PLAIN}`} text-[13px] leading-relaxed text-fg outline-none placeholder:text-muted scrollbar-none disabled:opacity-60`}
+        />
+      </div>
+      {/* The context legend along the bottom edge — one removable chip per staged ⌘I item, ahead of
+          the attachment tiles it shares the band with. `empty:hidden`: the node is always passed but
+          renders nothing while nothing is staged, and an empty row must not reserve its padding. */}
       {context && (
-        // pointer-events off on the row so a click in the run-out beside the chips lands in the
-        // textarea; each chip switches them back on. Geometry (left/top/max-width/row-gap) is written
-        // by the inline-context effect from the textarea's computed style.
-        <div
-          ref={contextRef}
-          data-composer-context
-          className="pointer-events-none absolute z-[1] flex flex-wrap items-center"
-          style={{ columnGap: CONTEXT_CHIP_GAP }}
-        >
+        <div data-composer-context className={`flex flex-wrap items-center gap-1.5 px-3 pb-2 empty:hidden ${railAction ? RAIL_RESERVE_WITH_ACTION : RAIL_RESERVE_PLAIN}`}>
           {context}
         </div>
       )}
-      <textarea
-        id={id}
-        ref={taRef}
-        onScroll={context ? syncContextScroll : undefined}
-        data-surface={surface}
-        value={prose}
-        autoFocus={autoFocus}
-        disabled={busy}
-        onChange={(e) => setProse(e.target.value)}
-        onKeyDown={onKeyDown}
-        onPaste={(e) => {
-          // Any file item claims the whole paste (preventDefault) — deliberately. An image paste
-          // usually carries a junk text/html or filename text/plain fallback that must NOT be
-          // inserted as text. Known trade-off: a genuinely mixed text+file clipboard loses its text
-          // half; revisit only with a heuristic that can tell the fallback from real prose.
-          const files = [...e.clipboardData.items].filter((i) => i.kind === "file").map((i) => i.getAsFile()!).filter(Boolean)
-          if (files.length) {
-            e.preventDefault()
-            void takeFiles(files)
-          }
-        }}
-        placeholder={placeholder}
-        rows={1}
-        spellCheck={false}
-        style={{ minHeight, maxHeight }}
-        // With a footer strip the box is an INSET-FOOTER layout: the strip below already reserves the
-        // vertical band the floating buttons occupy, so the text runs FULL width (no right rail carved
-        // out of every line). Without a footer the box is a single compact row and the right padding is
-        // what keeps text from sliding under the floating paperclip/send buttons.
-        className={`block w-full resize-none bg-transparent px-3.5 ${footer ? "py-2.5 pb-3" : `py-2.5 ${railAction ? RAIL_RESERVE_WITH_ACTION : RAIL_RESERVE_PLAIN}`} text-[13px] leading-relaxed text-fg outline-none placeholder:text-muted scrollbar-none disabled:opacity-60`}
-      />
       {/* Attachment chips along the bottom row — one square tile per attached file (image thumbnail or
           file-type icon), each removable. The paths still live in `value`; these tiles just render them
           instead of the raw absolute-path text. Reserve the right rail so tiles never slip under the

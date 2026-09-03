@@ -30,6 +30,7 @@ import { fenceStandsFor, registeredStandingAt } from "../lib/questionShadow.ts"
 import { FrizzWake } from "./FrizzWake.tsx"
 import { RecurringPromptLine } from "./RecurringPromptLine.tsx"
 import { LinkifiedText } from "./LinkifiedText.tsx"
+import { contextChipLabel, parseSentContext, type SentContextItem } from "../lib/composerContext.ts"
 import { AnswersCard } from "./AnswersCard.tsx"
 import { WakeDivider } from "./WakeDivider.tsx"
 import { useLiveAnswering, type LiveAnswering } from "../lib/answering.ts"
@@ -2980,6 +2981,59 @@ function SendMessageCard({ to, summary, body, type, status, durationMs }: { to?:
 
 // The user chat bubble, right-justified — plain and uncapped. Its own component so the unqueue /
 // deliver-now hooks stay out of memoized Message.
+// A sent message that carries ⌘I selected context (lib/composerContext.ts — inline `[^N]` references
+// over footnote definitions) renders as the HUMAN COMPOSED IT: the prose with a chip at each
+// reference, and the definitions dump hidden behind them. The serialized text underneath is untouched
+// — this is presentation over the same bytes the worker read (maintainer 2026-09-02: "The chip should
+// also render as a chip once I hit Enter"). Clicking a chip unfolds that item's quote (and comment)
+// under the prose; clicking again, or another chip, folds it. Everything stops propagation because
+// the QUEUED bubble is itself a click target (click-to-unqueue).
+function SentContextBody({ body, items }: { body: string; items: SentContextItem[] }) {
+  const [open, setOpen] = useState<number | null>(null)
+  const byMarker = useMemo(() => new Map(items.map((item) => [item.marker, item])), [items])
+  const openItem = open === null ? undefined : byMarker.get(open)
+  // Split keeps the `[^N]` delimiters at odd indexes; a marker with no definition (one the human
+  // typed by hand) falls through to plain text.
+  const parts = useMemo(() => body.split(/(\[\^\d+\])/), [body])
+  return (
+    <>
+      {parts.map((part, i) => {
+        const item = i % 2 === 1 ? byMarker.get(Number(part.slice(2, -1))) : undefined
+        if (!item) return <LinkifiedText key={i} text={part} />
+        const isOpen = open === item.marker
+        return (
+          <button
+            key={i}
+            type="button"
+            title={item.display}
+            aria-expanded={isOpen}
+            onClick={(e) => {
+              e.stopPropagation()
+              setOpen(isOpen ? null : item.marker)
+            }}
+            onKeyDown={(e) => e.stopPropagation()}
+            // Baseline-aligned so the chip reads as part of the sentence; the dark-on-light tints are
+            // this bubble's own (the bubble is the one LIGHT surface in the transcript, so the
+            // panel/border tokens the dark chips use elsewhere would vanish here).
+            className={`inline-flex max-w-56 items-baseline rounded border px-1 align-baseline font-mono-keep text-[11px] leading-snug transition-colors ${
+              isOpen ? "border-bg/40 bg-bg/15" : "border-bg/25 bg-bg/[0.08] hover:bg-bg/15"
+            }`}
+          >
+            <span className="truncate">{contextChipLabel(item)}</span>
+          </button>
+        )
+      })}
+      {openItem && (
+        <span className="mt-2 block cursor-auto rounded-md border border-bg/20 bg-bg/[0.06] px-2 py-1.5" onClick={(e) => e.stopPropagation()}>
+          <span className="block truncate font-mono-keep text-[11px] text-bg/60">{openItem.display}{openItem.startLine !== undefined ? ` · ${openItem.startLine === openItem.endLine ? `line ${openItem.startLine}` : `lines ${openItem.startLine}-${openItem.endLine}`}` : ""}</span>
+          <span className="mt-1 block max-h-40 overflow-y-auto whitespace-pre-wrap break-words font-mono-keep text-[11.5px] leading-4 text-bg/80">{openItem.text}</span>
+          {openItem.comment?.trim() && <span className="mt-1 block text-[12px] text-bg/80">{openItem.comment}</span>}
+        </span>
+      )}
+    </>
+  )
+}
+
 function UserBubble({ text, rawText, queued, deliveryUnconfirmed, deliveryId, sourceId }: { text: string; rawText?: string; queued?: boolean; deliveryUnconfirmed?: boolean; deliveryId?: string; sourceId?: string }) {
   // TAKE IT BACK. A still-queued send is the one bubble in the transcript that isn't history yet, so
   // it alone is clickable: the click unqueues it at the provider and hands the words back to the
@@ -3017,6 +3071,9 @@ function UserBubble({ text, rawText, queued, deliveryUnconfirmed, deliveryId, so
   // splitProseAttachments, the agent-prose splitter) it never swallows a ::directive or mermaid line.
   // `text` itself stays whole for the unqueue payload below — restoreDraft must hand the paths back.
   const { prose, attachments } = useMemo(() => splitComposerValue(text), [text])
+  // ⌘I selected context, recovered from the serialization the composer sent. Null for everything
+  // else — including pre-footnote-era sends, which keep their plain-text rendering.
+  const sentContext = useMemo(() => parseSentContext(prose), [prose])
   return (
     // `self-end` must stay on THIS node: the parent scroll container is a flex column and the bubble's
     // right-justification depends on being its direct child (see the group-container note above the
@@ -3059,8 +3116,10 @@ function UserBubble({ text, rawText, queued, deliveryUnconfirmed, deliveryId, so
         >
           {/* Verbatim bytes, but link-shaped runs (a pasted URL, `#123`, a commit hash) render as the
               anchors they would be in agent prose — see LinkifiedText. The anchors stop their own
-              click/keydown propagation, so a link inside a QUEUED bubble opens instead of unqueueing. */}
-          <LinkifiedText text={prose} />
+              click/keydown propagation, so a link inside a QUEUED bubble opens instead of unqueueing.
+              A message carrying ⌘I context renders its references as chips instead (SentContextBody);
+              the unqueue payload above stays the whole serialized text either way. */}
+          {sentContext ? <SentContextBody body={sentContext.body} items={sentContext.items} /> : <LinkifiedText text={prose} />}
         </div>
         {/* SEND IT NOW — icon only, no fill until the pointer is on it, and ABSOLUTE so it costs the
             bubble no width. Laying it out as a flex sibling would narrow every queued bubble by 36px

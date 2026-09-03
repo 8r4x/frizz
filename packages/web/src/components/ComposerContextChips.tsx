@@ -2,86 +2,67 @@ import { useEffect, useRef, useState, type ReactElement } from "react"
 import { useSnapshot } from "valtio"
 import { MessageSquare, X } from "lucide-react"
 import { removeContextItem, setContextComment, store } from "../store.ts"
-import { contextDisplayPath } from "../lib/composerContext.ts"
-import { useProjectDir } from "../lib/drafts.ts"
-import { CONTEXT_CHIP_HEIGHT } from "./Composer.tsx"
+import { contextChipLabel, contextDisplayPath, markerToken, stripMarkerFromProse } from "../lib/composerContext.ts"
+import { draftKey, draftStore, useProjectDir, useThreadSessionId } from "../lib/drafts.ts"
+import { joinComposerValue, splitComposerValue } from "../lib/imagePaths.ts"
 
-// The staged SELECTED-CONTEXT items for a thread, as chips INLINE in its prompt box: the pills open the
-// first line of the message and the typed prose runs on after them (the ⌘I flow — see FileViewerPanel
-// and lib/composerContext.ts). Composer owns the row — this renders one `[data-context-chip]` pill per
-// selection, `CONTEXT_CHIP_HEIGHT` tall, and Composer lays them on the text's first line, sets each
-// `[data-context-label]` on the prose's baseline and indents the prose past the last one; see its
-// `context` prop for why a row of pills above the text was
-// rejected. Each chip is the file's basename plus its line range. Clicking a chip pops a card above it
-// — the quoted text plus a comment box — so each item can carry a note the way a review comment does.
-// The set serializes into the next send and clears with it.
+// The staged SELECTED-CONTEXT items for a thread, as a LEGEND of chips along the prompt box's bottom
+// edge (Composer renders this node in its bottom band, beside the attachment tiles). Each chip names
+// its `[^N]` reference and the file it quotes — the reference itself lives in the PROSE, at whatever
+// position the caret held when ⌘I staged it (see FileViewerPanel and lib/composerContext.ts), so the
+// chips here are the roster, not the anchors. Clicking a chip pops a card above it — the quoted text
+// plus a comment box — so each item can carry a note the way a review comment does. The × removes the
+// item AND its `[^N]` token from the draft; deleting the token in the text removes the chip the same
+// way (ThreadComposerBox's marker sweep). The set serializes into the next send and clears with it.
 export function ComposerContextChips({ slug }: { slug: string }): ReactElement | null {
   const snap = useSnapshot(store)
   const projectDir = useProjectDir()
+  const sessionId = useThreadSessionId(slug)
   const items = snap.composerContext[slug]
   const [openId, setOpenId] = useState<number | null>(null)
-  const firstChipRef = useRef<HTMLSpanElement | null>(null)
-  // BACKSPACE AT THE TEXT'S START EATS THE LAST CHIP (maintainer 2026-08-30) — the editor convention
-  // for inline tokens: with the caret at 0 and nothing selected there is no character left of it, so
-  // the key's meaning falls through to the pill row. Bound to the textarea BESIDE this row (the
-  // overlay and the textarea are siblings inside the composer box), never to the window: two
-  // composers for two threads can be on screen at once, and each row owns only its own box.
-  useEffect(() => {
-    const ta = firstChipRef.current?.closest("[data-composer-context]")?.parentElement?.querySelector("textarea")
-    if (!ta || !items?.length) return
-    const last = items[items.length - 1]
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Backspace" || event.metaKey || event.ctrlKey || event.altKey) return
-      if (ta.selectionStart !== 0 || ta.selectionEnd !== 0) return
-      event.preventDefault()
-      removeContextItem(slug, last.id)
-    }
-    ta.addEventListener("keydown", onKey)
-    return () => ta.removeEventListener("keydown", onKey)
-  }, [slug, items])
   if (!items?.length) return null
+  const remove = (item: { id: number; marker: number }) => {
+    removeContextItem(slug, item.id)
+    // The token comes out of the draft with the item — a `[^2]` left standing would read as a
+    // reference to nothing (and block its number from ever being reused in this draft).
+    const key = draftKey.followUp(projectDir, slug, sessionId)
+    const { prose, attachments } = splitComposerValue(draftStore.get(key))
+    const next = stripMarkerFromProse(prose, item.marker)
+    if (next !== prose) draftStore.set(key, joinComposerValue(next, attachments.map((attachment) => attachment.path)))
+  }
   return (
     <>
-      {items.map((item, index) => {
-        const base = item.path.split("/").filter(Boolean).pop() || item.path
-        const lines = item.startLine !== undefined && item.endLine !== undefined
-          ? item.startLine === item.endLine ? `:${item.startLine}` : `:${item.startLine}-${item.endLine}`
-          : ""
+      {items.map((item) => {
         const isOpen = openId === item.id
         return (
           <span
             key={item.id}
-            ref={index === 0 ? firstChipRef : undefined}
             data-context-chip
-            style={{ height: CONTEXT_CHIP_HEIGHT }}
-            className={`group/ctx pointer-events-auto relative flex items-center gap-1 rounded-md border px-1.5 text-[11px] leading-none transition-colors ${
+            className={`group/ctx relative flex h-5 items-center gap-1 rounded-md border px-1.5 text-[11px] leading-none transition-colors ${
               isOpen ? "border-accent/60 bg-panel-2 text-fg" : "border-border bg-panel-2/50 text-fg/80 hover:bg-panel-2"
             }`}
           >
-            {/* The content sits CENTRED in the pill; Composer moves the whole pill so this label's
-                baseline meets the prose's — see its inline-context effect. */}
-            <button
-              type="button"
-              onClick={() => setOpenId(isOpen ? null : item.id)}
-              title={contextDisplayPath(item.path, projectDir)}
-              className="flex min-w-0 items-center gap-1 outline-none"
-            >
-              <span data-context-label style={{ transform: "translateY(var(--ctx-ink-shift, 0px))" }} className="max-w-48 truncate font-mono-keep">{base}{lines}</span>
-              {/* The comment marker: only once a note exists, so a bare quote stays a bare chip. Like
-                  the ✕ below it sits on its flex centre: the pill box is CENTRED ON INK now (Composer's
-                  --ctx-ink-shift placement, 2026-08-30), so a symmetric glyph's box centre IS the
-                  label's ink mid and the old per-glyph nudges came off with the placement they fitted. */}
-              {item.comment?.trim() && <MessageSquare size={10} aria-hidden="true" className="shrink-0 text-muted" />}
-            </button>
             <button
               type="button"
               // Like every control beside a live input here: never blur the textarea on the click.
               onMouseDown={(e) => e.preventDefault()}
+              onClick={() => setOpenId(isOpen ? null : item.id)}
+              title={contextDisplayPath(item.path, projectDir)}
+              className="flex min-w-0 items-center gap-1 outline-none"
+            >
+              <span className="shrink-0 font-mono-keep text-muted">{markerToken(item.marker)}</span>
+              <span data-context-label className="max-w-48 truncate font-mono-keep">{contextChipLabel(item)}</span>
+              {/* The comment marker: only once a note exists, so a bare quote stays a bare chip. */}
+              {item.comment?.trim() && <MessageSquare size={10} aria-hidden="true" className="shrink-0 text-muted" />}
+            </button>
+            <button
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
               onClick={() => {
-                removeContextItem(slug, item.id)
+                remove(item)
                 if (isOpen) setOpenId(null)
               }}
-              aria-label={`Remove context ${base}`}
+              aria-label={`Remove context ${contextChipLabel(item)}`}
               // -mr-[3px] folds the button's own 2px of padding AND most of the X's dead space (lucide's
               // X paints the middle 12 of its 24 units, ~2px of box per side at size 10) into the
               // pill's, so the ✕ ink sits as far from the right border as the label ink does from the
@@ -89,14 +70,6 @@ export function ComposerContextChips({ slug }: { slug: string }): ReactElement |
               // 6.5px; ✕→right border 7.5px at -mr-0.5, 5.5px at -mr-1, 6.5px at -mr-[3px].
               className="shrink-0 rounded p-0.5 -mr-[3px] text-muted transition-colors hover:text-fg"
             >
-              {/* Ink, not box, and RENDERED ink, not geometry: the eye centres a × on the lowercase
-                  body beside it (the math axis), and a geometry probe put it there — but the
-                  fractional transforms rasterize differently at the maintainer's dsf 2, where a pixel
-                  scan read the box-centred X 0.5px ABOVE the x-height centre (and a cap-band lift
-                  tried first, 1.5px above — maintainer 2026-08-28: "it's not right"). +0.045em of 11px
-                  is the +0.5px that lands it on the body at dsf 2 in both fonts (residual 0.00px);
-                  dsf 1 can only snap to ±0.5px and reads +0.5. Sweep: scan-dsf2.mjs in the thread's
-                  scratch dir. */}
               <X size={10} strokeWidth={2.5} />
             </button>
             {isOpen && (
@@ -116,9 +89,8 @@ export function ComposerContextChips({ slug }: { slug: string }): ReactElement |
 }
 
 // The quote-plus-comment card, popped ABOVE its chip like the slash-suggestion menu pops above the box
-// (same border/shadow/z), because the chip lives on the text's first line and nothing may push that
-// line around while a note is being typed. Escape or a click anywhere outside closes it and hands the
-// caret back to the textarea beside the chip.
+// (same border/shadow/z). Escape or a click anywhere outside closes it and hands the caret back to the
+// textarea the chip row hangs off.
 function ContextCard({ text, initial, onComment, onClose }: {
   text: string
   initial: string
@@ -171,7 +143,7 @@ function CommentInput({ initial, onChange, onClose }: { initial: string; onChang
         event.preventDefault()
         event.stopPropagation()
         onClose()
-        event.currentTarget.closest("[data-context-chip]")?.parentElement?.parentElement?.querySelector("textarea")?.focus()
+        event.currentTarget.closest("[data-composer-context]")?.parentElement?.querySelector("textarea")?.focus()
       }}
       placeholder="Add a comment on this selection…"
       autoFocus

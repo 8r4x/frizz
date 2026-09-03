@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
-import { closeFilePanel, addContextItem } from "../store.ts"
+import { closeFilePanel, addContextItem, store } from "../store.ts"
+import { draftKey, draftStore, useProjectDir, useThreadSessionId } from "../lib/drafts.ts"
+import { joinComposerValue, splitComposerValue } from "../lib/imagePaths.ts"
 import { useInnerHtml } from "../lib/innerHtml.ts"
 import { highlightedSource, localFileQuery } from "../lib/localFileQuery.ts"
 import { useLocalFileCodeLinks } from "../lib/localFileCode.ts"
 import { useMarkdownHtml } from "../lib/useMarkdown.ts"
 import { splitFrontmatter } from "../lib/frontmatter.ts"
 import { isLocalMarkdownFile, localFileDir } from "../lib/markdownTargets.ts"
-import { locateInSource } from "../lib/composerContext.ts"
+import { insertMarkerIntoProse, locateInSource, nextMarker } from "../lib/composerContext.ts"
 import { Frontmatter, FOOTER_STYLE, OpenAction } from "./MarkdownDrawer.tsx"
 import { SheetHeader } from "./ui/SheetHeader.tsx"
 
@@ -77,23 +79,27 @@ export function FileViewerPanel({ slug, path }: { slug: string; path: string }) 
   useLocalFileCodeLinks(renderedRef, html)
   const title = resolved.split("/").filter(Boolean).pop() || resolved
 
-  // ⌘I / Ctrl-I: stage the current selection (when it lives inside this panel) as a context item on
-  // the thread's composer, then FOCUS the composer (maintainer 2026-08-31: "Hit Command-I, which adds
-  // the chip. Type immediately into the prompt box."). A textarea keeps its own caret across blur, so
-  // re-selecting in the file and hitting ⌘I again returns the writer to the exact point they were
-  // typing at — the round trip costs nothing. A bare ⌘I with no selection just focuses the box.
-  // Window-level, capture-phase: the selection owns no focusable element, so a local key handler
-  // would never see the chord.
+  // ⌘I / Ctrl-I: stage the current selection (when it lives inside this panel) as a context item —
+  // splicing its `[^N]` footnote reference into the draft AT THE CARET — then FOCUS the composer
+  // (maintainer 2026-08-31: "Hit Command-I, which adds the chip. Type immediately into the prompt
+  // box."). A textarea keeps its own caret across blur, so the reference lands exactly where the
+  // writer was typing (maintainer 2026-09-02: the chip landed "at the beginning of the prompt box
+  // instead of where the cursor currently exists"), and prose can interleave with references —
+  // `… [^1] like so, and [^2] like this` — which is what lets the agent tie each comment to its
+  // selection. A bare ⌘I with no selection just focuses the box. Window-level, capture-phase: the
+  // selection owns no focusable element, so a local key handler would never see the chord.
+  const projectDir = useProjectDir()
+  const sessionId = useThreadSessionId(slug)
   useEffect(() => {
-    function focusComposer() {
-      const ta = document.querySelector<HTMLTextAreaElement>("main[data-standalone-thread] textarea")
-      if (!ta) return
-      // A never-touched textarea wakes with its caret at 0; put it at the end, where typing after a
-      // fresh ⌘I belongs. One that has been typed in keeps the caret exactly where it was.
-      if (document.activeElement !== ta && ta.selectionStart === 0 && ta.selectionEnd === 0 && ta.value.length > 0) {
-        ta.setSelectionRange(ta.value.length, ta.value.length)
-      }
-      ta.focus()
+    const composerTextarea = () => document.querySelector<HTMLTextAreaElement>("main[data-standalone-thread] textarea")
+    // The caret the reference belongs at, in PROSE coordinates (the textarea's value IS the draft's
+    // prose — attachments live on trailing lines the composer peels off). A never-touched textarea
+    // reports 0/0; that means "no caret yet", and the reference belongs at the END of what was
+    // already typed, not in front of it.
+    function caretIn(ta: HTMLTextAreaElement | null, prose: string): number {
+      if (!ta) return prose.length
+      const untouched = document.activeElement !== ta && ta.selectionStart === 0 && ta.selectionEnd === 0 && ta.value.length > 0
+      return untouched ? prose.length : Math.min(ta.selectionStart ?? prose.length, prose.length)
     }
     function onKey(e: KeyboardEvent) {
       if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey || e.key.toLowerCase() !== "i") return
@@ -106,7 +112,12 @@ export function FileViewerPanel({ slug, path }: { slug: string; path: string }) 
         // No stageable selection: the chord still lands the writer in the prompt box.
         e.preventDefault()
         e.stopPropagation()
-        focusComposer()
+        const ta = composerTextarea()
+        if (!ta) return
+        if (document.activeElement !== ta && ta.selectionStart === 0 && ta.selectionEnd === 0 && ta.value.length > 0) {
+          ta.setSelectionRange(ta.value.length, ta.value.length)
+        }
+        ta.focus()
         return
       }
       e.preventDefault()
@@ -123,15 +134,28 @@ export function FileViewerPanel({ slug, path }: { slug: string; path: string }) 
       } else {
         lines = locateInSource(raw, text)
       }
-      addContextItem(slug, { path: resolved, text, ...(lines ?? {}) })
-      // Collapsing the selection is the acknowledgment — the chip appearing on the composer is the
-      // payload, and a still-highlighted range invites a second ⌘I that would stage a duplicate.
+      const ta = composerTextarea()
+      const key = draftKey.followUp(projectDir, slug, sessionId)
+      const { prose, attachments } = splitComposerValue(draftStore.get(key))
+      const marker = nextMarker(prose, store.composerContext[slug] ?? [])
+      const spliced = insertMarkerIntoProse(prose, caretIn(ta, prose), marker)
+      draftStore.set(key, joinComposerValue(spliced.prose, attachments.map((attachment) => attachment.path)))
+      addContextItem(slug, { marker, path: resolved, text, ...(lines ?? {}) })
+      // Collapsing the selection is the acknowledgment — the reference appearing in the composer is
+      // the payload, and a still-highlighted range invites a second ⌘I that would stage a duplicate.
       selection!.removeAllRanges()
-      focusComposer()
+      // The caret goes just past the new reference — but only after React commits the new draft into
+      // the controlled textarea; setting it against the old value would clamp or drift.
+      requestAnimationFrame(() => {
+        const el = composerTextarea()
+        if (!el) return
+        el.setSelectionRange(spliced.caret, spliced.caret)
+        el.focus()
+      })
     }
     window.addEventListener("keydown", onKey, true)
     return () => window.removeEventListener("keydown", onKey, true)
-  }, [slug, resolved, raw])
+  }, [slug, resolved, raw, projectDir, sessionId])
 
   return (
     <div ref={rootRef} data-file-viewer-panel className="flex h-full min-h-0 flex-col">
