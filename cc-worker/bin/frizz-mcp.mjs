@@ -496,10 +496,13 @@ function questionSchema(depth) {
           "x cannot dismiss it, because a generic close icon is not consent for something irreversible. " +
           "Declining must therefore be one of your own options.",
       },
+      // No `maxItems`: the count is the worker's to choose (maintainer 2026-09-03 — "allow arbitrary
+      // numbers of options"). A `multi` over a long list is a real shape, and the card letters past 26.
       options: {
         type: "array",
-        maxItems: 8,
-        description: "Two to four is almost always right. Omit entirely for a free-text question.",
+        description:
+          "As many as the choice actually has — a fork of two, or a `multi` over twenty findings. " +
+          "Omit entirely for a free-text question.",
         items: option,
       },
     },

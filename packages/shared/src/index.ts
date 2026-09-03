@@ -1875,7 +1875,11 @@ export const AskedQuestionSchema: z.ZodType<AskedQuestion> = z.lazy(() => z.obje
   header: z.string().trim().max(24).optional(),
   kind: AskQuestionKind,
   danger: z.boolean().optional(),
-  options: z.array(AskedOptionSchema).max(8).optional(),
+  // UNBOUNDED, deliberately. This carried `.max(8)` from launch until 2026-09-03, when the maintainer
+  // asked for the cap to go ("allow arbitrary numbers of options"): a `multi` over a long list — which
+  // gates to run, which of twenty findings to act on — is a real shape, and the card letters past 26
+  // (`AA.`) already. The count is the worker's to choose; the answer's `chosen` is unbounded to match.
+  options: z.array(AskedOptionSchema).optional(),
 }).strict())
 
 /** The depth of a question tree, counting the root as 1. Separate from the schema because zod's `lazy`
@@ -1970,7 +1974,9 @@ export interface QuestionAnswer {
 const QuestionAnswerSchema: z.ZodType<QuestionAnswer> = z.lazy(() => z.object({
   questionId: z.string().min(1).max(64),
   question: z.string().min(1).max(600),
-  chosen: z.array(z.string().max(200)).max(8),
+  // No count cap: a `multi` may carry any number of options (see AskedQuestionSchema), and the human
+  // may pick every one of them.
+  chosen: z.array(z.string().max(200)),
   text: z.string().max(8000).optional(),
   followUps: z.array(QuestionAnswerSchema).max(ASK_MAX_PER_CALL).optional(),
 }).strict())

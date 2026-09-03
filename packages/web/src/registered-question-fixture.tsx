@@ -26,6 +26,7 @@ import "./styles.css"
 //                 stand down (the registered card carries its own).
 //   ?table=1    — an option whose body carries a TABLE, a blockquote and a code fence: the blocks whose
 //                 opaque panel fills clashed with a selected chip's accent tint (screenshot 2026-09-02).
+//   ?wide=1     — a `multi` over THIRTY options: no count cap (2026-09-03), and lettering past `Z.`.
 //   ?font=sans  — the other of the two fonts this app renders in; mono is the default and the wider.
 const params = new URLSearchParams(location.search)
 document.documentElement.dataset.font = params.get("font") === "sans" ? "sans" : "mono"
@@ -101,6 +102,22 @@ const GATES: RegisteredQuestionView = {
   },
 }
 
+// A `multi` over a LONG list — thirty options, past the `.max(8)` the schema carried until 2026-09-03
+// and past the 26 the card letters `A.`–`Z.`, so the tail reads `AA.`…`AD.`. What is worth looking at is
+// that the run stays one even column and the free-text row still follows the last option.
+const WIDE: RegisteredQuestionView = {
+  id: "qst_0006ffff",
+  askedAt: ago(4),
+  spec: {
+    question: "The audit turned up thirty findings. Which of them should be fixed on this thread?",
+    kind: "multi",
+    options: Array.from({ length: 30 }, (_, i) => ({
+      label: `Finding ${i + 1}`,
+      ...(i % 7 === 3 ? { description: "a one-line trade-off, so the row wraps the way a real one does" } : {}),
+    })),
+  },
+}
+
 // An option body carrying every BLOCK the prose surface renders — a table above all, which is the case
 // that broke inside a SELECTED chip (the accent tint behind opaque panel fills; screenshot 2026-09-02).
 const TABLE: RegisteredQuestionView = {
@@ -142,6 +159,7 @@ const TABLE: RegisteredQuestionView = {
 }
 
 const questions = params.get("danger") === "1" ? [GATE]
+  : params.get("wide") === "1" ? [WIDE]
   : params.get("tree") === "1" ? [TREE]
   : params.get("many") === "1" ? [SETTINGS, TREE, GATES]
   : params.get("table") === "1" ? [TABLE]

@@ -12,7 +12,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { AskedQuestion, BoardSnapshot, Settings } from "@frizz/shared"
-import { ASK_MAX_OPEN, BURIED_ANSWERS_HEADER, parseQuestionsCancelledWake, questionAnswerMessage, questionsCancelledWakeMessage } from "@frizz/shared"
+import { ASK_MAX_OPEN, AnswerQuestionsInput, AskInput, BURIED_ANSWERS_HEADER, parseQuestionsCancelledWake, questionAnswerMessage, questionsCancelledWakeMessage } from "@frizz/shared"
 import type { BoardManager } from "./board.ts"
 import { createRouter } from "./router.ts"
 import { createStorage, type SessionRow } from "./storage.ts"
@@ -145,6 +145,28 @@ test("a follow-up tree deeper than three levels is refused", async () => {
     await assert.rejects(() => h.router.ask.handler({ input: { slug: "t", questions: [l1] } }), /the limit is 3/)
     const ok = await h.router.ask.handler({ input: { slug: "t", questions: [l2] } })
     assert.equal(ok.registered.length, 1, "exactly three levels is fine")
+  } finally { h.close() }
+})
+
+test("a question takes as many options as the choice has, and a multi answer may pick every one", async () => {
+  const h = harness()
+  try {
+    h.storage.upsertSession(row("t"))
+    // The option count carried `.max(8)` until 2026-09-03 (maintainer: "allow arbitrary numbers of
+    // options"). Forty is past every cap that ever sat here, and past the 26 the card letters `A.`–`Z.`,
+    // so this pins the RPC schema (the zod boundary, which the handler calls above skip), the row, and
+    // the answer that picks the whole list — `chosen` carried the same cap and had to go with it.
+    const labels = Array.from({ length: 40 }, (_, i) => `Finding ${i + 1}`)
+    const wide: AskedQuestion = { question: "Which findings should be acted on?", kind: "multi", options: labels.map((label) => ({ label })) }
+    const input = AskInput.parse({ slug: "t", questions: [wide] })
+    const { registered } = await h.router.ask.handler({ input })
+    assert.equal(registered[0].spec.options?.length, 40)
+    assert.equal(h.storage.listThreadQuestions("t", { openOnly: true }).length, 1)
+
+    const answers = AnswerQuestionsInput.parse({ slug: "t", answers: [{ questionId: registered[0].id, question: wide.question, chosen: labels }] })
+    const result = await h.router.answerQuestions.handler({ input: answers })
+    assert.deepEqual(result.answered, [registered[0].id])
+    assert.deepEqual(JSON.parse(h.storage.getThreadQuestion(registered[0].id)!.answer!).chosen, labels)
   } finally { h.close() }
 })
 
