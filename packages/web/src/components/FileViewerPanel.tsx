@@ -19,7 +19,7 @@ import { SheetHeader } from "./ui/SheetHeader.tsx"
 //
 //   · a Rendered ⇄ Source toggle (the source view shows the file verbatim, frontmatter included);
 //   · ⌘I over a selection in EITHER view stages that selection as a context item on the thread's
-//     composer (chips inline in the box, each with an optional comment — see lib/composerContext.ts).
+//     composer — an `@file:line` chip inline in the prose at the caret (see lib/composerContext.ts).
 //
 // Line numbers for a source-view selection are exact (character offsets against the raw text); for a
 // rendered-view selection they are best-effort (whitespace-insensitive unique match), because the

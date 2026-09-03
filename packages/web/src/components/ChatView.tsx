@@ -3027,7 +3027,6 @@ function SentContextBody({ body, items }: { body: string; items: SentContextItem
         <span className="mt-2 block cursor-auto rounded-md border border-bg/20 bg-bg/[0.06] px-2 py-1.5" onClick={(e) => e.stopPropagation()}>
           <span className="block truncate font-mono-keep text-[11px] text-bg/60">{openItem.display}{openItem.startLine !== undefined ? ` · ${openItem.startLine === openItem.endLine ? `line ${openItem.startLine}` : `lines ${openItem.startLine}-${openItem.endLine}`}` : ""}</span>
           <span className="mt-1 block max-h-40 overflow-y-auto whitespace-pre-wrap break-words font-mono-keep text-[11.5px] leading-4 text-bg/80">{openItem.text}</span>
-          {openItem.comment?.trim() && <span className="mt-1 block text-[12px] text-bg/80">{openItem.comment}</span>}
         </span>
       )}
     </>

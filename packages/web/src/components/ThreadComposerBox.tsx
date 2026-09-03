@@ -7,7 +7,6 @@ import { buildMessageWithContext, hasToken } from "../lib/composerContext.ts"
 import { splitComposerValue } from "../lib/imagePaths.ts"
 import { useThreadComposerControls } from "../hooks/useThreadComposerControls.tsx"
 import { Composer } from "./Composer.tsx"
-import { ComposerContextChips } from "./ComposerContextChips.tsx"
 import { LogoutConfirmModal, SignInModal } from "./SignInModal.tsx"
 import { draftKey, draftStore, useDraft, useProjectDir } from "../lib/drafts.ts"
 import { parseAccountAlias } from "../lib/signIn.ts"
@@ -150,7 +149,6 @@ export function ThreadComposerBox({
       className={className}
     >
       <Composer
-        context={<ComposerContextChips slug={slug} />}
         contextTokens={contextTokens}
         id={id}
         surface={surface}

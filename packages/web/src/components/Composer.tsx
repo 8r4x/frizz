@@ -86,7 +86,6 @@ export function Composer({
   busy,
   footer,
   leftAction,
-  context,
   contextTokens,
   slashSuggest,
   onInterruptSubmit,
@@ -108,16 +107,12 @@ export function Composer({
   // Rendered INSIDE the box along its bottom edge (the dispatch form's inline mode/model/effort
   // readouts). The textarea auto-grows above it; the footer strip is always reserved.
   footer?: React.ReactNode
-  // STAGED CONTEXT — the ⌘I selection legend (ThreadComposerBox passes ComposerContextChips),
-  // rendered as a wrap row along the box's bottom edge beside the attachment tiles: one removable
-  // chip per staged item wearing the same label as its `@` reference. The references themselves live
-  // IN THE PROSE as text (see the note above) — chips-in-an-overlay on the first line was the
-  // previous design, and it pinned every reference to the box's start regardless of the caret.
-  // Renders nothing when nothing is staged.
-  context?: React.ReactNode
-  // The `@` tokens currently staged on this thread. Drives the backdrop pill behind each staged
-  // token in the prose (an unstaged `@thing` the user happened to type stays plain text) and the
-  // atomic Backspace that deletes a whole token. Order-irrelevant; empty/omitted disables both.
+  // STAGED CONTEXT — the `@` tokens the ⌘I flow has staged on this thread. Drives the backdrop pill
+  // behind each staged token in the prose (an unstaged `@thing` the user happened to type stays
+  // plain text) and the atomic Backspace that deletes a whole token. The pill IS the chip: there is
+  // no roster of chips anywhere else in the box — a legend row along the bottom edge was tried and
+  // cut (maintainer 2026-09-03: "we DONT NEED THE CHIPS AT THE BOTTOM … just the inline chip"), so
+  // removing a reference is deleting its text. Order-irrelevant; empty/omitted disables both.
   contextTokens?: string[]
   // A small action rendered just LEFT of the send button (the dispatch composer's GitHub-picker icon).
   // Only surfaces that pass it get it; reply/queue composers omit it.
@@ -655,14 +650,6 @@ export function Composer({
           className={`relative block w-full resize-none bg-transparent px-3.5 ${footer ? "py-2.5 pb-3" : `py-2.5 ${railAction ? RAIL_RESERVE_WITH_ACTION : RAIL_RESERVE_PLAIN}`} text-[13px] leading-relaxed text-fg outline-none placeholder:text-muted scrollbar-none disabled:opacity-60`}
         />
       </div>
-      {/* The context legend along the bottom edge — one removable chip per staged ⌘I item, ahead of
-          the attachment tiles it shares the band with. `empty:hidden`: the node is always passed but
-          renders nothing while nothing is staged, and an empty row must not reserve its padding. */}
-      {context && (
-        <div data-composer-context className={`flex flex-wrap items-center gap-1.5 px-3 pb-2 empty:hidden ${railAction ? RAIL_RESERVE_WITH_ACTION : RAIL_RESERVE_PLAIN}`}>
-          {context}
-        </div>
-      )}
       {/* Attachment chips along the bottom row — one square tile per attached file (image thumbnail or
           file-type icon), each removable. The paths still live in `value`; these tiles just render them
           instead of the raw absolute-path text. Reserve the right rail so tiles never slip under the

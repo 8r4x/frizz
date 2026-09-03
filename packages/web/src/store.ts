@@ -442,19 +442,8 @@ export function addContextItem(slug: string, item: Omit<ComposerContextItem, "id
   items.push({ ...item, id: ++contextSeq })
 }
 
-export function removeContextItem(slug: string, id: number): void {
-  const items = store.composerContext[slug]
-  if (items) store.composerContext[slug] = items.filter((item) => item.id !== id)
-}
-
-export function setContextComment(slug: string, id: number, comment: string): void {
-  const items = store.composerContext[slug]
-  // Replace the ELEMENT rather than assigning `item.comment` in place: the in-place write is real in
-  // the store but the chips' useSnapshot did not re-render on it (verified in a live stack — the
-  // comment marker never appeared while the store held the text), while array-level replacement
-  // notifies exactly like add/remove do.
-  if (items) store.composerContext[slug] = items.map((item) => (item.id === id ? { ...item, comment } : item))
-}
+// There is no remove-by-id: an item leaves the roster when its `@` token leaves the draft prose
+// (ThreadComposerBox's token sweep) — the token in the text is the only handle the human has on it.
 
 // Take (and clear) a thread's staged items at send time. Returns plain copies so the caller can
 // restore them on a rejected send — the proxy entries themselves are gone from the store by then.

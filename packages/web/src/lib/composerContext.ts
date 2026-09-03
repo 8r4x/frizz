@@ -28,8 +28,6 @@ export interface ComposerContextItem {
   /** 1-based line range in the file, when the selection could be located unambiguously. */
   startLine?: number
   endLine?: number
-  /** The human's note on this selection, typed on the chip. */
-  comment?: string
 }
 
 /** The chip label a context item wears everywhere: `basename:12` / `basename:3-9` / `basename`. */
@@ -89,14 +87,6 @@ export function insertTokenIntoProse(prose: string, caret: number, token: string
   const lead = before && !/\s$/.test(before) ? " " : ""
   const trail = after && !/^\s/.test(after) ? " " : ""
   return { prose: `${before}${lead}${token}${trail}${after}`, caret: at + lead.length + token.length }
-}
-
-/**
- * Delete a token from the prose (every whole occurrence, defensively), folding the spacing the insert
- * added so `a @guide.md:3 b` comes back as `a b`.
- */
-export function stripTokenFromProse(prose: string, token: string): string {
-  return prose.replace(new RegExp(`( ?)${escapeRe(token)}${TOKEN_BOUNDARY}( ?)`, "g"), (_, lead: string, trail: string) => (lead && trail ? " " : ""))
 }
 
 /**
@@ -177,19 +167,18 @@ function lineLabel(item: { startLine?: number; endLine?: number }): string {
 
 /**
  * The agent-facing serialization: one DEFINITION per item — `@guide.md:3 (docs/guide.md, line 3):`
- * then the selection as a blockquote, comments as plain lines after each quote. The `@` tokens stay
- * in the prose where the human put them, so each definition opens with the very token the sentence
- * used; the parenthesis spells the path and line range out in full for a reader that does not want
- * to decode the label. Blockquotes rather than a fence because the quoted text may itself contain
- * any fence, and because the transcript renders the sent message as markdown — quoted context reads
- * as quotation.
+ * then the selection as a blockquote. The `@` tokens stay in the prose where the human put them, so
+ * each definition opens with the very token the sentence used; the parenthesis spells the path and
+ * line range out in full for a reader that does not want to decode the label. The human's remarks
+ * on a selection are the prose around its token — there is no per-item note. Blockquotes rather
+ * than a fence because the quoted text may itself contain any fence, and because the transcript
+ * renders the sent message as markdown — quoted context reads as quotation.
  */
 export function serializeContextItems(items: ComposerContextItem[], projectDir?: string | null): string {
   if (!items.length) return ""
   const blocks = items.map((item) => {
     const quoted = item.text.replace(/\s+$/, "").split("\n").map((line) => `> ${line}`).join("\n")
-    const comment = item.comment?.trim()
-    return `${item.token} (${contextDisplayPath(item.path, projectDir)}${lineLabel(item)}):\n${quoted}${comment ? `\n\nComment: ${comment}` : ""}`
+    return `${item.token} (${contextDisplayPath(item.path, projectDir)}${lineLabel(item)}):\n${quoted}`
   })
   return `Selected context:\n\n${blocks.join("\n\n")}`
 }
@@ -224,7 +213,6 @@ export interface SentContextItem {
   endLine?: number
   /** The quoted selection, blockquote prefixes stripped. */
   text: string
-  comment?: string
 }
 
 const HEADER = "Selected context:\n\n"
@@ -240,8 +228,8 @@ export function parseSentContext(prose: string): { body: string; items: SentCont
   if (at === -1) return null
   if (at !== 0 && prose.slice(at - 2, at) !== "\n\n") return null
   const body = prose.slice(0, Math.max(0, at - 2))
-  // Definition blocks are separated by a blank line followed by the next `@token (` head — a comment
-  // paragraph inside a block also follows a blank line, so split on the lookahead, not on `\n\n`.
+  // Definition blocks are separated by a blank line followed by the next `@token (` head; split on
+  // the lookahead rather than on `\n\n` so a blank line inside a quote never opens a bogus block.
   const blocks = prose.slice(at + HEADER.length).split(/\n\n(?=@\S+ \()/)
   const items: SentContextItem[] = []
   for (const block of blocks) {
@@ -254,13 +242,8 @@ export function parseSentContext(prose: string): { body: string; items: SentCont
     let i = 1
     const quote: string[] = []
     for (; i < lines.length && lines[i].startsWith(">"); i++) quote.push(lines[i].replace(/^> ?/, ""))
-    if (!quote.length) return null
-    let comment: string | undefined
-    if (i < lines.length) {
-      if (lines[i] !== "" || !lines[i + 1]?.startsWith("Comment: ")) return null
-      comment = lines.slice(i + 1).join("\n").slice("Comment: ".length)
-    }
-    items.push({ token: head[1], display, startLine, endLine, text: quote.join("\n"), comment })
+    if (!quote.length || i < lines.length) return null
+    items.push({ token: head[1], display, startLine, endLine, text: quote.join("\n") })
   }
   if (!items.length) return null
   // The references must actually be in the body — a message that merely QUOTES a serialization (an

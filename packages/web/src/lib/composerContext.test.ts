@@ -10,7 +10,6 @@ import {
   parseSentContext,
   serializeContextItems,
   splitProseByTokens,
-  stripTokenFromProse,
   tokenLabel,
   uniqueToken,
   type ComposerContextItem,
@@ -71,13 +70,6 @@ test("a token splices at the caret, padding only the sides that would glue to a 
   assert.deepEqual(insertTokenIntoProse("hi", 99, "@a.md:1"), { prose: "hi @a.md:1", caret: 10 })
 })
 
-test("stripping a token folds the spacing its insert added, and leaves longer tokens alone", () => {
-  assert.equal(stripTokenFromProse("a @a.md:1 b", "@a.md:1"), "a b")
-  assert.equal(stripTokenFromProse("@a.md:1 lead", "@a.md:1"), "lead")
-  assert.equal(stripTokenFromProse("tail @a.md:1", "@a.md:1"), "tail")
-  assert.equal(stripTokenFromProse("a @a.md:12 b", "@a.md:1"), "a @a.md:12 b")
-})
-
 test("the splitter cuts prose into plain runs and whole staged tokens, longest token first", () => {
   assert.deepEqual(splitProseByTokens("x @a.md:1 y @a.md:1#2.", ["@a.md:1", "@a.md:1#2"]), [
     { text: "x " },
@@ -92,12 +84,12 @@ test("the splitter cuts prose into plain runs and whole staged tokens, longest t
   assert.deepEqual(splitProseByTokens("", ["@a.md:1"]), [])
 })
 
-test("serialization defines each token, quotes every line, and carries the comment", () => {
-  const out = serializeContextItems([item({ token: "@guide.md:3-4", text: "line a\nline b", startLine: 3, endLine: 4, comment: "why is this here?" })], "/repo")
-  assert.equal(out, "Selected context:\n\n" + "@guide.md:3-4 (docs/guide.md, lines 3-4):\n> line a\n> line b\n\nComment: why is this here?")
+test("serialization defines each token and quotes every line", () => {
+  const out = serializeContextItems([item({ token: "@guide.md:3-4", text: "line a\nline b", startLine: 3, endLine: 4 })], "/repo")
+  assert.equal(out, "Selected context:\n\n" + "@guide.md:3-4 (docs/guide.md, lines 3-4):\n> line a\n> line b")
 })
 
-test("a single line reads as one line, no lines reads as the bare path, and no comment means no Comment line", () => {
+test("a single line reads as one line, and no lines reads as the bare path", () => {
   const out = serializeContextItems(
     [item({ text: "a" }), item({ id: 2, token: "@guide.md", text: "b", startLine: undefined, endLine: undefined })],
     "/repo",
@@ -124,25 +116,26 @@ test("with no staged items the value passes through untouched", () => {
 test("a sent message parses back into its body and items", () => {
   const sent = buildMessageWithContext(
     "Fix this @guide.md:3-4 and mind the note @guide.md:9 please",
-    [item({ token: "@guide.md:3-4", text: "line a\nline b", startLine: 3, endLine: 4 }), item({ id: 2, token: "@guide.md:9", text: "quoted", startLine: 9, endLine: 9, comment: "careful" })],
+    [item({ token: "@guide.md:3-4", text: "line a\nline b", startLine: 3, endLine: 4 }), item({ id: 2, token: "@guide.md:9", text: "quoted", startLine: 9, endLine: 9 })],
     "/repo",
   )
   const parsed = parseSentContext(sent)
   assert.ok(parsed)
   assert.equal(parsed.body, "Fix this @guide.md:3-4 and mind the note @guide.md:9 please")
   assert.deepEqual(parsed.items, [
-    { token: "@guide.md:3-4", display: "docs/guide.md", startLine: 3, endLine: 4, text: "line a\nline b", comment: undefined },
-    { token: "@guide.md:9", display: "docs/guide.md", startLine: 9, endLine: 9, text: "quoted", comment: "careful" },
+    { token: "@guide.md:3-4", display: "docs/guide.md", startLine: 3, endLine: 4, text: "line a\nline b" },
+    { token: "@guide.md:9", display: "docs/guide.md", startLine: 9, endLine: 9, text: "quoted" },
   ])
   // A definition with no line range parses too.
   const bare = parseSentContext("see @guide.md\n\nSelected context:\n\n@guide.md (docs/guide.md):\n> q")
-  assert.deepEqual(bare?.items, [{ token: "@guide.md", display: "docs/guide.md", startLine: undefined, endLine: undefined, text: "q", comment: undefined }])
+  assert.deepEqual(bare?.items, [{ token: "@guide.md", display: "docs/guide.md", startLine: undefined, endLine: undefined, text: "q" }])
 })
 
 test("what is not the serialization renders as the plain text it is", () => {
-  // The two earlier formats must not half-parse.
+  // The earlier formats must not half-parse.
   assert.equal(parseSentContext("notes\n\nSelected context:\n\n[1] docs/guide.md:\n> old style"), null)
   assert.equal(parseSentContext("notes [^1]\n\nSelected context:\n\n[^1]: docs/guide.md (line 3):\n> footnote era"), null)
+  assert.equal(parseSentContext("see @guide.md:3\n\nSelected context:\n\n@guide.md:3 (docs/guide.md, line 3):\n> q\n\nComment: comment era"), null)
   // A definition whose reference is missing from the body is someone quoting the format, not sending it.
   assert.equal(parseSentContext("no reference\n\nSelected context:\n\n@guide.md:3 (docs/guide.md, line 3):\n> quoted"), null)
   // The header mid-sentence is prose.
