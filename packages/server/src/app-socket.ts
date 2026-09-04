@@ -213,8 +213,32 @@ export const APP_SOCKET_TRANSCRIPT_READ_WINDOW_MS = 1_000
 export const APP_SOCKET_MAX_TRANSCRIPT_CACHE_ENTRIES = 128
 export const APP_SOCKET_MAX_TRANSCRIPT_CACHE_BYTES = 32 * 1_024 * 1_024
 
+// `ws` defaults perMessageDeflate to OFF, so every frame went out raw while the SAME board went over
+// HTTP gzipped by the compression middleware. Measured 2026-09-04 on the maintainer's own board: 914 KB
+// raw, 158 KB gzip — a 5.8x difference, paid on the handshake keyframe of every page load and again on
+// every board push after it. Loopback bandwidth is cheap, but the browser still has to receive and the
+// server still has to write 914 KB, and on a relayed/remote origin it is the whole cost.
+//
+// The threshold keeps the small frames raw: a per-frame deflate on a 200-byte tail event costs more in
+// CPU and zlib bookkeeping than it saves, and those frames are the common case. The memLevel and
+// concurrency caps are the `ws` documentation's own guardrails against per-connection zlib memory,
+// which is the reason the default is off at all.
+export const APP_SOCKET_DEFLATE = {
+  threshold: 8 * 1_024,
+  concurrencyLimit: 10,
+  zlibDeflateOptions: { level: 6, memLevel: 8 },
+  // A sliding window is negotiated per connection and costs memory on both ends for the whole
+  // connection's life; these frames are independently compressible, so decline the context takeover.
+  serverNoContextTakeover: true,
+  clientNoContextTakeover: true,
+} as const
+
 export function createAppSocketServer(deps: AppSocketDeps): AppSocketServer {
-  const wss = new WebSocketServer({ noServer: true, maxPayload: APP_SOCKET_MAX_MESSAGE_BYTES })
+  const wss = new WebSocketServer({
+    noServer: true,
+    maxPayload: APP_SOCKET_MAX_MESSAGE_BYTES,
+    perMessageDeflate: APP_SOCKET_DEFLATE,
+  })
   const registry = new SubscriptionRegistry<WebSocket>()
   const boundedCount = (value: number | undefined, fallback: number): number => {
     const candidate = value ?? fallback
