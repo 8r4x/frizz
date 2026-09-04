@@ -134,6 +134,9 @@ test("references inside a question card are live, and clicking one does not pick
     // ── A PAST question: the row is inert, its references are not ──
     const ro = "[data-case='readonly']"
     assert.equal(await page.$eval(`${option(ro, 0)} > button`, (b) => (b as HTMLButtonElement).disabled), true)
+    // …and it must NOT wear the pointer the live rows carry (styles.css `[data-question-option]`), which
+    // is why that rule is selected on the same `button:disabled` test the base cursor rule uses.
+    assert.equal(await page.$eval(option(ro, 0), (n) => getComputedStyle(n).cursor), "auto")
     await page.waitForSelector(`${option(ro, 0)} code.local-file-code[data-local-path='/fixture/cloudflare-ask.md']`)
     await page.waitForSelector(`${option(ro, 0)} a[href='https://github.com/colinhacks/frizz/issues/482']`)
     await mouseClick(page, `${option(ro, 0)} a[href='https://github.com/colinhacks/frizz/issues/482']`)

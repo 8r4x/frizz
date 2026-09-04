@@ -48,6 +48,27 @@ test("focusing the free-text box unselects a registered question's chosen option
     await page.waitForSelector(`${single} [data-question-option]`)
     await page.waitForSelector(`${multi} [data-question-option]`)
 
+    // ── EVERY pixel of a row reads as clickable, because every pixel picks the option ──
+    // Sampled by hit test rather than by reading the rule, because the hit test IS the failure: an
+    // option's markdown body wears `opacity-90`, which paints it in the positioned layer above the
+    // stretched button, so the row showed a pointer on its label line and a plain arrow over every line
+    // below it (maintainer 2026-09-03). `?many=1`'s first card is the one with multi-line bodies and a
+    // code fence, so the sweep crosses prose, a `pre` and the recommended badge, not just a label.
+    const nonPointer = await page.$$eval(`${single} [data-question-option]`, (rows) => {
+      const bad: string[] = []
+      for (const row of rows) {
+        const r = row.getBoundingClientRect()
+        for (let y = r.top + 4; y < r.bottom - 2; y += 6) {
+          for (const fx of [0.06, 0.3, 0.6, 0.95]) {
+            const el = document.elementFromPoint(r.left + r.width * fx, y)
+            if (el && getComputedStyle(el).cursor !== "pointer") bad.push(`${el.tagName.toLowerCase()}@${Math.round(y - r.top)}`)
+          }
+        }
+      }
+      return bad
+    })
+    assert.deepEqual(nonPointer, [], "every pixel of a live option row reads as clickable")
+
     // ── SINGLE: pick B, then click into the box — B must let go ──
     await mouseClick(page, `${single} [data-question-option]`, 1)
     assert.deepEqual(await selectedRows(page, single), [1])
@@ -58,13 +79,16 @@ test("focusing the free-text box unselects a registered question's chosen option
     await page.keyboard.press("Escape")
     assert.equal(await boxFocused(page, single), false)
     assert.deepEqual(await selectedRows(page, single), [])
-    // A chip click still takes over from a typed answer, and clears the text.
+    // A chip click still takes over from a typed answer — but it LEAVES the text. This assertion read
+    // the other way until `4a6b5b49` (2026-09-02) deliberately reversed it: the typed draft stays in the
+    // box as an unselected draft, and registeredAnswer submits the chip beside it. That commit did not
+    // update this test, so it pinned the retired behaviour until 2026-09-03.
     await mouseClick(page, `${single} textarea[data-surface='questionAnswer']`)
     await page.keyboard.type("neither")
     assert.deepEqual(await selectedRows(page, single), [])
     await mouseClick(page, `${single} [data-question-option]`, 0)
     assert.deepEqual(await selectedRows(page, single), [0])
-    assert.equal(await page.$eval(`${single} textarea[data-surface='questionAnswer']`, (ta) => (ta as HTMLTextAreaElement).value), "")
+    assert.equal(await page.$eval(`${single} textarea[data-surface='questionAnswer']`, (ta) => (ta as HTMLTextAreaElement).value), "neither")
 
     // ── MULTI: the note box only adds colour, so the toggled set survives its focus ──
     await mouseClick(page, `${multi} [data-question-option]`, 0)

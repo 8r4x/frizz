@@ -1013,6 +1013,19 @@ a[href] {
   position: relative;
   z-index: 1;
 }
+/* EVERY pixel of the chip picks the option, so every pixel must LOOK like it does. The stretched button
+   carries the pointer, but only over the pixels it actually wins the hit test on — and it loses most of
+   them: the body wears `opacity-90`, and an element with opacity < 1 paints as if positioned at
+   z-index 0, so it lands in the same layer as the button and, being later in tree order, takes the
+   hover. The chip therefore read as a pointer on its label line and a plain arrow over everything below
+   it (maintainer 2026-09-03: "the entire answer block should be a cursor pointer"). Declaring the
+   cursor on the ROW fixes it once for whatever paints above the button — the body, its code blocks, the
+   recommended badge — because `cursor` inherits, where a rule on the button alone cannot. A PAST
+   question's rows are inert (the stretched button is `disabled`), and they must keep the plain arrow
+   the base `button:not(:disabled)` rule already gives them, so the row is selected by the same test. */
+[data-question-option]:not(:has(> button:disabled)) {
+  cursor: pointer;
+}
 /* An option's markdown BODY can carry a code block (a diff, the message that would be posted), and a
    wide one h-scrolls — which needs its pixels OUT from under the stretched button, or wheel/drag
    scrolling targets the button and the overflow is unreachable. Unlike a link, a click here must still
