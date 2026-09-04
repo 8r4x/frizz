@@ -57,9 +57,9 @@ function lineOfOffset(raw: string, offset: number): number {
 }
 
 export function FileViewerPanel({ slug, path }: { slug: string; path: string }) {
-  // Markdown reads through the reader gate (home-and-below, `.md` only) and renders; anything else
-  // reads through the narrower project-only text gate and is source, full stop. The read itself lives
-  // in lib/localFileQuery so the rail can PREWARM it on hover through the identical key.
+  // Markdown reads through the reader gate (`.md` only) and renders; anything else reads through the
+  // text gate — the same roots since 2026-09-03 — and is source, full stop. The read itself lives in
+  // lib/localFileQuery so the rail can PREWARM it on hover through the identical key.
   //
   // LIVE while open: the server watches the file and the socket invalidates this query on every save
   // (useLiveLocalFile), so the panel follows a worker's edits as they land. The poll is the fallback

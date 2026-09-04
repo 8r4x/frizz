@@ -3002,12 +3002,13 @@ export function createRouter(ctx: AppContext) {
       handler: async ({ input }) => readLocalMarkdown(input.path, openRoots),
     }),
 
-    // A project file's SOURCE, for the fullscreen page's file viewer. Rooted at the project directory
-    // ONLY — see readLocalTextFile for why this gate is narrower than openRoots.
+    // A file's SOURCE, for the fullscreen page's file viewer. The SAME openable roots as the Markdown
+    // reader — see readLocalTextFile for why the project-directory-only gate this replaced refused 41%
+    // of the rail's own rows (a worker's checkout is very often a worktree outside the project dir).
     localFile: query({
       input: z.object({ path: z.string().max(4096) }).strict(),
       output: z.object({ path: z.string(), text: z.string(), truncated: z.boolean() }),
-      handler: async ({ input }) => readLocalTextFile(input.path, [ctx.project.dir]),
+      handler: async ({ input }) => readLocalTextFile(input.path, openRoots),
     }),
 
     // Batch-classify path REFERENCES (as they appear in inline code) → their canonical openable path, or

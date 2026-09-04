@@ -75,14 +75,27 @@ export type LocalMarkdownRead = { path: string; markdown: string; truncated: boo
 export type LocalTextRead = { path: string; text: string; truncated: boolean }
 
 /**
- * A PROJECT file's source, for the fullscreen page's file viewer (the "edited files" rail, 2026-08-28).
+ * A file's source, for the fullscreen page's file viewer (the "edited files" rail, 2026-08-28).
  *
- * Deliberately NARROWER than every other local-file gate: `roots` here is the project directory alone,
- * never home-and-below. This is the second route whose bytes enter the page (after the Markdown
- * reader), and the files it exists for are the ones a worker just edited in the checkout — nothing
- * under `~` needs to be readable through it. Binary is refused rather than rendered as noise: a NUL in
- * the first 8 KiB is the classic tell and the viewer is a text surface. Same 1 MiB line-boundary
- * truncation as the Markdown reader.
+ * The SAME openable roots as the Markdown reader, deliberately: this gate was the project directory
+ * alone until 2026-09-03, on the premise that "the files it exists for are the ones a worker just
+ * edited in the checkout, so nothing under `~` needs to be readable here". That premise is false —
+ * a worker's checkout is very often NOT the project directory. Over two weeks of this machine's
+ * transcripts, 41% of every file a worker wrote sat outside every registered project dir: git
+ * worktrees at `~/.cache/<tool>/worktrees/<slug>/`, sibling clones, `/tmp` scratch, the project's own
+ * `attachments` state dir. Every one of those rail rows answered a click with "Local file is outside
+ * Frizz's trusted roots" — while a `.md` in the SAME directory opened fine through the reader, which
+ * had home-and-below all along (maintainer 2026-09-03: "why do we have this? I see it a lot, and it's
+ * annoying").
+ *
+ * The narrower gate also bought no security it was the last line of. Frizz's exposed mode (`--host` /
+ * `--public-origin`) has no auth at all, so anyone who can reach the origin can already dispatch a
+ * worker that reads any file on the machine and prints it into a transcript — and `openLocalFile`
+ * already spawns the desktop opener on anything under home. The origin check is the boundary; this is
+ * defense in depth behind it, and it stays exactly as wide as the reader's.
+ *
+ * Binary is refused rather than rendered as noise: a NUL in the first 8 KiB is the classic tell and the
+ * viewer is a text surface. Same 1 MiB line-boundary truncation as the Markdown reader.
  */
 export function readLocalTextFile(rawPath: string, roots: readonly string[]): LocalTextRead {
   const path = resolveLocalFile(rawPath, roots)
@@ -108,17 +121,18 @@ export function readLocalMarkdown(rawPath: string, roots: readonly string[]): Lo
 }
 
 /**
- * The path a LIVE WATCH of a file may attach to — exactly the gate its read passed, or nothing. A
- * `.md` reads through the reader gate (home-and-below, and the canonical path must be Markdown too);
- * everything else reads through the project-only text gate. A watch reveals only "this changed", but
- * a file the reader is not allowed to read is not one it may be told about either.
+ * The path a LIVE WATCH of a file may attach to — exactly the gate its read passed, or nothing. Both
+ * readers now share one set of roots, so the containment is one call; the only asymmetry left is the
+ * Markdown one, where the CANONICAL path must be Markdown too. A watch reveals only "this changed",
+ * but a file the reader is not allowed to read is not one it may be told about either — so a `.md`
+ * href whose target is some other file arms nothing, exactly as it reads nothing.
  */
-export function resolveWatchableLocalFile(rawPath: string, projectDir: string, openRoots: readonly string[]): string {
-  if (MARKDOWN_FILE_EXT.test(rawPath.trim())) {
-    const path = resolveLocalFile(rawPath, openRoots)
-    if (MARKDOWN_FILE_EXT.test(path)) return path
+export function resolveWatchableLocalFile(rawPath: string, roots: readonly string[]): string {
+  const path = resolveLocalFile(rawPath, roots)
+  if (MARKDOWN_FILE_EXT.test(rawPath.trim()) && !MARKDOWN_FILE_EXT.test(path)) {
+    throw new Error("Local file is not a Markdown file")
   }
-  return resolveLocalFile(rawPath, [projectDir])
+  return path
 }
 
 function defaultSpawn(command: string, args: readonly string[], options: SpawnOptions) {

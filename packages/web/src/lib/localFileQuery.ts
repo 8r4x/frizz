@@ -9,9 +9,11 @@ import { resolveFileLanguage } from "./syntaxHighlight.ts"
 // like eager rendering when the user hovers over a given changed file"). Both must use the identical
 // key and fetcher or the prefetch warms a cache entry the panel never looks in.
 //
-// Markdown reads through the reader gate (home-and-below, `.md` only); anything else reads through the
-// narrower project-only text gate. Either way the result carries the CANONICAL path (symlinks
-// resolved), which is what the panel labels, links relative to, and stamps on context items.
+// Markdown reads through the reader gate (`.md` only, canonical path included); anything else reads
+// through the text gate, which since 2026-09-03 is rooted identically — home-and-below plus the temp
+// trees — so a worker's worktree file opens as readily as one in the project dir. Either way the result
+// carries the CANONICAL path (symlinks resolved), which is what the panel labels, links relative to,
+// and stamps on context items.
 // The key alone — what the socket's `file-changed` frame invalidates (api/socket.ts), keyed by the
 // path the reader subscribed with, which is the path it queried with.
 export function localFileQueryKey(path: string): readonly [string, string] {

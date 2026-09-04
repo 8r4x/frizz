@@ -4,7 +4,15 @@ import { join } from "node:path"
 import assert from "node:assert/strict"
 import { test } from "node:test"
 import type { LocalFileOpener } from "@frizz/shared"
-import { MARKDOWN_READ_LIMIT, openLocalFile, readLocalMarkdown, resolveLocalFile, resolveOpenableFile } from "./local-file.ts"
+import {
+  MARKDOWN_READ_LIMIT,
+  openLocalFile,
+  readLocalMarkdown,
+  readLocalTextFile,
+  resolveLocalFile,
+  resolveOpenableFile,
+  resolveWatchableLocalFile,
+} from "./local-file.ts"
 
 test("local opener canonicalizes a regular file inside its trusted root and uses fixed argv", () => {
   const root = mkdtempSync(join(tmpdir(), "frizz-local-file-"))
@@ -126,4 +134,43 @@ test("an oversized Markdown file is cut at a line boundary and reports the cut",
   // Whole lines only — the tail is never a half-written line (nor a split multi-byte character).
   assert.equal(read.markdown.endsWith("x".repeat(99)), true)
   assert.equal(read.markdown.split("\n").every((l) => l === "" || l.length === 99), true)
+})
+
+test("the text reader spans every openable root, not the project dir alone, and refuses binary", () => {
+  const project = realpathSync(mkdtempSync(join(tmpdir(), "frizz-local-text-project-")))
+  // A worker's checkout is very often NOT the project directory — a git worktree, a sibling clone,
+  // `/tmp` scratch. The viewer's gate is the reader's, so every one of those rows opens.
+  const worktree = realpathSync(mkdtempSync(join(tmpdir(), "frizz-local-text-worktree-")))
+  const untrusted = realpathSync(mkdtempSync(join(tmpdir(), "frizz-local-text-untrusted-")))
+  const roots = [project, worktree]
+  writeFileSync(join(project, "app.ts"), "export const a = 1\n")
+  writeFileSync(join(worktree, "mod.rs"), "fn main() {}\n")
+  writeFileSync(join(untrusted, "elsewhere.ts"), "no")
+  writeFileSync(join(worktree, "logo.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x0d]))
+
+  assert.equal(readLocalTextFile(join(project, "app.ts"), roots).text, "export const a = 1\n")
+  assert.deepEqual(readLocalTextFile(join(worktree, "mod.rs"), roots), {
+    path: join(worktree, "mod.rs"),
+    text: "fn main() {}\n",
+    truncated: false,
+  })
+  assert.throws(() => readLocalTextFile(join(untrusted, "elsewhere.ts"), roots), /trusted roots/)
+  assert.throws(() => readLocalTextFile(join(worktree, "logo.png"), roots), /not a text file/)
+})
+
+test("a watch attaches exactly where the read is allowed, and a decoy .md arms nothing", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "frizz-local-watch-")))
+  const outside = realpathSync(mkdtempSync(join(tmpdir(), "frizz-local-watch-outside-")))
+  writeFileSync(join(root, "README.md"), "# Title\n")
+  writeFileSync(join(root, "app.ts"), "export const a = 1\n")
+  writeFileSync(join(root, "real.conf"), "PASSWORD=hunter2")
+  symlinkSync(join(root, "real.conf"), join(root, "decoy.md"))
+  writeFileSync(join(outside, "other.ts"), "no")
+
+  assert.equal(resolveWatchableLocalFile(join(root, "README.md"), [root]), join(root, "README.md"))
+  assert.equal(resolveWatchableLocalFile(join(root, "app.ts"), [root]), join(root, "app.ts"))
+  // The Markdown reader refuses a `.md` href whose canonical target is not Markdown, so the watch must
+  // too — otherwise a file the reader cannot show still reports that it changed.
+  assert.throws(() => resolveWatchableLocalFile(join(root, "decoy.md"), [root]), /not a Markdown file/)
+  assert.throws(() => resolveWatchableLocalFile(join(outside, "other.ts"), [root]), /trusted roots/)
 })

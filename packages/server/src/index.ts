@@ -585,11 +585,11 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
       // too — projecting only the RPC is the exact half-fix the × already had to correct once.
       (slug) => c.tailer.ownerGone?.(slug) ?? false,
     ),
-    // A reader's live watch on the file it shows. Gated as the read is (Markdown through the reader
-    // roots, anything else through the project directory alone) and watched by CANONICAL path, so a
-    // symlinked `.md` and its target are one watch.
+    // A reader's live watch on the file it shows. Gated as the read is (one set of openable roots for
+    // both readers, plus the Markdown reader's canonical-extension check) and watched by CANONICAL
+    // path, so a symlinked `.md` and its target are one watch.
     watchFile: (path: string, onChange: () => void) =>
-      watchLocalFile(resolveWatchableLocalFile(path, c.project.dir, openableFileRoots(c.project)), onChange),
+      watchLocalFile(resolveWatchableLocalFile(path, openableFileRoots(c.project)), onChange),
   })
   let githubInit: Promise<void> | undefined
   let terminal: TerminalServer | undefined
