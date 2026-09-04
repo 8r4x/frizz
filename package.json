@@ -37,7 +37,7 @@
     "frizz-dev:check": "nub scripts/install-global-cli.mjs --check",
     "frizz-dev:uninstall": "nub scripts/install-global-cli.mjs --uninstall",
     "install:global": "nub scripts/install-global-cli.mjs",
-    "typecheck": "tsc -b packages/shared packages/rpc packages/server packages/registrar packages/relay . && pnpm --filter @frizz/web typecheck",
+    "typecheck": "tsc -b packages/shared packages/rpc packages/server packages/registrar packages/relay . packages/web",
     "test": "nub scripts/run-tests.mjs",
     "test:e2e": "nub scripts/e2e-web.mjs",
     "prepack": "node ./scripts/prepare-package.mjs && node ./scripts/build-package.mjs && node ./scripts/publish-manifest.mjs --strip",
