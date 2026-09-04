@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, writeFileSync, appendFileSync, utimesSync, readFileSync, rmSync } from "node:fs"
+import { mkdtempSync, writeFileSync, appendFileSync, utimesSync, readFileSync, rmSync, openSync, closeSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { createStorage, type Storage, type SessionRow } from "./storage.ts"
@@ -3646,4 +3646,50 @@ test("tailer: a shell the OS says nobody is running goes stale; alive and unknow
   assert.equal(run(undefined, 48 * 60 * 60_000), "running", "an unavailable probe must not invent a verdict")
   // INSIDE THE GRACE WINDOW a just-launched shell is alive by construction and is not probed at all.
   assert.equal(run(false, 5_000), "running", "a shell launched seconds ago is not interrogated")
+})
+
+// The case above injects `shellAlive`, which is answered inline — so it pins the VERDICT MAPPING and
+// nothing about the real probe. This one takes the injection away and drives the production path: a
+// real `lsof` against a real file, held open by a real fd. That probe is async and batched (it blocked
+// the event loop for ~300ms per shell before 2026-09-04), so its verdict lands one tick later, and that
+// one-tick lag is precisely what needs pinning.
+test("tailer: the real shell probe is async — the verdict lands on the NEXT tick, never inside one", { skip: process.platform === "win32" ? "lsof is POSIX" : false }, async () => {
+  const openTicks = async (outputFile: string) => {
+    const h = harness()
+    h.storage.upsertSession(row())
+    fixture(h.logDir, "sid", [
+      IN_FLIGHT,
+      JSON.stringify(bashBg("toolu_sh", "Waiting for the verification and suite", "until grep -q done out; do sleep 5; done")),
+      JSON.stringify(resultText("toolu_sh", `Command running in background with ID: bReal. Output is being written to: ${outputFile}.`)),
+    ])
+    // No shellAlive: this is the real lsof path.
+    const t = makeTailer(h)
+    h.clock.ms = Date.parse("2026-07-01T00:00:01.000Z") + 10 * 60_000
+    t.tick()
+    // The read is what queues the probe — `shellIsGone` is reached through assembly, not through tick.
+    const first = t.get("t")?.bgShells[0]?.state
+    // Let the batched probe run and land in the cache, then read it again.
+    await new Promise((r) => setTimeout(r, 2000))
+    return { first, second: t.get("t")?.bgShells[0]?.state }
+  }
+
+  const dir = tmp("frizz-shell-probe-")
+  const dead = join(dir, "dead.output")
+  const alive = join(dir, "alive.output")
+  writeFileSync(dead, "")
+  writeFileSync(alive, "")
+  // Hold `alive` open from THIS process, so lsof has a real holder to find. That fd is the whole
+  // control: without it both files are identical on disk and the test could not tell the two apart.
+  const held = openSync(alive, "r")
+  try {
+    const gone = await openTicks(dead)
+    assert.equal(gone.first, "running", "the first tick must not block on lsof, so it cannot yet know")
+    assert.equal(gone.second, "stale", "the batched verdict must land in the cache for the next tick")
+
+    const living = await openTicks(alive)
+    assert.equal(living.first, "running")
+    assert.equal(living.second, "running", "a file this process holds open must never read as gone")
+  } finally {
+    closeSync(held)
+  }
 })

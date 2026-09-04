@@ -1,5 +1,6 @@
 import { statSync, openSync, readSync, closeSync, readdirSync, realpathSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs"
-import { execFileSync } from "node:child_process"
+import { execFile } from "node:child_process"
+import { promisify } from "node:util"
 import { basename, join } from "node:path"
 import { homedir, tmpdir } from "node:os"
 import type { AskQuestion, AwaitingHint } from "@frizz/shared"
@@ -140,23 +141,67 @@ const SUBAGENT_STALE_MS = 15 * 60_000
 const SHELL_PROBE_TTL_MS = 30_000
 const SHELL_PROBE_GRACE_MS = 60_000 // a just-launched shell is alive by construction; do not pay for it
 
-function probeShellAlive(outputFile: string): boolean | undefined {
+const execFileAsync = promisify(execFile)
+
+// ASKED OFF THE EVENT LOOP, AND ASKED ONCE FOR EVERY SHELL AT ONCE. `lsof <path>` has to walk every
+// process's open-file table on the machine to answer, so it costs the same whether you ask about one
+// path or twenty — measured on this machine 2026-09-04: 292-395 ms for a single path, 1102 ms for three
+// separate calls, 268 ms for the same three batched into one. It used to run as execFileSync inside the
+// 1 s tick, which made that cost a HARD BLOCK on the whole server: a census put it at 24.9 spawns/min,
+// and one call in a CPU sample reached 1.88 s. Every RPC the browser had in flight waited behind it.
+//
+// So the probe is now async and batched, and `shellIsGone` reads only the cache it fills. The verdict
+// therefore lands on the NEXT tick rather than this one — at most a second later, and the surrounding
+// contract was already built for exactly that: an unknown answer leaves the shell running, so a
+// not-yet-probed shell is treated the same as an unprobeable one.
+async function probeShellsAlive(outputFiles: readonly string[]): Promise<Map<string, boolean | undefined>> {
+  const verdicts = new Map<string, boolean | undefined>()
   // NO FILE, NO VERDICT. `lsof` exits 1 both for "nobody holds this" and for "this path does not exist",
   // so without this check a shell whose output file has not been created yet — or was rotated or cleaned
   // away underneath it — reads as DEAD while it is running. Absence of evidence, not evidence of death.
-  if (!existsSync(outputFile)) return undefined
-  try {
-    // `-t` prints pids only; a non-zero exit with empty output means "nobody holds it", which is the
-    // answer we want rather than an error. `lsof` is absent on Windows — undefined, not dead.
-    const out = execFileSync("lsof", ["-t", "--", outputFile], { encoding: "utf8", timeout: 4000, stdio: ["ignore", "pipe", "ignore"] })
-    return out.trim().length > 0
-  } catch (err) {
-    const e = err as NodeJS.ErrnoException & { status?: number }
-    if (e.code === "ENOENT") return undefined // no lsof on this platform
-    // lsof exits 1 when no process holds the file — that is a real DEAD verdict, not a failure.
-    if (e.status === 1) return false
-    return undefined
+  const live: Array<{ requested: string; real: string }> = []
+  for (const file of outputFiles) {
+    if (!existsSync(file)) {
+      verdicts.set(file, undefined)
+      continue
+    }
+    // lsof reports the REAL path, so `/tmp/x` comes back as `/private/tmp/x` on macOS and a naive
+    // string compare then reads every held shell as dead. Match on what lsof will actually print.
+    try {
+      live.push({ requested: file, real: realpathSync(file) })
+    } catch {
+      verdicts.set(file, undefined)
+    }
   }
+  if (live.length === 0) return verdicts
+  let stdout = ""
+  try {
+    // `-F pn` is lsof's machine-readable form: one `p<pid>` line per holder, then an `n<path>` line per
+    // fd it holds. A path that appears is held by somebody; a path absent from the output is held by
+    // nobody. That per-path attribution is why this is `-F pn` and not `-t`, which prints bare pids and
+    // could not say WHICH of a batch of paths they belong to.
+    stdout = (await execFileAsync("lsof", ["-F", "pn", "--", ...live.map((f) => f.real)], { encoding: "utf8", timeout: 8000 })).stdout
+  } catch (err) {
+    // `code` is the EXIT STATUS when lsof actually ran, and a string errno when it could not be
+    // spawned. Telling those apart is the whole correctness of this catch, and getting it wrong is
+    // silent: an empty stdout means "nobody holds any of these" when lsof ran, and "no idea" when it
+    // did not — read as the latter, every dead shell stays "running" forever.
+    const e = err as NodeJS.ErrnoException & { stdout?: string; code?: string | number; killed?: boolean }
+    const ran = typeof e.code === "number" && !e.killed
+    if (!ran) {
+      // No lsof on this platform, or it was killed on the timeout — undefined, not dead, for the batch.
+      for (const f of live) verdicts.set(f.requested, undefined)
+      return verdicts
+    }
+    // A BATCH EXITS NON-ZERO AS SOON AS *ANY* PATH IS UNHELD, which is the commonest outcome there is
+    // and not an error at all. The answer is in stdout, and an EMPTY stdout is itself the answer when
+    // lsof ran: nobody holds any of them.
+    stdout = e.stdout ?? ""
+  }
+  const held = new Set<string>()
+  for (const line of stdout.split("\n")) if (line.startsWith("n")) held.add(line.slice(1))
+  for (const f of live) verdicts.set(f.requested, held.has(f.real))
+  return verdicts
 }
 // The minute bucket of an ISO instant, for the board signature: a child's "N min ago" reading only
 // changes when this changes, so folding this (not the raw mtime) into the sig means a steadily-active
@@ -3218,6 +3263,44 @@ export function createTailer(deps: TailerDeps): Tailer {
   // PER TAILER, deliberately: a DEAD verdict is terminal and never re-probed, so a module-level cache
   // would let one tailer's verdict decide another's shells — and make the whole thing unclearable.
   const shellAliveCache = new Map<string, { at: number; alive: boolean }>()
+  // Paths this tick wanted a verdict for and the cache could not answer. Assembly is synchronous, so
+  // every shellIsGone call of one tick has landed here by the time the flush below runs — which is what
+  // makes ONE lsof per tick enough for all of them, rather than one per shell.
+  const shellProbeWanted = new Set<string>()
+  let shellProbeInFlight = false
+  let shellProbeArmed: ReturnType<typeof setTimeout> | undefined
+  /** Arm the flush from whatever filled the queue. `shellIsGone` is reached through board ASSEMBLY, not
+   *  through the tick, so hanging the flush off the tick would leave a queue that assembly filled and
+   *  nothing drained until the tick after next. A zero timer is enough: assembly is synchronous, so one
+   *  pass has queued every path it wants before this can fire. Unref'd so it never holds a test open. */
+  function armShellProbeFlush(): void {
+    if (shellProbeArmed) return
+    shellProbeArmed = setTimeout(() => {
+      shellProbeArmed = undefined
+      flushShellProbes()
+    }, 0)
+    shellProbeArmed.unref?.()
+  }
+  function flushShellProbes(): void {
+    if (shellProbeInFlight || shellProbeWanted.size === 0) return
+    const batch = [...shellProbeWanted]
+    shellProbeWanted.clear()
+    shellProbeInFlight = true
+    void probeShellsAlive(batch)
+      .then((verdicts) => {
+        for (const [file, alive] of verdicts) {
+          if (alive === undefined) continue // cannot tell ⇒ record nothing, ask again next tick
+          shellAliveCache.set(file, { at: now(), alive })
+        }
+        // A verdict that arrived after assembly changes what the board should say, and nothing else
+        // will notice: the next tick reads the cache, so nudge it rather than waiting for one.
+        if (verdicts.size > 0) deps.onChange()
+      })
+      .catch(() => {}) // a failed probe is an unknown verdict, and unknown never demotes a shell
+      .finally(() => {
+        shellProbeInFlight = false
+      })
+  }
   function shellIsGone(e: { outputFile?: string; startedAt: string }): boolean {
     if (!e.outputFile) return false
     const started = Date.parse(e.startedAt)
@@ -3225,10 +3308,19 @@ export function createTailer(deps: TailerDeps): Tailer {
     const cached = shellAliveCache.get(e.outputFile)
     // A DEAD verdict is terminal — a process cannot come back — so it is never re-probed.
     if (cached && (cached.alive === false || now() - cached.at < SHELL_PROBE_TTL_MS)) return !cached.alive
-    const alive = (deps.shellAlive ?? probeShellAlive)(e.outputFile)
-    if (alive === undefined) return false // cannot tell ⇒ unchanged
-    shellAliveCache.set(e.outputFile, { at: now(), alive })
-    return !alive
+    // An INJECTED probe is answered inline. It is the test seam, and a caller who supplies one is
+    // saying the answer is cheap; the batching below exists solely because the real one is not.
+    if (deps.shellAlive) {
+      const alive = deps.shellAlive(e.outputFile)
+      if (alive === undefined) return false // cannot tell ⇒ unchanged
+      shellAliveCache.set(e.outputFile, { at: now(), alive })
+      return !alive
+    }
+    // The real probe costs ~300ms of blocked event loop, so it does NOT happen here. Queue it and
+    // report the shell unchanged; the verdict lands in the cache and this reads it next tick.
+    shellProbeWanted.add(e.outputFile)
+    armShellProbeFlush()
+    return false
   }
 
   function backgroundShellLookup(slug: string, id: string): { command?: string; outputFile?: string; state: "running" | "done" } | undefined {
