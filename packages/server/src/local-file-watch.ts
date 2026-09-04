@@ -1,4 +1,4 @@
-import { watch, type FSWatcher } from "node:fs"
+import { statSync, watch, type FSWatcher } from "node:fs"
 import { basename, dirname } from "node:path"
 
 // ONE LIVE WATCH PER OPEN FILE, for the readers that render a file on disk — the /full page's split
@@ -19,10 +19,35 @@ import { basename, dirname } from "node:path"
 //
 // Shared by canonical path: two readers on one file (a panel plus a stacked drawer, or two tabs) hold
 // one OS watch between them, and the last one to leave closes it.
+//
+// AND THE NAME FILTER IS NOT ENOUGH ON MACOS, which is why every settled burst is checked against the
+// file's own stat before anyone is told about it. A directory watch is supposed to name the entry that
+// moved, and on Linux it does; on macOS the creation of a SIBLING emits a `rename` carrying OUR file's
+// name as well as the sibling's. Measured 2026-09-04 — one `writeFileSync` of `other.md` beside a
+// watched `doc.md` produced, in order, `["change","<the directory>"]`, `["rename","doc.md"]` and
+// `["rename","other.md"]`. Nothing in the first two is distinguishable from a real save, so the
+// listener fired on a file that had not changed a byte: an open reader at a checkout's root re-read
+// itself on every unrelated save in that directory, and local-file-watch.test.ts's negative control
+// ("a sibling's save is not this file's change") failed 3 runs out of 3.
+//
+// The stamp is inode, size and NANOSECOND mtime, so it separates two saves inside one millisecond —
+// which the coarser mtimeMs would not, and a missed save is the one failure this module must not have.
+// A file that cannot be stat'ed stamps as "gone", which is a change like any other: the delete fires,
+// and so does the recreate that follows it onto the same watch.
 
 const SETTLE_MS = 50
 
-type Entry = { watcher: FSWatcher; listeners: Set<() => void>; timer: NodeJS.Timeout | null }
+/** The file's identity as the last fire saw it. Unreadable — deleted, or mid-rename — is its own value. */
+function stampOf(path: string): string {
+  try {
+    const s = statSync(path, { bigint: true })
+    return `${s.ino}:${s.size}:${s.mtimeNs}`
+  } catch {
+    return "gone"
+  }
+}
+
+type Entry = { watcher: FSWatcher; listeners: Set<() => void>; timer: NodeJS.Timeout | null; stamp: string }
 const entries = new Map<string, Entry>()
 
 function close(path: string): void {
@@ -56,11 +81,16 @@ export function watchLocalFile(path: string, onChange: () => void): () => void {
       if (current.timer) clearTimeout(current.timer)
       current.timer = setTimeout(() => {
         current.timer = null
+        // The burst has settled, so the file is at rest and its stat is the truth about it. Unchanged
+        // means the events were somebody else's business (see the macOS note above) and nobody hears.
+        const stamp = stampOf(path)
+        if (stamp === current.stamp) return
+        current.stamp = stamp
         for (const listener of current.listeners) listener()
       }, SETTLE_MS)
       current.timer.unref?.()
     })
-    entry = { watcher, listeners: new Set(), timer: null }
+    entry = { watcher, listeners: new Set(), timer: null, stamp: stampOf(path) }
     // The OS dropped the watch (the directory went away). Nothing re-arms it: the reader's next read
     // reports the missing file in its own words, and reopening the file subscribes afresh.
     watcher.on("error", () => close(path))
