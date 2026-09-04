@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
+import { useVirtualizer } from "@tanstack/react-virtual"
 import { useSnapshot } from "valtio"
 import { Check, ChevronRight, CircleDashed, Clock, Ellipsis, Github, Hourglass, Loader2, Pin, PinOff, RotateCcw, Timer } from "lucide-react"
 import type { BoardSnapshot, ThreadView } from "@frizz/shared"
@@ -27,7 +28,7 @@ import { awaitingProse, awaitingWaitClause, prWatchRefs } from "../lib/awaitingP
 import { useOptimisticallySteered } from "../lib/steering.ts"
 import { useOptimisticallyArchived } from "../lib/optimisticArchive.ts"
 import { activeSidebarSection, queueNavigationSettled, railRevealDelta, type SidebarSectionGeometry } from "../lib/sidebarScrollspy.ts"
-import type { ReactElement, ReactNode } from "react"
+import type { ReactElement, ReactNode, RefObject } from "react"
 
 // THE LEFT SIDEBAR — the thread list as a FLOATING column (no border, no fill: it floats in the
 // page's whitespace the way the old ToC nav did). App centers the sidebar + workpane as a PAIR with
@@ -303,7 +304,10 @@ export function Sidebar() {
                 ))}
             </section>
           )}
-          {/* DONE — collapsible, OMITTED entirely (with its rule) when empty. */}
+          {/* DONE — collapsible, OMITTED entirely (with its rule) when empty, and the ONLY band whose
+              rows are virtualized once open (see DoneBand: it is the only band that grows without
+              bound). Collapsed, it has always mounted nothing at all — the gate below is the original
+              one — so virtualization is about the EXPANDED band alone. */}
           {inactiveThreads.length > 0 && (
             <div>
               <hr className="my-3 border-border/50" />
@@ -313,13 +317,9 @@ export function Sidebar() {
                 collapsed={collapsed.inactive}
                 onToggle={() => (store.sidebarCollapsed.inactive = !store.sidebarCollapsed.inactive)}
               />
-              {!collapsed.inactive &&
-                inactiveThreads.map((t) => (
-                  <div key={t.id}>
-                    <ThreadRow t={t} active={activeId === t.id} onQueueNavigate={navigateToQueueCard} />
-                    <SubAgentRows t={t} />
-                  </div>
-                ))}
+              {!collapsed.inactive && (
+                <DoneBand threads={inactiveThreads} railRef={railRef} activeId={activeId} onQueueNavigate={navigateToQueueCard} />
+              )}
             </div>
           )}
           {/* EXTERNAL — the project's own `claude`/`codex` terminals, which frizz reads but
@@ -381,6 +381,118 @@ export function SectionHeader({ label, count, collapsed, onToggle }: { label: st
     </button>
   ) : (
     <div className={cls}>{inner}</div>
+  )
+}
+
+// THE DONE BAND, VIRTUALIZED — the only band that is, because it is the only one that grows without
+// bound. Done holds every thread the human has ever finished, and it mounted all of them: 553 rows on a
+// copy of the maintainer's own board, measured 2026-09-04 with scripts/verify-done-band-virtualization.mjs.
+//
+//   rail DOM nodes                     154 collapsed → 15,085 expanded
+//   ONE full style recalculation      3.10ms         →  21.50ms   (6.9×)
+//   ONE overlay open: main thread blocked   0ms      → 101-108ms, and 53ms → 119ms to paint
+//
+// Virtualized, expanded: 884 nodes, a 4.00ms recalculation, and no long task at all.
+//
+// The recalculation is the MECHANISM, not a side reading. App's body scroll lock (App.tsx) forces
+// exactly one every time a drawer, the palette or the settings pane opens, so an expanded Done band
+// taxes every later navigation whether or not the reader is looking at it — and the rows it taxes you
+// for are the ones you finished with. The rows are ALREADY memoized; this was never a render problem.
+//
+// It shares the RAIL's scroller rather than growing a nested one — a second scrollbar inside the rail
+// would be a UI change, and this is a performance fix. That is what `scrollMargin` is for: the band's
+// own offset inside the rail's scrolled content, so the virtualizer can read the rail's scrollTop in the
+// band's coordinates. The offset MOVES whenever anything above changes — a row arrives, Snoozed
+// expands, a title rewraps — so it is re-measured after every commit (every band above is rendered from
+// the board, so a commit is the only way any of them can change) and on any resize of the rail itself
+// (a width change rewraps titles above without a commit).
+//
+// WHAT THIS COSTS, so nobody rediscovers it as a bug: the browser's own find (⌘F) and Tab order reach
+// only the rows currently mounted. That is inherent to virtualizing, and the rail is a column of names
+// you SCAN — ⌘K searches every thread, mounted or not.
+// The rail has no arrow-walk and no programmatic row focus (it is mouse-driven — see the header note),
+// so there is nothing here that has to scroll an unmounted row into view before focusing it. If one is
+// ever added, it must call virtualizer.scrollToIndex first; a row that is not mounted cannot be focused.
+//
+// 27px is STRUCTURAL, not a fitted constant: a row is pt-1 + leading-[19px] + pb-1, and that line box
+// is fixed, so it holds in BOTH app fonts (`html[data-font]`) with nothing to re-measure when the
+// setting flips. Verified: the band's ink pitch reads exactly 27.00px in mono AND in sans, and all 553
+// rows measured 27px each, so the whole band is 14,931px estimated and 14,931px real — the rail's
+// scrollHeight is 15,120px with the band virtualized and 15,120px without it, and the scrollbar cannot
+// tell. Only a WRAPPED title (46px) breaks the estimate, and measureElement corrects it as it mounts.
+const DONE_ROW_ESTIMATE = 27
+// ~25 rows fill the 684px rail at 1440×900, so eight either side is a screenful of slack for a fast
+// wheel without taking the node count back up.
+const DONE_OVERSCAN = 8
+
+function DoneBand({
+  threads,
+  railRef,
+  activeId,
+  onQueueNavigate,
+}: {
+  threads: ThreadView[]
+  railRef: RefObject<HTMLDivElement | null>
+  activeId: string | null
+  onQueueNavigate: (id: string) => void
+}) {
+  const listRef = useRef<HTMLDivElement>(null)
+  const [scrollMargin, setScrollMargin] = useState(0)
+  const virtualizer = useVirtualizer({
+    count: threads.length,
+    getScrollElement: () => railRef.current,
+    // Keyed by THREAD, not index: a Done row is archived by the human at any position in the band, and
+    // an index key would hand the next row the vanished one's measured height.
+    getItemKey: (index) => threads[index]?.id ?? index,
+    estimateSize: () => DONE_ROW_ESTIMATE,
+    overscan: DONE_OVERSCAN,
+    scrollMargin,
+  })
+
+  // NO DEPENDENCY ARRAY, deliberately: this has to run after every commit, because a commit is exactly
+  // when the bands above may have changed height. It reads two rects and settles immediately — a state
+  // write only happens when the offset actually moved.
+  useLayoutEffect(() => {
+    const rail = railRef.current
+    const list = listRef.current
+    if (!rail || !list) return
+    const measure = () => {
+      // CONTENT coordinates, not offsetTop. Neither the rail nor the aside above it is positioned, so
+      // offsetTop would answer against the document and carry the whole page layout into the number.
+      const next = list.getBoundingClientRect().top - rail.getBoundingClientRect().top + rail.scrollTop
+      setScrollMargin((current) => (Math.abs(current - next) < 0.5 ? current : next))
+    }
+    measure()
+    // The rail's own box: a width change rewraps the titles ABOVE this band, which moves it without any
+    // commit of its own.
+    const observer = new ResizeObserver(measure)
+    observer.observe(rail)
+    return () => observer.disconnect()
+  })
+
+  return (
+    // The band's full height, so the rail's scrollbar is the length the whole archive deserves — the
+    // reader must not be able to tell which rows are mounted.
+    <div ref={listRef} data-done-band className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
+      {virtualizer.getVirtualItems().map((item) => {
+        const t = threads[item.index]
+        if (!t) return null
+        return (
+          <div
+            key={t.id}
+            ref={virtualizer.measureElement}
+            data-index={item.index}
+            className="absolute left-0 top-0 w-full"
+            // `start` is in the RAIL's coordinates (it includes scrollMargin); this box is positioned
+            // inside the band, so the offset comes back off.
+            style={{ transform: `translateY(${item.start - scrollMargin}px)` }}
+          >
+            <ThreadRow t={t} active={activeId === t.id} onQueueNavigate={onQueueNavigate} />
+            <SubAgentRows t={t} />
+          </div>
+        )
+      })}
+    </div>
   )
 }
 
