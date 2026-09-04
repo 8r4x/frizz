@@ -18,6 +18,7 @@ import {
   renderGithubPrompt,
   effectiveTemplate,
   ghAuthed,
+  resetGhAuthedCache,
   gitGithubRemote,
   githubRemoteNameWithOwner,
   DEFAULT_GITHUB_PROMPT,
@@ -447,11 +448,7 @@ test("effectiveTemplate: a non-blank override is used verbatim", () => {
 
 // Write a `gh` stub whose behavior per subcommand is driven by GH_STUB_MODE, prepend it to PATH, run
 // the probe, restore PATH. POSIX-only (a shell script isn't executable via execFile on Windows).
-async function withStubGh<T>(mode: string, run: () => Promise<T>): Promise<T> {
-  const dir = mkdtempSync(join(tmpdir(), "gh-stub-"))
-  writeFileSync(
-    join(dir, "gh"),
-    `#!/bin/sh
+const stubScript = `#!/bin/sh
 case "$GH_STUB_MODE:$1 $2" in
   *":auth status")
     case "$GH_STUB_MODE" in
@@ -467,9 +464,32 @@ case "$GH_STUB_MODE:$1 $2" in
     esac ;;
 esac
 exit 1
-`,
-    { mode: 0o755 },
-  )
+`
+
+async function withStubGh<T>(mode: string, run: () => Promise<T>): Promise<T> {
+  const dir = mkdtempSync(join(tmpdir(), "gh-stub-"))
+  writeFileSync(join(dir, "gh"), stubScript, { mode: 0o755 })
+  const path = process.env.PATH
+  process.env.PATH = `${dir}:${path ?? ""}`
+  process.env.GH_STUB_MODE = mode
+  // ghAuthed caches its positive answer process-wide, so without this every scenario after the first
+  // signed-in one would read that cache instead of this stub and pass for the wrong reason.
+  resetGhAuthedCache()
+  try {
+    return await run()
+  } finally {
+    resetGhAuthedCache()
+    process.env.PATH = path
+    delete process.env.GH_STUB_MODE
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+// The same stub, but it neither clears the cache on the way in nor on the way out — the two caching
+// tests below are precisely about what SURVIVES a call, so they cannot use the isolating variant.
+async function withStubGhLeavingCache<T>(mode: string, run: () => Promise<T>): Promise<T> {
+  const dir = mkdtempSync(join(tmpdir(), "gh-stub-"))
+  writeFileSync(join(dir, "gh"), stubScript, { mode: 0o755 })
   const path = process.env.PATH
   process.env.PATH = `${dir}:${path ?? ""}`
   process.env.GH_STUB_MODE = mode
@@ -504,6 +524,28 @@ test("ghAuthed: genuinely signed out — both probes fail → false", posixOnly,
 
 test("ghAuthed: a blank `gh auth token` is NOT a credential → false", posixOnly, async () => {
   assert.equal(await withStubGh("blank-token", ghAuthed), false)
+})
+
+// `gh auth status` is a NETWORK round trip (345-394ms measured 2026-09-04) and githubStatus runs it on
+// every page load. These two pin the asymmetry that makes caching it safe.
+
+test("ghAuthed: the TRUE answer is cached, so a signed-in operator pays the round trip once", posixOnly, async () => {
+  // Arm the cache against a signed-in gh, then ask again against a gh that reports signed OUT and holds
+  // no token. Only the cache can return true through that, so this fails the moment the caching goes.
+  resetGhAuthedCache()
+  assert.equal(await withStubGhLeavingCache("status-ok", ghAuthed), true)
+  assert.equal(await withStubGhLeavingCache("signed-out", ghAuthed), true, "the cached positive must answer without shelling out")
+  resetGhAuthedCache()
+})
+
+test("ghAuthed: the FALSE answer is NOT cached, so a mid-session `gh auth login` shows up at once", posixOnly, async () => {
+  // Signing in is exactly the transition the live re-check exists to catch. A cache that stored the
+  // boolean rather than only the positive would swallow it for a whole TTL, so the second call must
+  // genuinely re-probe. No reset between the two — that is the point.
+  resetGhAuthedCache()
+  assert.equal(await withStubGhLeavingCache("signed-out", ghAuthed), false)
+  assert.equal(await withStubGhLeavingCache("status-ok", ghAuthed), true, "a signed-out result must not be remembered")
+  resetGhAuthedCache()
 })
 
 // ---- githubRemoteNameWithOwner (the local, no-network half of the same gate) ----

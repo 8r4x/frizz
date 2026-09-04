@@ -33,7 +33,12 @@ export async function ghInstalled(): Promise<boolean> {
   }
 }
 
-// `gh auth status --active` exit 0 → signed in. Re-checked live on each githubStatus query (cheap).
+// `gh auth status --active` exit 0 → signed in.
+//
+// It is NOT cheap, which this comment claimed until it was timed: `auth status` validates the token
+// against api.github.com, so it is a network round trip — measured 345-394ms on a warm connection,
+// 2026-09-04. githubStatus runs on every page load, where it was the single longest request of the
+// load. So the POSITIVE answer is cached for GH_AUTHED_TTL_MS below.
 //
 // Its FAILURE, though, is NOT a reliable "signed out", so it is never trusted on its own. Two ways a
 // genuinely signed-in user lands in the catch:
@@ -47,13 +52,48 @@ export async function ghInstalled(): Promise<boolean> {
 // no version-new flag, and holding a credential is the question this gate is really asking. The cost
 // of the false positive is small and self-explaining — a revoked token shows the icon, and the picker
 // surfaces gh's own error when it's opened.
+// Only the TRUE answer is cached, and that asymmetry is the whole design. Caching a false would make
+// a mid-session `gh auth login` take up to a TTL to show up, which is the one thing the live re-check
+// existed to guarantee; caching the true costs nothing anybody can observe, because a token revoked
+// inside the window still surfaces gh's own error the moment the picker is opened (see above). So a
+// signed-in operator — the overwhelmingly common case — pays the round trip once per window, and an
+// operator who is signing in right now still sees it on their very next query.
+const GH_AUTHED_TTL_MS = 30_000
+let ghAuthedUntil = 0
+// One probe at a time. githubStatus is fired by every mounting tab, and without this a page load with
+// three of them spawns three `gh` processes that all wait on the same network round trip.
+let ghAuthedInFlight: Promise<boolean> | null = null
+
 export async function ghAuthed(): Promise<boolean> {
+  if (Date.now() < ghAuthedUntil) return true
+  if (ghAuthedInFlight) return await ghAuthedInFlight
+  const probe = (async () => {
+    const authed = await (async () => {
+      try {
+        await gh(["auth", "status", "--active"])
+        return true
+      } catch {
+        return await ghHasToken()
+      }
+    })()
+    // Cache EITHER route to true, including the token fallback. The offline/VPN case is the slowest
+    // one there is — `auth status` burns its way to GH_TIMEOUT before the fallback even starts — and
+    // it is also the case where the answer is least likely to change.
+    if (authed) ghAuthedUntil = Date.now() + GH_AUTHED_TTL_MS
+    return authed
+  })()
+  ghAuthedInFlight = probe
   try {
-    await gh(["auth", "status", "--active"])
-    return true
-  } catch {
-    return await ghHasToken()
+    return await probe
+  } finally {
+    ghAuthedInFlight = null
   }
+}
+
+/** Drop the cached positive — for tests, and for anything that knows the credential just changed. */
+export function resetGhAuthedCache(): void {
+  ghAuthedUntil = 0
+  ghAuthedInFlight = null
 }
 
 // Does gh hold a credential for the active host? stdout here is the TOKEN ITSELF — only its emptiness
