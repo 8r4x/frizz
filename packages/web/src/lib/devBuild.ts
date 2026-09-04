@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react"
-import { getFrizzSupervisorStatus, isDevFrizzBuild } from "../api/restart.ts"
+import { isDevFrizzBuild } from "../api/restart.ts"
+import { useSupervisorStatus } from "../api/supervisorStatus.ts"
 
 // "Is Frizz itself a development build?" — the one answer every dev-only affordance in the UI asks for.
 //
@@ -11,39 +11,19 @@ import { getFrizzSupervisorStatus, isDevFrizzBuild } from "../api/restart.ts"
 // components/RestartWorkerButton.tsx, which shipped invisible for exactly that reason. The launcher
 // is the only thing that knows, and it reports it on the supervisor status.
 //
-// ONE request per page load, however many components ask: the probe is a module-level promise, and
-// its resolved value is cached for every later caller (including components that mount afterwards).
-// That matters because the caller is a thread-footer verb and the queue renders one footer per card.
+// The answer rides the ONE shared supervisor poll (api/supervisorStatus.ts). It used to be a
+// module-level promise of its own, which is how a single navigation came to request
+// /_frizz/control/status three times (t+58ms / t+61ms / t+63ms, 2026-09-04) — and the caller is a
+// thread-footer verb, so the queue renders one footer per card. Sharing the query keeps that at one
+// request however many footers mount, and drops the old cache's one weakness with it: a `null` answer
+// (a supervisor mid-restart, unreachable, or serving the SPA HTML fallback) is not evidence of a
+// production build, and the poll now simply asks again instead of the verb staying hidden for the life
+// of the page.
 //
-// Deliberately NOT read off the valtio store that App's supervisor poll already fills: the standalone
-// `/full` thread page renders INSTEAD of <App />, so that poll never runs there, and the verb would be
-// missing on exactly one surface for no reason a reader could see.
-let cached: boolean | null = null
-let probe: Promise<boolean> | null = null
-
-/** Test seam: drop the cached answer so a case can probe again. */
-export function resetDevFrizzBuildProbe(): void {
-  cached = null
-  probe = null
-}
-
-export function probeDevFrizzBuild(): Promise<boolean> {
-  if (cached !== null) return Promise.resolve(cached)
-  probe ??= getFrizzSupervisorStatus()
-    .then((status) => {
-      // `null` is NOT an answer — getFrizzSupervisorStatus folds an unreachable supervisor, a
-      // non-protocol reply and a SPA HTML fallback all into it, and it never rejects. Read it as
-      // "ask again", not as "production": the supervisor is legitimately unreachable while it
-      // restarts, and caching that window as false would hide the verb for the rest of the page's
-      // life. Report false meanwhile, because a dev-only affordance must never appear on no evidence.
-      if (status === null) return false
-      cached = isDevFrizzBuild(status)
-      return cached
-    })
-    .catch(() => false)
-    .finally(() => { probe = null })
-  return probe
-}
+// Still deliberately NOT read off the valtio store that App's control-plane effect fills: the standalone
+// `/full` thread page renders INSTEAD of <App />, so that effect never runs there, and the verb would be
+// missing on exactly one surface for no reason a reader could see. Observing the query is what keeps it
+// working on both.
 
 /**
  * Starts false and flips true once the supervisor answers. A dev-only control therefore appears a
@@ -52,15 +32,5 @@ export function probeDevFrizzBuild(): Promise<boolean> {
  * in a published Frizz should render only once the server has affirmatively said "development build".
  */
 export function useDevFrizzBuild(): boolean {
-  const [dev, setDev] = useState(cached === true)
-  useEffect(() => {
-    if (cached !== null) {
-      setDev(cached)
-      return
-    }
-    let active = true
-    void probeDevFrizzBuild().then((value) => { if (active) setDev(value) })
-    return () => { active = false }
-  }, [])
-  return dev
+  return isDevFrizzBuild(useSupervisorStatus().data ?? null)
 }

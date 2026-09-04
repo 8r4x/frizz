@@ -122,6 +122,44 @@ const WATCHDOG_MS = 7000
 const STALE_MS = 5000
 const MAX_HEAL_ATTEMPTS = 3
 
+// ── The revisit cache: a thread you have already read must not re-download on the way back in ──────────
+// This query carried no staleTime at all, so react-query treated every cached copy as stale the instant
+// it landed and EVERY open issued a fresh threadTranscript — including a return to the thread you just
+// left. Measured against a copy of the maintainer's 558-thread board (2026-09-04): four cold opens
+// painted their first row at 408 / 910 / 2072 / 1660ms with zero client-side long tasks (the wait is the
+// server reading JSONL, not us), while a REVISIT painted from cache in 63ms and then spent 1998ms on a
+// request whose answer was already on screen — one of ~11 RPCs fighting over the browser's six HTTP/1.1
+// connections, which is how a transcript read came to report `stall: 1978ms` before it was ever sent.
+const REVISIT_STALE_MS = 15_000
+// Long enough that moving around a board keeps the threads you visited warm. The cost is bounded by what
+// the server actually sends — the latest page of a windowed transcript, not a thread's whole history.
+const REVISIT_GC_MS = 30 * 60_000
+
+/**
+ * How long a cached transcript may be served without re-reading it. The NUMBER is the easy part; the
+ * GATE is what makes this safe, because a stale transcript is far worse than a slow one.
+ *
+ * `dataUpdatedAt` is when the SERVER last confirmed this cache entry — a queryFn refetch and a socket
+ * push both stamp it — and the board delivers `lastActivityAt` per thread over its own delta channel.
+ * A marker NEWER than that stamp therefore means the thread moved after our freshest confirmation, and
+ * the copy is re-read on sight. So does a thread with no board row at all (a board that has not seeded
+ * yet, another project's thread): with no marker there is nothing to gate on, and the answer is 0.
+ *
+ * The one window this cannot see is a read whose FLIGHT spanned the activity — the response lands after
+ * a marker it does not contain. Three things already cover it and none of them consult staleTime: the
+ * socket push (a fresh subscription makes the server send a full snapshot, app-socket.ts
+ * `enqueueSubscriptionPush`), the activity-edge refetch beyond the subscription budget
+ * (api/transcript-live.ts), and the level-triggered watchdog below. The window is also bounded — it
+ * closes on its own after REVISIT_STALE_MS.
+ */
+export function transcriptStaleTime(board: BoardSnapshot | null, slug: string, dataUpdatedAt: number): number {
+  const activity = threadBySlug(board, slug)?.lastActivityAt
+  if (!activity) return 0
+  const movedAt = Date.parse(activity)
+  if (!Number.isFinite(movedAt)) return 0
+  return movedAt > dataUpdatedAt ? 0 : REVISIT_STALE_MS
+}
+
 export function useTranscript(slug: string, opts: { poll: boolean }) {
   const qc = useQueryClient()
   const snap = useSnapshot(store)
@@ -155,6 +193,13 @@ export function useTranscript(slug: string, opts: { poll: boolean }) {
     // one-shot refresh/retry actions. Ordinary SSE fallback still polls exactly as before.
     refetchInterval: opts.poll && !socket && !transportFallback ? 1500 : false,
     refetchOnWindowFocus: !transportFallback,
+    // Serve a revisited thread from cache instead of re-reading it — see transcriptStaleTime above for
+    // the activity gate that keeps that from ever showing a transcript the board says has moved on.
+    // Nothing that keeps a LIVE thread live goes through here: the socket push writes the cache
+    // directly, and the interval poll, the activity-edge refetch and the watchdog below all fetch
+    // unconditionally. staleTime governs exactly one decision — whether MOUNTING re-reads.
+    staleTime: (query) => transcriptStaleTime(store.board as BoardSnapshot | null, slug, query.state.dataUpdatedAt),
+    gcTime: REVISIT_GC_MS,
   })
 
   // LEVEL-TRIGGERED freshness watchdog — the self-healing complement to the edge-triggered push/poll. A

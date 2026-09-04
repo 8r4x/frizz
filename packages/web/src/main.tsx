@@ -7,6 +7,7 @@ import { RouterProvider } from "react-router"
 import { router } from "./routes.tsx"
 import { connectSync } from "./api/socket.ts"
 import { initTranscriptLive } from "./api/transcript-live.ts"
+import { initSupervisorStatus } from "./api/supervisorStatus.ts"
 import { initFont } from "./lib/font.ts"
 import { installExternalLinkInterceptor } from "./lib/external-links.ts"
 import { installLocalFileLinkInterceptor } from "./lib/local-file-links.ts"
@@ -50,6 +51,9 @@ if (!settingsFixture) {
   // fresh centrally (socket subscription within budget, activity-edge refetch beyond) — components
   // never manage subscriptions themselves.
   initTranscriptLive(queryClient)
+  // The ONE listener for the control-action wake event, so an accepted restart costs one status read
+  // rather than one per surface reading the supervisor — see api/supervisorStatus.ts.
+  initSupervisorStatus(queryClient)
   initFont(queryClient)
   installExternalLinkInterceptor()
   installLocalFileLinkInterceptor()

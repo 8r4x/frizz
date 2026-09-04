@@ -1,5 +1,6 @@
 import { createRoot } from "react-dom/client"
 import { useSnapshot } from "valtio"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import "./styles.css"
 import { store } from "./store.ts"
 
@@ -68,4 +69,12 @@ function Fixture() {
   )
 }
 
-createRoot(document.getElementById("root")!).render(<Fixture />)
+// RestartFrizzButton reads the supervisor through the shared status query (api/supervisorStatus.ts),
+// so the fixture has to provide a client the way the real app's main.tsx does.
+const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+
+createRoot(document.getElementById("root")!).render(
+  <QueryClientProvider client={queryClient}>
+    <Fixture />
+  </QueryClientProvider>,
+)

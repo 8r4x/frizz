@@ -32,8 +32,11 @@ import { projectSlug } from "./base-path.ts"
  * box's model + effort profile, which the server keeps in one machine-level file
  * (server/dispatch-preferences.ts): scoping it would let a switch briefly paint the profile this
  * project last saw instead of the one just chosen in another.
+ * `supervisorStatus` is the LAUNCHER's own state — one supervisor per machine, sitting above every
+ * project it serves (api/supervisorStatus.ts) — so scoping it would mint a second poll of one answer on
+ * every project switch.
  */
-const MACHINE_WIDE = new Set(["projectsList", "projectsQueueCounts", "threadLocate", "dispatchPreferencesGet"])
+const MACHINE_WIDE = new Set(["projectsList", "projectsQueueCounts", "threadLocate", "dispatchPreferencesGet", "supervisorStatus"])
 
 /** The `queryKeyHashFn` for this app's QueryClient. Nothing else should need to call it. */
 export function projectScopedQueryKeyHash(key: readonly unknown[]): string {

@@ -23,7 +23,7 @@ import { CommandPalette } from "./components/CommandPalette.tsx"
 import { StatusListView } from "./components/StatusListView.tsx"
 import { ErrorBoundary } from "./components/ErrorBoundary.tsx"
 import { RestartOverlay } from "./components/RestartOverlay.tsx"
-import { FRIZZ_SUPERVISOR_STATUS_WAKE_EVENT, getFrizzSupervisorStatus } from "./api/restart.ts"
+import { useSupervisorStatus } from "./api/supervisorStatus.ts"
 
 const RELOAD_AFTER_UPDATE_RESTART = "frizz:reload-after-update-restart"
 
@@ -55,69 +55,53 @@ export function App() {
 
   // The public supervisor survives replacement of the app child. It is consequently the only
   // trustworthy transition signal: an old child can still say ready while the next artifact builds.
-  // Poll gently at rest and promptly during a handoff; writes are gated in rpc.ts but drafts remain
+  // The READ is shared — api/supervisorStatus.ts owns the one poll (gentle at rest, prompt across a
+  // handoff) that this board, the Restart Frizz button and the dev-build probe all observe; this effect
+  // is only what the BOARD does with each answer. Writes are gated in rpc.ts but drafts remain
   // session-backed and editable throughout.
+  const { data: supervisorStatus, dataUpdatedAt: supervisorAnsweredAt } = useSupervisorStatus()
+  const announcedFailure = useRef<string | null>(null)
   useEffect(() => {
-    let active = true
-    let timer: ReturnType<typeof setTimeout> | undefined
-    let announcedFailure: string | null = null
-    let polling = false
-    const poll = async () => {
-      if (polling) return
-      polling = true
-      const status = await getFrizzSupervisorStatus()
-      if (!active) { polling = false; return }
-      if (status) {
-        // An optimistic, user-initiated restart raised the overlay before the supervisor confirmed the
-        // transition. HOLD it until a poll actually OBSERVES a server-confirmed non-"ready" status: a
-        // "ready" read while pending is either the pre-flip state or a stale in-flight response, and
-        // applying it would drop the overlay and (with a destination armed) reload onto the old child.
-        // The moment a poll sees "restarting"/"failed", the optimism is server-backed — clear the hold.
-        if (store.controlPlaneRestartPending) {
-          if (status.state !== "ready") {
-            store.controlPlaneRestartPending = false
-            store.controlPlaneState = status.state
-            store.controlPlaneMessage = status.message ?? null
-          }
-        } else {
-          store.controlPlaneState = status.state
-          store.controlPlaneMessage = status.message ?? null
-        }
-        const destination = sessionStorage.getItem(RELOAD_AFTER_UPDATE_RESTART)
-        if (status.state === "ready" && destination && !store.controlPlaneRestartPending) {
-          sessionStorage.removeItem(RELOAD_AFTER_UPDATE_RESTART)
-          window.location.replace(destination)
-          polling = false
-          return
-        }
-        if (status.state === "failed" && destination) {
-          sessionStorage.removeItem(RELOAD_AFTER_UPDATE_RESTART)
-          if (announcedFailure !== status.message) {
-            // Announce the failure, never its REASON: the supervisor's message is raw build output —
-            // a `nub run typecheck` failure arrives as several hundred characters of absolute
-            // snapshot paths — and pasting that into a toast stretched a strip across the entire
-            // viewport, four lines deep, saying the same thing the failure panel beside the reload
-            // button was already showing properly. The panel owns the detail; this owns the attention.
-            announcedFailure = status.message ?? "Update & Restart failed"
-            showToast("Update & Restart failed — Frizz kept running the previous version", { duration: 7000 })
-          }
-        }
+    const status = supervisorStatus
+    if (!status) return
+    // An optimistic, user-initiated restart raised the overlay before the supervisor confirmed the
+    // transition. HOLD it until a poll actually OBSERVES a server-confirmed non-"ready" status: a
+    // "ready" read while pending is either the pre-flip state or a stale in-flight response, and
+    // applying it would drop the overlay and (with a destination armed) reload onto the old child.
+    // The moment a poll sees "restarting"/"failed", the optimism is server-backed — clear the hold.
+    if (store.controlPlaneRestartPending) {
+      if (status.state !== "ready") {
+        store.controlPlaneRestartPending = false
+        store.controlPlaneState = status.state
+        store.controlPlaneMessage = status.message ?? null
       }
-      polling = false
-      timer = setTimeout(poll, store.controlPlaneState === "restarting" ? 500 : 8_000)
+    } else {
+      store.controlPlaneState = status.state
+      store.controlPlaneMessage = status.message ?? null
     }
-    const wake = () => {
-      if (timer) clearTimeout(timer)
-      void poll()
+    const destination = sessionStorage.getItem(RELOAD_AFTER_UPDATE_RESTART)
+    if (status.state === "ready" && destination && !store.controlPlaneRestartPending) {
+      sessionStorage.removeItem(RELOAD_AFTER_UPDATE_RESTART)
+      window.location.replace(destination)
+      return
     }
-    window.addEventListener(FRIZZ_SUPERVISOR_STATUS_WAKE_EVENT, wake)
-    void poll()
-    return () => {
-      active = false
-      window.removeEventListener(FRIZZ_SUPERVISOR_STATUS_WAKE_EVENT, wake)
-      if (timer) clearTimeout(timer)
+    if (status.state === "failed" && destination) {
+      sessionStorage.removeItem(RELOAD_AFTER_UPDATE_RESTART)
+      if (announcedFailure.current !== status.message) {
+        // Announce the failure, never its REASON: the supervisor's message is raw build output —
+        // a `nub run typecheck` failure arrives as several hundred characters of absolute
+        // snapshot paths — and pasting that into a toast stretched a strip across the entire
+        // viewport, four lines deep, saying the same thing the failure panel beside the reload
+        // button was already showing properly. The panel owns the detail; this owns the attention.
+        announcedFailure.current = status.message ?? "Update & Restart failed"
+        showToast("Update & Restart failed — Frizz kept running the previous version", { duration: 7000 })
+      }
     }
-  }, [])
+    // `supervisorAnsweredAt`, not the status alone: react-query's structural sharing hands back the SAME
+    // object when a poll's answer is unchanged, and this body has to run on EVERY answer the way the
+    // interval loop it replaces did — the reload destination is armed between two reads, so a run keyed
+    // on the status object could miss it.
+  }, [supervisorStatus, supervisorAnsweredAt])
 
   // While ANY overlay is open (thread sheet, doc drawer, settings, new-thread modal, palette), the
   // PAGE must not scroll — only the overlay's own pane does.

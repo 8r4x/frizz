@@ -1,7 +1,8 @@
-import React, { useEffect, useRef, useState } from "react"
+import React, { useRef, useState } from "react"
 import { useSnapshot } from "valtio"
 import { AlertTriangle, RefreshCw, X } from "lucide-react"
-import { canRestart, canUpdateRestart, FRIZZ_SUPERVISOR_STATUS_WAKE_EVENT, getFrizzSupervisorStatus, requestFrizzRestart, requestFrizzUpdateRestart } from "../api/restart.ts"
+import { canRestart, canUpdateRestart, FRIZZ_SUPERVISOR_STATUS_WAKE_EVENT, requestFrizzRestart, requestFrizzUpdateRestart } from "../api/restart.ts"
+import { useSupervisorStatus } from "../api/supervisorStatus.ts"
 import { showToast, store } from "../store.ts"
 import { STATUS_ROW_ACTION, STATUS_ROW_ICON } from "../lib/statusRow.ts"
 
@@ -243,24 +244,22 @@ export function RestartFrizzButton() {
   // boolean would either re-open the panel one poll after the close or swallow the NEXT, different
   // failure. Keyed on the text, a repeat of the same reason stays closed and a new reason re-opens.
   const [dismissed, setDismissed] = useState<string | undefined>()
-  const [available, setAvailable] = useState<boolean | null>(null)
-  const [updateAvailable, setUpdateAvailable] = useState(false)
-  const [versions, setVersions] = useState<{ version?: string; updateVersion?: string }>({})
   const requested = useRef(false)
   const controlRef = useRef<HTMLDivElement>(null)
 
-  useEffect(() => {
-    let active = true
-    void getFrizzSupervisorStatus().then((status) => {
-      if (!active) return
-      setAvailable(canRestart(status))
-      setUpdateAvailable(canUpdateRestart(status))
-      setVersions({ version: status?.version, updateVersion: status?.updateVersion })
-    })
-    return () => { active = false }
-  }, [])
+  // Read straight off the shared supervisor poll (api/supervisorStatus.ts) rather than a private probe
+  // copied into local state on mount. Two things follow. This button no longer contributes one of the
+  // three /_frizz/control/status requests a single navigation used to make (t+58/61/63ms, 2026-09-04).
+  // And it now tracks a status that CHANGES: a registry launcher starts update-optimistic and
+  // versionless, so `updateVersion` — the field that lights the badge dot — normally lands after the
+  // first answer, and the frozen mount snapshot could never show it.
+  const status = useSupervisorStatus().data ?? null
+  const updateAvailable = canUpdateRestart(status)
+  const versions = { version: status?.version, updateVersion: status?.updateVersion }
 
-  if (available !== true) return null
+  // Nothing to offer until a supervisor has affirmatively answered — an unreachable one and a poll that
+  // has not landed yet read the same, which is the correct bias for a global recovery verb.
+  if (!canRestart(status)) return null
 
   // A failure the SUPERVISOR reports (a build that won't compile, an artifact that won't promote)
   // never reaches the click handler's catch — the POST was accepted, and the overlay simply drops
