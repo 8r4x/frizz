@@ -32,6 +32,15 @@ const FENCE_BLOCK = /^```(done|awaiting)[ \t]*\r?\n([\s\S]*?)\r?\n```[ \t]*$/gm
 // server and rendered `shells: [bzvtnt3ig]` as PROSE in the in-chat card — the raw frontmatter printed at
 // the human, which is the exact bug class that comment was written to prevent. A comment cannot keep two
 // implementations in step; having one implementation can.
+//
+// THIS CALL IS WHY THE `yaml` PACKAGE IS IN THE ENTRY CHUNK, and it is not the barrel's doing.
+// Measured 2026-09-04 by building three ways: yaml stubbed out costs 97,450 bytes of the entry chunk;
+// with this one call removed and the barrel's `import … from "yaml"` left exactly as it is, rolldown
+// tree-shakes 66,095 of those away by itself. So a perf pass that moves the export out of @frizz/shared
+// into its own module buys nothing while ChatView, RestedCard and registeredDone.ts still call
+// splitFenceBlocks synchronously during render. The only way to get the bytes back is to stop needing
+// the parse in the browser — and a LAZY parse is not it: the degraded return before the module lands
+// prints the raw frontmatter at the human, which is the exact bug the paragraph above exists to end.
 export function parseFenceBody(raw: string, kind: FenceKind): { body: string; hints: AwaitingHint[] } {
   if (kind === "done") return { body: raw.trim(), hints: [] }
   return splitAwaitingFrontmatter(raw)
