@@ -4,7 +4,7 @@ import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, w
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { questionAnswerMessage, questionsCancelledWakeMessage, type InteractionRequest } from "@frizz/shared"
-import { answersInFlight, appServerTurnStalled, createBoard, deriveAwaitingBackground, deriveNeedsYou, degradeIfAwaitingAnswer, degradeIfNoTranscript, fenceWatchViews, hasDeclaredWait, hasParkedTimerWatch, hasRegisteredBackgroundPark, registeredDoneFence, resolveLimitPause, resolveSessionPermission, resolveSessionProfile, resolveSessionTitle, type RegisteredWatch } from "./board.ts"
+import { answersInFlight, appServerTurnStalled, createBoard, deriveAwaitingBackground, deriveNeedsYou, degradeIfAwaitingAnswer, degradeIfNoTranscript, fenceWatchViews, hasDeclaredWait, hasParkedTimerWatch, hasRegisteredBackgroundPark, isBoardRelevantFrizzPath, registeredDoneFence, resolveLimitPause, resolveSessionPermission, resolveSessionProfile, resolveSessionTitle, type RegisteredWatch } from "./board.ts"
 import { Bus } from "./bus.ts"
 import { createStorage, type ThreadQuestionRow } from "./storage.ts"
 import type { Project } from "./project.ts"
@@ -1666,6 +1666,90 @@ test("board stop drains a watcher setup that races shutdown and immediately unsu
     assert.equal(unsubscribes, 1, "a watcher acquired after the stop gate is torn down before drain completes")
   } finally {
     releaseSubscribe()
+    await board.stop()
+    storage.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// THE WATCH SCOPE. `.frizz/` is a shared directory, not a board directory: every dispatched worker owns
+// `.frizz/threads/<session-id>/` as free-form scratch, and the board CLI churns sentinels under
+// `.frizz/.session-state/`. A rebuild is thousands of synchronous node:sqlite queries on the event loop,
+// so a recursive watch over the lot let any agent's note stall every RPC the browser had in flight
+// (measured 2026-09-04: 4.5-10ms board RPC idle, 49-1069ms on the live server). These pin the narrowing
+// in both directions, because the failure mode of over-narrowing — a sidebar that stops updating — is
+// far worse than the slowness it fixes.
+test("the .frizz watch predicate admits a top-level thread document and nothing else", () => {
+  const roots = new Set(["/repo/.frizz", "/private/repo/.frizz"])
+  assert.equal(isBoardRelevantFrizzPath(roots, "/repo/.frizz/my-thread.md"), true, "the one file the board re-reads")
+  // The realpath spelling is the one @parcel/watcher actually reports for a symlinked root.
+  assert.equal(isBoardRelevantFrizzPath(roots, "/private/repo/.frizz/my-thread.md"), true)
+  assert.equal(isBoardRelevantFrizzPath(roots, "/repo/.frizz/threads/2f0a/scratch.md"), false, "worker scratch")
+  assert.equal(isBoardRelevantFrizzPath(roots, "/repo/.frizz/.session-state/2f0a.seen"), false, "CLI liveness sidecar")
+  assert.equal(isBoardRelevantFrizzPath(roots, "/repo/.frizz/plans/design.md"), false, "a .md one level down is not a thread file")
+  assert.equal(isBoardRelevantFrizzPath(roots, "/repo/.frizz/config.yml"), false, "nothing the board projection reads")
+  assert.equal(isBoardRelevantFrizzPath(roots, "/elsewhere/.frizz/my-thread.md"), false, "another project's tree")
+})
+
+test("a worker scratch write triggers no board rebuild, while a top-level .md still does", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-board-watch-scope-"))
+  mkdirSync(join(dir, ".frizz"))
+  const project: Project = {
+    dir, id: "project-board-watch-scope", name: "fixture", label: "fixture", stateDir: dir, cwdSlug: "fixture",
+  }
+  const storage = createStorage(join(dir, "ui.db"), "p")
+  // assemble() calls foreignIds() exactly once per build, which makes it an honest rebuild counter.
+  let builds = 0
+  const tailer = {
+    get: () => undefined,
+    foreignIds: () => { builds++; return [] },
+    subAgent: () => undefined,
+    forget: () => {},
+    start: () => {},
+    stop: () => {},
+    tick: () => {},
+  } satisfies Tailer
+  let fire!: (paths: string[]) => void
+  let fail!: () => void
+  let ignored: string[] = []
+  const board = createBoard(project, storage, new Bus(), tailer, "watch-scope-boot", {
+    subscribe: async (_dir, fn, opts) => {
+      ignored = [...(opts?.ignore ?? [])] as string[]
+      fire = (paths) => fn(null, paths.map((path) => ({ path, type: "update" as const })))
+      fail = () => fn(new Error("watcher backend gave up"), [])
+      return { unsubscribe: async () => {} }
+    },
+  })
+  // Long enough to clear the 150ms rebuild debounce with margin, short enough to stay far under the 15s
+  // level-triggered reconcile — so anything counted below is the edge, never the safety net.
+  const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 400))
+  try {
+    await board.start()
+    const afterStart = builds
+    assert.ok(afterStart >= 1, "the initial build ran")
+    assert.deepEqual(ignored, [join(dir, ".frizz", "threads"), join(dir, ".frizz", ".session-state")])
+
+    // NEGATIVE: the scratch directory Frizz hands every worker, and the CLI's sentinel dir.
+    fire([join(dir, ".frizz", "threads", "2f0a", "scratch.md"), join(dir, ".frizz", ".session-state", "2f0a.seen")])
+    await settle()
+    assert.equal(builds, afterStart, "worker scratch must not rebuild the board")
+
+    // POSITIVE, and the control that proves the counter above can move at all.
+    fire([join(dir, ".frizz", "my-thread.md")])
+    await settle()
+    assert.equal(builds, afterStart + 1, "a top-level thread document still rebuilds promptly")
+
+    fire([])
+    await settle()
+    assert.equal(builds, afterStart + 1, "an empty batch is still no rebuild")
+
+    // An errored callback carries no paths to test, so the filter has nothing to decide on and must
+    // fail OPEN. The cost of a wrong guess is asymmetric: a spare rebuild is milliseconds, a dropped
+    // one is up to RECONCILE_MS of a stale sidebar.
+    fail()
+    await settle()
+    assert.equal(builds, afterStart + 2, "a watcher error rebuilds rather than going quiet")
+  } finally {
     await board.stop()
     storage.close()
     rmSync(dir, { recursive: true, force: true })

@@ -1,10 +1,11 @@
 import {
   existsSync,
+  realpathSync,
   watch as fsWatch,
   type FSWatcher,
 } from "node:fs"
 import { homedir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import watcher from "@parcel/watcher"
 import type { BoardSnapshot, ThreadView, RuntimeState, ThreadRecurringPrompt } from "@frizz/shared"
 import { AskedQuestionSchema, BoardDiffer, PermissionMode, SnoozeUntil, ThreadSlug, isDirectSubAgent, questionAnswerMessage, questionsCancelledWakeMessage, type AskedQuestion, type PermissionMode as PermissionModeValue, type QuestionAnswer, type QuestionDismissal } from "@frizz/shared"
@@ -188,6 +189,40 @@ function registeredLegacyFileIsTerminal(projectDir: string, slug: string): boole
   const raw = frontmatter?.match(/^status:\s*(.*?)\s*$/m)?.[1]
   const status = raw?.replace(/^(?:"(.*)"|'(.*)')$/, "$1$2").trim()
   return status === "done" || status === "dismissed"
+}
+
+// WHAT A `.frizz` FILESYSTEM EVENT CAN ACTUALLY CHANGE ABOUT THIS BOARD, and it is one thing:
+// `legacyTerminalCache`, whose only input is `.frizz/<slug>.md` — a DIRECT child of `.frizz`
+// (resolveLegacyThreadFile opens nothing else and rejects anything whose resolved dirname is not
+// `.frizz` itself). Everything else `assemble()` reads is ui.db and tailer state, and both arrive on
+// their own edges. So a full rebuild is warranted by a top-level `.md` and by nothing else down there.
+//
+// That distinction is worth money because `.frizz/` is NOT only board state. Frizz hands every
+// dispatched worker `.frizz/threads/<session-id>/` as a free-form scratch directory it may fill as it
+// likes (dispatch.ts), and the board CLI keeps a per-session sentinel plus a `.seen` liveness
+// heartbeat under `.frizz/.session-state/` (board/config.mjs) — on this checkout, 715 scratch
+// directories and 559 sentinels. Watching the whole tree recursively turned every note any agent wrote
+// into a full rebuild, and a rebuild is thousands of SYNCHRONOUS node:sqlite queries on the event loop
+// (five per thread across 637 threads here). Measured 2026-09-04: the board RPC answers in 4.5-10ms on
+// an idle server and in 49-1069ms (median ~270ms) on the maintainer's live one, whose own log carries
+// 220 "the event loop is blocked" tick warnings, median 1.5s. Agents were manufacturing the stall that
+// made the UI they run under feel slow.
+//
+// Two filters, deliberately both. `ignore` prunes the noisy subtrees in the native layer, so on inotify
+// no watch descriptor is ever spent on those 715 directories and on fs-events the event never reaches
+// JS at all. The predicate is the CORRECTNESS half: it is an allow-list of what the board reads, so a
+// tree nobody has thought of yet costs one string test rather than a rebuild.
+const FRIZZ_WATCH_IGNORED_DIRS = ["threads", ".session-state"]
+
+// True when a watcher event names a file the board would actually re-read. `roots` holds every spelling
+// the watched `.frizz` may be reported under — see watchFrizzDir for why there is more than one.
+//
+// FAILING OPEN IS THE RIGHT FAILURE: a spurious rebuild costs milliseconds, a dropped one costs up to
+// RECONCILE_MS of a stale sidebar. So this accepts every direct-child `.md`, not only the ones whose
+// stem is a live session slug — an unregistered `foo.md` contributes nothing to the board, but keeping
+// it out of the predicate would buy a rounding error and put the answer at the mercy of the registry.
+export function isBoardRelevantFrizzPath(roots: ReadonlySet<string>, path: string): boolean {
+  return path.endsWith(".md") && roots.has(dirname(path))
 }
 
 function futureSnooze(row: Pick<SessionRow, "snoozed_until">, nowMs: number): string | undefined {
@@ -1699,8 +1734,9 @@ export function createBoard(
     notifyPrimed = true
   }
 
-  // The file-backed migration cache is recomputed only on a full rebuild (the recursive .frizz
-  // watcher catches changes). Overlay-only refreshes remain filesystem-free.
+  // The file-backed migration cache is recomputed only on a full rebuild (the `.frizz` watcher catches
+  // changes to the top-level `<slug>.md` files this reads, and only those — see
+  // isBoardRelevantFrizzPath). Overlay-only refreshes remain filesystem-free.
   let legacyTerminalCache = new Set<string>()
 
   // Build exactly the session-backed threads recorded by Frizz. The registry is the provenance
@@ -1945,7 +1981,32 @@ export function createBoard(
     if (parcelSub || stopped) return Promise.resolve()
     if (watchSetup) return watchSetup
     const setup = (async () => {
-      const next = await subscribe(join(project.dir, ".frizz"), () => scheduleRebuild())
+      const dir = join(project.dir, ".frizz")
+      // @parcel/watcher reports every event under the REALPATH of the watched root rather than the
+      // string it was handed: subscribing to `/tmp/x/.frizz` on macOS yields `/private/tmp/x/.frizz/…`
+      // (probed 2026-09-04 against the pinned 2.5.6, which is also how the fs-events backend spells its
+      // own backfill). Carry both spellings, or a project reached through any symlinked path — every
+      // sandbox under /tmp, and plenty of real checkouts — filters to nothing and never rebuilds again.
+      const roots = new Set([dir])
+      try {
+        roots.add(realpathSync(dir))
+      } catch {
+        // The directory raced away between the existence probe and here. The literal spelling still
+        // matches if it comes back, and the level-triggered reconcile covers the gap either way.
+      }
+      const next = await subscribe(
+        dir,
+        (err, events) => {
+          // An errored callback carries no paths to test, so there is nothing to filter on. Rebuild:
+          // this filter is an optimisation and must never be the reason the sidebar goes stale.
+          if (err || !events) {
+            scheduleRebuild()
+            return
+          }
+          if (events.some((event) => isBoardRelevantFrizzPath(roots, event.path))) scheduleRebuild()
+        },
+        { ignore: FRIZZ_WATCH_IGNORED_DIRS.map((name) => join(dir, name)) },
+      )
       if (stopped) {
         await next.unsubscribe()
         return
@@ -1981,7 +2042,7 @@ export function createBoard(
         await watchFrizzDir()
       } else {
         // .frizz/ not created yet — watch the repo root (non-recursive) for its appearance,
-        // then hand off to the recursive .frizz watcher. Avoids recursively watching the whole repo.
+        // then hand off to the .frizz watcher. Avoids recursively watching the whole repo.
         try {
           bootstrapWatch = fsWatch(project.dir, (_e, name) => {
             if (name === ".frizz" && frizzDirExists(project.dir)) {

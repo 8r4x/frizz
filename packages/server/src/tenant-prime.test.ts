@@ -166,6 +166,40 @@ test("the pause between projects tracks the last activation, clamped at both end
   assert.deepEqual(waits, [250, 25, 90, 800])
 })
 
+test("resolving a project is blocking work, so its cost is paced against too", async () => {
+  // `toProject` shells out to `git remote get-url`, synchronously, at a 110ms median under load. It used
+  // to sit entirely outside the measured span, so a project that cost 300ms to resolve and 100ms to
+  // activate was logged and paced as 100ms. Both halves block the same loop and both are counted now.
+  //
+  // The gap must NOT be: it sits between the two halves, and folding a politeness wait into the cost
+  // that decides the next politeness wait would make each project pace off the last one's idling.
+  const waits: number[] = []
+  let clock = 0
+  const result = await startTenantPrime({
+    list: () => [candidate("a"), candidate("b")],
+    isOpen: () => false,
+    toProject: (entry) => {
+      clock += 300
+      return project(entry)
+    },
+    activate: async () => {
+      clock += 100
+      return {}
+    },
+    monotonicNow: () => clock,
+    startDelayMs: 250,
+    delay: async (ms) => {
+      // Advance the clock across the wait, the way real time does — this is what catches a span that
+      // wrongly encloses the gap.
+      clock += ms
+      waits.push(ms)
+    },
+    log: () => {},
+  }).done
+  assert.deepEqual(result.tookMs, [400, 400], "300ms of resolution plus 100ms of activation")
+  assert.deepEqual(waits, [250, 400], "the gap tracks resolve+activate, and is not itself counted")
+})
+
 test("one pathological activation cannot pace the whole rail — the gap is still bounded", async () => {
   // The ceiling's real job: a project that somehow takes half a minute must not buy itself half a
   // minute of silence and hold every remaining badge hostage. Raising it to 1500ms honoured the duty

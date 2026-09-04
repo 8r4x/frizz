@@ -20,7 +20,8 @@ import { log as frizzLog } from "./logging.ts"
 //     reaches it sooner, and without the clicking.
 //   * THE COLD PRIME IS ALREADY BOUNDED. `tailer.start()` folds at most MAX_PRIME_ROWS_PER_TICK rows
 //     inside PRIME_BUDGET_MS (tailer.ts) and hands the rest to later ticks, so activating a large board
-//     costs ~200ms here instead of the 1.5-7.5s it cost before that bound existed.
+//     costs a few hundred ms here instead of the 1.5-7.5s it cost before that bound existed. The bound
+//     covers the whole per-row cost, not only the fold, since 2026-09-04 — see below.
 //   * SCHEDULERS FOR EVERY REGISTERED PROJECT IS THE DESIGN, not a side effect. plans/singleton-frizz.md
 //     §4 settles it: timers, `awaiting` wakes, snooze expiry, PR watches and limit auto-resume must not
 //     go quiet for a project you are not looking at. Lazy activation left them dead until you opened it.
@@ -47,10 +48,14 @@ import { log as frizzLog } from "./logging.ts"
 // projects on the maintainer's 2026-09-02 boot took 111-1000ms each, and the pass ran for 18.5s of wall
 // clock against 5.7s of summed activation — the difference being the tailer and everything else
 // contending for the same loop. See PRIME_MAX_GAP_MS for what that broke and what was done about it.
-// The deeper cost is upstream: `tailer.start()`'s first tick does per-row work BEFORE its budget check
-// (one SQLite retiredOps query per row, plus a stat per transcript), so a big board's activation is not
-// bounded by PRIME_BUDGET_MS the way the third bullet above assumes. Pacing politely around that is a
-// mitigation; making the prime itself bounded is the fix, and it is not done here.
+// The deeper cost was upstream, AND IT IS FIXED (2026-09-04). `tailer.start()`'s first tick used to do
+// per-row work BEFORE its budget check — a retiredOps query, a tail-cache hydrate and a stat per
+// transcript, plus a read-side discovery pass for anything unbound — so a big board's activation was not
+// bounded by PRIME_BUDGET_MS the way the COLD PRIME bullet above assumes it is. The bound is now asked
+// before that setup runs rather than only before the fold, and a 558-thread board's first tick fell from
+// 2251ms to 342ms with a cold tail cache (1140ms to 359ms warm). The pacing below is still worth having —
+// a dozen tailers and everything else share this loop — but it is no longer covering for an activation
+// that was an order of magnitude over the figure it paces against.
 
 /**
  * A head start for the launching project, whose board is the page the operator is actually waiting for.
@@ -177,6 +182,16 @@ export function startTenantPrime(deps: TenantPrimeDeps): TenantPrimeRun {
         result.skipped.push(entry.id)
         continue
       }
+      // RESOLUTION IS BLOCKING WORK AND IT COUNTS. `toProject` is `projectFromRegistryEntry`, which
+      // calls `originRemoteUrl` — a SYNCHRONOUS `git remote get-url`, measured at a 110ms median under
+      // load (2026-09-04). Timing only the activation left that spawn out of `tookMs` entirely, so
+      // `gapAfter` paced against a number smaller than the loop had actually been blocked for, and the
+      // log under-reported every project by the same amount.
+      //
+      // Measured as its own span rather than by moving the start of the activation's, because the gap
+      // below sits between the two: one span across both would fold the POLITENESS WAIT into the cost
+      // that decides the next politeness wait, and each project would pace off the last one's idling.
+      const resolveStartedAt = deps.monotonicNow?.() ?? performance.now()
       let project: Project
       try {
         project = deps.toProject(entry)
@@ -191,12 +206,13 @@ export function startTenantPrime(deps: TenantPrimeDeps): TenantPrimeRun {
         log(`${project.name} is served by another Frizz (pid ${other}) — leaving it closed here`)
         continue
       }
+      const resolveMs = (deps.monotonicNow?.() ?? performance.now()) - resolveStartedAt
       if (lastTookMs !== undefined) await delay(deps.gapMs ?? gapAfter(lastTookMs))
       if (stopped) break
       try {
         const startedAt = deps.monotonicNow?.() ?? performance.now()
         const opened = await deps.activate(project)
-        const tookMs = Math.round((deps.monotonicNow?.() ?? performance.now()) - startedAt)
+        const tookMs = Math.round(resolveMs + ((deps.monotonicNow?.() ?? performance.now()) - startedAt))
         lastTookMs = tookMs
         if (opened === undefined) result.failed.push(entry.id)
         else {
