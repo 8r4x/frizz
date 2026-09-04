@@ -1133,3 +1133,68 @@ test("pinned_at: a pre-pin unified file gains the column, the pin persists, and 
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+// ── the batched registry reads ──────────────────────────────────────────────────────────────────────
+// The board reads five per-thread tables for EVERY row it assembles, and it used to ask each of them
+// one thread at a time: 2,790 statements per rebuild on the maintainer's 558-thread board, all of it
+// synchronous and all of it on the event loop. The `…BySlug` readers ask each table once instead. That
+// is only safe while each one answers EXACTLY what the per-thread call answers — same predicate, same
+// order, same empty — so this pins the two against each other rather than against a hand-written
+// expectation, which would drift the moment either statement is edited.
+test("the batched registry reads answer exactly what the per-thread reads answer", () => {
+  const s = store()
+  const NOW = 1_800_000_000_000
+  const slugs = ["alpha", "beta", "gamma", "delta", "epsilon"]
+  // `epsilon` is deliberately given NOTHING: a thread with no rows must read back as the empty array
+  // the per-thread call returns, not as a missing map entry a caller forgot to default.
+  for (const [index, slug] of slugs.slice(0, 4).entries()) {
+    for (let k = 0; k < 3; k++) {
+      // TIES ON PURPOSE. Every one of these orders on a time column the rows here SHARE, so only the
+      // secondary key can separate them — `id` for the registries, `rowid` for the questions, which is
+      // insertion order and the only thing that keeps one ask's questions in the order it wrote them.
+      const timerId = `tmr_${index}${k}`
+      s.armThreadTimer({ id: timerId, slug, prompt: `p${k}`, fireAtMs: NOW + 60_000, createdAtMs: NOW })
+      if (k === 0) s.cancelThreadTimer(slug, timerId, NOW)
+
+      const prId = `prw_${index}${k}`
+      s.armPrWatch({ id: prId, slug, owner: "o", repo: "r", number: 10 + k, createdAtMs: NOW, expiresAtMs: NOW + 60_000 })
+      if (k === 1) s.dropPrWatch(slug, prId, NOW)
+
+      const watchId = `wch_${index}${k}`
+      s.armThreadWatch({ id: watchId, slug, kind: k % 2 ? "agent" : "shell", target: `t${k}`, createdAtMs: NOW, expiresAtMs: NOW + 60_000 })
+      if (k === 2) s.settleThreadWatch(watchId, NOW, "expired")
+
+      const questionId = `qst_${index}${k}`
+      s.askThreadQuestion({ id: questionId, slug, spec: `{"q":${k}}`, askedAtMs: NOW })
+      if (k === 0) s.answerThreadQuestion(questionId, "yes", NOW)
+      if (k === 1) s.dismissThreadQuestion(questionId, NOW)
+    }
+    if (index % 2 === 0) s.markThreadDone(slug, `done ${index}`, NOW)
+  }
+
+  const timers = s.armedThreadTimersBySlug()
+  const prWatches = s.armedPrWatchesBySlug()
+  const watches = s.armedThreadWatchesBySlug()
+  const questions = s.threadQuestionsBySlug()
+  const done = s.threadDoneBySlug()
+  for (const slug of slugs) {
+    // deepEqual over an ARRAY is order-sensitive, which is what pins the ORDER BY.
+    assert.deepEqual(timers.get(slug) ?? [], s.listThreadTimers(slug, { armedOnly: true }), `timers: ${slug}`)
+    assert.deepEqual(prWatches.get(slug) ?? [], s.listPrWatches(slug, { armedOnly: true }), `pr watches: ${slug}`)
+    assert.deepEqual(watches.get(slug) ?? [], s.listThreadWatches(slug, { armedOnly: true }), `watches: ${slug}`)
+    // UNFILTERED, matching the board: it takes the open questions AND the just-answered ones off this
+    // one list, so an `openOnly` batched read would silently drop `answersInFlight`.
+    assert.deepEqual(questions.get(slug) ?? [], s.listThreadQuestions(slug), `questions: ${slug}`)
+    assert.deepEqual(done.get(slug), s.getThreadDone(slug), `done: ${slug}`)
+  }
+
+  // The predicate is load-bearing, so prove the fixture can see it: each armed-only read must be a
+  // STRICT subset of the unfiltered one, or the comparisons above would pass on an empty difference.
+  assert.equal(timers.get("alpha")!.length, 2, "one of alpha's three timers is cancelled")
+  assert.equal(prWatches.get("alpha")!.length, 2, "one of alpha's three PR watchers is dropped")
+  assert.equal(watches.get("alpha")!.length, 2, "one of alpha's three watches is expired")
+  assert.equal(questions.get("alpha")!.length, 3, "questions are read whole, settled ones included")
+  assert.equal(timers.get("epsilon"), undefined, "a thread with no rows is absent, and reads back as []")
+  assert.equal(done.get("beta"), undefined, "so is a thread with no completion")
+  s.close()
+})

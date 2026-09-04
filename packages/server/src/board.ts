@@ -12,7 +12,7 @@ import { AskedQuestionSchema, BoardDiffer, PermissionMode, SnoozeUntil, ThreadSl
 import type { Bus } from "./bus.ts"
 import type { Project } from "./project.ts"
 import { isHeadlessRow, isBrokerClaudeRow, sessionTitleLocked, type ThreadQuestionRow } from "./storage.ts"
-import type { Storage, SessionRow } from "./storage.ts"
+import type { Storage, SessionRow, PrWatchRow, ThreadTimerRow, ThreadWatchRow } from "./storage.ts"
 import { normalizeObservedThreadModel } from "./backend/thread-profiles.ts"
 import type { Tailer, SessionTelemetry, FenceView } from "./tailer.ts"
 import type { InteractionChange } from "./interaction-store.ts"
@@ -1307,6 +1307,40 @@ export function registeredDoneFence(
   return { kind: "done", body: done.body, hints: [], registered: true }
 }
 
+// Every per-thread REGISTRY the row builder needs, read whole ONCE per build and indexed by slug.
+//
+// These five used to be five queries per row: `listPrWatches`, `listThreadTimers`,
+// `listThreadQuestions`, `listThreadWatches` and `getThreadDone`, each scoped to one slug. That is
+// five statements times however many threads the project holds, and node:sqlite is SYNCHRONOUS — the
+// whole cost lands on the event loop, which is the same loop every RPC and every board push is waiting
+// on. On a copy of the maintainer's own board (558 rows) one rebuild issued 2,794 statements and took
+// 30.5ms; 2,790 of those statements were these five. A rebuild fires on a 150ms debounce whenever any
+// agent writes into `.frizz`, and unconditionally every RECONCILE_MS — so on a live server with agents
+// working it ran continuously, and the board RPC that idles at 4.5-10ms was measured at 49-1069ms
+// (median ~270ms) with 220 blocked-loop warnings in the server's own log.
+//
+// Batched, the same rebuild issues FIVE statements total. Nothing about the projection changes: each
+// batched read carries the identical predicate and ORDER BY as the per-slug one it replaces (see the
+// `groupBySlug` note in storage.ts), and a thread with no rows is simply absent from the map, which is
+// why every read below spells the fallback `?? []` — the empty array the per-thread call returned.
+interface ThreadRegistries {
+  prWatches: Map<string, PrWatchRow[]>
+  timers: Map<string, ThreadTimerRow[]>
+  questions: Map<string, ThreadQuestionRow[]>
+  watches: Map<string, ThreadWatchRow[]>
+  done: Map<string, { body: string; doneAt: number }>
+}
+
+function readThreadRegistries(storage: Storage): ThreadRegistries {
+  return {
+    prWatches: storage.armedPrWatchesBySlug(),
+    timers: storage.armedThreadTimersBySlug(),
+    questions: storage.threadQuestionsBySlug(),
+    watches: storage.armedThreadWatchesBySlug(),
+    done: storage.threadDoneBySlug(),
+  }
+}
+
 function sessionThreadView(
   projectDir: string,
   storage: Storage,
@@ -1317,6 +1351,9 @@ function sessionThreadView(
   nowMs: number,
   codexTurnLiveness: CodexTurnLivenessReader,
   claudeBrokerDaemonAlive: ClaudeBrokerLivenessReader,
+  // This thread's timers, watchers, watches, questions and completion — read once per build by the
+  // caller for the whole project and looked up by slug here. See ThreadRegistries above for why.
+  registries: ThreadRegistries,
   // Every watched PR's checks/mergeability as the poller last saw it, read once per build by the caller.
   // It decides a QUEUE RULE (checks still running → the active rail, not the queue) as well as what the
   // card renders, so both read the same book — a card stating check state the board could not see is
@@ -1336,16 +1373,16 @@ function sessionThreadView(
   // runtime, no turn and no last activity, and half a SessionTelemetry carrying one fence would put
   // every predicate below on a shape none of them was written for.
   // The PRs this thread has actually REGISTERED, by `owner/repo#N` — what a `prs:` declaration is
-  // checked against. Read per thread because the registry is per thread, unlike the status book above.
-  const armedPrWatches = storage.listPrWatches(row.slug, { armedOnly: true }).map((w) => ({
+  // checked against. Looked up per thread, but READ once for the whole project (ThreadRegistries).
+  const armedPrWatches = (registries.prWatches.get(row.slug) ?? []).map((w) => ({
     target: `${w.owner}/${w.repo}#${w.number}`,
     createdAt: new Date(w.created_at).toISOString(),
   }))
   const registeredPrWatches = new Set(armedPrWatches.map((w) => w.target))
   // This thread's ARMED TIMERS — what a `timers:` declaration is checked against, and rows on the
-  // resting card's table beside the PRs and shells (maintainer 2026-08-24). Same per-thread read, same
-  // ms→ISO mapping as the worker's own tool (router.armedTimerViews).
-  const armedTimers = storage.listThreadTimers(row.slug, { armedOnly: true }).map((t) => ({
+  // resting card's table beside the PRs and shells (maintainer 2026-08-24). Same per-thread lookup,
+  // same ms→ISO mapping as the worker's own tool (router.armedTimerViews).
+  const armedTimers = (registries.timers.get(row.slug) ?? []).map((t) => ({
     id: t.id,
     prompt: t.prompt,
     fireAt: new Date(t.fire_at).toISOString(),
@@ -1353,7 +1390,7 @@ function sessionThreadView(
   }))
   const armedTimerIds = new Set(armedTimers.map((t) => t.id))
   // This thread's ARMED WATCHES on its own running work — the `thread_watch` rows `mcp__frizz__watch`
-  // creates. Same per-thread read as the two registries above, and the same ms→ISO mapping as the
+  // creates. Same per-thread lookup as the two registries above, and the same ms→ISO mapping as the
   // worker's own read-back (router.armedOwnWatchViews), so the row, the strip and the tool cannot
   // disagree about one wait.
   // This thread's OPEN REGISTERED QUESTIONS, carried whole rather than as a flag: the card renders from
@@ -1361,8 +1398,9 @@ function sessionThreadView(
   // to be answered, withdrawn or dismissed BY. A row whose spec no longer parses is dropped rather than
   // thrown on — one bad row must not blank a card carrying three good ones.
   // ONE read of the thread's questions, both halves derived from it: the OPEN ones the card asks, and
-  // the just-answered ones still on their way to the worker (answersInFlight).
-  const questionRows = storage.listThreadQuestions(row.slug)
+  // the just-answered ones still on their way to the worker (answersInFlight). Unfiltered by state for
+  // exactly that reason, which is why the batched read behind it is unfiltered too.
+  const questionRows = registries.questions.get(row.slug) ?? []
   const questions: ThreadView["questions"] = []
   for (const q of questionRows) {
     if (q.state !== "open") continue
@@ -1373,7 +1411,7 @@ function sessionThreadView(
   // rest Goal with text, the same gate the scheduler's evalQuestionAnswers wakes on. Anything looser
   // would also cover the human's own ×, which deliberately wakes nobody and has no arrival to bridge to.
   const inFlightAnswers = answersInFlight(questionRows, rawTele?.lastUserAt, row.recurring_on_rest === 1 && Boolean(row.recurring_prompt?.trim()))
-  const armedWatches: RegisteredWatch[] = storage.listThreadWatches(row.slug, { armedOnly: true }).map((w) => ({
+  const armedWatches: RegisteredWatch[] = (registries.watches.get(row.slug) ?? []).map((w) => ({
     id: w.id,
     kind: w.kind,
     target: w.target,
@@ -1386,7 +1424,7 @@ function sessionThreadView(
   // those braces: whatever path leaves a done row beside an open question or an armed wait, the board
   // presents the wait, never a finished thread that is also asking or waiting.
   const supersededDone = questions.length > 0 || armedWatches.length > 0 || armedPrWatches.length > 0 || armedTimers.length > 0
-  const done = supersededDone ? undefined : registeredDoneFence(storage.getThreadDone(row.slug), rawTele?.lastUserAt)
+  const done = supersededDone ? undefined : registeredDoneFence(registries.done.get(row.slug), rawTele?.lastUserAt)
   const tele: SessionTelemetry | undefined = done && rawTele ? { ...rawTele, lastFence: done } : rawTele
   // A headless thread mid-turn with nobody driving it is a crash/stall, not a rest. For codex that is
   // an app-server that stopped advancing the rollout; for the broker it is a dead ownerless daemon (its
@@ -1749,6 +1787,10 @@ export function createBoard(
     // ONE READ PER BUILD, not per thread: the watched-PR book is keyed by ref and shared by every thread
     // watching that PR, and it is parsed on the way in.
     const github = readGithubStatusBook(storage.getSetting(GITHUB_STATUS_SETTING))
+    // The same rule, applied to the five per-thread registries: five statements for the whole project
+    // instead of five per row. On the maintainer's 558-thread board that is 2,794 statements per
+    // rebuild down to 9, all of it on the event loop — see ThreadRegistries.
+    const registries = readThreadRegistries(storage)
     const currentInteractionKeys = new Set<string>()
     const out: ThreadView[] = []
     for (const row of rows) {
@@ -1787,6 +1829,7 @@ export function createBoard(
         nowMs,
         codexTurnLiveness,
         claudeBrokerDaemonAlive,
+        registries,
         github,
       ))
     }

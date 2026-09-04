@@ -448,6 +448,36 @@ export interface ThreadQuestionRow {
   settled_at: number | null
 }
 
+// ---- THE PER-THREAD REGISTRIES, READ WHOLE -------------------------------------------------------
+// Five little tables hang off a thread — its timers, its PR watchers, its watches, its questions, its
+// completion — and the board reads all five for EVERY row it assembles. One query per thread per table
+// is fine at ten threads and is not fine at six hundred: measured on a copy of the maintainer's own
+// board (558 rows), a single rebuild issued 2,794 statements, of which 2,790 were exactly these five
+// asked 558 times each, and took 30.5ms. node:sqlite is SYNCHRONOUS, so that is 30.5ms of blocked event
+// loop — and a rebuild fires on a 150ms debounce whenever any agent writes into `.frizz`, plus every
+// 15s regardless. On the live server that landed as a board RPC answering in 49-1069ms (median ~270ms)
+// against 4.5-10ms on an idle one, and 220 "tick took Nms" warnings in a day.
+//
+// So the board asks each table ONCE and indexes the answer by slug. These readers are the batched half;
+// the per-thread `listX(slug)` calls remain for the worker tools and the scheduler, which genuinely
+// want one thread. Each batched statement carries the SAME predicate and the SAME ORDER BY as the
+// per-thread one it replaces — that is what makes the two byte-identical, and it is the thing to
+// re-check if either statement is ever edited.
+//
+// Insertion order is what makes the grouping faithful: a Map preserves it, and so does an array push,
+// so each bucket comes out in exactly the order the global ORDER BY produced — which is the per-slug
+// ORDER BY restricted to that slug, because every one of these orders on columns the slug does not
+// participate in.
+function groupBySlug<Row extends { thread_slug: string }>(rows: Row[]): Map<string, Row[]> {
+  const bySlug = new Map<string, Row[]>()
+  for (const row of rows) {
+    const bucket = bySlug.get(row.thread_slug)
+    if (bucket) bucket.push(row)
+    else bySlug.set(row.thread_slug, [row])
+  }
+  return bySlug
+}
+
 export interface Storage {
   /** The SHARED connection — raw, unscoped. Prefer `scope`; see project-scope.ts. */
   db: Database
@@ -593,6 +623,10 @@ export interface Storage {
   // A thread's timers, newest deadline last. `armedOnly` is what the worker's tool reads back; the full
   // set is for tests and diagnostics.
   listThreadTimers(slug: string, opts?: { armedOnly?: boolean }): ThreadTimerRow[]
+  /** Every thread's ARMED timers at once, keyed by slug — the board's read (see groupBySlug above).
+   *  Same predicate and same `fire_at, id` order as `listThreadTimers(slug, { armedOnly: true })`; a
+   *  thread with none is ABSENT from the map, so a caller reads `?? []` for the empty array. */
+  armedThreadTimersBySlug(): Map<string, ThreadTimerRow[]>
   getThreadTimer(id: string): ThreadTimerRow | undefined
   // Every armed timer that is due, across all threads — the scheduler's one read per tick.
   dueThreadTimers(nowMs: number): ThreadTimerRow[]
@@ -612,6 +646,10 @@ export interface Storage {
   // A thread's watchers, oldest first. `armedOnly` is what the worker's tool reads back and what the
   // board lists; the full set is for diagnostics.
   listPrWatches(slug: string, opts?: { armedOnly?: boolean }): PrWatchRow[]
+  /** Every thread's ARMED watchers at once, keyed by slug — the board's read (see groupBySlug above).
+   *  Same predicate and same `created_at, id` order as `listPrWatches(slug, { armedOnly: true })`;
+   *  a thread with none is ABSENT from the map. */
+  armedPrWatchesBySlug(): Map<string, PrWatchRow[]>
   getPrWatch(id: string): PrWatchRow | undefined
   // Every armed watcher across all threads — the scheduler's one read per tick.
   armedPrWatches(): PrWatchRow[]
@@ -627,6 +665,10 @@ export interface Storage {
    *  by that triple, so a worker re-registering the same wait after a wake gets one row, not two. */
   armThreadWatch(watch: { id: string; slug: string; kind: "shell" | "agent"; target: string; createdAtMs: number; expiresAtMs: number }): ThreadWatchRow
   listThreadWatches(slug: string, opts?: { armedOnly?: boolean }): ThreadWatchRow[]
+  /** Every thread's ARMED watches at once, keyed by slug — the board's read (see groupBySlug above).
+   *  Same predicate and same `created_at, id` order as `listThreadWatches(slug, { armedOnly: true })`;
+   *  a thread with none is ABSENT from the map. */
+  armedThreadWatchesBySlug(): Map<string, ThreadWatchRow[]>
   getThreadWatch(id: string): ThreadWatchRow | undefined
   /** Every armed watch whose timeout has elapsed — the scheduler cancels these and wakes their threads. */
   expiredThreadWatches(nowMs: number): ThreadWatchRow[]
@@ -643,6 +685,12 @@ export interface Storage {
    *  two things the human owes an answer to, and collapsing them would silently drop one. */
   askThreadQuestion(q: { id: string; slug: string; spec: string; askedAtMs: number }): ThreadQuestionRow
   listThreadQuestions(slug: string, opts?: { openOnly?: boolean }): ThreadQuestionRow[]
+  /** Every thread's questions at once, keyed by slug — the board's read (see groupBySlug above).
+   *  UNFILTERED, matching the board's own `listThreadQuestions(slug)` with no `openOnly`: the card
+   *  renders the OPEN ones and `answersInFlight` reads the just-ANSWERED ones off the same list, so
+   *  narrowing this to open rows here would silently drop the in-flight half. Same `asked_at, rowid`
+   *  order; a thread with none is ABSENT from the map. */
+  threadQuestionsBySlug(): Map<string, ThreadQuestionRow[]>
   getThreadQuestion(id: string): ThreadQuestionRow | undefined
   /** Every OPEN question on the machine — what the `done` gate and the board both read. */
   openThreadQuestions(): ThreadQuestionRow[]
@@ -666,6 +714,10 @@ export interface Storage {
   /** The thread's completion, or undefined. It is the CALLER's job to check `doneAt` against the newest
    *  user record — a done row is spent by the human sending more work, and this returns it either way. */
   getThreadDone(slug: string): { body: string; doneAt: number } | undefined
+  /** Every thread's completion at once, keyed by slug — the board's read (see groupBySlug above). One
+   *  row per thread is the table's PRIMARY KEY, so this is a Map of VALUES rather than of arrays, and
+   *  a thread with none is ABSENT — the same `undefined` `getThreadDone` returns. */
+  threadDoneBySlug(): Map<string, { body: string; doneAt: number }>
   /** Forget it, so the thread is no longer done. */
   clearThreadDone(slug: string): boolean
   // ---- THE BUILT-IN SIGN-OFF NUDGE ----------------------------------------------------------------
@@ -1550,6 +1602,13 @@ export function createStorage(source: string | Database, projectId: string): Sto
   const armedTimersBySlugStmt = scope.prepare<[string], ThreadTimerRow>(
     "SELECT * FROM thread_timer WHERE project_id = @project_id AND thread_slug = ? AND state = 'armed' ORDER BY fire_at, id",
   )
+  // The board's batched read of the same rows: every armed timer this project holds, in the SAME
+  // `fire_at, id` order the per-slug statement above uses, so grouping it by slug reproduces that
+  // statement's answer for every thread at once. Distinct from `dueTimersStmt` directly below, which
+  // is the scheduler's and carries a deadline predicate this one must not.
+  const armedTimersStmt = scope.prepare<[], ThreadTimerRow>(
+    "SELECT * FROM thread_timer WHERE project_id = @project_id AND state = 'armed' ORDER BY fire_at, id",
+  )
   const timerByIdStmt = scope.prepare<[string], ThreadTimerRow>("SELECT * FROM thread_timer WHERE project_id = @project_id AND id = ?")
   const dueTimersStmt = scope.prepare<[number], ThreadTimerRow>(
     "SELECT * FROM thread_timer WHERE project_id = @project_id AND state = 'armed' AND fire_at <= ? ORDER BY fire_at, id",
@@ -1659,6 +1718,13 @@ export function createStorage(source: string | Database, projectId: string): Sto
   const openThreadQuestionsStmt = scope.prepare<[], ThreadQuestionRow>(
     "SELECT * FROM thread_question WHERE project_id = @project_id AND state = 'open' ORDER BY asked_at, rowid",
   )
+  // The board's batched read. UNFILTERED by state, unlike the statement directly above: the board takes
+  // both halves off one list — the open questions the card asks, and the just-answered ones still on
+  // their way to the worker — so this is the whole-project twin of `threadQuestionsBySlugStmt`, right
+  // down to the rowid tiebreak that keeps one ask's questions in the order the worker wrote them.
+  const allThreadQuestionsStmt = scope.prepare<[], ThreadQuestionRow>(
+    "SELECT * FROM thread_question WHERE project_id = @project_id ORDER BY asked_at, rowid",
+  )
   const answerThreadQuestionStmt = scope.prepare(`
     UPDATE thread_question SET state = 'answered', answer = ?, settled_at = ?
     WHERE project_id = @project_id AND id = ? AND state = 'open'
@@ -1693,6 +1759,11 @@ export function createStorage(source: string | Database, projectId: string): Sto
     ON CONFLICT(project_id, thread_slug) DO UPDATE SET body = excluded.body, done_at = excluded.done_at
   `)
   const getThreadDoneStmt = scope.prepare("SELECT body, done_at FROM thread_done WHERE project_id = @project_id AND thread_slug = ?")
+  // The board's batched read. No ORDER BY to match: the table's primary key is (project_id,
+  // thread_slug), so a slug selects at most one row and there is nothing for an order to decide.
+  const allThreadDoneStmt = scope.prepare<[], { thread_slug: string; body: string; done_at: number }>(
+    "SELECT thread_slug, body, done_at FROM thread_done WHERE project_id = @project_id",
+  )
   const clearThreadDoneStmt = scope.prepare("DELETE FROM thread_done WHERE project_id = @project_id AND thread_slug = ?")
   // Only a PROMPTLESS snooze expires here. One that carries a prompt still owes the thread a bump, and
   // the scheduler — not the board — clears it once that wake reaches a terminal state. Erasing it on
@@ -2356,6 +2427,9 @@ export function createStorage(source: string | Database, projectId: string): Sto
     armPrWatch: (watch) => void armPrWatchStmt.run(watch),
     listPrWatches: (slug, opts) =>
       (opts?.armedOnly ? armedPrWatchesBySlugStmt : prWatchesBySlugStmt).all(slug),
+    // Grouped off `armedPrWatchesStmt` — the scheduler's own whole-project read, which already carries
+    // the identical `state = 'armed'` predicate and `created_at, id` order the per-slug statement uses.
+    armedPrWatchesBySlug: () => groupBySlug(armedPrWatchesStmt.all()),
     getPrWatch: (id) => prWatchByIdStmt.get(id),
     armedPrWatches: () => armedPrWatchesStmt.all(),
     expiredPrWatches: (nowMs) => expiredPrWatchesStmt.all(nowMs),
@@ -2374,6 +2448,9 @@ export function createStorage(source: string | Database, projectId: string): Sto
     },
     listThreadWatches: (slug, opts) =>
       (opts?.armedOnly ? armedThreadWatchesBySlugStmt : threadWatchesBySlugStmt).all(slug),
+    // Grouped off `armedThreadWatchesStmt`, for the same reason as the PR watchers above: it is already
+    // the identical predicate and order, asked of the whole project instead of one slug.
+    armedThreadWatchesBySlug: () => groupBySlug(armedThreadWatchesStmt.all()),
     getThreadWatch: (id) => threadWatchByIdStmt.get(id),
     expiredThreadWatches: (nowMs) => expiredThreadWatchesStmt.all(nowMs),
     armedThreadWatches: () => armedThreadWatchesStmt.all(),
@@ -2383,6 +2460,7 @@ export function createStorage(source: string | Database, projectId: string): Sto
     },
     listThreadQuestions: (slug, opts) =>
       (opts?.openOnly ? openThreadQuestionsBySlugStmt : threadQuestionsBySlugStmt).all(slug),
+    threadQuestionsBySlug: () => groupBySlug(allThreadQuestionsStmt.all()),
     getThreadQuestion: (id) => threadQuestionByIdStmt.get(id),
     openThreadQuestions: () => openThreadQuestionsStmt.all(),
     answerThreadQuestion: (id, answer, atMs) => answerThreadQuestionStmt.run(answer, atMs, id).changes === 1,
@@ -2395,12 +2473,20 @@ export function createStorage(source: string | Database, projectId: string): Sto
       const row = getThreadDoneStmt.get(slug) as { body: string; done_at: number } | undefined
       return row ? { body: row.body, doneAt: row.done_at } : undefined
     },
+    // The same ms→`doneAt` mapping as `getThreadDone`, applied once per row instead of once per call,
+    // so the board reads the identical shape out of the map that it read out of the single-row call.
+    threadDoneBySlug: () => {
+      const bySlug = new Map<string, { body: string; doneAt: number }>()
+      for (const row of allThreadDoneStmt.all()) bySlug.set(row.thread_slug, { body: row.body, doneAt: row.done_at })
+      return bySlug
+    },
     clearThreadDone: (slug) => clearThreadDoneStmt.run(slug).changes > 0,
     dropThreadWatch: (slug, id, settledAtMs) => dropThreadWatchStmt.run(settledAtMs, id, slug).changes === 1,
     settleThreadWatch: (id, settledAtMs, state = "settled") => settleThreadWatchStmt.run(state, settledAtMs, id).changes === 1,
     armThreadTimer: (timer) => void armTimerStmt.run(timer),
     listThreadTimers: (slug, opts) =>
       (opts?.armedOnly ? armedTimersBySlugStmt : timersBySlugStmt).all(slug),
+    armedThreadTimersBySlug: () => groupBySlug(armedTimersStmt.all()),
     getThreadTimer: (id) => timerByIdStmt.get(id),
     dueThreadTimers: (nowMs) => dueTimersStmt.all(nowMs),
     cancelThreadTimer: (slug, id, settledAtMs) =>
