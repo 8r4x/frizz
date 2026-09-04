@@ -1,4 +1,5 @@
 import { House, Settings as SettingsIcon } from "lucide-react"
+import { Link } from "react-router"
 import { store } from "../store.ts"
 import { useBoard } from "../hooks.ts"
 import { STATUS_ROW_ACTION, STATUS_ROW_ICON } from "../lib/statusRow.ts"
@@ -129,9 +130,15 @@ export function StatusRow() {
           hit area beside two 24px ones is a target you miss. `-ml-px` is the ink trim — the square's
           own `-mx-1.5` leaves the house glyph's ink 1px OUTSIDE the composer's border (measured), and
           the left edge is the one place in this row where a pixel of overhang is visible. */}
-      <a href="/" title="All projects" aria-label="All projects" className={`${STATUS_ROW_ACTION} -ml-px`}>
+      {/* A ROUTER Link, like the rail's identical door at ProjectRail.tsx. It was a raw `<a href="/">`
+          from 2026-08-19 until 2026-09-04, which hard-loaded the document: measured at 116-411ms with a
+          0.15 CLS, and it threw away the app socket and the whole query cache on the way out. That was
+          an oversight rather than a decision — the router refactor that made the rail outlive a
+          navigation predates this row by a fortnight, and `/` has had its own SPA route the whole time.
+          The rail is hidden under 800px and off by default, so THIS was the door most operators used. */}
+      <Link to="/" title="All projects" aria-label="All projects" className={`${STATUS_ROW_ACTION} -ml-px`}>
         <House size={STATUS_ROW_ICON} aria-hidden="true" />
-      </a>
+      </Link>
       <Divider />
       <button
         type="button"

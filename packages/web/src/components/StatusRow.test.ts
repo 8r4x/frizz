@@ -3,6 +3,7 @@ import test from "node:test"
 import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
+import { MemoryRouter } from "react-router"
 import type { BoardSnapshot } from "@frizz/shared"
 import { StatusRow } from "./StatusRow.tsx"
 import { store, type ConnectionState } from "../store.ts"
@@ -38,8 +39,15 @@ function render(
     : { projectLabel: label, ...(githubRepo ? { githubRepo } : {}), threads: [] }) as unknown as BoardSnapshot
   store.connection = options.connection ?? "open"
   store.socketBoardFallback = null
+  // The home crumb is a router Link (it hard-loaded the document until 2026-09-04), and a Link outside a
+  // router context throws on render — every case here failed at once when it changed. In the app the row
+  // is always under RouterProvider; MemoryRouter is the same context without a DOM history.
   return renderToStaticMarkup(
-    createElement(QueryClientProvider, { client }, createElement(StatusRow, null)),
+    createElement(
+      QueryClientProvider,
+      { client },
+      createElement(MemoryRouter, null, createElement(StatusRow, null)),
+    ),
   )
 }
 
@@ -187,6 +195,29 @@ test("the quota READING is small, but its provider mark is a full-sized, full-br
   assert.match(html, /text-muted\/65 size-\[11px\][^"]*size-\[14px\]!/)
 })
 
+test("the home crumb is a ROUTER link, not a raw anchor that reloads the document", () => {
+  // It was `<a href="/">` from 2026-08-19 to 2026-09-04: a full document load measured at 116-411ms with
+  // a 0.15 CLS, throwing away the app socket and the whole query cache on the way out. The rail's
+  // identical door had been a `<Link>` since the router refactor a fortnight earlier, so this was an
+  // oversight — and an easy one to make again, because in STATIC MARKUP the two are the same string.
+  // `<Link to="/">` renders exactly `<a href="/">`, so no assertion on the HTML can tell them apart.
+  //
+  // What differs is the CONTEXT they need: a Link reads the router off React context and throws without
+  // one, a plain anchor does not care. So rendering the row with no router is the discriminator, and it
+  // is the same property that makes this a client-side navigation at all.
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  client.setQueryData(["authStatus"], { claude: "authed", codex: "authed", emails: {} })
+  store.board = { projectLabel: "colinhacks/frizz", threads: [] } as unknown as BoardSnapshot
+  store.connection = "open"
+  assert.throws(
+    () => renderToStaticMarkup(createElement(QueryClientProvider, { client }, createElement(StatusRow, null))),
+    /basename|Router/,
+    "a raw <a href=\"/\"> would render happily here; a router Link cannot",
+  )
+  // …and inside a router it renders, still pointing at the project grid.
+  assert.match(render(), /href="\/"[^>]*aria-label="All projects"|aria-label="All projects"[^>]*href="\/"/)
+})
+
 test("a provider with NO DATA renders nothing at all — and takes the divider with it", () => {
   // "if there's no data available for a given agent, then it should just be entirely hidden instead of
   // showing an em dash" (maintainer 2026-08-19). An em dash spent a readout's worth of space saying a
@@ -199,8 +230,13 @@ test("a provider with NO DATA renders nothing at all — and takes the divider w
   client.setQueryData(["authStatus"], { claude: "authed", codex: "signed-out", emails: {} })
   store.board = { projectLabel: "colinhacks/frizz", threads: [] } as unknown as BoardSnapshot
   store.connection = "open"
+  // Seeds its own client rather than going through `render`, so it needs the router context too.
   const one = renderToStaticMarkup(
-    createElement(QueryClientProvider, { client }, createElement(StatusRow, null)),
+    createElement(
+      QueryClientProvider,
+      { client },
+      createElement(MemoryRouter, null, createElement(StatusRow, null)),
+    ),
   )
   assert.doesNotMatch(one, /—/, "no em dash anywhere")
   assert.equal(one.split("Claude Code").length - 1, 1, "the Claude chip is still there")

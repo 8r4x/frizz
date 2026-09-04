@@ -1,4 +1,5 @@
 import { createRoot } from "react-dom/client"
+import { MemoryRouter } from "react-router"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import "./styles.css"
 
@@ -107,15 +108,20 @@ const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false 
 
 createRoot(document.getElementById("root")!).render(
   <QueryClientProvider client={queryClient}>
-    <main className="min-h-screen bg-bg p-6 text-fg">
-      {/* The sidebar column's real width at a 1440px viewport by default, so the row's split reads at the
-          measure it actually ships at; `?width=272` is the column's floor. */}
-      <div style={{ width }}>
-        <StatusRow />
-        <div className="rounded-xl border border-border bg-panel px-3 py-6 text-[13px] text-muted">
-          A stand-in prompt box. The row's two ends land on THIS border.
+    {/* The row's home crumb is a router Link (it hard-loaded the document until 2026-09-04), and a Link
+        outside a router context throws on render. In the app the row always sits under RouterProvider;
+        a MemoryRouter gives the fixture the same context without touching the address bar. */}
+    <MemoryRouter>
+      <main className="min-h-screen bg-bg p-6 text-fg">
+        {/* The sidebar column's real width at a 1440px viewport by default, so the row's split reads at the
+            measure it actually ships at; `?width=272` is the column's floor. */}
+        <div style={{ width }}>
+          <StatusRow />
+          <div className="rounded-xl border border-border bg-panel px-3 py-6 text-[13px] text-muted">
+            A stand-in prompt box. The row's two ends land on THIS border.
+          </div>
         </div>
-      </div>
-    </main>
+      </main>
+    </MemoryRouter>
   </QueryClientProvider>,
 )
