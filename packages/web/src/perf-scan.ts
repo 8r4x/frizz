@@ -1,5 +1,17 @@
-// DEV-ONLY render instrumentation, opt-in via `?scan=1`. react-scan patches React's reconciler hook,
-// so this module must be imported BEFORE react-dom — main.tsx keeps it as its first import.
+// DEV-ONLY render instrumentation, opt-in via `?scan=1`.
+//
+// NOTHING IN THE APP IMPORTS THIS FILE. It is loaded as its own `<script type="module">`, injected
+// into the head ahead of main.tsx by the `frizz:dev-render-scan` Vite plugin, which is `apply:
+// "serve"` — so this module and everything it drags in (react-scan, react-grab, preact, bippy:
+// 185,755 bytes of entry chunk, measured 2026-09-04) exist in dev and are absent from the production
+// graph by construction rather than by tree-shaking. main.tsx imported it until 2026-09-04 and
+// shipped all of that to every user, because the `import.meta.env.DEV` guard below sits inside the
+// function while the import sat at the top.
+//
+// It is a separate script rather than a lazy import because react-scan side-effect-imports bippy,
+// which installs `__REACT_DEVTOOLS_GLOBAL_HOOK__`, and react-dom reads that global once at its own
+// module scope. `await import("react-scan")` therefore always loses the race — see the long note on
+// the plugin in vite.config.ts.
 //
 // It answers one question we otherwise can only guess at: when opening a thread drawer, WHICH
 // components render, how many times, and how much of that was avoidable? Results land on
@@ -28,7 +40,7 @@ declare global {
   }
 }
 
-export function installRenderScan(): void {
+function installRenderScan(): void {
   if (!import.meta.env.DEV) return
   if (typeof window === "undefined") return
   if (!new URLSearchParams(window.location.search).has("scan")) return
@@ -79,3 +91,6 @@ export function installRenderScan(): void {
     },
   })
 }
+
+// Self-installing: this module IS the entry point, so there is no caller to do it.
+installRenderScan()

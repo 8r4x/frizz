@@ -1,6 +1,3 @@
-// FIRST import on purpose: react-scan patches React's reconciler hook and must load before react-dom.
-// No-ops unless DEV and `?scan=1`.
-import { installRenderScan } from "./perf-scan.ts"
 import { createRoot } from "react-dom/client"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import "@xterm/xterm/css/xterm.css"
@@ -19,8 +16,6 @@ import { primeRoute } from "./lib/router.ts"
 import { innerPath } from "./lib/base-path.ts"
 import { projectScopedQueryKeyHash } from "./lib/queryKeyScope.ts"
 import { parseStandaloneThreadPath } from "./lib/standaloneThreadRoute.ts"
-
-installRenderScan()
 
 const settingsFixture = typeof window !== "undefined" && window.location.pathname.endsWith("/settings-formatting-fixture.html")
 // innerPath, not location.pathname: under a project prefix the deep link is `/project/nub/thread/x/full`.
