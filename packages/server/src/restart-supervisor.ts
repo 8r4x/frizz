@@ -23,6 +23,7 @@ import {
   type LocalAuthorityPolicy,
 } from "./local-origin.ts"
 import { resolveLocalImage } from "./local-image.ts"
+import { recoveryPage, unauthorizedPage, unlistedHostPage } from "./supervisor-pages.ts"
 import { FRIZZ_ROUTE_PREFIX, frizzRoute } from "@frizz/shared"
 
 export const SUPERVISOR_CONTROL_PREFIX = "/_frizz/control"
@@ -117,12 +118,6 @@ function responseJson(res: ServerResponse, status: number, value: unknown): void
   res.end(JSON.stringify(value))
 }
 
-function recoveryPage(url: string, detail = "Frizz is restarting or unavailable."): string {
-  // This is deliberately not an auto-refresh page. A broken child must not make a browser spin forever.
-  const escaped = url.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll('"', "&quot;")
-  return `<!doctype html><meta charset="utf-8"><title>Frizz recovering</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:3rem;font:16px system-ui;color:#e7e7e7;background:#171717}main{max-width:36rem;padding:1.5rem;border:1px solid #444;border-radius:.75rem;background:#222}a{color:#f7d64a}</style><main><h1>Frizz is recovering</h1><p>${detail}</p><p><a href="${escaped}">Try this page again</a></p></main>`
-}
-
 function proxyHeaders(
   req: IncomingMessage,
   childPort: number,
@@ -158,30 +153,6 @@ function readCookie(header: string | undefined, name: string): string | undefine
     if (pair.slice(0, eq).trim() === name) return pair.slice(eq + 1).trim()
   }
   return undefined
-}
-
-function unauthorizedPage(reason?: "unknown" | "expired" | "already-used"): string {
-  // Deliberately says nothing about what Frizz is or whose machine this is. An unauthenticated
-  // visitor should not learn that a shell-capable board lives here. The reason is the one exception:
-  // "already used" and "expired" send the operator to very different next actions, and neither
-  // discloses anything to somebody who did not already hold a link.
-  const detail = reason === "already-used"
-    ? "That link has already been used. Generate a fresh one."
-    : reason === "expired"
-      ? "That link expired. Generate a fresh one."
-      : "This address needs a current access link.";
-  return `<!doctype html><meta charset="utf-8"><title>Unauthorized</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:3rem;font:16px system-ui;color:#e7e7e7;background:#171717}main{max-width:30rem;padding:1.5rem;border:1px solid #444;border-radius:.75rem;background:#222}</style><main><h1>Unauthorized</h1>${detail ? `<p>${detail}</p>` : ""}</main>`
-}
-
-/**
- * The refusal an operator sees after opening an exposed board by a name `--allowed-host` does not
- * list. Unlike unauthorizedPage this SAYS what Frizz is: the board is already open to this network by
- * IP with no gate at all, so naming the flag costs nothing and saves the guess. The name is escaped
- * even though the Host parser already refuses every character that could break markup.
- */
-function unlistedHostPage(name: string): string {
-  const shown = name.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!)
-  return `<!doctype html><meta charset="utf-8"><title>Not served by this name</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:3rem;font:16px system-ui;color:#e7e7e7;background:#171717}main{max-width:34rem;padding:1.5rem;border:1px solid #444;border-radius:.75rem;background:#222}code{font:14px ui-monospace,monospace;padding:.1em .3em;border-radius:.3em;background:#333;white-space:nowrap}</style><main><h1>Not served by this name</h1><p>Frizz does not answer to <code>${shown}</code>. A name a browser has to resolve is how DNS rebinding makes another site's page count as this board, so an exposed board accepts only its own hostname and the names its operator lists.</p><p>Open the board by its IP address, or relaunch with <code>--allowed-host ${shown}</code> (or <code>FRIZZ_ALLOWED_HOSTS=${shown}</code>) to accept this one.</p></main>`
 }
 
 function isControlRequest(req: IncomingMessage): boolean {
@@ -676,7 +647,7 @@ export class RestartSupervisorProxy {
     upstream.once("error", () => {
       if (res.headersSent) return res.destroy()
       res.writeHead(503, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" })
-      res.end(recoveryPage(req.url ?? "/", "The Frizz application server is unavailable. Use Restart Frizz to recover it."))
+      res.end(recoveryPage(req.url ?? "/", "unreachable"))
     })
     req.pipe(upstream)
   }
