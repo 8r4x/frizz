@@ -1,8 +1,8 @@
 export type { AppRouter } from "./router.ts"
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
-import { readFileSync, existsSync } from "node:fs"
-import { dirname, join, resolve, extname, normalize } from "node:path"
+import { readFileSync, existsSync, statSync } from "node:fs"
+import { dirname, join, resolve, extname, normalize, sep } from "node:path"
 import { DEFAULT_PORT, FRIZZ_ROUTE_PREFIX } from "@frizz/shared"
 import {
 ContextStartupError,
@@ -15,6 +15,7 @@ ContextStartupError,
   type ContextStartupPhase,
 } from "./context.ts"
 import { createApp, type AppOptions } from "./app.ts"
+import { compress, negotiateEncoding, shouldCompress, type ContentEncoding } from "./compression.ts"
 import { createTerminalServer } from "./terminal.ts"
 import { createAppSocketServer, makeTranscriptReader } from "./app-socket.ts"
 import {
@@ -425,16 +426,114 @@ export function createShutdownSignalHandler(options: ShutdownSignalHandlerOption
   }
 }
 
+/**
+ * Cache-Control for the two kinds of file in web/dist, and they are NOT the same kind.
+ *
+ * Vite content-hashes everything it emits under `assets/`, so a given URL's bytes can never change —
+ * `immutable` is exactly true there, and it is the whole difference between a reload that transfers
+ * the bundle again and one that transfers nothing. Until 2026-09-04 this handler sent `content-type`
+ * and no validator of any kind, so a reload with the browser cache ENABLED re-fetched the whole app.
+ * Measured that day in headless Chrome against a real 558-thread board, document + static bytes on a
+ * reload: 1,568,997 -> 1,200, and DOMContentLoaded 34.5 -> 14.2 ms. The 1,200 is three 304s for the
+ * files that are NOT hashed; every byte under /assets/ comes from disk.
+ *
+ * index.html is the opposite case and must never get that treatment: it is the document that NAMES
+ * the current hashes, so an immutably-cached copy strands the browser on the old build's asset URLs.
+ * Frizz updates itself by promoting a new artifact and restarting, which means "restart and reload"
+ * has to be enough to land on the new app — caching the shell would break exactly that. `no-cache`
+ * says "store it, but revalidate before every use": the reload still costs ~300 bytes when nothing
+ * changed (a 304 off the ETag below) and picks up a new build the moment there is one. Verified by
+ * swapping a new entry chunk in under a running server and reloading the same page in the same
+ * browser, which executed the new bytes rather than the cached ones.
+ */
+const STATIC_CACHE_IMMUTABLE = "public, max-age=31536000, immutable"
+const STATIC_CACHE_REVALIDATE = "no-cache"
+
+/**
+ * Encoded static bodies, keyed by file + mtime + size + encoding.
+ *
+ * Brotli takes the cold load from 1,568,997 to 473,271 bytes — 70% — which is what a Frizz reached
+ * through the relay from a remote origin actually pays, the same reason /rpc is compressed (app.ts).
+ * It is NOT free-but-pointless locally either: measured 2026-09-04 against one server with the only
+ * variable being the client's accept-encoding, median cold FCP was 260 ms with brotli and 280 ms with
+ * `identity`. Decompressing 1.3 MB costs the browser less than reading it off a loopback socket does.
+ *
+ * Cached because brotli q4 over a ~1.3 MB entry chunk is tens of milliseconds that would otherwise be
+ * paid on every cold load. The key space is bounded by the files in one dist directory, and the byte
+ * budget bounds a long-lived server that has served several promoted artifacts.
+ */
+const staticEncodedCache = new Map<string, Uint8Array>()
+const STATIC_ENCODED_CACHE_MAX_BYTES = 32 * 1024 * 1024
+let staticEncodedCacheBytes = 0
+
+function encodedStatic(key: string, encoding: ContentEncoding, raw: Uint8Array): Uint8Array {
+  const hit = staticEncodedCache.get(key)
+  if (hit) return hit
+  const out = compress(raw, encoding)
+  if (staticEncodedCacheBytes + out.byteLength > STATIC_ENCODED_CACHE_MAX_BYTES) {
+    staticEncodedCache.clear()
+    staticEncodedCacheBytes = 0
+  }
+  staticEncodedCache.set(key, out)
+  staticEncodedCacheBytes += out.byteLength
+  return out
+}
+
+/** Does the client already hold this exact representation? */
+function staticIsFresh(req: IncomingMessage, etag: string, mtimeMs: number): boolean {
+  const ifNoneMatch = req.headers["if-none-match"]
+  if (ifNoneMatch) {
+    return ifNoneMatch.split(",").some((candidate) => {
+      const tag = candidate.trim()
+      return tag === "*" || tag.replace(/^W\//, "") === etag
+    })
+  }
+  const ifModifiedSince = req.headers["if-modified-since"]
+  if (!ifModifiedSince) return false
+  const since = Date.parse(ifModifiedSince)
+  // HTTP dates carry whole seconds, so compare at that resolution — otherwise a file whose mtime has
+  // a fractional part always looks newer than the copy the client just told us it has.
+  return Number.isFinite(since) && Math.floor(mtimeMs / 1000) <= Math.floor(since / 1000)
+}
+
 // Serve a built asset from web/dist, falling back to index.html for SPA routes. Path is
 // normalized + confined to distDir so a request can't escape the root.
-function serveStatic(distDir: string, req: IncomingMessage, res: ServerResponse) {
+export function serveStatic(distDir: string, req: IncomingMessage, res: ServerResponse) {
   const rel = normalize((req.url ?? "/").split("?")[0]).replace(/^(\.\.[/\\])+/, "")
   let file = join(distDir, rel === "/" ? "index.html" : rel)
   if (!file.startsWith(distDir)) file = join(distDir, "index.html")
   if (!existsSync(file)) file = join(distDir, "index.html") // SPA fallback
   try {
-    const body = readFileSync(file)
-    res.writeHead(200, { "content-type": MIME[extname(file)] ?? "application/octet-stream" })
+    const stats = statSync(file)
+    // The policy follows the file we RESOLVED, never the URL that was asked for. A request for a
+    // hashed asset that no longer exists lands on the SPA fallback above, and answering that with
+    // `immutable` would pin the app shell forever under an /assets/ URL — the stale-build bug, with
+    // no way out but a manual cache clear.
+    const cacheControl = file.startsWith(join(distDir, "assets") + sep) ? STATIC_CACHE_IMMUTABLE : STATIC_CACHE_REVALIDATE
+    const etag = `"${stats.size.toString(16)}-${Math.trunc(stats.mtimeMs).toString(16)}"`
+    const headers: Record<string, string> = {
+      "content-type": MIME[extname(file)] ?? "application/octet-stream",
+      "cache-control": cacheControl,
+      etag,
+      "last-modified": stats.mtime.toUTCString(),
+      // Sent on every static response, not just the compressed ones: a shared cache in front of a
+      // tunnelled Frizz must not hand a brotli body to a client that asked for identity.
+      vary: "Accept-Encoding",
+    }
+    if (staticIsFresh(req, etag, stats.mtimeMs)) {
+      res.writeHead(304, headers)
+      res.end()
+      return
+    }
+    let body: Uint8Array = readFileSync(file)
+    const accept = req.headers["accept-encoding"]
+    const encoding = negotiateEncoding(Array.isArray(accept) ? accept.join(",") : accept)
+    if (encoding && shouldCompress(new Headers({ "content-type": headers["content-type"]! }), body.byteLength)) {
+      body = encodedStatic(`${encoding}:${file}:${etag}`, encoding, body)
+      headers["content-encoding"] = encoding
+    }
+    headers["content-length"] = String(body.byteLength)
+    res.writeHead(200, headers)
     res.end(body)
   } catch {
     res.writeHead(404)
