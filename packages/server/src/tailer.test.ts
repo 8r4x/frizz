@@ -3334,6 +3334,50 @@ test("tailer: a killed shell does NOT come back when the fold re-primes from scr
   assert.deepEqual(second.get("t")?.subAgents, [], "…and it is gone from every live surface, not just the shell list")
 })
 
+// …AND IT STAYS KILLED ON A BOARD BIG ENOUGH TO DEFER ITS PRIME, which is every board this bug was
+// ever reported from. The prime bound now turns a cold row back BEFORE its state is built at all (a
+// row with no state IS an unprimed row), because the setup — the `retiredOps` read, the tail-cache
+// hydrate, a stat per transcript, read-side discovery — used to run for all 558 rows of a real board
+// on a tick that folded one of them. Every fence that makes a dismissal durable lives inside that
+// setup, so a bound that skipped it rather than deferring it would resurrect the killed shell on
+// exactly the boards large enough to matter. The one-row test above cannot see that: nothing defers.
+test("tailer: a killed shell stays killed on a board big enough to defer its prime", () => {
+  const h = harness()
+  // Registered FIRST and VISIBLE, so registry order alone puts the row under test past the per-tick
+  // bound — more than MAX_PRIME_ROWS_PER_TICK of them, and none archived, so the archive-yield rule
+  // never fires and the count is the only thing deferring anybody.
+  for (let i = 0; i < 60; i++) {
+    const slug = `filler-${i}`
+    h.storage.upsertSession(row({ slug, thread_name: `frizz-${slug}`, session_id: `filler-sid-${i}` }))
+    fixture(h.logDir, `filler-sid-${i}`, [IN_FLIGHT, DONE])
+  }
+  h.storage.upsertSession(row())
+  const shellLine = JSON.stringify(bashBg("toolu_sh", "Restart the census sweep", "node census.ts"))
+  const ackLine = JSON.stringify(resultText("toolu_sh", "Command running in background with ID: bhq. Output is being written to: /tmp/tasks/bhq.output. You will be notified when it completes."))
+  fixture(h.logDir, "sid", [IN_FLIGHT, shellLine, ackLine])
+
+  // A FROZEN monotonic clock, for the same reason the archived-yield test freezes it: what is under
+  // test is the deferral, and PRIME_BUDGET_MS is real wall time that would make WHICH tick primes this
+  // row depend on how loaded the machine is.
+  const opts = { mtimeMs: () => Date.parse("2026-07-01T00:00:02.000Z"), monotonicNow: () => 0 }
+  const first = makeTailer(h, opts)
+  h.clock.ms = Date.parse("2026-07-01T00:01:00.000Z")
+  first.tick()
+  // THE CONTROL. Without this the test proves nothing: if the row primed on tick one, the deferral
+  // path it exists to cover never ran. Undefined, not empty — a deferred row is not set up at all.
+  assert.equal(first.get("t"), undefined, "the row under test really was deferred, setup and all")
+  for (let i = 0; i < 5; i++) first.tick()
+  assert.equal(first.get("t")?.bgShells.length, 1, "…and it folds on a later tick, shell and all")
+  assert.equal(first.dismissOp?.("t", "toolu_sh"), true)
+
+  // THE RESTART, over the same registry — and the same deferral, so the row is rebuilt on a tick that
+  // is nowhere near the one that read the registry's `retired_op` rows into anything else.
+  const second = makeTailer(h, opts)
+  for (let i = 0; i < 6; i++) second.tick()
+  assert.deepEqual(second.get("t")?.bgShells, [], "a deferred prime must not resurrect what the operator killed")
+  assert.deepEqual(second.get("t")?.subAgents, [], "…on every live surface, exactly as an undeferred one does not")
+})
+
 // …AND A REVIVED OP STOPS BEING DISMISSED — on the tick the revival lands, not at the next boot.
 //
 // trackResumes queues the un-retirement (a pure fold function holds no storage handle), and the drain

@@ -83,7 +83,10 @@ const POLL_MS = 1000
 // short ticks instead, and costs nothing steady-state because an already-primed row is cheap.
 //
 // A row that does not get primed this tick is simply not in `states` yet, which is the same condition
-// as a row dispatched a second from now — the tick already handles that on every poll.
+// as a row dispatched a second from now — the tick already handles that on every poll. That was the
+// INTENT from the day this constant landed, and it only became literally true on 2026-09-04: until then
+// the loop built the state — and paid everything a state costs — for every row it then declined to
+// fold, so the bound covered the fold and nothing around it. See the gate in tick().
 const MAX_PRIME_ROWS_PER_TICK = 25
 // …and a wall-clock ceiling on the same pass, because per-row prime cost varies by orders of
 // magnitude: one enormous transcript costs more than fifty ordinary ones. A row count alone left a
@@ -4185,6 +4188,20 @@ export function createTailer(deps: TailerDeps): Tailer {
     let primedRows = 0
     const tickStartedMs = monotonicNow()
     primeIncomplete = false
+    // THE PRIME BOUND. Asked at TWO gates in the loop below — once before a cold row is SET UP at all,
+    // and once more where the fold itself begins — so it has to be one predicate rather than two copies
+    // that can drift. `primedRows` is read live, not captured.
+    //
+    // `primedRows > 0` guarantees forward progress: the very first cold row of a tick always primes,
+    // however expensive, so a board can never stall by being over budget on entry.
+    const primeDeferred = (row: SessionRow): boolean =>
+      // Yield the slot to a still-cold visible row — but never at the cost of the forward-progress
+      // guarantee above. `primedRows > 0` keeps the archive advancing by at least one row per tick
+      // even if a visible row were somehow to stay cold indefinitely, so deferral can never become
+      // starvation. The visible row still primes on this same tick; it just is not necessarily first.
+      (coldVisibleRow && primedRows > 0 && rowIsArchived(row)) ||
+      primedRows >= MAX_PRIME_ROWS_PER_TICK ||
+      (primedRows > 0 && monotonicNow() - tickStartedMs > PRIME_BUDGET_MS)
     for (const row of rows) {
       if (primeProgress && primed % PRIME_PROGRESS_EVERY === 0) primeProgress(primed, rows.length)
       primed++
@@ -4196,14 +4213,39 @@ export function createTailer(deps: TailerDeps): Tailer {
       // deterministic path); a codex row (transcript_id NULL) falls to agent_session_id ?? session_id.
       const backend = resolveBackend(row.backend)
       const nativeId = row.agent_session_id ?? row.transcript_id ?? row.session_id
-      let state = states.get(row.slug)
+      const known = states.get(row.slug)
       const runtimeGeneration = row.runtime_generation ?? 0
-      if (
-        !state ||
-        state.sessionId !== row.session_id ||
-        state.nativeSessionId !== nativeId ||
-        state.runtimeGeneration !== runtimeGeneration
-      ) {
+      // The state this row may KEEP: same session, same native transcript stem, same runtime
+      // generation. Anything else is a different conversation wearing the same slug, and its state has
+      // to be rebuilt from scratch — which costs exactly what never having had one costs.
+      const keepable = known !== undefined &&
+        known.sessionId === row.session_id &&
+        known.nativeSessionId === nativeId &&
+        known.runtimeGeneration === runtimeGeneration
+      let state = keepable ? known : undefined
+      // THE BOUND IS ASKED BEFORE THE SETUP, NOT ONLY BEFORE THE FOLD (2026-09-04).
+      //
+      // Everything between here and the prime below is PER-ROW work that a deferred row used to pay in
+      // full for nothing: a `retiredOps` query, a tail-cache hydrate (a stat, two reads and a hash), and
+      // then resolveTranscript — a stat per transcript, and for anything still unbound a whole read-side
+      // discovery pass whose `claimedIds` re-reads the entire registry. MAX_PRIME_ROWS_PER_TICK and
+      // PRIME_BUDGET_MS bounded only the FOLD, so a cold board ran that setup for every row and folded
+      // 25. Measured on a 558-thread board, cold tail cache: the first tick cost 2251ms and primed
+      // exactly ONE row — the wall-clock budget was already spent by the time the second cold row
+      // reached the gate below (1140ms and one row with the cache warm). That is tenant-prime.ts's
+      // "THE COLD PRIME IS ALREADY BOUNDED" bullet being false by an order of magnitude, and the
+      // operator felt it as the board taking seconds to appear while the rail opened behind it.
+      //
+      // A row with no state IS a row that has not been primed — the condition MAX_PRIME_ROWS_PER_TICK
+      // already describes ("simply not in `states` yet") — so turning one back here needs no new concept
+      // and leaves exactly the state the fold's own deferral leaves. Nothing outside can tell the two
+      // apart either: `get` already answers undefined both for a slug with no state and for a stale one
+      // (registeredStateIsCurrent), and the scheduler's own seams read that as "unknown", never as idle.
+      if (!state && primeDeferred(row)) {
+        primeIncomplete = true
+        continue
+      }
+      if (!state) {
         // claude.transcriptPath always returns the logDir join; codex.transcriptPath resolves the
         // date-sharded rollout by id (or undefined before its id is pinned → the join is a harmless
         // placeholder until discovery pins it).
@@ -4248,17 +4290,13 @@ export function createTailer(deps: TailerDeps): Tailer {
         // Bounded so activation never blocks the loop for seconds. The row keeps its place in the
         // registry and primes on a following tick; scheduleTick below re-arms immediately while any
         // remain, so a cold board converges in a few hundred ms of wall time without a long stall.
-        // `primedRows > 0` guarantees forward progress: the very first cold row of a tick always
-        // primes, however expensive, so a board can never stall by being over budget on entry.
-        if (
-          // Yield the slot to a still-cold visible row — but never at the cost of the forward-progress
-          // guarantee below. `primedRows > 0` keeps the archive advancing by at least one row per tick
-          // even if a visible row were somehow to stay cold indefinitely, so deferral can never become
-          // starvation. The visible row still primes on this same tick; it just is not necessarily first.
-          (coldVisibleRow && primedRows > 0 && rowIsArchived(row)) ||
-          primedRows >= MAX_PRIME_ROWS_PER_TICK ||
-          (primedRows > 0 && monotonicNow() - tickStartedMs > PRIME_BUDGET_MS)
-        ) {
+        //
+        // THE SECOND GATE, and it is not redundant with the one above: a row reaches here unprimed with
+        // a state ALREADY BUILT in two ways the gate above cannot see. resolveTranscript resets
+        // `primed` when it re-links a drifted transcript, so a row that arrived primed leaves cold; and
+        // a row whose `setTranscriptIdIfCurrent` lost its race on an earlier tick was left set up and
+        // never folded. Both are rare, and both must still respect the budget rather than fold for free.
+        if (primeDeferred(row)) {
           primeIncomplete = true
           continue
         }
@@ -4729,7 +4767,15 @@ export function createTailer(deps: TailerDeps): Tailer {
       stopped = false
       primeProgress = onPrimeProgress
       try {
-        tick() // derive current state immediately (also restores state after a server restart)
+        // THROUGH THE BUDGET WRAPPER, like every other tick. This one derives current state immediately
+        // (and restores it after a server restart), and it is by far the most expensive tick the tailer
+        // ever runs — yet it was the only one with no cost accounting at all, because it called `tick`
+        // directly. So the warning that names a loop-blocking tick could not see the tick that blocks
+        // the loop longest: a 2251ms activation sat in the boot path for weeks, measured only when
+        // somebody went looking (2026-09-04, and see the prime bound in tick). It also seeds
+        // `lastTickMs`, so the first SCHEDULED tick honours the duty-cycle floor instead of assuming
+        // the boot pass was free.
+        tickWithBudget()
       } finally {
         primeProgress = undefined
       }
