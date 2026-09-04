@@ -54,3 +54,11 @@ package.json.publish-backup
 
 # vercel CLI link state for site/ (the frizz.sh one-pager)
 .vercel/
+
+# wrangler/miniflare's local emulation state — the KV and cache SQLite files `wrangler dev` writes
+# beside whatever directory it was launched from, so it appears at the root AND under packages/relay.
+# Machine-local scratch that regenerates on the next run.
+.wrangler/
+# the gh CLI's per-machine device id, written under a repo-local XDG state dir. Machine identity, and
+# so exactly the sort of thing that must never reach a commit.
+.local/
