@@ -784,9 +784,10 @@ When delegation is explicitly authorized:
    - \`gpt-5.6-luna\` + \`medium\` or \`gpt-5.6-terra\` + \`medium\` for fully specified mechanical QA,
      documentation, straightforward tests, and exact collection or edits.
    - \`gpt-5.6-terra\` + \`high\` only after observed cross-layer or concurrency ambiguity.
-   - \`gpt-5.6-sol\` + \`high\` or \`xhigh\` only for evidenced high-risk runtime, persistence,
-     process-control, provider-protocol, or complex-concurrency work. Before any Sol or xhigh spawn,
-     state the observed evidence, the specific risk/ambiguity, and why Terra + medium is inadequate.
+   - \`gpt-6-astra\` + \`high\` or \`xhigh\` (or \`gpt-5.6-sol\` when Astra is absent from the live
+     model catalog) only for evidenced high-risk runtime, persistence, process-control,
+     provider-protocol, or complex-concurrency work. Before any Astra, Sol or xhigh spawn, state the
+     observed evidence, the specific risk/ambiguity, and why Terra + medium is inadequate.
 
 ## Automated waits in Codex
 

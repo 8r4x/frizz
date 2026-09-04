@@ -349,8 +349,8 @@ test("loadWorkerPrompt(codex) carries codex's OWN session/wake + model/effort/sa
   assert.match(c, /schema default is a FULL fork/)
   assert.match(c, /`gpt-5\.6-luna` \+ `medium`/)
   assert.match(c, /`gpt-5\.6-terra` \+ `medium`/)
-  assert.match(c, /`gpt-5\.6-sol` \+ `high` or `xhigh`/)
-  assert.match(c, /Before any Sol or xhigh spawn/)
+  assert.match(c, /`gpt-6-astra` \+ `high` or `xhigh` \(or `gpt-5\.6-sol` when Astra is absent/)
+  assert.match(c, /Before any Astra, Sol or xhigh spawn/)
   assert.match(c, /why Terra \+ medium is inadequate/)
   assert.doesNotMatch(c, /do that work INLINE yourself/)
   // The effort enum must match what frizz actually sends codex: codexEffort (backend/codex.ts) passes

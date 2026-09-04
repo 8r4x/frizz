@@ -5,11 +5,14 @@ import { join } from "node:path"
 import { tmpdir } from "node:os"
 import { parseCodexModelsCache, readCodexModels, CODEX_MODELS_FALLBACK } from "./codex-models.ts"
 
-// A REAL snippet of ~/.codex/models_cache.json (codex-cli 0.144.1, fields verbatim). Deliberately
-// includes: per-model effort sets (sol → …/ultra, luna → …/max, 5.5 → …/xhigh), OUT-OF-ORDER priorities
-// (5.5 before sol) to prove the ascending sort, a hidden model (codex-auto-review) to prove the
-// visibility filter drops it, and an api=false-but-listed model (spark) to prove it is KEPT (frizz spawns
-// the TUI, not the Responses API). Trimmed of the fat sidecar fields the parser ignores.
+// A REAL snippet of ~/.codex/models_cache.json (codex-cli 0.144.1, fields verbatim; the gpt-6-astra
+// entry is the codex-cli 0.153.2 bundled shape, 2026-09-04). Deliberately includes: per-model effort
+// sets (astra/sol → …/ultra, luna → …/max, 5.5 → …/xhigh), OUT-OF-ORDER priorities (5.5 before sol,
+// astra LAST in the array but priority 1) to prove the ascending sort, a hidden model (codex-auto-review)
+// to prove the visibility filter drops it, an api=false-but-listed model (spark) to prove it is KEPT
+// (frizz spawns the TUI, not the Responses API), and the newer sidecar fields astra ships with
+// (`minimal_client_version`, `service_tiers`, `additional_speed_tiers`) to prove the parser ignores
+// them rather than tripping on them. Otherwise trimmed of the fat sidecar fields the parser ignores.
 const REAL_CACHE = JSON.stringify({
   fetched_at: "2026-07-12T16:21:05.012098Z",
   etag: 'W/"db2a6dc50b1d003969cdc236274e488a"',
@@ -43,7 +46,7 @@ const REAL_CACHE = JSON.stringify({
       ],
       visibility: "list",
       supported_in_api: true,
-      priority: 1,
+      priority: 2,
     },
     {
       slug: "gpt-5.6-luna",
@@ -83,15 +86,40 @@ const REAL_CACHE = JSON.stringify({
       supported_in_api: true,
       priority: 43,
     },
+    {
+      slug: "gpt-6-astra",
+      display_name: "GPT-6-Astra",
+      description: "Our most capable model for complex, demanding work.",
+      default_reasoning_level: "low",
+      supported_reasoning_levels: [
+        { effort: "low", description: "Fast responses with lighter reasoning" },
+        { effort: "medium", description: "Balances speed and reasoning depth for everyday tasks" },
+        { effort: "high", description: "Greater reasoning depth for complex problems" },
+        { effort: "xhigh", description: "Extra high reasoning depth for complex problems" },
+        { effort: "max", description: "Maximum reasoning depth for the hardest problems" },
+        { effort: "ultra", description: "Maximum reasoning with automatic task delegation" },
+      ],
+      visibility: "list",
+      minimal_client_version: "0.153.0",
+      supported_in_api: true,
+      priority: 1,
+      default_service_tier: null,
+      service_tiers: [{ id: "priority", name: "Fast", description: "2x speed, increased usage" }],
+      additional_speed_tiers: ["fast"],
+    },
   ],
 })
 
 test("parseCodexModelsCache: lists visible models priority-ASC with EXACT per-model effort sets", () => {
   const models = parseCodexModelsCache(REAL_CACHE)
-  // codex-auto-review (visibility:hide) is dropped; the rest are priority-ascending (sol=1, luna=3, 5.5=7, spark=26).
-  assert.deepEqual(models.map((m) => m.slug), ["gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.5", "gpt-5.3-codex-spark"])
+  // codex-auto-review (visibility:hide) is dropped; the rest are priority-ascending (astra=1, sol=2, luna=3, 5.5=7, spark=26).
+  assert.deepEqual(models.map((m) => m.slug), ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.5", "gpt-5.3-codex-spark"])
   const bySlug = Object.fromEntries(models.map((m) => [m.slug, m]))
-  // Per-model efforts are the crux of the fix: sol goes to ultra, luna to max, 5.5 stops at xhigh.
+  // Per-model efforts are the crux of the fix: astra and sol go to ultra, luna to max, 5.5 stops at xhigh.
+  assert.deepEqual(bySlug["gpt-6-astra"]!.efforts, ["low", "medium", "high", "xhigh", "max", "ultra"])
+  // Astra's catalogue default is `low`, and the parser mirrors it rather than assuming `medium`.
+  assert.equal(bySlug["gpt-6-astra"]!.defaultEffort, "low")
+  assert.equal(bySlug["gpt-6-astra"]!.displayName, "GPT-6-Astra")
   assert.deepEqual(bySlug["gpt-5.6-sol"]!.efforts, ["low", "medium", "high", "xhigh", "max", "ultra"])
   assert.deepEqual(bySlug["gpt-5.6-luna"]!.efforts, ["low", "medium", "high", "xhigh", "max"])
   assert.deepEqual(bySlug["gpt-5.5"]!.efforts, ["low", "medium", "high", "xhigh"])
@@ -151,7 +179,7 @@ test("readCodexModels: reads a real cache from CODEX_HOME; a MISSING cache degra
     const home2 = mkdtempSync(join(tmpdir(), "codex-models-"))
     mkdirSync(home2, { recursive: true })
     writeFileSync(join(home2, "models_cache.json"), REAL_CACHE)
-    assert.deepEqual(readCodexModels(home2).map((m) => m.slug), ["gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.5", "gpt-5.3-codex-spark"])
+    assert.deepEqual(readCodexModels(home2).map((m) => m.slug), ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.5", "gpt-5.3-codex-spark"])
     rmSync(home2, { recursive: true, force: true })
   } finally {
     rmSync(home, { recursive: true, force: true })

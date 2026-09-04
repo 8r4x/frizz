@@ -76,9 +76,11 @@ export const CLAUDE_MODELS: SelectOption[] = [
 // the server's codexModels() RPC, which reads the authoritative ~/.codex/models_cache.json (the fix for
 // two live breakages: a bare `gpt-5.6` that codex 400s, and a single effort list that's wrong per-model
 // — 5.6 goes to max/ultra, 5.5 stops at xhigh). This is only the DEGRADED fallback for the loading /
-// no-cache state — a compact mirror, NOT a second catalogue to maintain. gpt-5.6-sol (codex priority 1)
-// leads so it's the natural codex default; a codex spawn 400s on a bare `gpt-5.6`, hence the -sol id.
+// no-cache state — a compact mirror, NOT a second catalogue to maintain. Ordered by codex's own
+// priority: gpt-6-astra is priority 1 in the codex-cli 0.153.2 catalogue (its default effort is `low`
+// there, mirrored verbatim), then the 5.6 trio; a codex spawn 400s on a bare `gpt-5.6`, hence the -sol id.
 export const CODEX_MODELS_FALLBACK: CodexModel[] = [
+  { slug: "gpt-6-astra", displayName: "GPT-6 Astra", defaultEffort: "low", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"] },
   { slug: "gpt-5.6-sol", displayName: "GPT-5.6 Sol", defaultEffort: "medium", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"] },
   { slug: "gpt-5.6-terra", displayName: "GPT-5.6 Terra", defaultEffort: "medium", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"] },
   { slug: "gpt-5.6-luna", displayName: "GPT-5.6 Luna", defaultEffort: "medium", efforts: ["low", "medium", "high", "xhigh", "max"] },

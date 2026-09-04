@@ -71,7 +71,7 @@ export function selectCodexHostKind(
   if (flagValue === "1" || flagValue === "true") return nativeSupported ? "native" : "daemon"
   return nativeSupported ? "native" : "daemon"
 }
-export const CODEX_APP_SERVER_SUPPORTED_VERSION = "0.146.0"
+export const CODEX_APP_SERVER_SUPPORTED_VERSION = "0.153.2"
 // Upgrade policy: the AUDITED version is an exact coordinate — changing it requires a fresh
 // generated-protocol audit plus a source audit at the matching immutable Rust tag/commit, then a new
 // fingerprint and contract fixtures. These coordinates are intentionally runtime-visible diagnostics,
@@ -80,8 +80,8 @@ export const CODEX_APP_SERVER_SUPPORTED_VERSION = "0.146.0"
 // The ACCEPTANCE RULE is deliberately not that exact coordinate — see codexVersionVerdict below.
 export const CODEX_APP_SERVER_PROTOCOL_REVISION = Object.freeze({
   packageVersion: CODEX_APP_SERVER_SUPPORTED_VERSION,
-  sourceTag: "rust-v0.146.0",
-  sourceCommit: "e363b08c9175ac1cbe5893615dd2cb9ddf95043b",
+  sourceTag: "rust-v0.153.2",
+  sourceCommit: "657a993cbee87acf52d14b758ce49dbd46d1b8eb",
 })
 /** Numeric semver compare; a version that will not parse sorts BELOW everything (fails closed). */
 export function compareCodexVersions(a: string, b: string): number {
@@ -109,7 +109,10 @@ export type CodexVersionVerdict =
  * So one `npm i -g @openai/codex` turned every Codex thread into a permanent hard failure recoverable
  * only by editing a source constant and rebuilding frizz. The drift is continuous: the pin was 0.144.6
  * on 2026-07-27 with `@openai/codex@0.145.0` already published, and by 2026-07-31 the installed stable
- * was 0.146.0 — which is the re-audit this pin now records.
+ * was 0.146.0 — the re-audit the pin recorded until 2026-09-04, when it moved to 0.153.2: the first
+ * codex whose catalogue carries `gpt-6-astra` (`minimal_client_version: "0.153.0"` — the catalogue
+ * server omits the model for older clients, so an older pin could never offer it). The conformance
+ * test passed against that binary's own generated schema before the pin moved.
  *
  * The rule now: a FLOOR that refuses, and a CEILING that only warns.
  *  - BELOW the audited version → refuse. An older binary may genuinely lack params frizz sends, and

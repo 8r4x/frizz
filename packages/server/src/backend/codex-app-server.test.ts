@@ -361,9 +361,9 @@ test("bridge is the sole codex transport (always enabled) and negotiates exact i
   assert.ok(args.some((a) => a === 'default_tools_approval_mode="approve"'), "MCP calls would be cancelled at use")
   assert.equal(h.calls[0]!.binary, "/opt/codex")
   assert.deepEqual(CODEX_APP_SERVER_PROTOCOL_REVISION, {
-    packageVersion: "0.146.0",
-    sourceTag: "rust-v0.146.0",
-    sourceCommit: "e363b08c9175ac1cbe5893615dd2cb9ddf95043b",
+    packageVersion: "0.153.2",
+    sourceTag: "rust-v0.153.2",
+    sourceCommit: "657a993cbee87acf52d14b758ce49dbd46d1b8eb",
   })
   assert.notEqual(h.calls[0]!.env, process.env, "the child receives a point-in-time environment snapshot")
   // Looked up the way the OS does, because the snapshot is a PLAIN object: `process.env` is a
