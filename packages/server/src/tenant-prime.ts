@@ -39,9 +39,18 @@ import { log as frizzLog } from "./logging.ts"
 // arrived mid-pass is served now rather than after the remaining squares.
 //
 // The gap TRACKS THE LAST ACTIVATION, the way the tailer's own scheduleTick tracks its last tick: an
-// empty project costs a 25ms pause, a big one earns a 220ms breather, and nothing pathological can hold
-// the pass open for more than PRIME_MAX_GAP_MS. That 50% duty ceiling is also what phases the freshly
-// started tailers apart, which the flat gap was really for.
+// empty project costs a 25ms pause, a big one earns a breather its own size, and nothing pathological
+// can hold the pass open for more than PRIME_MAX_GAP_MS. That 50% duty ceiling is also what phases the
+// freshly started tailers apart, which the flat gap was really for.
+//
+// THE 11-220ms FIGURES ABOVE ARE THE 2026-08 MEASUREMENT AND NO LONGER DESCRIBE THIS MACHINE. Twelve
+// projects on the maintainer's 2026-09-02 boot took 111-1000ms each, and the pass ran for 18.5s of wall
+// clock against 5.7s of summed activation — the difference being the tailer and everything else
+// contending for the same loop. See PRIME_MAX_GAP_MS for what that broke and what was done about it.
+// The deeper cost is upstream: `tailer.start()`'s first tick does per-row work BEFORE its budget check
+// (one SQLite retiredOps query per row, plus a stat per transcript), so a big board's activation is not
+// bounded by PRIME_BUDGET_MS the way the third bullet above assumes. Pacing politely around that is a
+// mitigation; making the prime itself bounded is the fix, and it is not done here.
 
 /**
  * A head start for the launching project, whose board is the page the operator is actually waiting for.
@@ -50,8 +59,24 @@ import { log as frizzLog } from "./logging.ts"
 const PRIME_START_DELAY_MS = 250
 /** Floor on the pause between projects: even a 13ms activation yields the loop for a beat. */
 const PRIME_MIN_GAP_MS = 25
-/** …and the ceiling, so one slow activation cannot pace the whole rail. */
-const PRIME_MAX_GAP_MS = 250
+/**
+ * …and the ceiling, so one slow activation cannot pace the whole rail.
+ *
+ * IT WAS 250ms, AND THAT SILENTLY STOPPED MEANING A 50% DUTY CYCLE. The figure was chosen against the
+ * 11-220ms activations measured above, where clamping at 250 never bound anything. Activations are no
+ * longer that cheap: the maintainer's own boot log of 2026-09-02 opened twelve projects at 111, 156,
+ * 187, 237, 315, 349, 459, 545, 677, 706, 985 and 1000ms. At the old ceiling a 1000ms activation earned
+ * a 250ms breather — an 80% duty cycle, not 50% — and the loop stayed saturated for the whole pass. The
+ * board RPC measured a 1.19s mean and a 5.60s max while priming ran, against 10ms and 427ms with it off.
+ * That is the "long time to load initially": the page the operator is staring at waits behind the
+ * squares they are not looking at.
+ *
+ * 1500ms clears the slowest activation on that log with headroom, so the ratio below is honoured for
+ * every project actually observed, while still bounding a pathological one. The pass takes longer in
+ * wall-clock and that is the correct trade — the LAUNCHING project is already open and served before
+ * this starts, so what the extra seconds buy is a responsive UI while the other badges fill in.
+ */
+const PRIME_MAX_GAP_MS = 1_500
 
 /** The pause after an activation that took `tookMs` — a 50% duty cycle, clamped at both ends. */
 function gapAfter(tookMs: number): number {

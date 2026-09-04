@@ -135,14 +135,19 @@ test("stop() before the first project opens nothing at all", async () => {
 
 test("the pause between projects tracks the last activation, clamped at both ends", async () => {
   // The pacing is a 50% duty cycle on a measured cost, not a flat guess — an empty project (13ms here)
-  // costs the 25ms floor, a big board (800ms here) is capped at the 250ms ceiling, and a middling one
-  // is paid back exactly. The first project waits only the opening delay: there is nothing to be polite
-  // about yet.
+  // costs the 25ms floor, a middling one is paid back exactly, and a big board earns a breather its own
+  // size until the ceiling. The first project waits only the opening delay: there is nothing to be
+  // polite about yet.
+  //
+  // FOUR projects, because three could not reach the question. The gap is taken BEFORE an activation,
+  // so a list ending at the expensive project never spends the gap that project earned — which is how
+  // the ceiling went untested through the whole of the 250ms era, with this comment claiming it was
+  // "capped at the 250ms ceiling" while nothing asserted it. `d` is here to spend `c`'s gap.
   const waits: number[] = []
   let clock = 0
-  const costs = new Map([["a", 13], ["b", 90], ["c", 800]])
+  const costs = new Map([["a", 13], ["b", 90], ["c", 800], ["d", 5]])
   const result = await startTenantPrime({
-    list: () => [candidate("a"), candidate("b"), candidate("c")],
+    list: () => [candidate("a"), candidate("b"), candidate("c"), candidate("d")],
     isOpen: () => false,
     toProject: project,
     activate: async (p) => {
@@ -154,8 +159,34 @@ test("the pause between projects tracks the last activation, clamped at both end
     delay: async (ms) => void waits.push(ms),
     log: () => {},
   }).done
-  assert.deepEqual(result.tookMs, [13, 90, 800])
-  assert.deepEqual(waits, [250, 25, 90])
+  assert.deepEqual(result.tookMs, [13, 90, 800, 5])
+  // 800 is paid back in full: it is under PRIME_MAX_GAP_MS, which is what a 50% duty cycle MEANS for a
+  // real activation on this machine (the maintainer's boot log ranges 111-1000ms). It was clamped to 250
+  // before 2026-09-04, an 80% duty cycle that kept the loop saturated for the whole priming pass.
+  assert.deepEqual(waits, [250, 25, 90, 800])
+})
+
+test("one pathological activation cannot pace the whole rail — the gap is still bounded", async () => {
+  // The ceiling's real job: a project that somehow takes half a minute must not buy itself half a
+  // minute of silence and hold every remaining badge hostage. Raising it to 1500ms honoured the duty
+  // cycle for activations that actually happen; it did not remove the bound.
+  const waits: number[] = []
+  let clock = 0
+  const costs = new Map([["a", 30_000], ["b", 5]])
+  await startTenantPrime({
+    list: () => [candidate("a"), candidate("b")],
+    isOpen: () => false,
+    toProject: project,
+    activate: async (p) => {
+      clock += costs.get(p.id)!
+      return {}
+    },
+    monotonicNow: () => clock,
+    startDelayMs: 250,
+    delay: async (ms) => void waits.push(ms),
+    log: () => {},
+  }).done
+  assert.deepEqual(waits, [250, 1_500], "a 30s activation must be clamped, not paid back in full")
 })
 
 test("a run of skips costs no pause at all — only an activation earns one", async () => {
