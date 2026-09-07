@@ -49,3 +49,14 @@ A version gate proves Frizz is talking to the right binary. It says nothing abou
 2. `nub run test packages/server/src/backend/log-format-conformance.test.ts` and confirm it reports `pass`, not `skipped`.
 
 If it fails, the vendor moved the format and the parser — `parseCodexLine` in [`codex.ts`](../packages/server/src/backend/codex.ts), `applyRecord` in [`tailer.ts`](../packages/server/src/tailer.ts) — is what has to change. Capture a redacted rollout into `codex.fixtures/` alongside the existing ones as the regression pin, the way `multi-agent-0153.jsonl` records the last such move.
+
+## Then cut a release — a pin nobody can install is not a bump
+
+The point of a pin is the binary a USER ends up running, and `npx frizz` gives them whatever the last published version pinned. So a bump that lands on `main` and stops there has fixed nothing for anybody: it sits unreleased while every install keeps provisioning the old runtime. Finish the job (maintainer, 2026-09-07: *"once you bump these versions and test them end to end, you should cut a new release as well"*).
+
+**Cutting a release here is one line: raise `version` in the root [`package.json`](../package.json) and commit it as `chore(release): X.Y.Z`.** There is no tag to push and no release command. [`release.yml`](../.github/workflows/release.yml) fires on any push to `main` that touches `package.json`, and it publishes to npm through Trusted Publishing, tags the commit and creates the GitHub release by itself. It asks the registry whether the version is already published rather than diffing commits, so a re-run or a revert-and-reland can never double-publish.
+
+- **A patch bump is the convention**, `feat(` commits included — `feat(codex): re-pin the app-server audit to codex 0.153.4` shipped in a patch. Match the last `chore(release):` and add one.
+- **Everything unreleased on `main` ships with you.** `git log <last release commit>..HEAD` shows exactly who else's work is riding along; that is normal for a repo that lands straight on main, but look before you cut.
+- **Typecheck is the workflow's own gate**, deliberately not the full suite, because the suite drives real provider CLIs and has never run on a CI box. Run `nub run test` locally anyway before cutting — a release is outward-facing.
+- **The publish happens on PUSH, not on commit.** Work lands on LOCAL `main` here, so the version-bump commit is inert until someone pushes. Cut the release; do not push it as a way of forcing a publish unless that is what was asked for.
