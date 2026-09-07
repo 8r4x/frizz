@@ -110,6 +110,15 @@ test("real SDK + fake executable: init owns the requested session, input streams
     // dispatched frizz worker inherits CLAUDE_CODE_AUTO_COMPACT_WINDOW and captures it here, while a
     // run on a plain box does not. Cleared, so the baseline is the same in both places.
     CLAUDE_CODE_AUTO_COMPACT_WINDOW: undefined,
+    // THE SAME HAZARD A THIRD TIME, and this one fooled a bump (2026-09-05). The SDK writes
+    // CLAUDE_CODE_ENTRYPOINT only when the child's env does not already carry it (`if(!c.CLAUDE_CODE_
+    // ENTRYPOINT)c.CLAUDE_CODE_ENTRYPOINT="sdk-ts"` in sdk.mjs, 0.3.260 through 0.3.263 alike), and
+    // every Claude-launched shell already does: an interactive `claude` exports `sdk-cli`, a frizz
+    // broker worker exports `sdk-ts`. So the fixture echoed the RUNNER's tag, and the 0.3.261 bump read
+    // its own shell's `sdk-cli` as a vendor rename — a suite run from a broker worker then failed on the
+    // exact assertion that comment said must never be loosened. Cleared, so the SDK's own default is what
+    // every runner observes (measured 2026-09-07: exporting `sdk-cli` flipped the verdict, nothing else did).
+    CLAUDE_CODE_ENTRYPOINT: undefined,
     ...claudeWorkerEnv({}),
   })
   try {
@@ -155,12 +164,14 @@ test("real SDK + fake executable: init owns the requested session, input streams
       frizzFakeOverridePresent: false,
       clientApp: "frizz/claude-agent-sdk-foundation",
       // The SDK's own marker for how it launched the CLI, observed rather than set: Frizz never reads
-      // or writes CLAUDE_CODE_ENTRYPOINT, and the fixture only echoes it back. It rode in this snapshot
-      // as `sdk-ts` until the 0.3.261 bump renamed it to `sdk-cli` (2026-09-05). It stays asserted
+      // or writes CLAUDE_CODE_ENTRYPOINT, and the fixture only echoes it back. `sdk-ts` is the SDK's
+      // default for a child whose env does not already carry the variable — which the harness now
+      // guarantees (see the CLAUDE_CODE_ENTRYPOINT override above; the `sdk-cli` this pinned from
+      // 2026-09-05 to 2026-09-07 was the bumping worker's own shell, not the SDK). It stays asserted
       // because the value of this deepEqual is that it is TOTAL — every variable the CLI receives is
-      // named here, which is what makes "no secret leaked" a proof rather than a spot check — so a
+      // named here, which is what makes "no secret leaked" a proof rather than a spot check — so a real
       // vendor rename should land as a visible diff, not be waved through by a loosened matcher.
-      entrypoint: "sdk-cli",
+      entrypoint: "sdk-ts",
       pathPresent: true,
       homePresent: true,
       nodeOptionsPresent: false,
