@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { createRoot } from "react-dom/client"
+import { MemoryRouter } from "react-router"
 import type { BoardSnapshot, ThreadView } from "@frizz/shared"
 import { Sidebar } from "./components/Sidebar.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
@@ -155,9 +156,13 @@ window.fetch = async (input, init) => {
 createRoot(document.getElementById("root")!).render(
   <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
     <TooltipProvider>
-      <div className="flex min-h-screen bg-bg text-fg">
-        <Sidebar />
-      </div>
+      {/* The rail's StatusRow reads the router; outside a router context it throws on render and the
+          page blanks. A MemoryRouter gives it the same context without an address bar (2026-09-07). */}
+      <MemoryRouter>
+        <div className="flex min-h-screen bg-bg text-fg">
+          <Sidebar />
+        </div>
+      </MemoryRouter>
     </TooltipProvider>
   </QueryClientProvider>,
 )

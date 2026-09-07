@@ -289,7 +289,9 @@ plugin directory. The published package does this for you.
   reorders), except the Rested band, which uses the EXACT queue comparator (`orderQueue`) so the rail
   and the cards read in one order.
   Titles WRAP, never truncate. ONE derived indicator per row (spinner running, blue ● a live background
-  shell — in Active AND in its snoozed twin, since 2026-08-31; clock/GitHub/hourglass parks, "?"
+  shell — in Active AND in its snoozed twin, since 2026-08-31; GitHub's octocat for a PR wait and the
+  hourglass for a timer wait, each in WHICHEVER band the row sits — a timer park queues, and its queued
+  row wore the shell's dot until 2026-09-07; the hourglass for a user snooze, "?"
   needs-action, "!" stalled, faint · idle); a petite-caps PLAN tag marks a doc with a
   `## Plan` section (derived `hasPlan`). ENTIRELY MOUSE-DRIVEN — no arrow-walk, no chevron, no focus
   machine (all deleted): a row click opens the thread's drawer (chat; the frizz DOC composite for a

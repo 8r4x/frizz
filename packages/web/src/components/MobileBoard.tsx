@@ -99,7 +99,7 @@ function DoneMark({ size = 18 }: { size?: number }) {
   )
 }
 
-function SnoozedMark({ size = 18 }: { size?: number }) {
+function HourglassMark({ size = 18 }: { size?: number }) {
   return (
     <StatusBox size={size}>
       <Hourglass size={Math.round((size * 10) / 15)} className="text-muted/75" />
@@ -127,8 +127,11 @@ function ThreadMark({ kind }: { kind: SessionIndicatorKind }) {
       </StatusBox>
     )
   }
-  if (kind === "snoozed") return <SnoozedMark />
+  // Parked on the clock — a Snoozed park, or a queued wait on a TIMER (2026-09-07; it read as `background`
+  // and drew the play mark before). The row's dim, not the mark, is what separates the two.
+  if (kind === "snoozed" || kind === "timer") return <HourglassMark />
   if (kind === "done" || kind === "archived") return <DoneMark />
+  // Awaiting a PR: the rail draws GitHub's octocat; the phone has no mark for it yet and stays at rest.
   return <StatusBox />
 }
 
@@ -605,7 +608,7 @@ export function MobileBoard() {
             label="Snoozed"
             count={sections.snoozed.length}
             onClick={() => setTab("snoozed")}
-            icon={<SnoozedMark size={TAB_ICON} />}
+            icon={<HourglassMark size={TAB_ICON} />}
           />
           <TabButton
             active={tab === "done"}

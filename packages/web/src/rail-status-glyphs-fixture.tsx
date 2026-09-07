@@ -66,6 +66,11 @@ const STATES: { kind: string; t: ThreadView }[] = [
   // alive behind this", whichever band the row sits in). A `shell` hint here would therefore render a
   // second copy of the `background` dot two entries up and leave the park glyph unmeasured.
   { kind: "snoozed", t: { ...base, id: "snoozed", runtime: "turn-idle", needsYou: false, lastFence: { kind: "awaiting", body: "", hints: [{ kind: "timer", value: "tmr_a1b2c3d4e5f6" }] } } as unknown as ThreadView },
+  // AWAITING A TIMER, IN THE QUEUE (2026-09-07). A REGISTERED armed timer, queued, no fence — the shape
+  // a worker that armed `mcp__frizz__timer` and rested leaves behind, and the row that wore the blue dot.
+  // It draws the same hourglass as the `snoozed` slot (Sidebar.tsx hourglassMark), so the two measure
+  // identically by construction; the slot exists so the QUEUED arm is what gets measured.
+  { kind: "timer", t: { ...base, id: "timer", runtime: "turn-idle", needsYou: true, awaitingBackground: true, watches: [{ id: "timer:t:tmr_1", kind: "timer", target: "tmr_1", state: "armed", createdAt: "2026-09-07T09:00:00.000Z", timer: { fireAt: "2099-09-07T16:00:00.000Z", prompt: "re-check the deploy" } }] } as unknown as ThreadView },
   { kind: "archived", t: { ...base, id: "archived", state: "archived", runtime: "exited", needsYou: false } as unknown as ThreadView },
   // AWAITING A PR (2026-09-04). A REGISTERED watch and no fence, deliberately: that is the shape the
   // worker contract now steers workers toward, and it is the one the rail used to miss entirely. The

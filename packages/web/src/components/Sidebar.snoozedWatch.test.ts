@@ -85,23 +85,26 @@ test("a PR fence with a co-declared timer backstop also wears GitHub's mark", ()
   assert.doesNotMatch(html, HOURGLASS)
 })
 
-// THE HOURGLASS IS NO LONGER THE GENERIC PARK MARK. It stood for every park that was not a watch, back
-// when the fence's kinds were all "somebody will get to it eventually". The 2026-08-15 grammar names
-// LIVE THINGS, so the glyph says which SHAPE is being waited on — a clock for a timer, the shell's blue
-// dot for the thread's own background work — and the hourglass is left to the one park that really is
-// just elapsed time: a user snooze. What they all still share is that none may borrow GitHub's mark,
-// which is the confusion this file exists to prevent.
+// THE HOURGLASS MEANS "PARKED ON THE CLOCK", AND THE MARK NAMES THE WAIT, NOT THE BAND. The 2026-08-15
+// grammar names LIVE THINGS, so the glyph says which SHAPE is being waited on — the shell's blue dot for
+// the thread's own background work, GitHub's octocat for a PR — and the hourglass is for the parks
+// whose subject is an instant: a user snooze, and a TIMER. What they all still share is that none may
+// borrow GitHub's mark, which is the confusion this file exists to prevent.
 //
-// The shell arm drew lucide's CircleDashed until 2026-08-31, when it became `shellDot` — the SAME mark
-// the undimmed Active row wears while resting on that shell, because the running shell is one fact and
-// the park is only how the row is presented (maintainer: "we use blue dots to represent background
-// shells"). It is a class, not an svg, so it is matched on the class rather than a lucide icon name.
+// The timer park drew lucide's Clock from 2026-08-15 until 2026-09-07, when a QUEUED wait on a timer
+// took the hourglass (Sidebar.tsx hourglassMark; groups.awaitingTimerWatch has the report) and the parked
+// one had to match it — one wait, one mark, whichever band the row sits in, the same rule the octocat
+// follows. The shell arm drew lucide's CircleDashed until 2026-08-31, when it became `shellDot` — the
+// SAME mark the undimmed Active row wears while resting on that shell, because the running shell is one
+// fact and the park is only how the row is presented (maintainer: "we use blue dots to represent
+// background shells"). It is a class, not an svg, so it is matched on the class rather than a lucide
+// icon name.
 test("each park wears its own shape, and none of them borrows GitHub's mark", () => {
   const cases = [
     ["a bare user snooze, no fence", { snoozedUntil: FAR_FUTURE }, HOURGLASS],
     ["a snooze over a declared park", { snoozedUntil: FAR_FUTURE, lastFence: { kind: "awaiting", body: "", hints: [{ kind: "shell", value: "bzvtnt3ig" }] } }, HOURGLASS],
     ["a park on its own background work", { lastFence: { kind: "awaiting", body: "", hints: [{ kind: "shell", value: "bzvtnt3ig" }] } }, SHELL_DOT],
-    ["a park on a timer", { lastFence: { kind: "awaiting", body: "", hints: [{ kind: "timer", value: "tmr_a1b2c3" }] } }, /lucide-clock/],
+    ["a park on a timer", { lastFence: { kind: "awaiting", body: "", hints: [{ kind: "timer", value: "tmr_a1b2c3" }] } }, HOURGLASS],
   ] as [string, Partial<ThreadView>, RegExp][]
   for (const [name, extra, mark] of cases) {
     const html = row(extra)

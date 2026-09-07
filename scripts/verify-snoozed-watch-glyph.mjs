@@ -30,11 +30,10 @@ const CASES = [
   // `reason:` — follows as its own paragraph, and this fixture's watch row carries one.
   { slug: "watch-the-resolver-pr", icon: "lucide-github", tip: /^Snoozed until .* — waiting on acme\/app#391\n/ },
   // The other three Snoozed rows are the control: a timer park, a plain user snooze, and a usage-limit
-  // park. None of them is watching anything, so none may pick up the PR mark. The timer wears a CLOCK,
-  // not the hourglass — the hourglass stopped being the generic park mark when the 2026-08-15 grammar
-  // made every kind name a live thing, and each park has worn its own shape since (Sidebar.snoozedWatch's
-  // "each park wears its own shape"). This expectation was left behind by that change.
-  { slug: "check-in-on-create-prs", icon: "lucide-clock", tip: null },
+  // park. None of them is watching anything, so none may pick up the PR mark. The timer wears the
+  // HOURGLASS — "parked on the clock" — the same mark a queued timer wait wears since 2026-09-07 (it
+  // drew lucide's Clock here from 2026-08-15 until then; see Sidebar.tsx hourglassMark).
+  { slug: "check-in-on-create-prs", icon: "lucide-hourglass", tip: null },
   { slug: "dependabot-nub-ecosystem", icon: "lucide-hourglass", tip: null },
   { slug: "refactor-usage-endpoint", icon: "lucide-hourglass", tip: null },
 ]

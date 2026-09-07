@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 
 import { useQueryClient } from "@tanstack/react-query"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { useSnapshot } from "valtio"
-import { Check, ChevronRight, CircleDashed, Clock, Ellipsis, Github, Hourglass, Loader2, Pin, PinOff, RotateCcw, Timer } from "lucide-react"
+import { Check, ChevronRight, CircleDashed, Ellipsis, Github, Hourglass, Loader2, Pin, PinOff, RotateCcw, Timer } from "lucide-react"
 import type { BoardSnapshot, ThreadView } from "@frizz/shared"
 import { store, openThread, scrollToQueueCard, queueCardTargetY, pushSubAgentDrawer, showToast, QUEUE_CARD_VIEWPORT_TOP } from "../store.ts"
 import { rpc } from "../api/rpc.ts"
@@ -24,6 +24,7 @@ import { ProviderMark } from "./ProviderMark.tsx"
 import { STATUS_CHIP } from "../lib/status.ts"
 import { retrySession } from "../lib/retrySession.ts"
 import { formatSnoozedUntil, formatAutoSnoozedUntil, formatUserSnooze } from "../lib/snooze.ts"
+import { formatCompactElapsed } from "../lib/durationLabels.ts"
 import { awaitingProse, awaitingWaitClause } from "../lib/awaitingPresentation.ts"
 import { useOptimisticallySteered } from "../lib/steering.ts"
 import { useOptimisticallyArchived } from "../lib/optimisticArchive.ts"
@@ -921,10 +922,12 @@ function StatusChip({ status }: { status: string }) {
  *  above it wraps, and a reason set directly under a wrapped line reads as its third line — which is
  *  exactly how it looked when they were merely stacked. Nulls and blanks drop out, so a row with no
  *  fence is just its state. */
-function popover(t: Pick<ThreadView, "lastFence">, state: string | null): string {
+// `tail` is one more clause AFTER the fence's own — the timer arm's countdown — so the sentence still
+// reads state, then what is waited on, then when: "At rest — waiting on a timer — fires in 34m".
+function popover(t: Pick<ThreadView, "lastFence">, state: string | null, tail: string | null = null): string {
   const hints = t.lastFence?.kind === "awaiting" ? t.lastFence.hints : []
   const wait = awaitingWaitClause(hints)
-  const head = [state, wait].filter((part) => Boolean(part)).join(" — ")
+  const head = [state, wait, tail].filter((part) => Boolean(part)).join(" — ")
   return [head, awaitingReason(t)].filter((line) => Boolean(line)).join("\n\n")
 }
 
@@ -987,7 +990,9 @@ export function ThreadIndicator({ t, legacy }: { t: ThreadView; legacy?: boolean
 //                     it died mid-turn or exited after resting without a done fence. Same mark either
 //                     way, because the next action is the same: Retry. Exactly the rows that carry the
 //                     inline Retry verb (offersRetry === this kind — one decision, two surfaces).
-//   clock waiting   — machine-waiting behind an ```awaiting fence
+//   [⧗] on the clock — awaiting a TIMER (muted hourglass), in the queue or parked in Snoozed alike; the
+//                     Snoozed band's other parks wear the same hourglass (a user snooze) or the mark of
+//                     what they wait on (the octocat for a PR, the dot for a shell). See hourglassMark.
 //   [✓] done        — a ```done fence at rest, OR an archived thread (muted check — NOTHING else)
 //   […] at rest     — an ordinary rest with no concrete ask, INCLUDING a queued thread whose own
 //                     dispatched sub-agents are still running (they spin on their own child rows)
@@ -1090,6 +1095,32 @@ const githubMark = (
   </StatusBox>
 )
 
+// THE ONE MARK FOR "THIS THREAD IS PARKED ON THE CLOCK" — the muted hourglass, drawn by every arm whose
+// row is waiting for an instant rather than a process: a user snooze, a park with no fence to read, and
+// since 2026-09-07 a wait on a TIMER in whichever band it sits. A timer park QUEUES (board.deriveNeedsYou
+// keeps it a visible handoff), so most timer waits live below the rule in the Rested band, and there the
+// row wore the shell's blue dot — groups.restingOnLiveBackgroundWork counted an armed timer as motion —
+// while the SAME wait parked in Snoozed drew lucide's Clock. Three readings of one fact (maintainer:
+// "an item in the queue that's awaiting a timer should show up with the hourglass icon in the sidebar,
+// not with the flashing blue dot"). The clock is gone with it: the rail already had a word for "on the
+// clock", and the limit kill's accent hourglass is this same glyph in the attention colour, so the
+// family stays one glyph in two tones rather than two glyphs for one idea.
+const hourglassMark = <StatusBox><Hourglass size={9} className="text-muted/70" /></StatusBox>
+
+/** "fires in 34m" for the SOONEST armed timer — the resting card's TimerRow words, so the rail's hover
+ *  and the card never count down in two vocabularies. A due-but-undelivered timer (the scheduler's tick
+ *  runs seconds behind the instant) says "firing…" rather than a negative countdown. Null when no armed
+ *  row carries an instant, which today is never — the board only synthesizes armed rows, each with one. */
+function timerWake(t: Pick<ThreadView, "watches">, nowMs = Date.now()): string | null {
+  const soonest = (t.watches ?? [])
+    .filter((w) => w.kind === "timer" && w.state === "armed")
+    .map((w) => Date.parse(w.timer?.fireAt ?? ""))
+    .filter((ms) => Number.isFinite(ms))
+    .sort((a, b) => a - b)[0]
+  if (soonest === undefined) return null
+  return soonest > nowMs ? `fires in ${formatCompactElapsed(soonest - nowMs)}` : "firing…"
+}
+
 function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: string | null } {
   const kind = sessionIndicatorKind(t)
   if (kind === "archived") return { node: <StatusBox><Check size={10} strokeWidth={3} className="text-muted/75" /></StatusBox>, tip: "Done" }
@@ -1146,8 +1177,19 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
   // blue dot (checks still running) or the bare-rest ellipsis (checks settled). The tooltip is the
   // fence's own clause, which names the ref — "waiting on acme/app#391" — so the hover reaches the PR.
   if (kind === "pr") return { node: githubMark, tip: popover(t, "At rest") }
+  // AWAITING A TIMER, IN THE QUEUE — the same hourglass the Snoozed arm draws, on the rows that never
+  // park. A timer park queues (board.deriveNeedsYou), so this is where MOST timer waits actually live,
+  // and until 2026-09-07 every one of them wore the shell's blue dot (groups.awaitingTimerWatch carries
+  // the report). The tooltip says what is waited on and WHEN: the fence's own clause where there is one
+  // ("waiting on a timer and a background shell"), a synthesized one for a worker that registered the
+  // timer and rested without fencing, and the countdown either way — the one thing about this row the
+  // rail cannot show, and what the operator most wants on hover.
+  if (kind === "timer") {
+    const fenced = t.lastFence?.kind === "awaiting" && awaitingWaitClause(t.lastFence.hints) !== null
+    return { node: hourglassMark, tip: popover(t, fenced ? "At rest" : "At rest — waiting on a timer", timerWake(t)) }
+  }
   if (kind === "snoozed") {
-    const hourglass = <StatusBox><Hourglass size={9} className="text-muted/70" /></StatusBox>
+    const hourglass = hourglassMark
     const github = githubMark
     // A snoozed row whose fence names a PR (`prs:` since the 2026-08-24 YAML cutover; `pr:` and `pr-watch:`
     // before it, both retired) is snoozed FOR A PR, and the rail says so with GitHub's mark instead of the
@@ -1218,12 +1260,15 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
     // the shell's dot for a wait GitHub resolves; the same wait written the other way round drew the
     // octocat. One state, two marks, decided by fence order. The kinds below still rank among
     // themselves, because none of them is the subject of the wait the way a PR is.
+    // A TIMER — or a fence naming nothing the rail draws a shape for — is "parked on the clock", and
+    // wears the hourglass. It drew lucide's Clock until 2026-09-07, when the queued timer wait two arms
+    // up took the hourglass and the parked one had to match it: one wait, one mark (see hourglassMark).
     const mark = waitNamesPr(t)
       ? github
       : hk === "shell" || hk === "agent"
         ? shellDot
-        : <StatusBox><Clock size={9} className="text-muted/70" /></StatusBox>
-    return { node: mark, tip: popover(t, eventSnoozed ?? "Snoozed") }
+        : hourglass
+    return { node: mark, tip: popover(t, eventSnoozed ?? "Snoozed", hk === "timer" ? timerWake(t) : null) }
   }
   // At rest (no fence, nothing pending) with the process still ALIVE — a worker that came to rest
   // WITHOUT declaring done or a machine-wait, and with NOTHING it launched still running (that is the

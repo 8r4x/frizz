@@ -1039,21 +1039,45 @@ test("sessionIndicatorKind: a PR wait is marked from the REGISTERED watch, and y
   assert.equal(offersRetry(thread({ kind: "session", runtime: "exited", sessionId: "s", needsYou: true, watches: armed })), true)
 })
 
-// AN ARMED TIMER IS MOTION THE SAME WAY RUNNING CI IS: a wake with a known terminal instant that frizz
-// itself delivers. Timer watch rows landed 2026-08-24 (f50f9e60) after the dot's predicate was last
-// touched, so a timer park wore the bare-rest ellipsis — the mark Sidebar reserves for "NOTHING it
-// launched still running" — including the snoozed shape 60383a56 put in the Active band.
-test("sessionIndicatorKind: an armed timer park keeps the dot", () => {
+// AN ARMED TIMER IS A WAIT ON THE CLOCK, NOT LIVE WORK — the hourglass, in whichever band the row sits
+// (2026-09-07). A timer park QUEUES (board.deriveNeedsYou keeps it a visible handoff), and from
+// 2026-08-24 the queued row wore the shell's blue dot: restingOnLiveBackgroundWork counted an armed
+// timer as motion "the same way running CI is". The dot is the rail's word for "a process it launched is
+// still running", and nothing runs behind a timer (maintainer 2026-09-07: "an item in the queue that's
+// awaiting a timer should show up with the hourglass icon in the sidebar, not with the flashing blue
+// dot"). The kind is read off the REGISTERED row — the board only synthesizes rows for ARMED timers — so
+// a fence naming a fired timer, which has no row, can never advertise a wake that will not come.
+test("sessionIndicatorKind: a wait on an armed timer wears the hourglass, in the queue and out of it", () => {
   const timerRow = {
     id: "timer:t:tmr_1", kind: "timer" as const, target: "tmr_1", state: "armed" as const,
     createdAt: "2026-08-24T00:00:00.000Z", timer: { fireAt: "2026-09-02T16:00:00.000Z", prompt: "re-check the deploy" },
   }
-  const snoozedPark = thread({ kind: "session", runtime: "turn-idle", awaitingBackground: true, needsYou: false, watches: [timerRow] })
-  assert.equal(sessionIndicatorKind(snoozedPark), "background", "an armed wake is motion, not bare rest")
-  assert.deepEqual(partitionActive([snoozedPark]).running.map((t) => t.id), [snoozedPark.id], "and the snoozed shape bands ACTIVE")
-  // Queued (unsnoozed), the mark still states the armed wake — exactly as a queued shell rest keeps its
-  // dot while the BAND moves to the queue's own.
-  assert.equal(sessionIndicatorKind(thread({ kind: "session", runtime: "turn-idle", awaitingBackground: true, needsYou: true, watches: [timerRow] })), "background")
+  // THE REPORTED ROW: queued (needsYou), at rest, the server's awaitingBackground stating the timer wait.
+  const queued = thread({ kind: "session", runtime: "turn-idle", awaitingBackground: true, needsYou: true, watches: [timerRow] })
+  assert.equal(sessionIndicatorKind(queued), "timer", "a queued timer wait is the hourglass, not the dot")
+  assert.deepEqual(partitionActive([queued]).rested.map((t) => t.id), [queued.id], "and the BAND is still the queue's")
+  // The same wait excused from the queue keeps the mark; only the band moves.
+  const cardless = thread({ kind: "session", runtime: "turn-idle", awaitingBackground: true, needsYou: false, watches: [timerRow] })
+  assert.equal(sessionIndicatorKind(cardless), "timer")
+  assert.deepEqual(partitionActive([cardless]).running.map((t) => t.id), [cardless.id], "the cardless shape bands ACTIVE")
+  // A dev server the thread also left running is not what it is waiting FOR — the timer outranks the
+  // dot, exactly as the PR mark does.
+  assert.equal(sessionIndicatorKind({ ...queued, bgShells: liveShell }), "timer", "a running shell does not steal the hourglass")
+  // …but a PR watch beside the timer IS the subject; the timer is only its backstop.
+  const prRow = { id: "github:t:acme/app#1", kind: "github" as const, target: "acme/app#1", state: "armed" as const, createdAt: "2026-08-24T00:00:00.000Z" }
+  assert.equal(sessionIndicatorKind({ ...queued, watches: [timerRow, prRow] }), "pr", "GitHub's mark outranks the clock")
+  // The later facts still win: a done fence is a dismissal, a limit kill is a fault, an exited process
+  // is a stall that must keep its Retry, and a live sub-agent is motion.
+  assert.equal(sessionIndicatorKind({ ...queued, awaitingBackground: false, lastFence: { kind: "done", body: "", hints: [] } }), "done")
+  assert.equal(sessionIndicatorKind({ ...queued, awaitingBackground: false, limitPause: { backend: "claude", window: "session", at: "2026-07-23T00:00:00.000Z", autoResume: true } }), "limit")
+  assert.equal(sessionIndicatorKind({ ...queued, runtime: "exited", sessionId: "s" }), "stalled")
+  assert.equal(offersRetry({ ...queued, runtime: "exited", sessionId: "s" }), true, "…with the Retry the stall carries")
+  assert.equal(sessionIndicatorKind({ ...queued, needsYou: false, subAgents: liveSub }), "working")
+  // Parked in Snoozed — the event-snooze off the resting card, or a fenced park the server honoured —
+  // the row reads as snoozed; the Sidebar's Snoozed arm draws this same hourglass for it.
+  assert.equal(sessionIndicatorKind({ ...cardless, bgSnoozed: true }), "snoozed")
+  // Only an ARMED row is a wait. A fired one is settled, and the row falls through to the bare rest.
+  assert.equal(sessionIndicatorKind({ ...queued, awaitingBackground: false, watches: [{ ...timerRow, state: "fired" as const }] }), "rest")
 })
 
 // THE RESTING CARD'S EVENT-SNOOZE PARKS THE ROW IN SNOOZED. The click sets `bgSnoozed` and takes the queue

@@ -317,7 +317,10 @@ export function externalThreads(threads: readonly ThreadView[]): ThreadView[] {
 //   • held             — open, AT REST behind ANY declared ```awaiting fence (or the canonical
 //                        blocked+timer status) AND no live background op. Its own DIMMED band between
 //                        the rested rows and Done. The glyph and section share isSnoozed(), so a row can
-//                        never show a clock/hourglass while sitting in the Active/Rested section.
+//                        never read as "snoozed" while sitting in the Active/Rested section. (The
+//                        hourglass GLYPH is not Snoozed's alone since 2026-09-07: a queued wait on a
+//                        timer wears it too — awaitingTimerWatch — the way a queued PR wait wears the
+//                        octocat. The band says parked; the mark says what it waits on.)
 //   • inactive         — state === "archived" (the only archiver is an explicit Archive / done-card
 //                        button). Rendered under the label DONE — the key and the label differ.
 //   • legacy           — kind !== "session": vestigial .frizz-file rows, hidden entirely (null).
@@ -604,17 +607,15 @@ function restingOnBackgroundWork(t: ThreadView): boolean {
 function restingOnLiveBackgroundWork(t: ThreadView): boolean {
   if (!restingOnBackgroundWork(t)) return false
   if ((t.bgShells ?? []).some((s) => s.state === "running")) return true
-  // AN ARMED TIMER IS MOTION THE SAME WAY RUNNING CI IS: a wake with a known terminal instant that
-  // frizz itself delivers. Timer watch rows landed 2026-08-24 (f50f9e60), after this predicate was last
-  // touched, so a timer park wore the bare-rest ellipsis — the mark reserved for "NOTHING it launched
-  // still running". Only ARMED rows count: the board only synthesizes armed timer rows today, but a
-  // fired or cancelled one, should it ever reach here, is settled — not motion — like a green PR below.
-  //
-  // A FENCED timer park no longer reaches this line at all: it is Snoozed now (parkedOnArmedTimerAlone) and
-  // takes the hourglass two branches up, which is a strictly better mark than the dot. What still lands
-  // here is a timer armed WITHOUT an ```awaiting fence naming it — a thread that set an alarm and kept
-  // going, then came to rest — where the dot is exactly right: nothing is parked, but a wake is coming.
-  if ((t.watches ?? []).some((w) => w.kind === "timer" && w.state === "armed")) return true
+  // AN ARMED TIMER IS NOT THE DOT'S BUSINESS ANY MORE (2026-09-07). From 2026-08-24 this counted an armed
+  // timer as motion "the same way running CI is" — a wake with a known instant — so a QUEUED rest on a
+  // timer wore the shell's blue dot, the mark for "something it launched is still running". Nothing is
+  // running behind a timer; the clock is. The maintainer read the dot as a claim of live work
+  // (2026-09-07: "an item in the queue that's awaiting a timer should show up with the hourglass icon in
+  // the sidebar, not with the flashing blue dot"), so the timer wait is now its own kind — awaitingTimerWatch,
+  // resolved ABOVE this predicate in sessionIndicatorKind — and this one is back to what its name says:
+  // a shell that is still running, or CI that is. A settled watcher — passing, failing, no checks at all,
+  // closed, or never polled — is not motion, and falls through to the at-rest ellipsis.
   return (t.watches ?? []).some(
     (w) => w.kind === "github" && w.state === "armed" && w.github?.checks === "running" && w.github.state === "open",
   )
@@ -666,11 +667,39 @@ export function waitNamesPr(t: Pick<ThreadView, "watches" | "lastFence">): boole
   return t.lastFence?.kind === "awaiting" && t.lastFence.hints.some((h) => h.kind === "pr" && h.value.trim() !== "")
 }
 
+/** AWAITING A TIMER — parked on the clock, and since 2026-09-07 the hourglass wherever the row lands,
+ *  the way the octocat above is GitHub's mark wherever a PR wait lands.
+ *
+ *  A timer park QUEUES (board.deriveNeedsYou: "a visible handoff, never an auto-park"), so most timer
+ *  waits sit in the Rested band rather than in Snoozed — and there the row wore the shell's blue dot,
+ *  because restingOnLiveBackgroundWork counted an armed timer as motion. The dot is the rail's word for
+ *  "a process it launched is still running", and nothing is running behind a timer; the maintainer read
+ *  it as exactly that claim (2026-09-07: "an item in the queue that's awaiting a timer should show up
+ *  with the hourglass icon in the sidebar, not with the flashing blue dot"). The hourglass is the mark
+ *  the rail already uses for "parked on the clock" — the Snoozed band's park, the limit kill's accent
+ *  twin — so a queued timer wait joins that family instead of the shell's.
+ *
+ *  THE REGISTERED ROW IS THE SIGNAL, not the fence. The board synthesizes a `timer` watch row for every
+ *  ARMED `thread_timer` (fenceWatchViews), fence or no fence, and only for armed ones — a `timers:` line
+ *  naming a fired or cancelled id has no row, and the server treats that fence as a bare rest
+ *  (hasParkedTimerWatch). Reading the rows alone therefore never advertises a wake that will not come,
+ *  which is the trap the deleted `timer: <instant>` grammar fell into (one was written 5h55m in the past).
+ *
+ *  Gated on `turn-idle` for the reason awaitingPrWatch is: mid-turn keeps its spinner, and EXITED stays a
+ *  stall so the row keeps its Retry (offersRetry reads the resolved kind). Ranked BELOW the PR mark in
+ *  sessionIndicatorKind — a thread watching a PR with a timer as its backstop is waiting on GitHub, and
+ *  the clock is only how long it will wait — and ABOVE the dot, for the same reason the octocat is: a dev
+ *  server the thread also left running is not what it is waiting FOR. */
+export function awaitingTimerWatch(t: ThreadView): boolean {
+  if (t.runtime !== "turn-idle") return false
+  return (t.watches ?? []).some((w) => w.kind === "timer" && w.state === "armed")
+}
+
 // One status-priority decision shared by the sidebar renderer and its tests. The order is important:
 // an archived row at rest stays archived even if stale attention metadata lingers; a real human ask
 // stays a question after the worker exits; live work stays working; and a completed handoff stays a
 // check instead of being mislabelled as a crash merely because `needsYou` also puts it in the queue.
-export type SessionIndicatorKind = "archived" | "needs-input" | "working" | "background" | "pr" | "done" | "stalled" | "limit" | "snoozed" | "rest"
+export type SessionIndicatorKind = "archived" | "needs-input" | "working" | "background" | "pr" | "timer" | "done" | "stalled" | "limit" | "snoozed" | "rest"
 
 // NO RAIL MARK FOR AN ARMED STOP HOOK, and the reason is worth keeping because one shipped briefly
 // (2026-08-02, removed the same day — maintainer: "the whole point of a stop hook is that it means the
@@ -747,6 +776,11 @@ export function sessionIndicatorKind(t: ThreadView): SessionIndicatorKind {
   // subject is a review queue somewhere else. BELOW the done fence and the limit kill, which are both
   // later facts than the park — a killed or dismissed thread is not awaiting anything.
   if (awaitingPrWatch(t)) return "pr"
+  // AWAITING A TIMER — the hourglass, in whichever band the row sits (awaitingTimerWatch). Below the
+  // PR mark: a timer beside a PR watch is the watch's backstop, not the subject. Above the dot: a timer
+  // park in the QUEUE wore the shell's blue dot until 2026-09-07, which claimed live work behind a
+  // thread whose only pending event is a wake frizz will deliver.
+  if (awaitingTimerWatch(t)) return "timer"
   // Below the two DECLARED states on purpose. A worker that fenced ```done while a server it never
   // killed keeps running is a one-click dismissal, not live work (FRIZZ.md: "name it in the body and
   // fence anyway"), and a parked ```awaiting is the human's gate — either story outranks "something it
