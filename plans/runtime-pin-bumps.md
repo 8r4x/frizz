@@ -54,9 +54,19 @@ If it fails, the vendor moved the format and the parser — `parseCodexLine` in 
 
 The point of a pin is the binary a USER ends up running, and `npx frizz` gives them whatever the last published version pinned. So a bump that lands on `main` and stops there has fixed nothing for anybody: it sits unreleased while every install keeps provisioning the old runtime. Finish the job (maintainer, 2026-09-07: *"once you bump these versions and test them end to end, you should cut a new release as well"*).
 
-**Cutting a release here is one line: raise `version` in the root [`package.json`](../package.json) and commit it as `chore(release): X.Y.Z`.** There is no tag to push and no release command. [`release.yml`](../.github/workflows/release.yml) fires on any push to `main` that touches `package.json`, and it publishes to npm through Trusted Publishing, tags the commit and creates the GitHub release by itself. It asks the registry whether the version is already published rather than diffing commits, so a re-run or a revert-and-reland can never double-publish.
+### Releases publish from the `release` branch, not from main
 
-- **A patch bump is the convention**, `feat(` commits included — `feat(codex): re-pin the app-server audit to codex 0.153.4` shipped in a patch. Match the last `chore(release):` and add one.
-- **Everything unreleased on `main` ships with you.** `git log <last release commit>..HEAD` shows exactly who else's work is riding along; that is normal for a repo that lands straight on main, but look before you cut.
-- **Typecheck is the workflow's own gate**, deliberately not the full suite, because the suite drives real provider CLIs and has never run on a CI box. Run `nub run test` locally anyway before cutting — a release is outward-facing.
-- **The publish happens on PUSH, not on commit.** Work lands on LOCAL `main` here, so the version-bump commit is inert until someone pushes. Cut the release; do not push it as a way of forcing a publish unless that is what was asked for.
+Main answers "has this landed?". [`release`](../.github/workflows/release.yml) answers "has this been VERIFIED and chosen to ship?" — and only the second one publishes. The split exists because main moves under you: several agents land on it continuously, so the commit you verified and the commit that would publish are routinely not the same one, and a release from main carries whatever arrived in between (maintainer, 2026-09-08: *"you can bump these versions and do your own testing independent of whatever's landed on `main`"*).
+
+**`release` is a fast-forward pointer into main, never a fork.** It holds no commits of its own. You pick the main commit you actually tested and move the branch to it, which keeps the published tree a real snapshot of main — nothing to cherry-pick, nothing to merge back — while leaving later, unverified commits behind. If it ever needs a non-fast-forward push, stop and look rather than forcing it.
+
+### The sequence
+
+1. **Cut the version on main.** Raise `version` in the root [`package.json`](../package.json) and commit as `chore(release): X.Y.Z`. A patch bump is the convention, `feat(` commits included — `feat(codex): re-pin the app-server audit to codex 0.153.4` shipped in a patch. Match the last `chore(release):` and add one.
+2. **Look at what ships with you.** `git log release..HEAD` is the exact set. Anything there you have not verified either gets verified now or gets left behind by pointing `release` at an earlier commit — that choice is the whole reason the branch exists.
+3. **Verify the commit you are about to publish, not "the tree".** `nub run test` and `nub run typecheck` against that sha. Typecheck is the workflow's own gate, deliberately not the full suite, because the suite drives real provider CLIs and has never run on a CI box.
+4. **Push main, then fast-forward and push `release`.** `git push origin main`, then `git branch -f release <sha> && git push origin release`. The push to `release` is what publishes.
+
+`release.yml` then does everything else by itself: the npm publish through Trusted Publishing, the tag, and the GitHub release. It asks the registry whether the version is already published rather than diffing commits, so a re-run, a revert-and-reland or a `workflow_dispatch` can never double-publish. Reach for `workflow_dispatch` when a fast-forward lands the version bump mid-range and the path filter does not see it.
+
+**The consequence worth remembering: a version bump on main is now INERT.** Pushing main no longer publishes anything. That silence is deliberate, but it is silence — so the daily runtime watch compares the root `package.json` against `npm view frizz version` on every wake and reports a bump that never shipped.

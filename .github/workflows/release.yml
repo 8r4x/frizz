@@ -1,20 +1,44 @@
 name: release
 
-# Publishes `frizz` whenever package.json lands on main with a version that is not yet
-# on the registry. Bump the version, merge, and the release happens — there is no tag to push and no
-# separate release command, which suits a repo that lands work straight on main.
+# Publishes `frizz` from the `release` branch — NOT from main.
+#
+# WHAT CHANGED, AND WHY (2026-09-08). This published on every push to main that touched package.json.
+# That is the natural shape for a repo that lands straight on main, and it worked until releasing
+# became a standing automated job rather than something a human did while holding the whole tree in
+# their head. The problem is that main moves under you: several agents land on it continuously, so the
+# commit you verified and the commit that publishes are routinely not the same one, and a release
+# carries whatever happened to arrive in between. Nobody chose to ship that work; it was simply
+# adjacent.
+#
+# So the two questions are now separated. Main answers "has this landed?". `release` answers "has this
+# been VERIFIED and chosen to ship?" — and only the second one publishes.
+#
+# THE BRANCH IS A FAST-FORWARD POINTER INTO MAIN, never a fork. It holds no commits of its own: you
+# pick the main commit you actually tested and move `release` to it. That keeps the published tree a
+# real snapshot of main with no merge to reconcile and nothing to cherry-pick, while still letting you
+# leave later, unverified commits behind. If `release` ever needs a non-fast-forward push, something
+# has gone wrong — stop and look rather than forcing it.
+#
+# THE CONSEQUENCE TO KNOW ABOUT: bumping the version on main and pushing NO LONGER PUBLISHES. It is
+# inert until `release` is moved. That silence is deliberate, but it is silence, so the procedure lives
+# in plans/runtime-pin-bumps.md and the check for an unshipped bump runs on the daily runtime watch.
 #
 # Auth is npm Trusted Publishing (OIDC): no NPM_TOKEN, no secret to rotate or leak. That binds the
-# right to publish to THIS repository and THIS workflow file, which is why the filename is load-bearing
-# — renaming release.yml breaks publishing until the trusted publisher is reconfigured on npmjs.com.
-# Trusted publishing also attaches provenance automatically; passing --provenance is unnecessary.
+# right to publish to THIS repository and THIS workflow file — the filename is load-bearing, and
+# renaming release.yml breaks publishing until the trusted publisher is reconfigured on npmjs.com. It
+# does NOT bind a branch (npm's trusted publisher takes org, repo, workflow filename and an optional
+# environment, and this workflow declares no environment), which is what makes publishing from
+# `release` work at all. Trusted publishing attaches provenance automatically; --provenance is
+# unnecessary.
 
 on:
   push:
-    branches: [main]
+    branches: [release]
     paths:
       - package.json
-  # Lets a failed or interrupted release be retried without an empty version bump.
+  # Lets a failed or interrupted release be retried without an empty version bump — and covers the
+  # case where `release` moves across a range whose package.json diff the path filter does not see,
+  # which is every branch-creation push and any fast-forward that lands the bump mid-range.
   workflow_dispatch:
 
 # Two releases racing would fight over the same version; let an in-flight one finish rather than

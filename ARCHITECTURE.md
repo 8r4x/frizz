@@ -10,6 +10,11 @@ The UI has ZERO intelligence: all orchestration wisdom lives in the user-editabl
 
 **The repo root IS the published `frizz` package** — root `package.json` is the manifest, `src/` is
 the launcher, `npm publish` runs from the root, and the root `README.md` is the npmjs.com page.
+**Releases publish from the `release` branch, not from main** (since 2026-09-08): main says a change
+landed, `release` says it was verified and chosen to ship, and only the second one triggers
+[`release.yml`](.github/workflows/release.yml). The branch is a fast-forward pointer into main with no
+commits of its own — you move it to the tested sha — so a version bump on main is inert until it does.
+Full procedure in [plans/runtime-pin-bumps.md](plans/runtime-pin-bumps.md).
 
 | Path | What it is |
 | --- | --- |
