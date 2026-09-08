@@ -34,11 +34,17 @@ name: release
 on:
   push:
     branches: [release]
-    paths:
-      - package.json
-  # Lets a failed or interrupted release be retried without an empty version bump — and covers the
-  # case where `release` moves across a range whose package.json diff the path filter does not see,
-  # which is every branch-creation push and any fast-forward that lands the bump mid-range.
+    # NO path filter, deliberately — it was `paths: [package.json]` and that is wrong for this branch.
+    # A path filter tests the files changed IN THE PUSHED RANGE, and `release` advances by
+    # fast-forwarding over several main commits at once, so the version bump is normally somewhere in
+    # the middle of the range rather than in its diff — and on the push that CREATES the branch there
+    # is no range at all. Measured 2026-09-08: neither the creating push nor the next fast-forward
+    # fired, and both releases had to be dispatched by hand.
+    #
+    # Dropping the filter costs nothing, because the workflow is already idempotent by construction:
+    # it asks the registry whether this version exists and no-ops when it does. `release` only ever
+    # moves when someone means to publish, so a run per move is exactly right.
+  # Still here for the case it was written for: finishing a release that died AFTER the publish.
   workflow_dispatch:
 
 # Two releases racing would fight over the same version; let an in-flight one finish rather than
