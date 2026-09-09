@@ -17,14 +17,23 @@
 // land at the same instant, and provisioning fetches the platform package: bumping to a version whose
 // tarball is not there yet breaks every machine that boots before it appears.
 //
-// THE AGE FLOOR, which is why "behind" and "bump it" are not the same sentence. `nub install` refuses
-// any version younger than 24 hours (`minimumReleaseAge=1440`, `minimumReleaseAgeStrict=true` — nub's
-// own default, not a repo setting), so the Claude SDK cannot be installed on the day it ships. That
-// guard is right for a runtime Frizz provisions onto every user's machine, and the flags that bypass
-// it should stay unused: a bump that waits a day costs nothing, and a compromised publish is exactly
-// what the window is for. Codex reaches users through Frizz's own provisioner rather than through
-// pnpm, so nothing enforces the floor there — this check reports its age anyway, and the procedure
-// holds it to the same day, because "which package manager fetched it" is not a security argument.
+// THE AGE FLOOR NO LONGER GATES A BUMP, and the reason is arithmetic rather than appetite. `nub`
+// refuses any version under 24 hours old (`minimumReleaseAge=1440`, its own default), and this check
+// used to treat that as an eligibility test: behind, but hold until the release is a day old. On a
+// dependency you did not choose today that is exactly right. On these two it never converges —
+// Anthropic shipped 0.3.263 through 0.3.267 in two days, so every candidate was superseded BEFORE it
+// cleared the floor, and the pin was not one day behind but permanently behind (maintainer, 2026-09-09:
+// "I think we should ship these things as quickly as possible").
+//
+// It bought no safety the bump procedure does not already provide, either. Every pin move is verified
+// against the real binary — the wire contract against the app-server's own generated schema, and the
+// transcript format by folding a real session through the production parser — which is a stronger check
+// on a first-party runtime than waiting to see whether anyone else complains first.
+//
+// So the age is REPORTED and never blocks. The gate stays on for the rest of the tree; the install a
+// runtime bump performs passes `--minimum-release-age-exclude "@anthropic-ai/*"` to step around it for
+// these packages only. Codex was never gated at all — Frizz's own provisioner fetches it, not the
+// package manager.
 //
 // EXIT CODES, so a caller can branch without parsing prose:
 //   0   both pins are current
@@ -56,7 +65,8 @@ async function published(pkg, version) {
   return response.ok
 }
 
-/** How old a release must be before a bump may take it. Mirrors nub's `minimumReleaseAge` default. */
+/** The window the REPORT annotates against, so a reader knows when the install needs the exclude flag.
+ *  Mirrors nub's `minimumReleaseAge` default; it is not a gate here — see the age note above. */
 const AGE_FLOOR_MS = 24 * 60 * 60 * 1000
 
 /** When npm first served this version, or undefined if the registry will not say.
@@ -82,16 +92,12 @@ async function npmPublishedAt(pkg, version) {
   }
 }
 
-/** `{ eligible, age }` for a release: eligible once it is past the floor. Unknown age reads as NOT
- *  eligible — the point of the floor is that an unverifiable release does not get waved through. */
+/** How old a release is, for the report. `belowFloor` is context a reader may want — it is NOT a
+ *  verdict, and nothing branches on it: see the age note at the top for why the floor stopped gating. */
 function ageVerdict(publishedAt) {
-  if (publishedAt === undefined) return { eligible: false, ageHours: undefined, waitHours: undefined }
+  if (publishedAt === undefined) return { ageHours: undefined, belowFloor: false }
   const age = Date.now() - publishedAt
-  return {
-    eligible: age >= AGE_FLOOR_MS,
-    ageHours: Math.floor(age / 3_600_000),
-    waitHours: age >= AGE_FLOOR_MS ? 0 : Math.ceil((AGE_FLOOR_MS - age) / 3_600_000),
-  }
+  return { ageHours: Math.floor(age / 3_600_000), belowFloor: age < AGE_FLOOR_MS }
 }
 
 /** Numeric semver compare. An unparseable version sorts BELOW everything, so it never reads as newer. */
@@ -169,9 +175,11 @@ try {
 }
 
 const behind = lines.filter((line) => line.behind)
-// A pin may move when it is behind, the release has cleared the age floor, and every platform tarball
-// it would provision is actually published. All three, or the bump is not ready — see the age note above.
-const eligible = behind.filter((line) => line.eligible && line.unpublishedPlatforms.length === 0)
+// A pin may move when it is behind AND every platform tarball it would provision is published. The age
+// is not one of the conditions any more; the one thing that still genuinely blocks a bump is a version
+// whose per-platform tarballs have not landed yet, because provisioning fetches those and a machine
+// that boots before they appear gets nothing.
+const eligible = behind.filter((line) => line.unpublishedPlatforms.length === 0)
 
 if (json) {
   console.log(JSON.stringify({
@@ -188,12 +196,12 @@ if (json) {
     if (line.unpublishedPlatforms.length > 0) {
       console.log(`  ⚠ NOT YET PUBLISHED for ${line.unpublishedPlatforms.join(", ")} — provisioning would fail there; wait for the tarballs`)
     }
-    if (line.eligible) console.log(`  ready to bump (released ${line.ageHours}h ago, past the 24h floor)`)
-    else if (line.waitHours !== undefined) console.log(`  HOLD — released ${line.ageHours}h ago; eligible in ~${line.waitHours}h (24h minimum release age)`)
-    else console.log("  HOLD — the registry would not say when this shipped, so its age cannot clear the 24h floor")
+    const age = line.ageHours === undefined ? "age unknown" : `released ${line.ageHours}h ago`
+    if (line.unpublishedPlatforms.length > 0) console.log(`  HOLD — ${age}, but not every platform is published yet`)
+    else console.log(`  ready to bump (${age}${line.belowFloor ? ", inside the 24h age gate — the install excludes it" : ""})`)
   }
   if (behind.length === 0) console.log("\nboth pins are current.")
-  else if (eligible.length === 0) console.log(`\n${behind.map((l) => l.backend).join(" and ")} behind, none eligible yet — hold and re-check tomorrow.`)
+  else if (eligible.length === 0) console.log(`\n${behind.map((l) => l.backend).join(" and ")} behind, but waiting on platform tarballs — re-check shortly.`)
   else console.log(`\nbump now: ${eligible.map((l) => l.backend).join(", ")} — see plans/runtime-pin-bumps.md for what each bump requires.`)
 }
 
