@@ -510,9 +510,14 @@ export function serveStatic(distDir: string, req: IncomingMessage, res: ServerRe
   // directory threw — every load of the projects page (`/`, `/?add=…`, `/?unknown=…`) answered
   // "not found" while `/project/<slug>` and every asset were fine (2026-09-09). `join` still
   // converts the separators for the filesystem.
-  const rel = posix.normalize((req.url ?? "/").split("?")[0]).replace(/^(\.\.[/\\])+/, "")
+  //
+  // Backslashes are folded into slashes FIRST. POSIX normalization would leave a `..\` segment
+  // alone, and the native `join` on Windows would then walk it, so `/..\web-dist-x\secret` escaped
+  // the root while still sharing its prefix (pullfrog on #34).
+  const rel = posix.normalize((req.url ?? "/").split("?")[0].replace(/\\/g, "/")).replace(/^(\.\.[/\\])+/, "")
   let file = join(distDir, rel === "/" ? "index.html" : rel)
-  if (!file.startsWith(distDir)) file = join(distDir, "index.html")
+  // Separator-aware: `web-dist-private` starts with `web-dist` and is still outside it.
+  if (!file.startsWith(distDir + sep)) file = join(distDir, "index.html")
   if (!existsSync(file)) file = join(distDir, "index.html") // SPA fallback
   try {
     const stats = statSync(file)

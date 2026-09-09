@@ -3,7 +3,7 @@ import { createServer } from "node:http"
 import { connect } from "node:net"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { basename, join } from "node:path"
 import { gunzipSync } from "node:zlib"
 import { after, before, test } from "node:test"
 import { serveStatic } from "./index.ts"
@@ -124,4 +124,40 @@ test("text is compressed when the client asks, and left alone when it does not",
   })
   assert.match(gzipped.headers, /content-encoding: gzip/i)
   assert.match(gunzipSync(gzipped.body).toString("utf8"), /globalThis\.build = "one"/)
+})
+
+// A backslash must not be a way OUT of the root. On Windows the native `join` reads `\` as a
+// separator, so a `..\` segment that POSIX normalization left alone walks up — and a sibling that
+// shares the root's name prefix passed a bare `startsWith(distDir)` (pullfrog on #34). The request
+// goes over a raw socket because fetch turns `\` into `/` before sending.
+test("a backslash traversal to a prefix-sharing sibling gets the shell, never the sibling's file", async () => {
+  const sibling = `${dist}-private`
+  mkdirSync(sibling)
+  writeFileSync(join(sibling, "secret.txt"), "SECRET")
+  const name = basename(sibling)
+  const rawGet = (path: string) =>
+    new Promise<{ status: number; body: string }>((resolve, reject) => {
+      const port = Number(new URL(origin).port)
+      const socket = connect(port, "127.0.0.1", () => {
+        socket.write(`GET ${path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n`)
+      })
+      const chunks: Buffer[] = []
+      socket.on("data", (chunk) => chunks.push(chunk))
+      socket.on("error", reject)
+      socket.on("end", () => {
+        const raw = Buffer.concat(chunks).toString("utf8")
+        const status = Number(/^HTTP\/1\.1 (\d{3})/u.exec(raw)?.[1])
+        resolve({ status, body: raw.slice(raw.indexOf("\r\n\r\n") + 4) })
+      })
+    })
+  try {
+    for (const path of [`/..\\${name}\\secret.txt`, `/assets/..\\..\\${name}\\secret.txt`, `/../${name}/secret.txt`]) {
+      const res = await rawGet(path)
+      assert.equal(res.status, 200, path)
+      assert.doesNotMatch(res.body, /SECRET/u, path)
+      assert.match(res.body, /index-(AAAA|BBBB)\.js/u, path)
+    }
+  } finally {
+    rmSync(sibling, { recursive: true, force: true })
+  }
 })
