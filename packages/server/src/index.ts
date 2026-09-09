@@ -2,7 +2,7 @@ export type { AppRouter } from "./router.ts"
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import { readFileSync, existsSync, statSync } from "node:fs"
-import { dirname, join, resolve, extname, normalize, sep } from "node:path"
+import { dirname, join, resolve, extname, posix, sep } from "node:path"
 import { DEFAULT_PORT, FRIZZ_ROUTE_PREFIX } from "@frizz/shared"
 import {
 ContextStartupError,
@@ -505,7 +505,12 @@ function staticIsFresh(req: IncomingMessage, etag: string, mtimeMs: number): boo
 // Serve a built asset from web/dist, falling back to index.html for SPA routes. Path is
 // normalized + confined to distDir so a request can't escape the root.
 export function serveStatic(distDir: string, req: IncomingMessage, res: ServerResponse) {
-  const rel = normalize((req.url ?? "/").split("?")[0]).replace(/^(\.\.[/\\])+/, "")
+  // A URL path is POSIX whatever the host is. The platform `normalize` turns "/" into "\" on
+  // Windows, so the root test below missed, the root resolved to distDir ITSELF, and reading a
+  // directory threw — every load of the projects page (`/`, `/?add=…`, `/?unknown=…`) answered
+  // "not found" while `/project/<slug>` and every asset were fine (2026-09-09). `join` still
+  // converts the separators for the filesystem.
+  const rel = posix.normalize((req.url ?? "/").split("?")[0]).replace(/^(\.\.[/\\])+/, "")
   let file = join(distDir, rel === "/" ? "index.html" : rel)
   if (!file.startsWith(distDir)) file = join(distDir, "index.html")
   if (!existsSync(file)) file = join(distDir, "index.html") // SPA fallback
