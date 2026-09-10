@@ -543,8 +543,9 @@ export const RETIRED_AWAITING_REPLACEMENT: Record<RetiredAwaitingKind, string> =
  *  see it let one pass as prose. */
 const AWAITING_KEY_RE = /^([a-z][a-z-]*):\s*(\S.*)?$/i
 
-/** The YAML keys the frontmatter recognises: four PLURAL sequences of things frizz can look up, plus the
- *  two scalars `for:` and `title:`. Anything else is not structure and falls through to the body. */
+/** The keys the frontmatter recognises as STRUCTURE: four PLURAL sequences of things frizz can look up,
+ *  the scalar `for:`, and `title:` — which is recognised here so it never falls to the body, but is read
+ *  verbatim rather than as YAML (see splitAwaitingFrontmatter). Anything else falls through to the body. */
 const AWAITING_YAML_KEYS = new Set(["shells", "agents", "timers", "prs", "for", "title"])
 
 /** Which singular hint kind each plural sequence key produces. The WIRE SHAPE is unchanged by the
@@ -602,7 +603,16 @@ export function trimAwaitingTitle(raw: string): string {
  *  A RETIRED or UNKNOWN key never reaches the YAML parser, and that is not an optimisation. A retired key
  *  would otherwise surface as an opaque "map keys must be unique" or a nested-mapping error, when the
  *  worker needs to be told BY NAME what replaced it — the scheduler reads those lines back out of the
- *  BODY with `retiredAwaitingKindsIn`, exactly as it did under the line grammar. */
+ *  BODY with `retiredAwaitingKindsIn`, exactly as it did under the line grammar.
+ *
+ *  THE TITLE NEVER REACHES THE YAML PARSER EITHER. It is the one line of PROSE the frontmatter still
+ *  carries — a heading in the worker's own words — and prose is exactly what YAML cannot hold: a ` #`
+ *  starts a comment, a `: ` starts a nested mapping, a leading quote must close. On 2026-09-10 a worker
+ *  wrote `title: De-slop rewrite of the #64172 comment` — naming the PR, as the contract tells it to in
+ *  every resting message — and the card drew "De-slop rewrite of the" with no ellipsis and no error,
+ *  because YAML had read the PR number as a comment. A colon would have been worse: the whole
+ *  frontmatter fails to parse, and a fence that named a live sub-agent and a PR parks NOTHING. So the
+ *  title is read verbatim off its line (plus any indented continuation), and only the lookups stay YAML. */
 export function splitAwaitingFrontmatter(raw: string): { body: string; hints: AwaitingHint[] } {
   const lines = raw.split("\n").map((l) => l.replace(/\r$/, ""))
   const delimiter = lines.findIndex((l) => /^\s*---+\s*$/.test(l))
@@ -610,25 +620,39 @@ export function splitAwaitingFrontmatter(raw: string): { body: string; hints: Aw
   const after = delimiter === -1 ? [] : lines.slice(delimiter + 1)
   const rest: string[] = []
   const yamlLines: string[] = []
+  const titleLines: string[] = []
   // `structural` tracks whether the line we are on belongs to the YAML document. A block sequence's items
   // and any indented continuation belong to the KEY ABOVE THEM, so they follow that key's fate — which is
   // what keeps a retired `pr:` with its list underneath from orphaning a bare sequence into the parser.
+  // `inTitle` is the same rule for the one key that is prose: its continuation lines follow it verbatim.
   let structural = true
+  let inTitle = false
   for (const line of frontmatter) {
     const m = line.match(AWAITING_KEY_RE)
     const key = m?.[1].toLowerCase()
-    if (m && key) structural = AWAITING_YAML_KEYS.has(key)
+    if (m && key) {
+      structural = AWAITING_YAML_KEYS.has(key)
+      inTitle = key === "title"
+    }
     // A LINE THAT IS NOT A KEY AND NOT A CONTINUATION IS PROSE, exactly as it was under the line grammar:
     // a worker that omits the `---` and writes its handoff straight into the frontmatter must still park.
     // Feeding that sentence to YAML would be a parse error and would cost it the whole fence.
-    else if (line.trim() !== "" && !/^\s/.test(line) && !/^\s*-\s/.test(line)) structural = false
-    ;(structural ? yamlLines : rest).push(line)
+    else if (line.trim() !== "" && !/^\s/.test(line) && !/^\s*-\s/.test(line)) {
+      structural = false
+      inTitle = false
+    }
+    if (inTitle) titleLines.push(m && key === "title" ? (m[2] ?? "") : line)
+    else (structural ? yamlLines : rest).push(line)
   }
   const parsed = parseAwaitingYaml(yamlLines.join("\n"))
   // Unparsed lines go to the BODY rather than being dropped: the worker has to be able to see what it
   // wrote, or the correction it gets is about a fence it can no longer read.
   if (!parsed.ok) rest.push(...yamlLines)
   rest.push(...after)
+  // Capped HERE rather than at the card, so the hint on the wire is already the string that renders and
+  // no consumer can draw a longer one. A title alone still parks nothing (see readAwaitingPark).
+  const title = trimAwaitingTitle(titleLines.join(" "))
+  if (title) parsed.hints.push({ kind: "title", value: title })
   return { body: rest.join("\n").trim(), hints: parsed.hints.slice(0, AWAITING_HINT_MAX) }
 }
 
@@ -663,12 +687,9 @@ function parseAwaitingYaml(text: string): { ok: boolean; hints: AwaitingHint[] }
       for (const entry of Array.isArray(raw) ? raw : [raw]) push(itemKind, entry)
     } else if (key === "for") {
       push("for", raw)
-    } else if (key === "title") {
-      // Capped HERE rather than at the card, so the hint on the wire is already the string that renders
-      // and no consumer can draw a longer one. `push` slices at AWAITING_HINT_VALUE_MAX after this, which
-      // a trimmed title is always well inside.
-      if (typeof raw === "string" || typeof raw === "number") push("title", trimAwaitingTitle(String(raw)))
     }
+    // No `title` arm: splitAwaitingFrontmatter lifts that line out before the YAML parse, because a
+    // heading is prose and a ` #` or a `: ` in it would cut it or fail the document.
   }
   return { ok: true, hints }
 }

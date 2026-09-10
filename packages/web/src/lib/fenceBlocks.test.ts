@@ -189,6 +189,37 @@ test("an over-long title is trimmed on a word boundary at parse time", () => {
   assert.equal(parseFenceBody("title: one\n  two\n  three", "awaiting").hints[0]?.value, "one two three")
 })
 
+// THE TITLE IS PROSE, AND PROSE IS NOT YAML. On 2026-09-10 a worker wrote `title: De-slop rewrite of the
+// #64172 comment` — naming its PR, as every resting message must — and the card drew "De-slop rewrite of
+// the": YAML had read ` #64172 comment` as a comment. A `: ` would have failed the whole document instead,
+// and a fence naming a live sub-agent and a PR would have parked nothing. The title is lifted out before
+// the YAML parse, so what the worker wrote is what the card draws — items and `for:` still go through YAML.
+test("a `#` in the title is the worker's PR number, not a YAML comment", () => {
+  const { hints, body } = parseFenceBody("agents: [a314e585bf9f8987a]\nprs: [microsoft/TypeScript#64172]\nfor: 180d\ntitle: De-slop rewrite of the #64172 comment\n---\nWaiting on the rewrite.", "awaiting")
+  assert.deepEqual(hints, [
+    { kind: "agent", value: "a314e585bf9f8987a" },
+    { kind: "pr", value: "microsoft/TypeScript#64172" },
+    { kind: "for", value: "180d" },
+    { kind: "title", value: "De-slop rewrite of the #64172 comment" },
+  ])
+  assert.equal(body, "Waiting on the rewrite.")
+})
+
+test("a colon or a quote in the title neither fails the frontmatter nor loses the park", () => {
+  const colon = parseFenceBody("shells: [bzvtnt3ig]\nfor: 20m\ntitle: Held at CI gate: body fix drafted", "awaiting")
+  assert.deepEqual(colon.hints, [
+    { kind: "shell", value: "bzvtnt3ig" },
+    { kind: "for", value: "20m" },
+    { kind: "title", value: "Held at CI gate: body fix drafted" },
+  ])
+  assert.equal(colon.body, "", "nothing fell to the body")
+  const quote = parseFenceBody('title: "Quoted" then more\nfor: 5m', "awaiting")
+  assert.deepEqual(quote.hints, [
+    { kind: "for", value: "5m" },
+    { kind: "title", value: '"Quoted" then more' },
+  ])
+})
+
 test("a title alone names no wait — it is a heading, not an item", () => {
   const { hints } = parseFenceBody("title: Nightly bench", "awaiting")
   assert.deepEqual(hints, [{ kind: "title", value: "Nightly bench" }])

@@ -75,8 +75,11 @@ export interface TailStateCache {
 
 // ── fold-schema identity ───────────────────────────────────────────────────────────────────────────
 // The modules whose code decides what a folded state CONTAINS. If any of them changes, every cached
-// state was produced by a different derivation and must be discarded.
-const FOLD_SOURCES = ["transcript.ts", "tailer.ts", "backend/claude.ts", "backend/codex.ts"]
+// state was produced by a different derivation and must be discarded. The shared module is in the
+// list because the signal-fence parser (`splitAwaitingFrontmatter`, `lastFence`'s hints) has lived
+// there since 2026-08-24 — a parser fix on 2026-09-10 would otherwise have left every cached
+// `lastFence` carrying the old derivation until its transcript happened to grow.
+const FOLD_SOURCES = ["transcript.ts", "tailer.ts", "backend/claude.ts", "backend/codex.ts", "../../shared/src/index.ts"]
 
 let foldSchemaMemo: string | null = null
 

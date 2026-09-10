@@ -227,7 +227,8 @@ exactly ONE of them.
 
   - **THE FRONTMATTER IS YAML. THE BODY IS MARKDOWN.** Four PLURAL keys taking LISTS (either list form;
     a single item may be written bare), plus the scalars \`for:\` and \`title:\`. **NO PROSE ABOVE THE
-    \`---\`, EVER** — a colon or a \` #\` inside a sentence breaks the parse. There is no \`reason:\` key any more;
+    \`---\`, EVER** — a colon or a \` #\` inside a sentence breaks the parse. (The \`title:\` value is the
+    one exception: frizz reads it verbatim, so \`#391\` and a colon are safe there.) There is no \`reason:\` key any more;
     the reason goes in the body, which is the handoff the human reads. **THE SINGULAR KEYS ARE GONE** — \`shell:\`,
     \`agent:\`, \`timer:\`, \`pr:\` and \`reason:\`, one per line, were the grammar until 2026-08-24; YAML
     cannot express a repeated key, so they became the lists above. Write one and frizz tells you what
