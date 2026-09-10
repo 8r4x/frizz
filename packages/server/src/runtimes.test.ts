@@ -107,7 +107,7 @@ before(async () => {
 after(() => server.close())
 
 const claudeCoords: RuntimeCoordinates = { pkg: "@anthropic-ai/claude-agent-sdk-darwin-arm64", packageVersion: CLAUDE_AGENT_SDK_VERSION, label: CLAUDE_CODE_VERSION, binary: "claude" }
-const codexCoords: RuntimeCoordinates = { pkg: "@openai/codex", packageVersion: "0.153.4-darwin-arm64", label: "0.153.4", binary: "codex" }
+const codexCoords: RuntimeCoordinates = { pkg: "@openai/codex", packageVersion: "0.154.0-darwin-arm64", label: "0.154.0", binary: "codex" }
 
 const claudeTgz = tarball([
   { name: "package/package.json", data: Buffer.from('{"name":"stub"}') },
