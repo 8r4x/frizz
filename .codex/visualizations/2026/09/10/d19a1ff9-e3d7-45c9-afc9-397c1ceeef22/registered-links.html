@@ -72,12 +72,17 @@
     .icon { width:1em; height:1em; flex:none; align-self:baseline; transform:translateY(calc(.5em - .5cap)); overflow:visible }
     .icon-label { display:inline-flex; align-items:baseline; gap:5px; min-width:0 }
     .line.icon-label { display:flex }
-    .external-icon { color:var(--quiet) }
+    .external-icon,.document-icon { color:var(--quiet) }
     .arrow { margin-left:auto; color:var(--quiet); flex:none }
     .no-links { margin:2px 0; font-size:11px; color:var(--quiet); font-style:italic }
     [data-count="0"] .registered { display:none!important }
+    .a .registered { border-top:1px solid var(--border); margin-top:8px; padding-top:6px }
+    /* At 11.5px in both fonts, SVG-to-kind ink gaps are 6.83px (URL) / 7.33px (file).
+       Keep the activity-style kind column rather than collapsing the space before the label. */
     .a .registered .line { gap:6px }
     .a .registered .kind { min-width:33px }
+    .a .registered .label { flex:1 }
+    .a .registered .destination { margin-left:auto; max-width:45%; text-align:right; flex:0 1 auto }
     .c .registered .line { color:var(--muted) }
     .d .registered .destination { margin-left:auto; padding-left:14px; text-align:right; max-width:46% }
     .d .registered .label { max-width:65% }
@@ -145,7 +150,6 @@
     @media (max-width:480px) { .page-head { padding-top:24px } h1 { font-size:22px } .controls label { gap:5px; font-size:11px } select { font-size:11px; max-width:130px } .frame { padding-inline:12px } main { padding-inline:12px } .candidate-note { margin-left:0 } .source { margin-left:0 } .profile { gap:7px } .d .registered .destination { max-width:40% } }
   </style>
 
-
   <header class="page-head">
     <h1>Links underneath the prompt</h1>
     <p class="intro">Twelve link treatments in the existing activity area, plus four screenshot carousels for the transcript. These are mockups, not live resources.</p>
@@ -161,7 +165,7 @@
     </div>
   </div>
   <main>
-    <div id="links" class="section-head"><div><h2>Registered links</h2><p>The existing child-row arrow and external-open glyph, in every treatment.</p></div><button class="only-picked" aria-pressed="false">Show shortlist</button></div>
+    <div id="links" class="section-head"><div><h2>Registered links</h2><p>Option A combines the selected activity rows with an unlabeled divider and URL destinations.</p></div><button class="only-picked" aria-pressed="false">Show shortlist</button></div>
     <p id="shortlist-empty" class="footer-note" hidden>No treatments shortlisted. Choose “Show all options” to add some.</p>
     <div id="link-options" class="compare"></div>
     <div id="screenshots" class="section-head"><div><h2>Screenshot fences</h2><p>Inline in the transcript. Try the arrows, thumbnails, dots, or horizontal scroll.</p></div></div>
@@ -180,9 +184,11 @@
     };
     const icon = (name, cls = '') => `<svg class="icon ${cls}" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[name]}</svg>`;
     // Static copies keep this comparison page self-contained. Sources: lib/childOps.ts CHILD_ARROW,
-    // and Lucide ExternalLink (ISC), as rendered by components/MarkdownDrawer.tsx.
+    // and Lucide ExternalLink / FileText (ISC), used by MarkdownDrawer.tsx / Composer.tsx.
     const branch = () => '<span class="branch" aria-hidden="true">⤷</span>';
     const external = (cls='') => `<svg class="icon external-icon ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>`;
+    const documentIcon = () => '<svg class="icon document-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg>';
+    const isUrl = d => /^https?:\/\//i.test(d.target);
     const data = [
       { id:'dev', label:'Open dev server', target:'http://localhost:5173', short:'localhost:5173' },
       { id:'plan', label:'Working plan', target:'plans/registered-links.md', short:'registered-links.md' },
@@ -194,7 +200,7 @@
       { id:'reference', label:'Reference page', target:'https://example.com/reference', short:'example.com' },
     ];
     const variants = [
-      ['a','A','Matching activity rows','Selected direction. URLs are labelled “link”; local documents and downloads are labelled “file”.'],
+      ['a','A','Matching activity rows','Selected direction. An unlabeled divider, “link” / “file” labels, URL destinations on the right, and a document icon for files.'],
       ['b','B','Leading external arrow','The child arrow and external-open glyph precede the label. No kind tag.'],
       ['c','C','Trailing external arrow','The child arrow leads; the external-open glyph follows the label.'],
       ['d','D','Destination on the right','A compact list with the address or filename in a second column.'],
@@ -221,7 +227,7 @@
     function treatment(v, rows) {
       if (!rows.length) return '';
       switch(v) {
-        case 'a': return rows.map(d=>anchor(d,`${branch()}${external()}<span class="kind">${/^https?:\/\//i.test(d.target)?'Link':'File'}</span>${label(d)}`,'line')).join('');
+        case 'a': return rows.map(d=>anchor(d,`${branch()}${isUrl(d)?external():documentIcon()}<span class="kind">${isUrl(d)?'Link':'File'}</span>${label(d)}${isUrl(d)?`<span class="destination">${esc(d.target)}</span>`:''}`,'line')).join('');
         case 'b': return rows.map(simple).join('');
         case 'c': return rows.map(d=>anchor(d,branch()+label(d)+external(),'line icon-label')).join('');
         case 'd': return rows.map(d=>anchor(d,marked(d)+`<span class="destination">${esc(d.short)}</span>`,'line icon-label')).join('');
