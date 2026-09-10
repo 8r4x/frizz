@@ -67,6 +67,11 @@ interface Slot {
   offset: number
   partial: string
   live: boolean
+  // The instant of the signal that most recently made this slot live (`started`, an `interacted`
+  // resurrection, a roster resurrection), as epoch ms; NaN when that record carried no timestamp. A
+  // turn-end in the child's rollout OLDER than this belongs to work already accounted for and must
+  // not retire the slot — see foldChild.
+  liveSinceMs: number
   // Deadline for resolving `rolloutPath`. A child we can never locate must not read as forever-running.
   resolveDeadlineMs: number
 }
@@ -159,6 +164,7 @@ export function createCodexSubAgentTracker(deps: CodexSubAgentDeps): CodexSubAge
           offset: 0,
           partial: "",
           live: true,
+          liveSinceMs: Date.parse(startedAt),
           resolveDeadlineMs: 0, // stamped on the first poll, which is the first time we know `now`
         }
         slots.set(sig.path, slot)
@@ -172,6 +178,7 @@ export function createCodexSubAgentTracker(deps: CodexSubAgentDeps): CodexSubAge
         const slot = slots.get(sig.path)
         if (!slot || slot.live) return
         slot.live = true
+        slot.liveSinceMs = sig.at ? Date.parse(sig.at) : NaN
         publish(slot)
         return
       }
@@ -202,6 +209,7 @@ export function createCodexSubAgentTracker(deps: CodexSubAgentDeps): CodexSubAge
           else if (agent.status === "interrupted") retire(slot, sig.at, "killed")
           else if (!slot.live) {
             slot.live = true
+            slot.liveSinceMs = sig.at ? Date.parse(sig.at) : NaN
             publish(slot)
           }
         }
@@ -271,6 +279,16 @@ export function createCodexSubAgentTracker(deps: CodexSubAgentDeps): CodexSubAge
   // Fold whatever the child appended since our cursor, watching ONLY its turn brackets. A child whose
   // last bracket is closed has finished the work it was dispatched for (it may still be addressable —
   // `interacted` resurrects it — but it is not work in flight, and must not hold the parent Active).
+  //
+  // ONLY A BRACKET THAT CLOSED AFTER THE SLOT WENT LIVE COUNTS. A retired slot is skipped by poll, so
+  // its cursor stops wherever it was — and since codex >=0.153 the parent's own `completed` item
+  // retires the slot a beat BEFORE the child writes its task_complete, the previous turn's closing
+  // bracket is exactly what is left unread. The next `interacted` resurrected the child and the very
+  // same tick folded that stale bracket and retired it again, so a re-tasked child was invisible for
+  // its entire second and later turns. Measured on the maintainer's orchestration rollout of
+  // 2026-09-10 (27 spawns): 22 of 47 retirements were a resurrection killed on its own tick, every one
+  // at a bracket timestamped minutes before the `interacted` that revived it. The same guard covers a
+  // restart, where the prime folds the child's whole rollout from byte 0 after the parent's.
   function foldChild(slot: Slot, nowMs: number): void {
     const path = slot.rolloutPath
     if (!path) return
@@ -289,6 +307,7 @@ export function createCodexSubAgentTracker(deps: CodexSubAgentDeps): CodexSubAge
           open = true
           closedAt = undefined
         } else if (ev.kind === "turn-end") {
+          if (ev.at && Number.isFinite(slot.liveSinceMs) && Date.parse(ev.at) < slot.liveSinceMs) continue
           open = false
           closedAt = ev.at
         }

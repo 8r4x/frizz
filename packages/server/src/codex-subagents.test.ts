@@ -274,3 +274,40 @@ test("0.153: an `interacted` for a child we never saw start is ignored, not inve
   assert.ok(![...h.live.keys(), ...h.retired.map((r) => r.id)].some((id) => id.includes("xCccg87")))
   assert.equal(BUN, "/root/bun_mechanics") // the one child this slice does follow end to end
 })
+
+test("0.153: a re-tasked child stays live — the previous turn's unread closing bracket cannot retire it", () => {
+  // The bug on the maintainer's 2026-09-10 orchestration: `completed` retires the slot BEFORE the
+  // child writes its task_complete, poll skips retired slots, so that bracket sits unread. The next
+  // `interacted` resurrected the child and the same tick folded the stale bracket and retired it again.
+  const files = new Map<string, string>()
+  const h = harness(files)
+  for (const line of MA0153_LINES) h.tracker.onLine(line)
+  h.tracker.poll(Date.parse("2026-09-04T18:54:53.000Z"))
+  assert.equal(h.tracker.liveCount(), 0) // retired by the parent's `completed` at 18:54:52.109
+
+  // The child's rollout, first turn bracketed closed a hair before the parent's `completed` landed,
+  // and never folded: the slot was already retired when its cursor could have advanced.
+  const child = `/rollouts/01a06dc1-0eb0-7bb1-86c6-bbeeb64c24af.jsonl`
+  files.set(child, childRollout({ start: "2026-09-04T18:49:24.400Z", end: "2026-09-04T18:54:52.100Z" }))
+
+  // The parent re-tasks it, in the item spelling the fixture uses.
+  const interacted = JSON.stringify({
+    timestamp: "2026-09-04T18:56:00.000Z",
+    type: "event_msg",
+    payload: { type: "item_completed", item: { type: "SubAgentActivity", id: "call_reTask", kind: "interacted", agent_thread_id: "01a06dc1-0eb0-7bb1-86c6-bbeeb64c24af", agent_path: BUN } },
+  })
+  h.tracker.onLine(interacted)
+  h.tracker.poll(Date.parse("2026-09-04T18:56:00.050Z"))
+  assert.equal(h.tracker.liveCount(), 1, "the stale 18:54:52 bracket predates the 18:56:00 resurrection and must not close it")
+  assert.ok(h.live.has(BUN_CALL))
+  assert.equal(h.retired.length, 1)
+
+  // Its NEW turn closing is what retires it, at that bracket's own instant.
+  files.set(child, childRollout(
+    { start: "2026-09-04T18:49:24.400Z", end: "2026-09-04T18:54:52.100Z" },
+    { start: "2026-09-04T18:56:00.900Z", end: "2026-09-04T18:58:00.000Z" },
+  ))
+  h.tracker.poll(Date.parse("2026-09-04T18:58:01.000Z"))
+  assert.equal(h.tracker.liveCount(), 0)
+  assert.equal(h.retired.at(-1)?.at, "2026-09-04T18:58:00.000Z")
+})
