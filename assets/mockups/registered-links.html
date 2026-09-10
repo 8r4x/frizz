@@ -55,7 +55,7 @@
     .send svg { width:13px; height:13px }
     .ops { padding:8px 2px 0; display:grid; gap:3px; font-size:11.5px; color:var(--muted) }
     .op { display:flex; align-items:baseline; min-width:0; gap:6px; line-height:20px }
-    .branch { font-size:12px; color:var(--quiet); flex:none; width:9px }
+    .branch { font-size:11px; line-height:1; color:color-mix(in srgb,var(--muted) 45%,transparent); flex:none; width:9px }
     .dot { width:6px; height:6px; background:var(--accent); border-radius:50%; align-self:baseline; transform:translateY(calc(-.5cap + 3px)); flex:none; margin:0 3px 0 1px }
     .dot.shell { background:var(--shell) }
     .kind { font:9px var(--ui); color:var(--quiet); font-variant-caps:all-small-caps; letter-spacing:.04em; min-width:33px; flex:none }
@@ -68,27 +68,23 @@
     .line { display:flex; align-items:baseline; gap:6px; min-width:0; padding:2px 0; line-height:20px }
     .label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
     .destination { font-family:var(--mono); color:var(--quiet); font-size:10px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0 }
-    /* Symmetric 1em SVGs sit on the resolved cap band in both fonts. Measured with ink-gaps at
-       dsf 6: the 5px CSS gap reads as 5.5px between link ink and text. No per-variant nudges. */
+    /* Symmetric 1em SVGs sit on the resolved cap band in both fonts. The external glyph is the
+       same Lucide ExternalLink used by MarkdownDrawer and UrlElicitation, not a new link symbol. */
     .icon { width:1em; height:1em; flex:none; align-self:baseline; transform:translateY(calc(.5em - .5cap)); overflow:visible }
     .icon-label { display:inline-flex; align-items:baseline; gap:5px; min-width:0 }
     .line.icon-label { display:flex }
-    .link-mark { color:var(--quiet) }
+    .external-icon { color:var(--quiet) }
     .arrow { margin-left:auto; color:var(--quiet); flex:none }
     .no-links { margin:2px 0; font-size:11px; color:var(--quiet); font-style:italic }
     [data-count="0"] .registered { display:none!important }
     .a .registered .line { gap:6px }
-    .a .registered .branch { visibility:hidden }
-    .a .registered .link-mark { width:9px; margin-right:1px }
     .a .registered .kind { min-width:33px }
-    .b .registered .line { padding-left:15px }
-    .c .registered { padding-left:69px }
     .c .registered .line { color:var(--muted) }
     .d .registered .destination { margin-left:auto; padding-left:14px; text-align:right; max-width:46% }
     .d .registered .label { max-width:65% }
     .e .registered .link { display:block; padding:5px 0 }
     .e .registered .icon-label { display:flex }
-    .e .registered .destination { display:block; margin-left:16.5px; font-size:10px }
+    .e .registered .destination { display:block; margin-left:30.5px; font-size:10px }
     .group-heading { font-size:10px; color:var(--quiet); margin:8px 0 4px; letter-spacing:.01em }
     .f .registered { border-top:1px solid var(--border); margin-top:8px; padding-top:0 }
     .g .registered { padding-top:7px }
@@ -166,7 +162,7 @@
     </div>
   </div>
   <main>
-    <div id="links" class="section-head"><div><h2>Registered links</h2><p>Same labels and destinations. No artifact types or running-state indicators.</p></div><button class="only-picked" aria-pressed="false">Show shortlist</button></div>
+    <div id="links" class="section-head"><div><h2>Registered links</h2><p>The existing child-row arrow and external-open glyph, in every treatment.</p></div><button class="only-picked" aria-pressed="false">Show shortlist</button></div>
     <p id="shortlist-empty" class="footer-note" hidden>No treatments shortlisted. Choose “Show all options” to add some.</p>
     <div id="link-options" class="compare"></div>
     <div id="screenshots" class="section-head"><div><h2>Screenshot fences</h2><p>Inline in the transcript. Try the arrows, thumbnails, dots, or horizontal scroll.</p></div></div>
@@ -179,13 +175,15 @@
     const $ = (selector, root = document) => root.querySelector(selector);
     const esc = value => String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     const icons = {
-      link:'<path d="M5 7 7 5M4.5 8.5l-1 1a2.12 2.12 0 0 1-3-3l2-2a2.12 2.12 0 0 1 3 0m1-1 1-1a2.12 2.12 0 0 1 3 3l-2 2a2.12 2.12 0 0 1-3 0"/>',
-      out:'<path d="M3 9 9 3M3 3h6v6"/>',
       chevron:'<path d="m4.5 2.5 3.5 3.5-3.5 3.5"/>',
       left:'<path d="M7.5 2.5 4 6l3.5 3.5"/>',
       up:'<path d="M6 10V2m-4 4 4-4 4 4"/>',
     };
     const icon = (name, cls = '') => `<svg class="icon ${cls}" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[name]}</svg>`;
+    // Static copies keep this comparison page self-contained. Sources: lib/childOps.ts CHILD_ARROW,
+    // and Lucide ExternalLink (ISC), as rendered by components/MarkdownDrawer.tsx.
+    const branch = () => '<span class="branch" aria-hidden="true">⤷</span>';
+    const external = (cls='') => `<svg class="icon external-icon ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>`;
     const data = [
       { id:'dev', label:'Open dev server', target:'http://localhost:5173', short:'localhost:5173' },
       { id:'plan', label:'Working plan', target:'plans/registered-links.md', short:'registered-links.md' },
@@ -197,14 +195,14 @@
       { id:'reference', label:'Reference page', target:'https://example.com/reference', short:'example.com' },
     ];
     const variants = [
-      ['a','A','Matching activity rows','A neutral link mark and a “link” tag follow the existing row structure.'],
-      ['b','B','Link icon + label','One quiet link glyph. No kind tag, destination, or trailing action.'],
-      ['c','C','Labels only','Text aligned beneath activity labels. Nothing else in the row.'],
+      ['a','A','Matching activity rows','The child arrow, external-open glyph, and a “link” tag follow the existing row structure.'],
+      ['b','B','Leading external arrow','The child arrow and external-open glyph precede the label. No kind tag.'],
+      ['c','C','Trailing external arrow','The child arrow leads; the external-open glyph follows the label.'],
       ['d','D','Destination on the right','A compact list with the address or filename in a second column.'],
       ['e','E','Destination underneath','A two-line row exposes the destination without squeezing the label.'],
       ['f','F','Separate links group','A thin divider and a small heading distinguish links from running work.'],
       ['g','G','Collapsible group','A “Links” disclosure keeps the list available without always spending the height.'],
-      ['h','H','Inline text rail','Plain links share a wrapping line. Each ends with an opening arrow.'],
+      ['h','H','Inline text rail','Links share a wrapping line. Each keeps both existing arrows.'],
       ['i','I','Quiet filled chips','Small filled controls wrap beneath the activity rows.'],
       ['j','J','Outlined controls','The same compact row with borders instead of fills.'],
       ['k','K','Two-column list','A small grid saves height while keeping each label independently scannable.'],
@@ -219,29 +217,29 @@
     }
     function anchor(d, body, cls = '') { return `<a href="${esc(d.target)}" data-resource="${esc(d.id)}" class="link ${cls}" title="${esc(d.target)}">${body}</a>`; }
     const label = d => `<span class="label">${esc(d.label)}</span>`;
-    const mark = () => icon('link','link-mark');
-    const simple = d => anchor(d, mark()+label(d),'line icon-label');
+    const marked = d => branch()+external()+label(d);
+    const simple = d => anchor(d,marked(d),'line icon-label');
     function treatment(v, rows) {
       if (!rows.length) return '';
       switch(v) {
-        case 'a': return rows.map(d=>anchor(d,`<span class="branch" aria-hidden="true">↳</span>${mark()}<span class="kind">Link</span>${label(d)}`,'line')).join('');
+        case 'a': return rows.map(d=>anchor(d,`${branch()}${external()}<span class="kind">Link</span>${label(d)}`,'line')).join('');
         case 'b': return rows.map(simple).join('');
-        case 'c': return rows.map(d=>anchor(d,label(d),'line')).join('');
-        case 'd': return rows.map(d=>anchor(d,mark()+label(d)+`<span class="destination">${esc(d.short)}</span>`,'line icon-label')).join('');
-        case 'e': return rows.map(d=>anchor(d,`<span class="icon-label">${mark()}${label(d)}</span><span class="destination">${esc(d.target)}</span>`)).join('');
+        case 'c': return rows.map(d=>anchor(d,branch()+label(d)+external(),'line icon-label')).join('');
+        case 'd': return rows.map(d=>anchor(d,marked(d)+`<span class="destination">${esc(d.short)}</span>`,'line icon-label')).join('');
+        case 'e': return rows.map(d=>anchor(d,`<span class="icon-label">${marked(d)}</span><span class="destination">${esc(d.target)}</span>`)).join('');
         case 'f': return `<div class="group-heading">Links</div>${rows.map(simple).join('')}`;
         case 'g': return `<details open><summary class="group-toggle">${icon('chevron','chevron')}<span>Links</span><span class="count">${rows.length}</span></summary><div class="items">${rows.map(simple).join('')}</div></details>`;
-        case 'h': return rows.map(d=>anchor(d,label(d)+icon('out'),'icon-label')).join('');
-        case 'i': case 'j': return rows.map(d=>anchor(d,mark()+label(d))).join('');
-        case 'k': return rows.map(d=>anchor(d,label(d)+icon('out','arrow'))).join('');
-        case 'l': return anchor(rows[0],mark()+label(rows[0]),'icon-label')+(rows.length>1?`<details class="more"><summary>+${rows.length-1} more</summary><div class="menu">${rows.slice(1).map(simple).join('')}</div></details>`:'');
+        case 'h': return rows.map(d=>anchor(d,marked(d),'icon-label')).join('');
+        case 'i': case 'j': return rows.map(d=>anchor(d,marked(d))).join('');
+        case 'k': return rows.map(d=>anchor(d,branch()+label(d)+external('arrow'))).join('');
+        case 'l': return anchor(rows[0],marked(rows[0]),'icon-label')+(rows.length>1?`<details class="more"><summary>+${rows.length-1} more</summary><div class="menu">${rows.slice(1).map(simple).join('')}</div></details>`:'');
       }
     }
     function context() {
       return `<p class="context">The preview and working plan are ready.<br><strong>The links stay here as the conversation grows.</strong></p>
         <div class="composer"><textarea class="prompt" rows="2" aria-label="Mock follow-up prompt" placeholder="Send a follow-up…"></textarea>
         <div class="composer-bottom"><div class="profile"><span class="model">GPT-6 Astra</span><span class="effort">High</span></div><span class="send" aria-hidden="true">${icon('up')}</span></div></div>
-        ${$('#activity').value==='yes'?`<div class="ops" aria-label="Existing activity rows"><div class="op"><span class="branch" aria-hidden="true">↳</span><span class="dot"></span><span class="kind">Agent</span><span class="op-name">Reviewing the implementation</span><span class="elapsed">4m 12s</span><span class="op-x" aria-hidden="true">×</span></div><div class="op"><span class="branch" aria-hidden="true">↳</span><span class="dot shell"></span><span class="kind">Shell</span><span class="op-name">Running focused tests</span><span class="elapsed">38s</span><span class="op-x" aria-hidden="true">×</span></div></div>`:''}`;
+        ${$('#activity').value==='yes'?`<div class="ops" aria-label="Existing activity rows"><div class="op">${branch()}<span class="dot"></span><span class="kind">Agent</span><span class="op-name">Reviewing the implementation</span><span class="elapsed">4m 12s</span><span class="op-x" aria-hidden="true">×</span></div><div class="op">${branch()}<span class="dot shell"></span><span class="kind">Shell</span><span class="op-name">Running focused tests</span><span class="elapsed">38s</span><span class="op-x" aria-hidden="true">×</span></div></div>`:''}`;
     }
     function heading(id,letter,title) { return `<div class="candidate-head"><span class="letter">${letter}</span><h3>${title}</h3><button class="pick" data-pick="${id}" aria-pressed="${chosen.has(id)}" aria-label="Shortlist ${letter}: ${title}">${chosen.has(id)?'Shortlisted':'Shortlist'}</button></div>`; }
     function source(markup) { return `<details class="source"><summary>Markup</summary><pre>${esc(markup)}</pre></details>`; }
