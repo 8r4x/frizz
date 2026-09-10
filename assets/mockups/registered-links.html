@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="en" data-font="sans" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Frizz — links and screenshot treatments</title>
+  <style id="shared-styles">
+    /* Palette and type from packages/web/src/styles.css. The light palette is a comparison aid.
+       Static composer/operation rows follow ChatView.tsx and ChildOpRow.tsx, not a new app shell. */
+    :root { color-scheme:dark; --bg:#0d0e10; --panel:#131519; --panel-2:#181b20; --elevated:#1c1f25; --border:#26282d; --strong:#33363c; --fg:#e6e7e9; --muted:#8b8f96; --quiet:#626770; --accent:#e8b923; --shell:#4a9eff; --sans:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace; --ui:var(--sans) }
+    [data-font="mono"] { --ui:var(--mono) }
+    [data-theme="light"] { color-scheme:light; --bg:#f1f2f4; --panel:#fff; --panel-2:#f7f8fa; --elevated:#e9ecf0; --border:#dfe2e7; --strong:#b8bfc9; --fg:#24282f; --muted:#606875; --quiet:#7b8491; --accent:#9d7200; --shell:#2e75ce }
+    * { box-sizing:border-box }
+    body { margin:0; color:var(--fg); background:var(--bg); font:13px/1.5 var(--sans) }
+    button,select,textarea { font:inherit; color:inherit }
+    button,summary,select { cursor:pointer }
+    button { background:none; border:0 }
+    a { color:inherit }
+    :focus-visible { outline:2px solid var(--shell); outline-offset:3px; border-radius:3px }
+    button:hover,a:hover { color:var(--fg) }
+    [hidden] { display:none!important }
+    .page-head { max-width:1536px; padding:36px 32px 24px; margin:auto }
+    h1 { font-size:25px; font-weight:580; letter-spacing:-.04em; margin:0 0 7px }
+    .intro { color:var(--muted); max-width:780px; margin:0 }
+    .controls { position:sticky; top:0; z-index:5; background:var(--bg); border-block:1px solid var(--border) }
+    .controls-inner { max-width:1536px; margin:auto; padding:12px 32px; display:flex; gap:16px 22px; align-items:center; flex-wrap:wrap }
+    .controls label { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--muted) }
+    select { max-width:160px; background:var(--panel); border:1px solid var(--strong); border-radius:6px; padding:5px 24px 5px 8px; font-size:12px }
+    .jump { display:flex; gap:16px; margin-left:auto; font-size:12px; white-space:nowrap }
+    .jump a { text-decoration:none; color:var(--muted) }
+    main { max-width:1536px; margin:auto; padding:30px 32px 60px }
+    .section-head { display:flex; align-items:baseline; justify-content:space-between; gap:16px; margin-bottom:20px; scroll-margin-top:150px }
+    h2 { margin:0; font-size:17px; font-weight:550; letter-spacing:-.02em }
+    .section-head p { margin:4px 0 0; font-size:12px; color:var(--muted) }
+    .compare { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:30px 24px; align-items:start }
+    .candidate { min-width:0; scroll-margin-top:150px }
+    .candidate-head { margin-bottom:10px; display:flex; align-items:baseline; gap:8px }
+    .letter { color:var(--quiet); font:11px var(--mono); width:19px; flex:none }
+    h3 { margin:0; font-size:13px; font-weight:560 }
+    .pick { margin-left:auto; color:var(--quiet); font-size:11px; border:1px solid transparent; padding:3px 7px; border-radius:5px }
+    .pick[aria-pressed="true"] { border-color:var(--strong); color:var(--fg); background:var(--elevated) }
+    .candidate-note { font-size:12px; color:var(--muted); margin:9px 0 7px 27px; min-height:18px }
+    .frame { border:1px solid var(--border); border-radius:12px; background:var(--panel); padding:17px 18px 16px; font-family:var(--ui); margin-inline:auto; width:100%; max-width:720px }
+    [data-width="narrow"] .frame { max-width:360px; padding-inline:12px }
+    .context { color:var(--muted); font-size:12px; margin:0 0 14px; line-height:1.6 }
+    .context strong { font-weight:450; color:var(--fg) }
+    .composer { border:1px solid var(--strong); border-radius:9px; padding:10px 11px 9px; background:var(--panel-2) }
+    .prompt { display:block; width:100%; padding:0; height:38px; resize:none; border:0; outline:0; background:transparent; font:12px/1.5 var(--ui) }
+    .prompt::placeholder { color:var(--quiet) }
+    .composer-bottom { display:flex; align-items:center; justify-content:space-between; color:var(--muted); gap:10px }
+    .profile { display:flex; align-items:baseline; gap:9px; min-width:0; font-size:10.5px }
+    .profile .model { white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+    .profile .effort { color:var(--quiet) }
+    .send { border:1px solid var(--strong); border-radius:5px; width:23px; height:23px; display:grid; place-items:center; color:var(--quiet) }
+    .send svg { width:13px; height:13px }
+    .ops { padding:8px 2px 0; display:grid; gap:3px; font-size:11.5px; color:var(--muted) }
+    .op { display:flex; align-items:baseline; min-width:0; gap:6px; line-height:20px }
+    .branch { font-size:12px; color:var(--quiet); flex:none; width:9px }
+    .dot { width:6px; height:6px; background:var(--accent); border-radius:50%; align-self:baseline; transform:translateY(calc(-.5cap + 3px)); flex:none; margin:0 3px 0 1px }
+    .dot.shell { background:var(--shell) }
+    .kind { font:9px var(--ui); color:var(--quiet); font-variant-caps:all-small-caps; letter-spacing:.04em; min-width:33px; flex:none }
+    .op-name { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0 }
+    .elapsed { margin-left:auto; color:var(--quiet); font-size:11px; flex:none; padding-left:8px }
+    .op-x { color:var(--quiet); font:13px var(--sans); margin-left:2px; width:13px; text-align:center }
+    .registered { padding:4px 2px 0; font-size:11.5px }
+    .link { text-decoration:none; color:var(--muted); min-width:0; cursor:pointer }
+    .link:hover .label,.link:focus-visible .label { color:var(--fg); text-decoration:underline; text-underline-offset:3px }
+    .line { display:flex; align-items:baseline; gap:6px; min-width:0; padding:2px 0; line-height:20px }
+    .label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+    .destination { font-family:var(--mono); color:var(--quiet); font-size:10px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0 }
+    /* Symmetric 1em SVGs sit on the resolved cap band in both fonts. Measured with ink-gaps at
+       dsf 6: the 5px CSS gap reads as 5.5px between link ink and text. No per-variant nudges. */
+    .icon { width:1em; height:1em; flex:none; align-self:baseline; transform:translateY(calc(.5em - .5cap)); overflow:visible }
+    .icon-label { display:inline-flex; align-items:baseline; gap:5px; min-width:0 }
+    .line.icon-label { display:flex }
+    .link-mark { color:var(--quiet) }
+    .arrow { margin-left:auto; color:var(--quiet); flex:none }
+    .no-links { margin:2px 0; font-size:11px; color:var(--quiet); font-style:italic }
+    [data-count="0"] .registered { display:none!important }
+    .a .registered .line { gap:6px }
+    .a .registered .branch { visibility:hidden }
+    .a .registered .link-mark { width:9px; margin-right:1px }
+    .a .registered .kind { min-width:33px }
+    .b .registered .line { padding-left:15px }
+    .c .registered { padding-left:69px }
+    .c .registered .line { color:var(--muted) }
+    .d .registered .destination { margin-left:auto; padding-left:14px; text-align:right; max-width:46% }
+    .d .registered .label { max-width:65% }
+    .e .registered .link { display:block; padding:5px 0 }
+    .e .registered .icon-label { display:flex }
+    .e .registered .destination { display:block; margin-left:16.5px; font-size:10px }
+    .group-heading { font-size:10px; color:var(--quiet); margin:8px 0 4px; letter-spacing:.01em }
+    .f .registered { border-top:1px solid var(--border); margin-top:8px; padding-top:0 }
+    .g .registered { padding-top:7px }
+    .group-toggle { display:flex; gap:6px; align-items:baseline; color:var(--muted); font-size:11.5px; list-style:none }
+    .group-toggle::-webkit-details-marker { display:none }
+    .group-toggle .count { margin-left:2px; color:var(--quiet); font-size:10.5px }
+    .g details[open] > summary .chevron { rotate:90deg }
+    .g details .items { padding:5px 0 0 17px }
+    .h .registered { display:flex; flex-wrap:wrap; gap:3px 16px; margin-top:6px }
+    .h .registered .link { max-width:100%; padding-block:2px }
+    .i .registered,.j .registered { display:flex; gap:6px; flex-wrap:wrap; margin-top:7px }
+    .i .registered .link,.j .registered .link { display:inline-flex; align-items:baseline; gap:5px; padding:3px 8px; max-width:100%; border-radius:5px; line-height:20px }
+    .i .registered .link { background:var(--elevated) }
+    .j .registered .link { border:1px solid var(--strong) }
+    .i .registered .link:hover,.j .registered .link:hover { background:var(--elevated); color:var(--fg) }
+    .k .registered { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:4px 10px; margin-top:7px }
+    .k .registered .link { display:flex; align-items:baseline; gap:5px; border-bottom:1px solid var(--border); padding:5px 1px }
+    .l .registered { display:flex; align-items:baseline; gap:8px 16px; flex-wrap:wrap; margin-top:7px }
+    .l .registered > .link { max-width:calc(100% - 75px) }
+    .more { position:relative; flex:none; font-size:11px }
+    .more summary { color:var(--quiet); list-style:none; border-radius:4px; padding:2px 5px }
+    .more summary::-webkit-details-marker { display:none }
+    .more[open] summary { color:var(--fg); background:var(--elevated) }
+    .more .menu { position:absolute; right:0; top:29px; z-index:2; width:min(270px,65vw); background:var(--panel-2); border:1px solid var(--strong); border-radius:8px; padding:7px 10px; box-shadow:0 8px 24px #0003 }
+    .source { margin-left:27px; color:var(--quiet); font-size:11px }
+    .source summary:hover { color:var(--fg) }
+    pre { overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; color:var(--muted); background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:12px; font:11px/1.6 var(--mono); max-height:300px }
+    #screenshots { margin-top:52px }
+    .shot-context { margin:0 0 12px; font-size:12px; color:var(--muted) }
+    .gallery { overflow:hidden; border:1px solid var(--border); border-radius:10px; background:var(--bg) }
+    .hero-image { width:100%; display:block; aspect-ratio:16/9; object-fit:contain; background:var(--bg); cursor:zoom-in }
+    .gallery-foot { display:flex; align-items:baseline; padding:8px 10px; gap:9px; border-top:1px solid var(--border); font-size:11px; color:var(--muted) }
+    .caption { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+    .nav-button { width:23px; height:23px; display:inline-flex; align-items:baseline; justify-content:center; padding:5px; border:1px solid var(--strong); border-radius:5px; flex:none; font-size:12px }
+    .nav-button:disabled { opacity:.25; cursor:default }
+    .nav-controls { margin-left:auto; display:flex; align-items:baseline; gap:7px; flex:none }
+    .position { font:10px var(--mono); color:var(--quiet); white-space:nowrap }
+    .thumbs { display:flex; gap:7px; padding:9px 10px; border-top:1px solid var(--border) }
+    .thumb { padding:0; border:1px solid transparent; border-radius:4px; overflow:hidden; width:66px; opacity:.55 }
+    .thumb[aria-pressed="true"] { border-color:var(--muted); opacity:1 }
+    .thumb img { width:100%; display:block }
+    .dots { display:flex; gap:8px; align-items:center; margin-left:auto }
+    .gallery-dot { width:7px; height:7px; border-radius:50%; background:var(--strong); padding:0; outline-offset:4px }
+    .gallery-dot[aria-pressed="true"] { background:var(--muted) }
+    .filmstrip { display:flex; gap:10px; overflow-x:auto; padding:10px; scroll-snap-type:x mandatory }
+    .filmstrip figure { width:83%; flex:none; margin:0; scroll-snap-align:start }
+    .filmstrip img { width:100%; border-radius:6px; display:block; cursor:zoom-in }
+    .filmstrip figcaption { color:var(--muted); font-size:11px; margin-top:7px }
+    .footer-note { color:var(--quiet); font-size:12px; margin-top:30px }
+    dialog { padding:24px; color:var(--fg); background:var(--panel); border:1px solid var(--strong); border-radius:12px; width:min(550px,calc(100vw - 32px)); max-height:90vh }
+    dialog::backdrop { background:#0008 }
+    dialog h2 { margin-right:28px }
+    dialog p { color:var(--muted); font-size:12px }
+    dialog .close { position:absolute; top:14px; right:14px; padding:4px 8px; font-size:18px; color:var(--muted) }
+    dialog img { width:100%; display:block; margin-top:15px }
+    .only-picked { font-size:11px; color:var(--muted); border:1px solid var(--strong); border-radius:5px; padding:5px 9px; white-space:nowrap }
+    .only-picked[aria-pressed="true"] { background:var(--elevated); color:var(--fg) }
+    @media (max-width:850px) { .compare { grid-template-columns:1fr } .page-head,main { padding-inline:18px } .controls-inner { padding-inline:18px; gap:10px 14px } .jump { margin-left:0 } }
+    @media (max-width:480px) { .page-head { padding-top:24px } h1 { font-size:22px } .controls label { gap:5px; font-size:11px } select { font-size:11px; max-width:130px } .frame { padding-inline:12px } main { padding-inline:12px } .candidate-note { margin-left:0 } .source { margin-left:0 } .profile { gap:7px } .d .registered .destination { max-width:40% } }
+  </style>
+</head>
+<body data-width="full" data-count="3">
+  <header class="page-head">
+    <h1>Links underneath the prompt</h1>
+    <p class="intro">Twelve link treatments in the existing activity area, plus four screenshot carousels for the transcript. These are mockups, not live resources.</p>
+  </header>
+  <div class="controls">
+    <div class="controls-inner">
+      <label>Theme <select id="theme"><option value="dark">Dark</option><option value="light">Light</option></select></label>
+      <label>Font <select id="font"><option value="sans">Sans</option><option value="mono">Mono</option></select></label>
+      <label>Width <select id="width"><option value="full">Full</option><option value="narrow">Narrow · 360px</option></select></label>
+      <label>Links <select id="count"><option value="3">Three</option><option value="1">One</option><option value="8">Eight</option><option value="long">Long labels</option><option value="0">None</option></select></label>
+      <label>Activity <select id="activity"><option value="yes">Agents + Bash</option><option value="no">None</option></select></label>
+      <nav class="jump" aria-label="Comparison sections"><a href="#links">Links</a><a href="#screenshots">Screenshots</a></nav>
+    </div>
+  </div>
+  <main>
+    <div id="links" class="section-head"><div><h2>Registered links</h2><p>Same labels and destinations. No artifact types or running-state indicators.</p></div><button class="only-picked" aria-pressed="false">Show shortlist</button></div>
+    <p id="shortlist-empty" class="footer-note" hidden>No treatments shortlisted. Choose “Show all options” to add some.</p>
+    <div id="link-options" class="compare"></div>
+    <div id="screenshots" class="section-head"><div><h2>Screenshot fences</h2><p>Inline in the transcript. Try the arrows, thumbnails, dots, or horizontal scroll.</p></div></div>
+    <div id="gallery-options" class="compare"></div>
+    <details class="source" style="margin:30px 0 0"><summary>Shared CSS and sample registration data</summary><pre id="shared-source"></pre></details>
+    <p class="footer-note">Local paths keep their current opening behavior: Markdown in the Frizz reader, with an external-open action. These mock links show their destination without opening a file or starting a server. Screenshot illustrations are embedded; this page needs no server or network.</p>
+  </main>
+  <dialog id="preview"><button class="close" aria-label="Close preview">×</button><h2 id="preview-title"></h2><div id="preview-body"></div></dialog>
+  <script>
+    const $ = (selector, root = document) => root.querySelector(selector);
+    const esc = value => String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    const icons = {
+      link:'<path d="M5 7 7 5M4.5 8.5l-1 1a2.12 2.12 0 0 1-3-3l2-2a2.12 2.12 0 0 1 3 0m1-1 1-1a2.12 2.12 0 0 1 3 3l-2 2a2.12 2.12 0 0 1-3 0"/>',
+      out:'<path d="M3 9 9 3M3 3h6v6"/>',
+      chevron:'<path d="m4.5 2.5 3.5 3.5-3.5 3.5"/>',
+      left:'<path d="M7.5 2.5 4 6l3.5 3.5"/>',
+      up:'<path d="M6 10V2m-4 4 4-4 4 4"/>',
+    };
+    const icon = (name, cls = '') => `<svg class="icon ${cls}" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[name]}</svg>`;
+    const data = [
+      { id:'dev', label:'Open dev server', target:'http://localhost:5173', short:'localhost:5173' },
+      { id:'plan', label:'Working plan', target:'plans/registered-links.md', short:'registered-links.md' },
+      { id:'results', label:'Download results', target:'.frizz/results.csv', short:'results.csv' },
+      { id:'storybook', label:'Component playground', target:'http://localhost:6006', short:'localhost:6006' },
+      { id:'report', label:'Test report', target:'.frizz/report.html', short:'report.html' },
+      { id:'comparison', label:'Before and after', target:'.frizz/comparison.png', short:'comparison.png' },
+      { id:'notes', label:'Research notes', target:'plans/research.md', short:'research.md' },
+      { id:'reference', label:'Reference page', target:'https://example.com/reference', short:'example.com' },
+    ];
+    const variants = [
+      ['a','A','Matching activity rows','A neutral link mark and a “link” tag follow the existing row structure.'],
+      ['b','B','Link icon + label','One quiet link glyph. No kind tag, destination, or trailing action.'],
+      ['c','C','Labels only','Text aligned beneath activity labels. Nothing else in the row.'],
+      ['d','D','Destination on the right','A compact list with the address or filename in a second column.'],
+      ['e','E','Destination underneath','A two-line row exposes the destination without squeezing the label.'],
+      ['f','F','Separate links group','A thin divider and a small heading distinguish links from running work.'],
+      ['g','G','Collapsible group','A “Links” disclosure keeps the list available without always spending the height.'],
+      ['h','H','Inline text rail','Plain links share a wrapping line. Each ends with an opening arrow.'],
+      ['i','I','Quiet filled chips','Small filled controls wrap beneath the activity rows.'],
+      ['j','J','Outlined controls','The same compact row with borders instead of fills.'],
+      ['k','K','Two-column list','A small grid saves height while keeping each label independently scannable.'],
+      ['l','L','First link + overflow','The first registered link stays visible. The rest live in a small menu.'],
+    ];
+    const chosen = new Set();
+    let onlyPicked = false;
+    function links() {
+      const mode = $('#count').value;
+      if (mode === 'long') return data.slice(0,3).map((d,i) => ({...d,label:['Open the responsive settings preview with the latest changes','Working implementation plan for registered links and screenshot fences','Download the complete cross-platform verification results'][i]}));
+      return data.slice(0, Number(mode));
+    }
+    function anchor(d, body, cls = '') { return `<a href="${esc(d.target)}" data-resource="${esc(d.id)}" class="link ${cls}" title="${esc(d.target)}">${body}</a>`; }
+    const label = d => `<span class="label">${esc(d.label)}</span>`;
+    const mark = () => icon('link','link-mark');
+    const simple = d => anchor(d, mark()+label(d),'line icon-label');
+    function treatment(v, rows) {
+      if (!rows.length) return '';
+      switch(v) {
+        case 'a': return rows.map(d=>anchor(d,`<span class="branch" aria-hidden="true">↳</span>${mark()}<span class="kind">Link</span>${label(d)}`,'line')).join('');
+        case 'b': return rows.map(simple).join('');
+        case 'c': return rows.map(d=>anchor(d,label(d),'line')).join('');
+        case 'd': return rows.map(d=>anchor(d,mark()+label(d)+`<span class="destination">${esc(d.short)}</span>`,'line icon-label')).join('');
+        case 'e': return rows.map(d=>anchor(d,`<span class="icon-label">${mark()}${label(d)}</span><span class="destination">${esc(d.target)}</span>`)).join('');
+        case 'f': return `<div class="group-heading">Links</div>${rows.map(simple).join('')}`;
+        case 'g': return `<details open><summary class="group-toggle">${icon('chevron','chevron')}<span>Links</span><span class="count">${rows.length}</span></summary><div class="items">${rows.map(simple).join('')}</div></details>`;
+        case 'h': return rows.map(d=>anchor(d,label(d)+icon('out'),'icon-label')).join('');
+        case 'i': case 'j': return rows.map(d=>anchor(d,mark()+label(d))).join('');
+        case 'k': return rows.map(d=>anchor(d,label(d)+icon('out','arrow'))).join('');
+        case 'l': return anchor(rows[0],mark()+label(rows[0]),'icon-label')+(rows.length>1?`<details class="more"><summary>+${rows.length-1} more</summary><div class="menu">${rows.slice(1).map(simple).join('')}</div></details>`:'');
+      }
+    }
+    function context() {
+      return `<p class="context">The preview and working plan are ready.<br><strong>The links stay here as the conversation grows.</strong></p>
+        <div class="composer"><textarea class="prompt" rows="2" aria-label="Mock follow-up prompt" placeholder="Send a follow-up…"></textarea>
+        <div class="composer-bottom"><div class="profile"><span class="model">GPT-6 Astra</span><span class="effort">High</span></div><span class="send" aria-hidden="true">${icon('up')}</span></div></div>
+        ${$('#activity').value==='yes'?`<div class="ops" aria-label="Existing activity rows"><div class="op"><span class="branch" aria-hidden="true">↳</span><span class="dot"></span><span class="kind">Agent</span><span class="op-name">Reviewing the implementation</span><span class="elapsed">4m 12s</span><span class="op-x" aria-hidden="true">×</span></div><div class="op"><span class="branch" aria-hidden="true">↳</span><span class="dot shell"></span><span class="kind">Shell</span><span class="op-name">Running focused tests</span><span class="elapsed">38s</span><span class="op-x" aria-hidden="true">×</span></div></div>`:''}`;
+    }
+    function heading(id,letter,title) { return `<div class="candidate-head"><span class="letter">${letter}</span><h3>${title}</h3><button class="pick" data-pick="${id}" aria-pressed="${chosen.has(id)}" aria-label="Shortlist ${letter}: ${title}">${chosen.has(id)?'Shortlisted':'Shortlist'}</button></div>`; }
+    function source(markup) { return `<details class="source"><summary>Markup</summary><pre>${esc(markup)}</pre></details>`; }
+    function renderLinks() {
+      const rows = links();
+      $('#link-options').innerHTML = variants.map(([v,letter,title,note])=>{
+        const body = `<div class="registered">${treatment(v,rows)}</div>`;
+        return `<article id="option-${v}" data-candidate="${v}" class="candidate ${v}" ${onlyPicked&&!chosen.has(v)?'hidden':''}>${heading(v,letter,title)}<div class="frame">${context()}${body}</div><p class="candidate-note">${note}</p>${source(`<div class="${v}">\n  ${body}\n</div>`)}</article>`;
+      }).join('');
+    }
+    const shots = ['Settings · desktop','Settings · narrow','Empty state'];
+    function screenshot(i) {
+      // Illustrations, not screenshots of a running implementation. Embedded so the artifact is portable.
+      const light = document.documentElement.dataset.theme==='light';
+      const bg=light?'#f3f4f6':'#0d0e10', panel=light?'#fff':'#181b20', line=light?'#dfe2e7':'#33363c', fg=light?'#24282f':'#e6e7e9', muted=light?'#707783':'#8b8f96';
+      const x=i===1?185:115,w=i===1?270:470;
+      const body=i===2?`<rect x="${x}" y="120" width="${w}" height="148" rx="10" fill="${panel}" stroke="${line}"/><text x="${x+w/2}" y="174" text-anchor="middle" fill="${fg}" font-size="15">No linked resources</text><text x="${x+w/2}" y="203" text-anchor="middle" fill="${muted}" font-size="11">Registered links will appear here.</text><rect x="${x+w/2-43}" y="221" width="86" height="25" rx="5" fill="${fg}"/><text x="${x+w/2}" y="238" text-anchor="middle" fill="${bg}" font-size="10">Add a link</text>`:[0,1,2].map((n)=>`<rect x="${x}" y="${114+n*57}" width="${w}" height="47" rx="7" fill="${panel}" stroke="${line}"/><text x="${x+15}" y="${134+n*57}" fill="${fg}" font-size="12">${['Appearance','Notifications','Local file links'][n]}</text><text x="${x+15}" y="${149+n*57}" fill="${muted}" font-size="9">${['Choose the font and color theme','Control desktop notifications','Choose an external editor'][n]}</text><path d="m${x+w-23} ${132+n*57} 4 4-4 4" fill="none" stroke="${muted}"/></svg>`.replace('</svg>','')).join('');
+      return 'data:image/svg+xml;charset=utf-8,'+encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360"><rect width="640" height="360" fill="${bg}"/><g font-family="system-ui,sans-serif"><text x="${x}" y="67" fill="${muted}" font-size="10">Frizz / Preferences</text><text x="${x}" y="93" fill="${fg}" font-size="21" font-weight="550">Settings</text>${body}<text x="${x}" y="326" fill="${muted}" font-size="9">Illustrative screenshot · ${i+1} of 3</text></g></svg>`);
+    }
+    const galleryVariants = [
+      ['m','M','Image + counter','A single image, caption, and previous/next controls.'],
+      ['n','N','Thumbnail navigator','The other screenshots stay visible beneath the current one.'],
+      ['o','O','Caption + dots','A quieter navigator; dots select an image and arrow keys move through the set.'],
+      ['p','P','Peeking filmstrip','The next screenshot peeks into view. Scroll horizontally or use the arrow keys.'],
+    ];
+    const slide = {m:0,n:0,o:0};
+    function renderGalleries() {
+      $('#gallery-options').innerHTML = galleryVariants.map(([v,letter,title,note])=>{
+        const i=slide[v]||0;
+        let gallery;
+        if(v==='p') gallery=`<div class="filmstrip" tabindex="0" aria-label="Screenshot filmstrip">${shots.map((caption,j)=>`<figure><img src="${screenshot(j)}" alt="${caption}" data-enlarge="${j}"><figcaption>${j+1} / 3 · ${caption}</figcaption></figure>`).join('')}</div>`;
+        else gallery=`<img class="hero-image" src="${screenshot(i)}" alt="${shots[i]}" data-enlarge="${i}"><div class="gallery-foot"><span class="caption">${shots[i]}</span>${v==='o'?`<div class="dots">${shots.map((caption,j)=>`<button class="gallery-dot" data-slide="${v}:${j}" aria-label="Show ${caption}" aria-pressed="${i===j}"></button>`).join('')}</div>`:`<div class="nav-controls"><span class="position">${i+1} / 3</span><button class="nav-button" data-slide="${v}:${i-1}" aria-label="Previous screenshot" ${i===0?'disabled':''}>${icon('left')}</button><button class="nav-button" data-slide="${v}:${i+1}" aria-label="Next screenshot" ${i===2?'disabled':''}>${icon('chevron')}</button></div>`}</div>${v==='n'?`<div class="thumbs">${shots.map((caption,j)=>`<button class="thumb" data-slide="${v}:${j}" aria-label="Show ${caption}" aria-pressed="${i===j}"><img src="${screenshot(j)}" alt=""></button>`).join('')}</div>`:''}`;
+        const fence='```screenshots\n![Settings · desktop](.frizz/desktop.png)\n![Settings · narrow](.frizz/narrow.png)\n![Empty state](.frizz/empty.png)\n```';
+        return `<article id="option-${v}" data-candidate="${v}" class="candidate" ${onlyPicked&&!chosen.has(v)?'hidden':''}>${heading(v,letter,title)}<div class="frame"><p class="shot-context">The settings layout at both widths, plus the empty state.</p><div class="gallery" data-gallery="${v}" tabindex="0" role="region" aria-label="${title}">${gallery}</div></div><p class="candidate-note">${note}</p><details class="source"><summary>Proposed fence and markup</summary><pre>${esc(fence)}</pre><pre>${esc(gallery)}</pre></details></article>`;
+      }).join('');
+    }
+    function render() { renderLinks(); renderGalleries(); $('#shortlist-empty').hidden=!onlyPicked||chosen.size>0; }
+    function showPreview(title,body) { $('#preview-title').textContent=title; $('#preview-body').innerHTML=body; $('#preview').showModal(); }
+    function setSlide(v,i,focusLabel) { slide[v]=Math.max(0,Math.min(2,i)); renderGalleries(); if(focusLabel) { const g=$(`[data-gallery="${v}"]`); const target=[...g.querySelectorAll('button')].find(b=>b.getAttribute('aria-label')===focusLabel&&!b.disabled); (target||g).focus({preventScroll:true}); } }
+    document.addEventListener('click',event=>{
+      const pick=event.target.closest('[data-pick]');
+      if(pick) { const id=pick.dataset.pick; chosen.has(id)?chosen.delete(id):chosen.add(id); pick.setAttribute('aria-pressed',chosen.has(id)); pick.textContent=chosen.has(id)?'Shortlisted':'Shortlist'; if(onlyPicked&&!chosen.has(id)) pick.closest('.candidate').hidden=true; $('#shortlist-empty').hidden=!onlyPicked||chosen.size>0; return; }
+      const resource=event.target.closest('[data-resource]');
+      if(resource) { event.preventDefault(); const d=links().find(d=>d.id===resource.dataset.resource); showPreview(d.label,`<p>Mock link destination</p><pre>${esc(d.target)}</pre><p>${d.target.endsWith('.md')?'This opens in the Frizz Markdown reader, with an option to open externally.':d.target.startsWith('http')?'This opens the URL. Registration does not assert that a server is running.':'This uses the existing local-file opening behavior.'}</p>`); return; }
+      const nav=event.target.closest('[data-slide]');
+      if(nav) { const [v,i]=nav.dataset.slide.split(':'); setSlide(v,Number(i),nav.getAttribute('aria-label')); return; }
+      const img=event.target.closest('[data-enlarge]');
+      if(img) { const i=Number(img.dataset.enlarge); showPreview(shots[i],`<img src="${screenshot(i)}" alt="${shots[i]}"><p>Illustrative screenshot, not a running implementation.</p>`); }
+    });
+    document.addEventListener('keydown',event=>{
+      const gallery=event.target.closest('[data-gallery]');
+      if(!gallery||gallery.dataset.gallery==='p'||!['ArrowLeft','ArrowRight'].includes(event.key)) return;
+      event.preventDefault(); const v=gallery.dataset.gallery; setSlide(v,slide[v]+(event.key==='ArrowRight'?1:-1),''); $(`[data-gallery="${v}"]`).focus({preventScroll:true});
+    });
+    $('#preview .close').addEventListener('click',()=>$('#preview').close());
+    $('#preview').addEventListener('click',event=>{ if(event.target===$('#preview')) { const r=$('#preview').getBoundingClientRect(); if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom) $('#preview').close(); } });
+    $('.only-picked').addEventListener('click',event=>{ onlyPicked=!onlyPicked; event.target.setAttribute('aria-pressed',onlyPicked); event.target.textContent=onlyPicked?'Show all options':'Show shortlist'; render(); });
+    for(const name of ['theme','font','width','count','activity']) $('#'+name).addEventListener('change',()=>{
+      document.documentElement.dataset.theme=$('#theme').value; document.documentElement.dataset.font=$('#font').value;
+      document.body.dataset.width=$('#width').value; document.body.dataset.count=$('#count').value; render();
+    });
+    const params=new URLSearchParams(location.search);
+    for(const name of ['theme','font','width','count','activity']) if(params.has(name)&&[...$('#'+name).options].some(o=>o.value===params.get(name))) $('#'+name).value=params.get(name);
+    document.documentElement.dataset.theme=$('#theme').value; document.documentElement.dataset.font=$('#font').value;
+    document.body.dataset.width=$('#width').value; document.body.dataset.count=$('#count').value;
+    $('#shared-source').textContent=JSON.stringify(data.slice(0,3),null,2)+'\n\n'+$('#shared-styles').textContent;
+    render();
+  </script>
+</body>
+</html>
