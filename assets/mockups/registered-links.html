@@ -195,7 +195,7 @@
       { id:'reference', label:'Reference page', target:'https://example.com/reference', short:'example.com' },
     ];
     const variants = [
-      ['a','A','Matching activity rows','The child arrow, external-open glyph, and a “link” tag follow the existing row structure.'],
+      ['a','A','Matching activity rows','Selected direction. URLs are labelled “link”; local documents and downloads are labelled “file”.'],
       ['b','B','Leading external arrow','The child arrow and external-open glyph precede the label. No kind tag.'],
       ['c','C','Trailing external arrow','The child arrow leads; the external-open glyph follows the label.'],
       ['d','D','Destination on the right','A compact list with the address or filename in a second column.'],
@@ -208,7 +208,7 @@
       ['k','K','Two-column list','A small grid saves height while keeping each label independently scannable.'],
       ['l','L','First link + overflow','The first registered link stays visible. The rest live in a small menu.'],
     ];
-    const chosen = new Set();
+    const chosen = new Set(['a']);
     let onlyPicked = false;
     function links() {
       const mode = $('#count').value;
@@ -222,7 +222,7 @@
     function treatment(v, rows) {
       if (!rows.length) return '';
       switch(v) {
-        case 'a': return rows.map(d=>anchor(d,`${branch()}${external()}<span class="kind">Link</span>${label(d)}`,'line')).join('');
+        case 'a': return rows.map(d=>anchor(d,`${branch()}${external()}<span class="kind">${/^https?:\/\//i.test(d.target)?'Link':'File'}</span>${label(d)}`,'line')).join('');
         case 'b': return rows.map(simple).join('');
         case 'c': return rows.map(d=>anchor(d,branch()+label(d)+external(),'line icon-label')).join('');
         case 'd': return rows.map(d=>anchor(d,marked(d)+`<span class="destination">${esc(d.short)}</span>`,'line icon-label')).join('');
