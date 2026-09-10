@@ -569,7 +569,7 @@ test("followUp yields to a live external writer but still answers a thread whose
   install({ bridgeTurn: false, ownedSince: new Date().toISOString() }, yielded)
   await assert.rejects(
     h.router.followUp.handler({ input: { slug: external, sessionId: `sid-${external}`, message: "hello" } }),
-    /running in your terminal/,
+    /driven outside Frizz/,
   )
   assert.deepEqual(yielded, [], "frizz must not race a second writer onto a live external turn")
 

@@ -291,8 +291,9 @@ export interface ClaudeAgentBrokerBridge {
  * The protocol error's own wording is a boundary label (`input.text contains unsafe text`) aimed at a
  * developer reading a stack trace. This is the string a human reads in a toast after pressing Enter, so
  * it names the problem and what to do about it — and it has to FIT: sendEagerFollowUp renders it as
- * `Steer failed — ${message.slice(0, 90)}`, so anything longer is cut off mid-sentence (measured in the
- * browser: a 150-char version rendered as "…or h"). Keep each of these under 90 characters.
+ * `Steer failed — ${message.slice(0, 160)}`, so anything longer is cut off mid-sentence (measured in the
+ * browser when the cap was 90: a 150-char version rendered as "…or h"). Keep each of these well under
+ * 160 characters.
  */
 export function validatedInput(message: { id: string; text: string; parentToolUseId?: string }): ReturnType<typeof validateInputMessage> {
   try {

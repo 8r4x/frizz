@@ -93,6 +93,13 @@ class FakeAppServerProcess extends EventEmitter implements CodexAppServerProcess
     this.send({ method, params })
   }
 
+  // Open a turn the way the app-server does BY ITSELF — a thread goal's continuation — with no
+  // `turn/start` from the client: the turn is active server-side and only `turn/started` announces it.
+  startOwnTurn(threadId: string, turnId: string): void {
+    this.activeTurn = { threadId, turnId }
+    this.notify("turn/started", { threadId, turn: { id: turnId } })
+  }
+
   // End the active turn the way a real turn/completed would, clearing the bridge's current_turn_id.
   completeActiveTurn(threadId?: string, turnId?: string): void {
     const active = this.activeTurn
@@ -1173,6 +1180,36 @@ test("only locally witnessed turn ids may own provider requests and notification
   process.request("owned", "item/commandExecution/requestApproval", commandParams(binding.codexThreadId, turnId, { itemId: "owned-item" }))
   const scope = { projectId: "project-1", threadSlug: binding.threadSlug, sessionId: binding.sessionId }
   await waitFor(() => h.interactions.listPending(scope).length === 1, "owned turn request")
+  h.close()
+})
+
+// A codex thread goal makes the app-server open a continuation turn BY ITSELF the instant the previous
+// one completes, on the connection Frizz holds. Ignoring that `turn/started` left `current_turn_id`
+// null for the turn's whole life: the operator's steer was refused as an outside writer and the board
+// saw no bridge turn (live 2026-09-10). Such a turn is adopted, steered, and retired like a local one.
+test("a turn the app-server starts on its own is adopted as the current turn and steerable", async () => {
+  const h = harness()
+  const binding = await h.bridge.startDisposableSession({ threadSlug: "goal-owner", sessionId: "goal-owner-session", cwd: h.dir })
+  const process = h.processes[0]!
+  assert.equal(h.bridge.turnLiveness(binding.threadSlug, binding.sessionId)?.bridgeTurn, false)
+
+  process.startOwnTurn(binding.codexThreadId, "goal-turn")
+  await waitFor(() => h.bridge.binding(binding.threadSlug, binding.sessionId)?.currentTurnId === "goal-turn", "goal turn adopted")
+  assert.equal(h.bridge.turnLiveness(binding.threadSlug, binding.sessionId)?.bridgeTurn, true)
+
+  // An approval raised inside the adopted turn is owned, not rejected as unwitnessed.
+  process.request("goal-approval", "item/commandExecution/requestApproval", commandParams(binding.codexThreadId, "goal-turn", { itemId: "goal-item" }))
+  const scope = { projectId: "project-1", threadSlug: binding.threadSlug, sessionId: binding.sessionId }
+  await waitFor(() => h.interactions.listPending(scope).length === 1, "adopted turn request")
+
+  // The operator's follow-up steers the adopted turn instead of racing a second one onto it.
+  const followUp = await h.bridge.followUp({ threadSlug: binding.threadSlug, sessionId: binding.sessionId, text: "Steer the goal turn" })
+  assert.deepEqual(followUp, { turnId: "goal-turn", mode: "steer", deduped: false })
+  assert.equal(process.clientRequests.filter((message) => message.method === "turn/start").length, 0)
+
+  process.completeActiveTurn()
+  await waitFor(() => h.bridge.binding(binding.threadSlug, binding.sessionId)?.currentTurnId === null, "goal turn retired")
+  assert.equal(h.bridge.turnLiveness(binding.threadSlug, binding.sessionId)?.bridgeTurn, false)
   h.close()
 })
 

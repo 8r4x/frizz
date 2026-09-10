@@ -209,7 +209,7 @@ export function sendEagerFollowUp(
       callbacks.onRollback?.()
       // A transport rejection is not enough evidence to expose terminal-recovery machinery.
       // Restore the draft and leave the provider untouched.
-      showToast(callbacks.failureToast?.(error.message) ?? `Steer failed — ${error.message.slice(0, 90)}`)
+      showToast(callbacks.failureToast?.(error.message) ?? `Steer failed — ${error.message.slice(0, 160)}`)
     },
   })
   return true

@@ -1746,10 +1746,13 @@ export function createRouter(ctx: AppContext) {
             ctx.storage.setCodexRuntime(input.slug, "app-server")
           }
           const binding = bridge.binding(input.slug, row.session_id)
-          // Writer-yield: if the rollout shows an in-flight turn the bridge did NOT start (it has no
+          // Writer-yield: if the rollout shows an in-flight turn the bridge does NOT hold (it has no
           // current turn of its own), someone is driving this thread in their own terminal via
-          // `codex resume`. frizz keeps MIRRORING that turn (the tailer follows the same rollout), but it
+          // `codex resume`. Frizz keeps MIRRORING that turn (the tailer follows the same rollout), but it
           // must not start/steer a second turn and race two writers. Yield until the external turn rests.
+          // A turn the app-server opens on its own — a codex thread goal's continuation — is NOT this
+          // case: the bridge adopts it from `turn/started` (codex-app-server.ts), so it holds a current
+          // turn and the follow-up steers it like any other.
           //
           // "In flight" must mean the rollout is ACTUALLY ADVANCING, not merely that it stopped
           // mid-turn: a rollout frozen by a dead app-server looks identical to an external writer from
@@ -1762,7 +1765,8 @@ export function createRouter(ctx: AppContext) {
           )
           const turnLive = ctx.tailer.get(input.slug)?.turn === "in-flight" && !stalled
           if (turnLive && (!binding || binding.currentTurnId === null)) {
-            throw new Error("This thread is running in your terminal right now — frizz is mirroring it live. Wait for that turn to finish, then send your follow-up here.")
+            // Under 160 characters: sendEagerFollowUp toasts this after "Steer failed — " and cuts the rest.
+            throw new Error("This thread is being driven outside Frizz. Wait for that turn to end, then resend.")
           }
           if (!binding || binding.state !== "active") {
             await bridge.resumeOwnedSession(input.slug, row.session_id)

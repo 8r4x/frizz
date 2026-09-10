@@ -62,7 +62,7 @@ export function useDeliverQueuedNow(slug: string | null): {
       },
       (error: unknown) => {
         setPending(false)
-        showToast(`Couldn't push it through — ${(error instanceof Error ? error.message : String(error)).slice(0, 90)}`)
+        showToast(`Couldn't push it through — ${(error instanceof Error ? error.message : String(error)).slice(0, 160)}`)
       },
     )
   }, [pending, slug])

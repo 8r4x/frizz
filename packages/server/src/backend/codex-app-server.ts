@@ -3893,7 +3893,15 @@ export class CodexAppServerBridge {
         // overwrite the authority already pinned to this Frizz-owned session.
         return
       }
-      if (!this.pendingTurnStarts.has(turnKey(binding))) return
+      // No local `turn/start` pending means the app-server opened this turn BY ITSELF — a thread goal
+      // (`thread/goal/set`, which the worker can arm through codex's own `create_goal` tool) makes it
+      // start a continuation turn the instant the previous one completes, on the very connection Frizz
+      // holds. Those turns used to be ignored here, so `current_turn_id` stayed null for their whole
+      // life and everything downstream read them as an OUTSIDE writer: the board saw rollout activity
+      // with no bridge turn, followUp refused the operator's steer as "running in your terminal", and
+      // an approval raised inside one was rejected as unwitnessed (live 2026-09-10, a goal-driven
+      // research thread the operator could not steer). A turn the app-server starts on Frizz's own
+      // connection is Frizz's turn: adopt it, and `turn/completed` retires it like any other.
       this.providerErrors.delete(binding.frizz_session_id)
       this.scope.prepare(`
         UPDATE codex_app_server_session SET current_turn_id = ?, updated_at = ?

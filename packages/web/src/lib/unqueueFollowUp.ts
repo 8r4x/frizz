@@ -105,7 +105,7 @@ export function useUnqueueFollowUp(slug: string | null): {
       },
       (error: unknown) => {
         setPending(false)
-        showToast(`Couldn't unqueue — ${(error instanceof Error ? error.message : String(error)).slice(0, 90)}`)
+        showToast(`Couldn't unqueue — ${(error instanceof Error ? error.message : String(error)).slice(0, 160)}`)
       },
     )
   }, [pending, projectDir, queryClient, slug])
