@@ -31,11 +31,13 @@
 import { useId, useState } from "react"
 import { AlarmClock, Bell, Github, Hourglass, MessageCircleOff, TerminalSquare } from "lucide-react"
 import { isGithubWakeBacklog, parseGithubWakeSteer, parseLimitModelSwitchWake, parseLimitResumeWake, parseParkWake, parsePrWatchExpiredWake, parsePrWatchStateWake, parsePrWatchWake, parseQuestionsCancelledWake, parseShellDoneWake, parseTimerWake, stripWakeTrailer, type GithubWakeSteer, type LimitWindow, type ParkWake, type PrWatchStateWake, type PrWatchWake, type ShellDoneWake, type TimerWake } from "@frizz/shared"
-import { CARD_BODY, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
+import { QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
 import { VSpace } from "./rhythm.tsx"
 import { WakeDivider } from "./WakeDivider.tsx"
 import { githubRefUrl } from "../lib/githubRef.ts"
 import { wakeCardTitle } from "../lib/githubWakeCard.ts"
+import { useMarkdownHtml } from "../lib/useMarkdown.ts"
+import { useInnerHtml } from "../lib/innerHtml.ts"
 
 // The divider's own link language. It is NOT the accent `CARD_LINK` the cards use: a divider is quiet
 // transcript punctuation, and an accent-gold link inside one shouts louder than the event does. This is
@@ -115,7 +117,7 @@ export function FrizzWake({ steer: served, text, sourceId, at, wrap }: { steer?:
               one branch that renders arbitrary text. The server strips it in the display projection and
               this is normally a no-op — but this branch exists precisely for a delivery the parsers
               missed, and that is exactly when the boilerplate used to reach the operator. */}
-          <div className={`${CARD_BODY} whitespace-pre-wrap [overflow-wrap:anywhere]${wrap ? ` ${QUEUE_WRAP}` : ""}`}>{stripWakeTrailer(text)}</div>
+          <WakeProse text={stripWakeTrailer(text)} wrap={wrap} />
         </TranscriptCard>
       </div>
     )
@@ -157,6 +159,13 @@ export function FrizzWake({ steer: served, text, sourceId, at, wrap }: { steer?:
     )
   }
   return <GithubSteerDivider steer={steer!} text={text} sourceId={sourceId} at={at} />
+}
+
+// Batched wakes carry Markdown headings and lists even when no structured wake parser matches.
+function WakeProse({ text, wrap }: { text: string; wrap?: boolean }) {
+  const html = useMarkdownHtml(text)
+  const inner = useInnerHtml(html)
+  return <div className={`md-body [overflow-wrap:anywhere]${wrap ? ` ${QUEUE_WRAP}` : ""}`} dangerouslySetInnerHTML={inner} />
 }
 
 // ---- THE FIRED-TIMER HAIRLINE, WHICH IS THE ONE THAT KEEPS A BODY -----------------------------------

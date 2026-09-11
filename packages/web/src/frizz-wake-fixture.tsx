@@ -12,8 +12,8 @@ import "./styles.css"
 // stacked under those hairlines (maintainer 2026-08-18: "these callouts should obviously be hairlines",
 // and 2026-08-19 on extending it to the rest).
 //
-// Every text here is composed by the REAL formatter the scheduler calls — never a hand-written string —
-// so this page cannot pass while the shipped wording drifts out from under the parsers.
+// Recognized wakes use the scheduler's real formatters. Fallback samples also cover text with no
+// structured parser, including the Markdown envelope around a batch of held wakes.
 //
 // `?font=sans|mono` sets `data-font`. The prose font is a user setting applied before first paint, and a
 // fixture that does not set it silently renders the mono default — which is how a glyph fitted here once
@@ -38,6 +38,23 @@ const review = formatGithubWakeSteer({
 })
 
 const messages: ChatMessage[] = [
+  wake("batched", `Frizz held 2 wakes for this thread and is delivering them together, oldest first. Each is under its own heading; read all of them before acting on any.
+
+### 1. Awaiting park ended
+
+${parkFinishedWakeMessage(["- `shells: [bc3rwp1k7]` — FINISHED — its result is waiting", "- `shells: [b7tv2uf53]` — still running"], false)}
+
+### 2. Timer fired
+
+Read the **finished** [report](https://example.com/report).
+
+\`\`\`text
+${"long-token-".repeat(35)}
+\`\`\`
+
+<script>window.__wakePwned = true</script>
+
+${PR_WATCH_ARMED_TRAILER}`),
   wake("w1", review),
   wake("w2", prWatchWakeMessage({ target: "nubjs/nub#760", closed: true })),
   wake("w3", prWatchWakeMessage({ target: "nubjs/nub#756", merged: true })),
@@ -108,8 +125,7 @@ const messages: ChatMessage[] = [
   wake("w20", prWatchWakeMessage({ target: "nubjs/nub#879", changes: ["now CONFLICTS with the base branch"] })),
   wake("w21", prWatchWakeMessage({ target: "nodejs/node#65796", changes: ["labels +blocked, −needs-ci", "review requested from richardlau"] })),
   // The FALLBACK still has to work: a wake this build cannot read keeps its first-party card and loses
-  // no text. Nothing frizz composes lands here any more, so this is a legacy transcript or a format a
-  // future frizz writes and this build has never seen.
+  // no prose. Batched deliveries also land here when their envelope has no structured parser.
   wake("w15", "⏰ Frizz has invented a wake shape this build predates.\n\n(And whatever it says, the text must survive — the card is what guarantees that.)"),
   // …AND ITS BODY IS STILL NOT ALLOWED TO CARRY FRIZZ'S TRAILER. This is the leak, reproduced: the
   // fallback is reached exactly when a tab is a build behind the wake it was sent, and a tab is a build
@@ -129,7 +145,7 @@ function Fixture() {
           <p className="mt-0.5 text-[12px] text-muted">Review activity, a finished PR, a CI verdict, both at once, the PR&rsquo;s own state moving, a background shell, a usage window, a fired timer, a park that ran out or finished, a lapsed watcher — and the unparsed fallback, with and without frizz&rsquo;s agent-facing trailer.</p>
         </header>
         <div className="flex flex-1 flex-col gap-3.5 py-5">
-          {messages.map((message) => <Message key={message.sourceId} m={message} />)}
+          {messages.map((message) => <Message key={message.sourceId} m={message} dense={new URLSearchParams(location.search).has("dense")} />)}
         </div>
       </section>
     </main>
