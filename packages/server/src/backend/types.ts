@@ -480,6 +480,23 @@ export function claudeCompactionEnv(settings: { autoCompactWindow?: number } | u
   return { [CLAUDE_AUTO_COMPACT_WINDOW_ENV]: String(window) }
 }
 
+// The context window a Codex thread runs with, from Settings — the codex twin of claudeCompactionEnv.
+// Codex reads `model_context_window` as a config override and clamps it to the model's
+// `max_context_window` (codex-rs models-manager `with_config_overrides`), so a value above the cap is
+// harmless; its auto-compact threshold follows at 90% of the resolved window, so this is also the
+// compaction dial. Unset ⇒ nothing is sent and the model's stock window applies. Rides the `config`
+// bag of `thread/start` and every cold `thread/resume` (CodexAppServerBridge.threadConfig), so it takes
+// effect on the next thread and on a thread the app-server picks back up — never on a thread whose
+// app-server already holds it. Measured 2026-09-11 on codex-cli 0.153.2 against gpt-5.6-sol: no
+// override → 258_400 reported (272K × 95% usable), 600_000 → 570_000, 1_000_000 → 828_400 (872K cap).
+export const CODEX_CONTEXT_WINDOW_KEY = "model_context_window"
+
+export function codexContextWindowConfig(settings: { codexContextWindow?: number } | undefined): Record<string, unknown> {
+  const window = settings?.codexContextWindow
+  if (window === undefined || !Number.isInteger(window) || window <= 0) return {}
+  return { [CODEX_CONTEXT_WINDOW_KEY]: window }
+}
+
 // The prompt-cache tier a Claude worker writes to, from Settings. Claude Code reads
 // CLAUDE_CODE_PROMPT_CACHE_TTL as "5m" or "1h"; unset, it picks 1h on a subscription within its usage
 // limits (the CLI's own help text for the variable, 2.1.259). The tiers differ in the WRITE price: a

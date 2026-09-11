@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { codexMcpConfigArgs, codexThreadMcpConfig } from "./codex-mcp.ts"
-import { FRIZZ_MCP } from "./types.ts"
+import { FRIZZ_MCP, codexContextWindowConfig } from "./types.ts"
 
 // These pin the SHAPE of the `-c` overrides. The shape is otherwise only observable by running a real
 // codex app-server (see _live_codex_mcp_inject.mts), so a refactor could silently stop mounting the
@@ -104,4 +104,18 @@ test("codexThreadMcpConfig: mounts the frizz server with THIS thread's slug in i
 test("codexThreadMcpConfig: no descriptor ⇒ an EMPTY bag, so no `config` key is sent at all", () => {
   // Degrades to exactly the pre-2026-09-04 behaviour rather than sending a half-built mount.
   assert.deepEqual(codexThreadMcpConfig(undefined, "compiled-hono", "/abs/node"), {})
+})
+
+test("codexContextWindowConfig: a positive integer window becomes `model_context_window`, anything else sends nothing", () => {
+  // The value is passed through UNCLAMPED: codex clamps it to the model's max_context_window itself
+  // (measured 2026-09-11: 1_000_000 on gpt-5.6-sol reported 828_400 = 872K × 95%), and a table of
+  // per-model caps here would go stale the moment a model shipped a bigger one.
+  assert.deepEqual(codexContextWindowConfig({ codexContextWindow: 600_000 }), { model_context_window: 600_000 })
+  assert.deepEqual(codexContextWindowConfig({ codexContextWindow: 1_000_000 }), { model_context_window: 1_000_000 })
+  // Unset ⇒ the model's stock window, exactly as before the setting existed.
+  assert.deepEqual(codexContextWindowConfig(undefined), {})
+  assert.deepEqual(codexContextWindowConfig({}), {})
+  for (const junk of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+    assert.deepEqual(codexContextWindowConfig({ codexContextWindow: junk }), {}, `${String(junk)} must send no override`)
+  }
 })

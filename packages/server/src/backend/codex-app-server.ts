@@ -38,7 +38,7 @@ import { nativeListenCodexAppServerHost } from "./codex-app-server-native.ts"
 import { readCodexAccountId } from "./auth-status.ts"
 import { codexThreadMcpConfig } from "./codex-mcp.ts"
 import { codexProviderError } from "./codex-error.ts"
-import type { FrizzMcp } from "./types.ts"
+import { codexContextWindowConfig, type FrizzMcp } from "./types.ts"
 import { log as frizzLog } from "../logging.ts"
 
 // Foundation-only bridge. It is deliberately not an AgentBackend: no current/default Codex TUI
@@ -1031,6 +1031,14 @@ export interface CodexAppServerBridgeOptions {
    * (exactly the pre-existing behaviour).
    */
   sandboxFor?: (threadSlug: string, sessionId: string) => CodexSandboxMode | undefined
+  /**
+   * The live Settings, read at every `thread/start` and cold `thread/resume` so the operator's Codex
+   * context window (Settings.codexContextWindow → `model_context_window`, see codexContextWindowConfig)
+   * reaches the thread. Read late on purpose: the bridge outlives many settings writes, and a value
+   * captured at construction would be the one from before the operator changed it. Absent ⇒ no
+   * override is sent and the model's stock window applies.
+   */
+  getSettings?: () => { codexContextWindow?: number }
 }
 
 function bindingFromRow(row: BindingRow): CodexAppServerSessionBinding {
@@ -3128,19 +3136,29 @@ export class CodexAppServerBridge {
    */
   /**
    * The `config` bag for one thread's `thread/start` / `thread/resume`: frizz's MCP server mounted
-   * PER THREAD so it knows who is calling, plus whatever the caller passed.
+   * PER THREAD so it knows who is calling, the operator's Codex context window from Settings, plus
+   * whatever the caller passed.
    *
    * This is the only channel that can carry a caller identity on codex. The argv mount on the
    * app-server is process-wide and serves every thread in the project, so `FRIZZ_THREAD_SLUG` was
    * simply absent and every tool that acts on the caller's own thread failed at the moment of use —
    * see `codexThreadMcpConfig` for the list and the measurement. Returns `{}` when there is nothing
-   * to send, so a caller with no config and no resolved MCP descriptor sends no `config` key at all,
-   * exactly as before.
+   * to send, so a caller with no config, no resolved MCP descriptor and no context-window setting
+   * sends no `config` key at all, exactly as before.
+   *
+   * The context window rides the same bag rather than the process-wide argv because the app-server is
+   * a long-lived daemon: an argv value would be frozen at its first spawn, while a per-thread override
+   * reads Settings at every start and every cold resume — the same "next thread, and a thread that
+   * comes back" semantics the Claude compaction window has (see codexContextWindowConfig).
    *
    * The caller's own config wins on a key collision: this is a default, not an override.
    */
   private threadConfig(threadSlug: string, callerConfig?: Record<string, unknown>): { config?: Record<string, unknown> } {
-    const config = { ...codexThreadMcpConfig(this.options.frizzMcp, threadSlug), ...callerConfig }
+    const config = {
+      ...codexThreadMcpConfig(this.options.frizzMcp, threadSlug),
+      ...codexContextWindowConfig(this.options.getSettings?.()),
+      ...callerConfig,
+    }
     return Object.keys(config).length ? { config } : {}
   }
 

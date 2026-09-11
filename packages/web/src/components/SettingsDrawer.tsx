@@ -21,6 +21,7 @@ export const SETTINGS_HELP = {
   permissionMode: "The permission mode new Claude Code threads launch with. Auto runs safe actions and asks you to approve the risky ones in the thread. Bypass launches the worker with --dangerously-skip-permissions: it never asks, so nothing waits on you and nothing is checked either. Takes effect on the next thread you dispatch; to change a thread that already exists, use the picker beside its model in the prompt box. Codex threads always run with full workspace access and are unaffected.",
   promptCacheTtl: "Which prompt-cache tier a new Claude thread writes to. A 1-hour entry costs twice the input price to write, a 5-minute entry 1.25 times; the hour only pays off when the thread's cache actually survives that long. Measured 2026-09-03: cache writes were half of a day's spend and the entries were lost every 15 to 30 minutes regardless, so 5 minutes was the cheaper tier. Automatic leaves the choice to Claude Code, which picks 1 hour on a subscription. Takes effect on the next thread you dispatch and on a thread that resumes after its worker exited.",
   autoCompactWindow: "How large a new Claude thread's conversation may grow, in tokens, before Claude Code compacts it. Frizz launches every Claude thread with the 1M context window, so without a ceiling a long thread keeps re-sending everything it has read on every turn; 500K halves that at the cost of an earlier summary. Takes effect on the next thread you dispatch and on a thread that resumes after its worker exited; a thread whose worker is already running keeps its current ceiling. A thread's context dial reads against the ceiling it was launched with, not the model's full window.",
+  codexContextWindow: "How much context a new Codex thread runs with, in tokens. Codex's own default is the model's stock window (272K on GPT-5.6), but GPT-5.6 and GPT-6 accept up to 872K when asked, and Codex compacts at 90% of whatever window the thread has, so a larger window is also a later compaction and a larger prompt re-sent on every turn. Codex caps the value at the model's own maximum, so 1M on GPT-5.6 runs at 872K, and GPT-5.5 stays at 272K whatever you pick. Takes effect on the next thread you dispatch and on a thread Codex picks back up after a restart; a thread its app-server already holds keeps its current window. A thread's context dial reads against the window Codex reports for it.",
   font: "Changes the interface reading font for this browser.",
   localFileOpener: "Chooses how vetted local artifact links open. Markdown files open in Frizz's own reader (which carries an Open action that uses this setting), and image clicks always use the OS default viewer.",
   density: "How much of a diff shows before you ask for it, in this browser. Compact collapses every diff to its header row (click one to open it); Comfortable shows them in full. Applies immediately.",
@@ -260,6 +261,8 @@ export function SettingsDrawer() {
 
             <ClaudeSection draft={draft} setDraft={update} />
 
+            <CodexSection draft={draft} setDraft={update} />
+
             <PromptsSection draft={draft} setDraft={update} />
           </div>
         )}
@@ -382,6 +385,57 @@ function ClaudeSection({
           options={PROMPT_CACHE_TTL_OPTIONS}
           indicatorPosition="right"
           ariaLabel="Claude prompt cache tier"
+        />
+      </SettingsField>
+    </div>
+  )
+}
+
+// The Codex context-window presets, in tokens. "Model default" sends nothing, so codex runs the model's
+// stock window (272K on GPT-5.6, 128K on Spark). The others ride `model_context_window`, which codex
+// clamps to the model's own `max_context_window` — 872K on GPT-5.6-sol/terra/luna and GPT-6-astra per
+// ~/.codex/models_cache.json on 2026-09-11, so the 1M preset is "the model's whole window" and reads
+// as 828K on the context dial (codex reports 95% of the resolved window as usable). Unlike the Claude
+// list there is no shipped ceiling to name: the server default is unset (settings.ts).
+const CODEX_CONTEXT_WINDOW_DEFAULT = "default"
+const CODEX_CONTEXT_WINDOW_OPTIONS = [
+  { value: CODEX_CONTEXT_WINDOW_DEFAULT, label: "Model default (272K on GPT-5.6)" },
+  { value: "400000", label: "400K tokens" },
+  { value: "600000", label: "600K tokens" },
+  { value: "800000", label: "800K tokens" },
+  { value: "1000000", label: "1M tokens (model maximum)" },
+]
+
+// "Codex" — what applies to Codex threads and nothing else. One field today: the context window a new
+// thread runs with. The band carries the vendor's name for the same reason the Claude one does, and so
+// the two compaction-shaped dials are never mistaken for one setting that applies to both runtimes: a
+// Claude thread is launched at 1M and CAPPED down, a Codex thread is launched at its stock window and
+// RAISED up, which is why the Claude field says "Compaction window" and this one says "Context window".
+// A stored value that is not one of the presets (an operator-typed number from the RPC) still has to
+// display: it is added as its own option rather than rendering the select blank.
+function CodexSection({
+  draft,
+  setDraft,
+}: {
+  draft: Settings
+  setDraft: (s: Settings) => void
+}) {
+  const stored = draft.codexContextWindow
+  const value = stored === undefined ? CODEX_CONTEXT_WINDOW_DEFAULT : String(stored)
+  const options = CODEX_CONTEXT_WINDOW_OPTIONS.some((o) => o.value === value)
+    ? CODEX_CONTEXT_WINDOW_OPTIONS
+    : [...CODEX_CONTEXT_WINDOW_OPTIONS, { value, label: `${value} tokens` }]
+  return (
+    <div className="flex flex-col gap-6">
+      <DividerLabel label="Codex" />
+      <SettingsField label="Context window" help={SETTINGS_HELP.codexContextWindow}>
+        <Select
+          variant="bordered"
+          value={value}
+          onValueChange={(v) => setDraft({ ...draft, codexContextWindow: v === CODEX_CONTEXT_WINDOW_DEFAULT ? undefined : Number(v) })}
+          options={options}
+          indicatorPosition="right"
+          ariaLabel="Codex context window"
         />
       </SettingsField>
     </div>

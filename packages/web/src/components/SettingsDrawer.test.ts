@@ -8,10 +8,19 @@ const tooltipSource = readFileSync(new URL("./Tooltip.tsx", import.meta.url), "u
 test("settings maps each contextual explanation to a help control", () => {
   // `subagentInstructions` is gone: the settings preamble was retired in favour of FRIZZ.md, so there
   // is exactly one operator-authored surface for project conventions.
-  for (const key of ["permissionMode", "font", "density", "notifications"]) {
+  for (const key of ["permissionMode", "font", "density", "notifications", "autoCompactWindow", "codexContextWindow"]) {
     assert.match(source, new RegExp(`\\b${key}:`), `missing settings help mapping: ${key}`)
   }
   assert.match(source, /label="Permissions" help=\{SETTINGS_HELP\.permissionMode\}/)
+  // The two compaction-shaped dials live under their own vendor band and keep distinct names: a Claude
+  // thread is launched at 1M and capped DOWN, a Codex thread is launched at its stock window and raised
+  // UP, so "Compaction window" and "Context window" are different controls, never one shared setting.
+  assert.match(source, /<DividerLabel label="Claude" \/>/)
+  assert.match(source, /<DividerLabel label="Codex" \/>/)
+  assert.match(source, /label="Compaction window" help=\{SETTINGS_HELP\.autoCompactWindow\}/)
+  assert.match(source, /label="Context window" help=\{SETTINGS_HELP\.codexContextWindow\}/)
+  // "Model default" stores NOTHING (the key is unset), so an untouched install sends codex no override.
+  assert.match(source, /codexContextWindow: v === CODEX_CONTEXT_WINDOW_DEFAULT \? undefined : Number\(v\)/)
   assert.match(source, /label="Density" help=\{SETTINGS_HELP\.density\}/)
   assert.match(source, /label="Desktop notifications" help=\{SETTINGS_HELP\.notifications\}/)
   // The redundant "GitHub picker prompts" group label is gone; each field carries its own label.

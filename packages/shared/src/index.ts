@@ -2770,6 +2770,15 @@ export const Settings = z.object({
   // writes were 51% of a day's spend while the entries were invalidated every 15–30 minutes anyway
   // (see claudePromptCacheEnv). Optional so an old blob parses; defaultSettings pins "auto".
   promptCacheTtl: z.enum(["auto", "5m", "1h"]).optional(),
+  // The context window a NEW Codex thread runs with, in tokens. Codex's own default is the model's
+  // stock window (272K on GPT-5.6), but the catalogue also carries a larger `max_context_window` (872K
+  // on GPT-5.6-sol/terra/luna and GPT-6-astra, measured 2026-09-11 in ~/.codex/models_cache.json) that
+  // a thread only reaches when asked. Reaches codex as the `model_context_window` config override on
+  // `thread/start` and every cold `thread/resume` (see codexContextWindowConfig); codex clamps it to
+  // the model's maximum, so a value above it is harmless, and it moves the auto-compact threshold with
+  // it (codex compacts at 90% of the resolved window). Unset ⇒ nothing is sent and the model's stock
+  // window applies. Optional so an old blob parses; defaultSettings leaves it unset.
+  codexContextWindow: z.number().int().positive().optional(),
   // The GitHub batch-dispatch prompt template (the picker's per-item worker prompt). Optional: when
   // unset OR blank the server falls back to its exported DEFAULT_GITHUB_PROMPT. Substitution tokens
   // the server fills: {repo} {n} {title} {url} {labels} {body}. The leading `THREAD: <slug>` tag is

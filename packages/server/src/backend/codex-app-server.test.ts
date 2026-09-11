@@ -250,6 +250,7 @@ function harness(
   codexAuthAccountId?: () => string | undefined,
   attachmentAccountId?: (requested: string | undefined, attachment: number) => string | undefined,
   authReplacementWaitMs?: number,
+  getSettings?: () => { codexContextWindow?: number },
 ) {
   const dir = mkdtempSync(join(tmpdir(), "frizz-codex-app-server-"))
   const dbPath = join(dir, "ui.db")
@@ -294,6 +295,7 @@ function harness(
       diagnostic: (event) => diagnostics.push(event),
       codexAuthAccountId: codexAuthAccountId ?? (() => undefined),
       ...(authReplacementWaitMs === undefined ? {} : { authReplacementWaitMs }),
+      ...(getSettings ? { getSettings } : {}),
     })
     bridges.push(bridge)
     return bridge
@@ -1401,6 +1403,39 @@ test("startDisposableSession forwards worker-contract/title/config instruction s
   assert.equal(params.baseInstructions, "WORKER CONTRACT BODY")
   assert.equal(params.developerInstructions, "TITLE PROTOCOL")
   assert.deepEqual(params.config, { model_reasoning_summary: "detailed" })
+  h.close()
+})
+
+test("the Codex context window from Settings rides thread/start AND a cold thread/resume, read live", async () => {
+  // Settings is a mutable seam here because the bridge outlives many settings writes: the value must
+  // be the one at the moment of the wire call, not the one at construction.
+  const settings: { codexContextWindow?: number } = { codexContextWindow: 600_000 }
+  const h = harness(CODEX_APP_SERVER_SUPPORTED_VERSION, undefined, undefined, undefined, undefined, () => settings)
+  const binding = await h.bridge.startDisposableSession({
+    threadSlug: "window-thread", sessionId: "window-session", cwd: h.dir, ephemeral: false,
+    config: { model_reasoning_summary: "detailed" },
+  })
+  const start = h.processes[0]!.clientRequests.find((message) => message.method === "thread/start")!
+  const startConfig = (start.params as Message).config as Record<string, unknown>
+  assert.equal(startConfig.model_context_window, 600_000)
+  // The caller's own keys are still there beside it — this is a default merged in, not a replacement.
+  assert.equal(startConfig.model_reasoning_summary, "detailed")
+
+  // The operator raises the window while the thread is detached; the resume by a FRESH app-server (the
+  // one after a daemon death or a Frizz restart) is exactly when a thread would otherwise keep the old
+  // window for the rest of its life.
+  settings.codexContextWindow = 1_000_000
+  const restarted = h.newBridge()
+  await restarted.resumeOwnedSession(binding.threadSlug, binding.sessionId)
+  const resume = h.processes[1]!.clientRequests.find((message) => message.method === "thread/resume")!
+  const resumeConfig = (resume.params as Message).config as Record<string, unknown>
+  assert.equal(resumeConfig.model_context_window, 1_000_000)
+
+  // Unset ⇒ no override at all, so a thread gets codex's own window exactly as before the setting.
+  delete settings.codexContextWindow
+  await restarted.startDisposableSession({ threadSlug: "stock-thread", sessionId: "stock-session", cwd: h.dir })
+  const stock = h.processes[1]!.clientRequests.find((message) => message.method === "thread/start")!
+  assert.equal((stock.params as Message).config, undefined)
   h.close()
 })
 

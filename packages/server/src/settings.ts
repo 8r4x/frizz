@@ -85,6 +85,9 @@ export const defaultSettings = (): Settings => ({
   // "auto" = the CLI's own tier (1h on a subscription). See the schema and claudePromptCacheEnv for
   // when "5m" is the cheaper choice.
   promptCacheTtl: "auto",
+  // Unset = codex's own window for the model (272K on GPT-5.6). The schema and codexContextWindowConfig
+  // explain the 872K ceiling a larger value is clamped to.
+  codexContextWindow: undefined,
   // Hidden until asked for — see the schema for why.
   projectRail: false,
 })

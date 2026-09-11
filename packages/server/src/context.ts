@@ -681,6 +681,9 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
           if (!mode.success) return undefined
           return codexSandbox(mode.data) as CodexSandboxMode
         },
+        // Read at every thread/start and cold resume, so the Codex context window the operator picks in
+        // Settings reaches the next thread without an app-server restart.
+        getSettings: () => getSettings(storage, home),
       })
     : undefined
   resources.codexAppServer = codexAppServer
