@@ -451,6 +451,27 @@ test("parseCodexLine: an input_image result exposes the data URL on `image`, nev
   assert.doesNotMatch(ev.text, /base64/, "and never the blob itself")
 })
 
+test("parseCodexLine: a result carrying SEVERAL pictures lists them all on `images`, in order", () => {
+  const line = JSON.stringify({
+    timestamp: "2026-07-29T20:29:00.000Z",
+    type: "response_item",
+    payload: {
+      type: "custom_tool_call_output",
+      call_id: "views",
+      output: [
+        { type: "input_text", text: "Script completed\nWall time 1.7 seconds\nOutput:\n" },
+        { type: "input_image", image_url: "data:image/png;base64,AAAA" },
+        { type: "input_image", image_url: "data:image/png;base64,BBBB" },
+        { type: "input_text", text: "{}" },
+      ],
+    },
+  })
+  const ev = parseCodexLine(line)[0] as Extract<NormalizedEvent, { kind: "tool-result" }>
+  assert.equal(ev.image, "data:image/png;base64,AAAA", "`image` stays the first picture")
+  assert.deepEqual(ev.images, ["data:image/png;base64,AAAA", "data:image/png;base64,BBBB"])
+  assert.equal(ev.text, "Script completed\nWall time 1.7 seconds\nOutput:\n[image output][image output]{}")
+})
+
 test("parseCodexLine: a REMOTE image url is not adopted (the transcript never fetches to draw a card)", () => {
   const ev = parseCodexLine(screenshotOutput("https://example.com/shot.png"))[0] as Extract<NormalizedEvent, { kind: "tool-result" }>
   assert.equal(ev.image, undefined)

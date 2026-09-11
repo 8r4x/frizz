@@ -728,8 +728,14 @@ function parseToolArguments(args: unknown): unknown {
 // part to the "[image output]" placeholder for `text`; this returns the data URL BY REFERENCE alongside
 // it (no copy, no decode) and only the transcript projection ever reads it. Returns {} when there is no
 // image, so spreading it adds no key at all to the overwhelmingly common case.
-function imageField(output: unknown): { image?: string } {
+//
+// `images` is EVERY drawable part in result order, `image` the first of them. One exec-wrapper script
+// can call `view_image` several times (a desktop and a mobile shot in one `exec`), and its single result
+// then carries one `input_image` part per view; the projection splits those views into their own cards
+// and needs the whole list to pair each card with its picture.
+function imageField(output: unknown): { image?: string; images?: string[] } {
   if (!Array.isArray(output)) return {}
+  const images: string[] = []
   for (const part of output) {
     if (!part || typeof part !== "object") continue
     const p = part as Record<string, unknown>
@@ -737,9 +743,9 @@ function imageField(output: unknown): { image?: string } {
     const url = typeof p.image_url === "string" ? p.image_url : typeof p.url === "string" ? p.url : undefined
     // Only an inline data URL is ours to render. A remote http(s) image is someone else's fetch — the
     // transcript never reaches out to the network to draw a tool card.
-    if (url?.startsWith("data:image/")) return { image: url }
+    if (url?.startsWith("data:image/")) images.push(url)
   }
-  return {}
+  return images.length ? { image: images[0], images } : {}
 }
 
 // The text of an `item_completed` item's `content` array, in order. Codex spells the part type with a

@@ -2350,6 +2350,9 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
     interruptedOwner?: ShellOwner
     orphanPoll?: boolean
     explicitBackground?: boolean
+    // A SPLIT exec wrapper's other cards (codexExecWrapperCards): they settle with the script's result.
+    companions?: TranscriptToolCall[]
+    views?: TranscriptToolCall[]
   }>()
   // Codex yielded PTYs identify the real shell lifecycle by `session_id`, not by the wrapper call id.
   // Keep this map while projecting so later write_stdin polls back-fill the originating Bash card.
@@ -2463,8 +2466,9 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
         }
         case "tool-call": {
           const m = openAssistant(ev.at, sourceId)
-          const call = codexToolCall(ev.name, ev.input, ev.id)
-          call.status = "pending"
+          const split = codexToolCards(ev.name, ev.input, ev.id)
+          const call = split.owner
+          for (const card of split.cards) card.status = "pending"
           // Caption this card with the thinking step that preceded it, unless the card already carries
           // a purpose-built title. Consumed either way: a poll folding into its owner must still spend
           // the caption, or a stale header would surface on some later, unrelated command.
@@ -2483,8 +2487,10 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
           // activity run (web/lib/toolActivity.orphanedPoll); only a real detached job keeps a card.
           if (!owner) {
             if (isPoll) call.backgroundState = "unknown"
-            pushToolPart(m, call)
-            m.tools.push(call)
+            for (const card of split.cards) {
+              pushToolPart(m, card)
+              m.tools.push(card)
+            }
           }
           if (call.name === "Spawn agent" && call.detail) agentDispatches.set(call.detail, { call, at: ev.at })
           if (ev.id) pendingCalls.set(ev.id, {
@@ -2494,6 +2500,7 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
             interruptedOwner,
             orphanPoll: isPoll && !owner,
             explicitBackground: codexExplicitBackground(ev.name, ev.input),
+            ...(split.cards.length > 1 ? { companions: split.cards.filter((card) => card !== call), views: split.views } : {}),
           })
           break
         }
@@ -2508,7 +2515,22 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
           // the call id, so a re-projection on every poll short-circuits on existsSync. A failed/cancelled
           // call is skipped for the same reason the Claude path skips it: whatever it returned is not the
           // screenshot that was asked for.
-          if (ev.image && result.status !== "failed" && result.status !== "cancelled") {
+          if (pending.companions) {
+            // A split exec wrapper: its View image cards carry no result of their own, so they settle
+            // with the script — a failed exec_command beside them is not a failed view. One whose file
+            // was already gone from disk takes the result's inline picture instead, paired by position:
+            // the script's `image(…)` calls emit the parts in source order, the same order the views
+            // were minted in. Keyed as the disk copy was, so an existing snapshot is simply kept.
+            for (const card of pending.companions) card.status = result.status === "cancelled" ? "cancelled" : "completed"
+            if (result.status !== "cancelled") {
+              const inline = ev.images ?? (ev.image ? [ev.image] : [])
+              pending.views?.forEach((view, i) => {
+                if (view.outputImage || !inline[i]) return
+                const shot = persistDataUrlImage(inline[i], `${ev.id}:view:${i}`)
+                if (shot) view.outputImage = shot
+              })
+            }
+          } else if (ev.image && result.status !== "failed" && result.status !== "cancelled") {
             const shot = persistDataUrlImage(ev.image, ev.id)
             if (shot) (pending.owner ?? pending).call.outputImage = shot
           }
@@ -2860,6 +2882,24 @@ export function latestTranscriptWindow(messages: readonly TranscriptMessage[]): 
   return [...earlierInstructions, ...messages.slice(start), ...pinned.slice(-MAX_PINNED_BACKGROUND_OPERATIONS)]
 }
 
+// The cards ONE codex tool call renders as — usually exactly one (`cards === [owner]`), the exception
+// being an exec-wrapper script that mixes `view_image` with other work; see codexExecWrapperCards.
+// `owner` is the card that receives the call's result (status, duration, output).
+interface CodexToolCards {
+  owner: TranscriptToolCall
+  cards: TranscriptToolCall[]
+  // The View image cards a SPLIT wrapper minted, in source order, so the result's inline pictures can
+  // be paired with them by position. Unset for every unsplit call, the direct `view_image` form included
+  // — that one pairs its single picture with its single card in the tool-result branch as before.
+  views?: TranscriptToolCall[]
+}
+
+function codexToolCards(name: string, input: unknown, callId?: string): CodexToolCards {
+  if (name === "exec" && typeof input === "string") return codexExecWrapperCards(input, callId)
+  const owner = codexToolCall(name, input, callId)
+  return { owner, cards: [owner] }
+}
+
 // Codex currently has two tool protocols: legacy function_call records and the unified custom exec
 // wrapper whose raw JavaScript invokes tools.exec_command, tools.apply_patch, tools.update_plan, etc.
 // Decode only static strings/structure from that wrapper (never evaluate it), then normalize both
@@ -2953,8 +2993,7 @@ function codexDirectToolCall(name: string, obj: Record<string, unknown>, callId?
     }
     case "view_image": {
       // Without this case a direct view_image function_call fell to the generic branch: the raw
-      // snake_case name, no picture, and — because codexResultSummary suppresses the placeholder only
-      // for the "View image" label — a card whose whole body was the literal text "[image output]".
+      // snake_case name and no picture.
       const path = strField(obj.path) ?? strField(obj.file_path)
       return viewImageCall(path, callId ?? path)
     }
@@ -3107,8 +3146,47 @@ interface WrappedInvocation {
   args: string
 }
 
-function codexExecWrapperCall(source: string, callId?: string): TranscriptToolCall {
+// An exec-wrapper script that VIEWS a picture beside other work — `image((await tools.view_image({path}))
+// .image_url); text(await tools.exec_command({cmd}))` is what codex writes when it re-reads a screenshot
+// it just took, often two of them (desktop and mobile) in one script. That rendered as ONE "Exec · 3
+// calls" card: the first picture on top (the result's inline image landed on the card) and, beneath it,
+// the exec_command's whole JSON envelope verbatim, because the picture stand-in glued onto that JSON kept
+// it from parsing (maintainer 2026-09-11: "this big blobby output, which I don't really want … just
+// render this screenshot normally in the chat … extract it out from the multi-tool call"). So every
+// `view_image` invocation is split out as its own View image card, in source order, each with its
+// picture, and whatever remains projects exactly as it would have alone — a lone exec_command becomes the
+// ordinary Bash card, several calls the generic Exec card summarising only THEM. The remainder owns the
+// wrapper's result; a script that only views pictures makes its first view the owner.
+function codexExecWrapperCards(source: string, callId?: string): CodexToolCards {
   const calls = wrappedInvocations(source)
+  const rest: WrappedInvocation[] = []
+  const views: TranscriptToolCall[] = []
+  // Source order, with the whole remainder standing where its first invocation was.
+  const order: Array<TranscriptToolCall | "rest"> = []
+  if (calls.length > 1) {
+    for (const call of calls) {
+      if (call.name !== "view_image") {
+        if (!rest.length) order.push("rest")
+        rest.push(call)
+        continue
+      }
+      // Keyed per view, not per call: two views in one script are two snapshots (see viewImageCall).
+      const view = viewImageCall(jsStringProperty(call.args, "path"), `${callId ?? source}:view:${views.length}`)
+      views.push(view)
+      order.push(view)
+    }
+  }
+  if (!views.length) {
+    const owner = codexExecWrapperCall(source, callId, calls)
+    return { owner, cards: [owner] }
+  }
+  const remainder = rest.length ? codexExecWrapperCall(source, callId, rest) : undefined
+  const cards = order.map((entry) => (entry === "rest" ? remainder! : entry))
+  return { owner: remainder ?? views[0], cards, views }
+}
+
+// `calls` defaults to every invocation in `source`; a split wrapper passes only the ones it kept.
+function codexExecWrapperCall(source: string, callId?: string, calls = wrappedInvocations(source)): TranscriptToolCall {
   if (calls.length !== 1) {
     return {
       name: "Exec",
@@ -3116,8 +3194,10 @@ function codexExecWrapperCall(source: string, callId?: string): TranscriptToolCa
       input: capToolInput(source.trim()),
     }
   }
+  return wrappedSingleCall(calls[0], source, callId)
+}
 
-  const call = calls[0]
+function wrappedSingleCall(call: WrappedInvocation, source: string, callId?: string): TranscriptToolCall {
   if (call.name === "exec_command") {
     const cmd = jsStringProperty(call.args, "cmd") ?? jsStringProperty(call.args, "command")
     const cwd = jsStringProperty(call.args, "workdir") ?? jsStringProperty(call.args, "cwd")
@@ -3612,7 +3692,12 @@ function unifiedToolResult(text: string): CodexToolResult | undefined {
   const wrapperStatus: CodexToolResult["status"] =
     header[1] === "failed" ? "failed" : header[1] === "terminated" ? "cancelled" : "completed"
   const wrapperDurationMs = Number(header[2]) * 1000
-  const body = raw.slice(header[0].length).trim()
+  // A result's parts join with NO separator (backend/codex stringifyOutput), so a script that calls
+  // `image(…)` beside `text(…)` hands over `[image output]{"chunk_id":…,"output":…}` — our own picture
+  // stand-in glued onto the exec_command's JSON envelope, which then failed to parse and rendered
+  // verbatim as the card's output. The stand-in captions a picture the card already draws (and
+  // codexResultSummary strips it from plain text for the same reason), so drop it before reading.
+  const body = raw.slice(header[0].length).split("[image output]").join("").trim()
   if (!body || body === "{}") return { status: wrapperStatus, durationMs: wrapperDurationMs, terminal: true }
 
   try {

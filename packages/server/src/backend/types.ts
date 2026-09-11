@@ -45,7 +45,9 @@ export type NormalizedEvent =
   // is what the board fold, summaries and the output pane consume, and splicing megabytes of base64 into
   // it would push the blob through every one of them. Carrying the already-parsed string by reference
   // costs nothing; only the transcript projection reads it, and only to decode it to disk once.
-  | { kind: "tool-result"; at?: string; id: string; text: string; image?: string }
+  // `images` is every such picture in result order (`image` is its first entry): one exec-wrapper
+  // script can view several files, and its one result carries one part per view.
+  | { kind: "tool-result"; at?: string; id: string; text: string; image?: string; images?: string[] }
   | { kind: "reasoning"; at?: string; text: string } // model-reasoning SUMMARY (Codex plaintext summary[]; Claude thinking is redacted → never emitted)
   // A CHILD sub-agent reporting UPWARD into this session — codex's inter-agent `agent_message` record,
   // whose `author` is the child's agent path and whose `recipient` is ours. `final` splits the child's

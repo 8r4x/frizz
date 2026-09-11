@@ -695,6 +695,117 @@ test("a direct view_image function_call renders the picture inline, never an '[i
   assert.deepEqual(readFileSync(call.outputImage!), Buffer.from(PNG_1x1, "base64"))
 })
 
+// ---- an exec-wrapper script that VIEWS pictures beside other work is split into its own cards ----
+// The shape codex writes when it re-reads screenshots it just took:
+//   image((await tools.view_image({path:desktop})).image_url);
+//   text(await tools.exec_command({cmd:"…"}));
+// It rendered as ONE "Exec · 3 calls" card with a picture on top and the exec_command's raw JSON envelope
+// beneath it (maintainer 2026-09-11). Each view is its own View image card now, and the remainder is the
+// card it would have been alone.
+function wrapperViewsRollout(callId: string, source: string, output: Array<Record<string, unknown>>) {
+  return rollout([
+    { type: "response_item", payload: { type: "custom_tool_call", call_id: callId, name: "exec", input: source } },
+    { type: "response_item", payload: { type: "custom_tool_call_output", call_id: callId, output } },
+  ])
+}
+const execEnvelope = (output: string) => JSON.stringify({ chunk_id: "5f457d", wall_time_seconds: 1.32, exit_code: 0, original_token_count: 148, output })
+
+test("a wrapper that views a picture and then runs a command becomes a View image card and a Bash card", () => {
+  const desktop = writeTempPng("desktop.png")
+  const source = `image((await tools.view_image({path:${JSON.stringify(desktop)}})).image_url);\ntext(await tools.exec_command({cmd:"agent-browser screenshot out.png",workdir:"/tmp/site",max_output_tokens:600}));`
+  const [view, bash, ...more] = parseCodexTranscript(wrapperViewsRollout("split1", source, [
+    { type: "input_text", text: "Script completed\nWall time 1.7 seconds\nOutput:\n" },
+    { type: "input_image", image_url: `data:image/png;base64,${PNG_1x1_ALT}` },
+    { type: "input_text", text: execEnvelope("✓ Screenshot saved to out.png\n") },
+  ]))[0].tools
+  assert.equal(more.length, 0, "exactly two cards")
+  // Source order: the view came first in the script, so it is the first card.
+  assert.equal(view.name, "View image")
+  assert.equal(view.detail, desktop)
+  assert.equal(view.status, "completed")
+  assert.equal(view.output, undefined)
+  assert.ok(view.outputImage, "the view carries its picture")
+  // The disk copy wins (it was there): the same bytes the file holds, not the inline data URL's.
+  assert.deepEqual(readFileSync(view.outputImage!), Buffer.from(PNG_1x1, "base64"))
+  // The remainder is the ordinary Bash card, owning the script's result — and the exec_command's JSON
+  // envelope is UNWRAPPED, not printed: its stdout is the output and its exit code the status.
+  assert.equal(bash.name, "Bash")
+  assert.equal(bash.command, "agent-browser screenshot out.png")
+  assert.equal(bash.cwd, "/tmp/site")
+  assert.equal(bash.status, "completed")
+  assert.equal(bash.exitCode, 0)
+  assert.equal(bash.output, "✓ Screenshot saved to out.png")
+  assert.equal(bash.outputImage, undefined, "the picture belongs to the view, never to the command")
+  assert.equal(bash.durationMs, 1320)
+})
+
+test("a command followed by two views is a Bash card and two View image cards, each with its own picture", () => {
+  const desktop = writeTempPng("desktop.png")
+  const mobile = writeTempPng("mobile.png", PNG_1x1_ALT)
+  const source = `text(await tools.exec_command({cmd:"agent-browser screenshot a.png; agent-browser screenshot b.png"}));\nimage((await tools.view_image({path:${JSON.stringify(desktop)}})).image_url);\nimage((await tools.view_image({path:${JSON.stringify(mobile)}})).image_url);`
+  const tools = parseCodexTranscript(wrapperViewsRollout("split2", source, [
+    { type: "input_text", text: "Script completed\nWall time 5.8 seconds\nOutput:\n" },
+    { type: "input_text", text: execEnvelope("✓ Done") },
+    { type: "input_image", image_url: `data:image/png;base64,${PNG_1x1}` },
+    { type: "input_image", image_url: `data:image/png;base64,${PNG_1x1_ALT}` },
+  ]))[0].tools
+  assert.deepEqual(tools.map((t) => t.name), ["Bash", "View image", "View image"])
+  assert.equal(tools[0].output, "✓ Done")
+  assert.equal(tools[0].outputImage, undefined)
+  assert.equal(tools[1].detail, desktop)
+  assert.equal(tools[2].detail, mobile)
+  // Two views are two SNAPSHOTS: each card holds its own file's bytes, keyed apart from the other.
+  assert.deepEqual(readFileSync(tools[1].outputImage!), Buffer.from(PNG_1x1, "base64"))
+  assert.deepEqual(readFileSync(tools[2].outputImage!), Buffer.from(PNG_1x1_ALT, "base64"))
+  assert.notEqual(tools[1].outputImage, tools[2].outputImage)
+  assert.equal(tools[1].status, "completed")
+  assert.equal(tools[2].status, "completed")
+})
+
+test("a view whose file is already gone takes the result's inline picture, paired by position", () => {
+  const gone = join(mkdtempSync(join(tmpdir(), "frizz-view-image-")), "gone.png")
+  const present = writeTempPng("present.png")
+  const source = `image((await tools.view_image({path:${JSON.stringify(gone)}})).image_url);\nimage((await tools.view_image({path:${JSON.stringify(present)}})).image_url);\ntext(await tools.exec_command({cmd:"true"}));`
+  const [first, second, bash] = parseCodexTranscript(wrapperViewsRollout("split3", source, [
+    { type: "input_text", text: "Script completed\nWall time 0.4 seconds\nOutput:\n" },
+    { type: "input_image", image_url: `data:image/png;base64,${PNG_1x1_ALT}` },
+    { type: "input_image", image_url: `data:image/png;base64,${PNG_1x1}` },
+    { type: "input_text", text: execEnvelope("") },
+  ]))[0].tools
+  assert.equal(bash.name, "Bash")
+  // The first view's file is gone, so it draws the FIRST inline picture (the alt bytes) — not the
+  // second view's file, and not nothing.
+  assert.ok(first.outputImage, "the inline picture stands in for the missing file")
+  assert.deepEqual(readFileSync(first.outputImage!), Buffer.from(PNG_1x1_ALT, "base64"))
+  assert.deepEqual(readFileSync(second.outputImage!), Buffer.from(PNG_1x1, "base64"))
+})
+
+test("a wrapper that ONLY views pictures is one View image card per view, the first owning the result", () => {
+  const a = writeTempPng("a.png")
+  const b = writeTempPng("b.png", PNG_1x1_ALT)
+  const source = `image((await tools.view_image({path:${JSON.stringify(a)}})).image_url);\nimage((await tools.view_image({path:${JSON.stringify(b)}})).image_url);`
+  const tools = parseCodexTranscript(wrapperViewsRollout("split4", source, [
+    { type: "input_text", text: "Script completed\nWall time 0.2 seconds\nOutput:\n" },
+    { type: "input_image", image_url: `data:image/png;base64,${PNG_1x1}` },
+    { type: "input_image", image_url: `data:image/png;base64,${PNG_1x1_ALT}` },
+  ]))[0].tools
+  assert.deepEqual(tools.map((t) => t.name), ["View image", "View image"])
+  assert.deepEqual(tools.map((t) => t.status), ["completed", "completed"])
+  assert.equal(tools[0].durationMs, 200)
+  assert.equal(tools[0].output, undefined, "no stand-in text leaks onto the owner")
+  assert.deepEqual(readFileSync(tools[1].outputImage!), Buffer.from(PNG_1x1_ALT, "base64"))
+})
+
+test("a multi-call wrapper WITHOUT a view still renders as the one summarising Exec card", () => {
+  const source = `text(await tools.exec_command({cmd:"ls"}));\ntext(await tools.exec_command({cmd:"pwd"}));`
+  const [call, ...more] = parseCodexTranscript(wrapperViewsRollout("split5", source, [
+    { type: "input_text", text: "Script completed\nWall time 0.2 seconds\nOutput:\nab" },
+  ]))[0].tools
+  assert.equal(more.length, 0)
+  assert.equal(call.name, "Exec")
+  assert.equal(call.detail, "2 calls · exec_command ×2")
+})
+
 // The one view_image that stays a plain header: the human's own prompt attachment, whose picture their
 // bubble already shows. Mirrors the Claude Read gate (transcript.test.ts). The file is REAL and readable
 // under a throwaway HOME (the memoized roots are reset around it), so the only thing that can leave
