@@ -56,6 +56,7 @@ function seed(storage: Storage): void {
   storage.armThreadTimer({ id: `${storage.projectId}-timer`, slug: "alpha-thread", prompt: "ping", fireAtMs: 9e12, createdAtMs: 1 })
   storage.armPrWatch({ id: `${storage.projectId}-pr`, slug: "alpha-thread", owner: "acme", repo: "app", number: 1, createdAtMs: 1, expiresAtMs: 9e12 })
   storage.armThreadWatch({ id: `${storage.projectId}-watch`, slug: "alpha-thread", kind: "shell", target: "sh1", createdAtMs: 1, expiresAtMs: 9e12 })
+  storage.upsertThreadLink({ id: `${storage.projectId}-link`, slug: "alpha-thread", kind: "link", label: "Preview", target: "http://localhost:5173/", createdAtMs: 1 })
   storage.askThreadQuestion({ id: `${storage.projectId}-q`, slug: "alpha-thread", spec: "{}", askedAtMs: 1 })
   storage.markThreadDone("alpha-thread", "done body", 1)
   storage.recordSubAgentSteer({

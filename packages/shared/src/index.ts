@@ -2295,6 +2295,28 @@ export const ProviderError = z.object({
 export type ProviderError = z.infer<typeof ProviderError>
 
 // One sidebar row: frizz board thread + runtime overlay.
+// Saved destinations, not live work. They survive rests and never hold a thread open.
+export const ThreadLinkView = z.object({
+  id: z.string(),
+  kind: z.enum(["link", "file"]),
+  label: z.string(),
+  target: z.string(),
+}).strict()
+export type ThreadLinkView = z.infer<typeof ThreadLinkView>
+
+export const UpsertOwnLinkInput = z.object({
+  slug: ThreadSlug,
+  label: z.string().trim().min(1).max(240).regex(/^[^\x00-\x1f\x7f]+$/),
+  target: z.string().trim().min(1).max(8192).regex(/^[^\x00-\x1f\x7f]+$/),
+}).strict()
+export type UpsertOwnLinkInput = z.infer<typeof UpsertOwnLinkInput>
+export const UpsertOwnLinkResult = z.object({ link: ThreadLinkView }).strict()
+export type UpsertOwnLinkResult = z.infer<typeof UpsertOwnLinkResult>
+export const DropOwnLinkInput = z.object({ slug: ThreadSlug, id: z.string().min(1) }).strict()
+export type DropOwnLinkInput = z.infer<typeof DropOwnLinkInput>
+export const DropOwnLinkResult = z.object({ dropped: z.boolean() }).strict()
+export type DropOwnLinkResult = z.infer<typeof DropOwnLinkResult>
+
 export const ThreadView = z.object({
   id: ThreadSlug, // slug; filename is <slug>.md
   title: z.string(),
@@ -2354,6 +2376,8 @@ export const ThreadView = z.object({
   // Live background SHELLS the worker launched (tailer-derived). Same default-[] discipline. Rendered
   // in the anchored background-ops strip alongside sub-agents; ids make current rows drillable.
   bgShells: z.array(BgShellView).default([]),
+  // Optional for snapshots from a server that predates link registration.
+  links: z.array(ThreadLinkView).optional(),
   // The thread's ARMED WATCHERS — registry-derived, not folded from the transcript, which is what makes
   // them survive the worker saying one more sentence. Same default-[] discipline as the two above.
   //
@@ -3111,6 +3135,7 @@ export type ListOwnThreadActivityInput = z.infer<typeof ListOwnThreadActivityInp
 
 export const OwnThreadActivityResult = z.object({
   activity: z.array(ThreadActivityItem),
+  links: z.array(ThreadLinkView).optional(),
   /** Every question still owed an answer. NOT a `ThreadActivityItem` and deliberately its own list: a
    *  question is not running work, it waits on a PERSON, and there is no `questions:` key in the awaiting
    *  fence for it to be written into. Until 2026-08-28 a worker could read its open questions back only

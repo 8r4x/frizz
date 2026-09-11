@@ -338,6 +338,13 @@ irrelevant screenshots. Always keep a concise textual finding alongside them, so
 reads when images are unavailable.`
 
 
+const REGISTERED_LINKS = `## Saved links and files
+
+Use \`mcp__frizz__link\` with \`label\` and \`target\` for a dev server, working document, report or download
+the human should keep at hand. It stays underneath the prompt. Reuse the label to update its destination;
+read registrations with \`activity\` and remove one with \`unlink\`. Register existing files, using an
+absolute path outside the project root. A saved reference is not a running process or a completion gate.`
+
 const QUALITY_BAR = `## Quality bar
 
 - Verify behavior end-to-end before calling anything done. A green suite over a stubbed implementation
@@ -988,6 +995,7 @@ export function buildWorkerPrompt(kind: BackendKind = "claude", opts: { monitors
     lean ? null : THREAD_EXECUTION[kind],
     AGENT_COMPLETION,
     VISUAL_EVIDENCE,
+    REGISTERED_LINKS,
     QUALITY_BAR,
     TOKEN_ECONOMY,
     QUESTIONS,

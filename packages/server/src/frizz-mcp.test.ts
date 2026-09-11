@@ -64,7 +64,9 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
     rpc.send({ jsonrpc: "2.0", method: "notifications/initialized" })
     rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/list" })
     const list = await rpc.next(2)
-    assert.deepEqual(list.result.tools.map((t: { name: string }) => t.name), ["spawn_thread", "goal", "timer", "watch_pr", "watch", "unwatch", "ask", "unask", "done", "title", "activity"])
+    assert.deepEqual(list.result.tools.map((t: { name: string }) => t.name), ["spawn_thread", "goal", "timer", "watch_pr", "watch", "unwatch", "ask", "unask", "done", "title", "activity", "link", "unlink"])
+    assert.deepEqual(list.result.tools.find((t: { name: string }) => t.name === "link").inputSchema.required, ["label", "target"])
+    assert.deepEqual(list.result.tools.find((t: { name: string }) => t.name === "unlink").inputSchema.required, ["id"])
     for (const required of ["prompt", "model", "effort"]) {
       assert.ok(list.result.tools[0].inputSchema.required.includes(required))
     }
@@ -152,7 +154,7 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
     // `wch_…` id of any watch holding one. It takes NOTHING: there is no thread parameter and no filter,
     // because the only correct answer is "everything you have running", and a worker that has lost its
     // ids cannot be trusted to name them.
-    assert.equal(list.result.tools.length, 11)
+    assert.equal(list.result.tools.length, 13)
     assert.deepEqual(list.result.tools[10].inputSchema.required, [])
     assert.deepEqual(Object.keys(list.result.tools[10].inputSchema.properties), [])
 
@@ -1240,6 +1242,50 @@ test("`activity` reads all four kinds back with the ids a fence names them by", 
 
 // The empty case is the one that has to TEACH: a worker with nothing running cannot write an awaiting
 // fence at all, and must be told which terminal state it is actually in rather than parking on nothing.
+test("link and unlink use the calling thread; activity reads saved destinations separately from work", async () => {
+  const seen: Array<{ url: string; body: any }> = []
+  const link = { id: "lnk_abc123", kind: "file", label: "Working plan", target: "/tmp/plan.md" }
+  const http = createServer((req, res) => {
+    let body = ""
+    req.on("data", (c) => { body += c })
+    req.on("end", () => {
+      seen.push({ url: req.url ?? "", body: JSON.parse(body || "{}") })
+      res.writeHead(200, { "content-type": "application/json" })
+      const result = req.url?.endsWith("upsertOwnLink") ? { link }
+        : req.url?.endsWith("dropOwnLink") ? { dropped: true }
+          : { activity: [], links: [link] }
+      res.end(JSON.stringify({ result }))
+    })
+  })
+  await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve))
+  const stateDir = mkdtempSync(join(tmpdir(), "frizz-mcp-links-"))
+  writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ port: (http.address() as { port: number }).port }))
+  const rpc = startServer({ FRIZZ_STATE_DIR: stateDir, FRIZZ_THREAD_SLUG: "owning-thread" })
+  try {
+    rpc.send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "link", arguments: { label: " Working plan ", target: " /tmp/plan.md ", slug: "foreign" } } })
+    const added = await rpc.next(1)
+    assert.equal(added.result.isError, undefined)
+    assert.match(added.result.content[0].text, /lnk_abc123/)
+    rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "activity", arguments: {} } })
+    const activity = (await rpc.next(2)).result.content[0].text
+    assert.match(activity, /Nothing is running/)
+    assert.match(activity, /lnk_abc123.*file: Working plan/)
+    assert.match(activity, /not running work/)
+    rpc.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "unlink", arguments: { id: link.id, slug: "foreign" } } })
+    assert.match((await rpc.next(3)).result.content[0].text, /No file was deleted/)
+    assert.deepEqual(seen, [
+      { url: "/_frizz/rpc/upsertOwnLink", body: { slug: "owning-thread", label: "Working plan", target: "/tmp/plan.md" } },
+      { url: "/_frizz/rpc/listOwnThreadActivity", body: { slug: "owning-thread" } },
+      { url: "/_frizz/rpc/dropOwnLink", body: { slug: "owning-thread", id: link.id } },
+    ])
+    for (const [id, name, args] of [[4, "link", { label: "Only a label" }], [5, "unlink", {}]] as const) {
+      rpc.send({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } })
+      assert.equal((await rpc.next(id)).result.isError, true)
+    }
+    assert.equal(seen.length, 3, "missing arguments must not contact the server")
+  } finally { rpc.kill(); http.close() }
+})
+
 test("`activity` with nothing running says so, and names the terminal states that remain", async () => {
   const http = createServer((_req, res) => {
     res.writeHead(200, { "content-type": "application/json" })

@@ -538,6 +538,13 @@ image files can embed, and a path outside that safe boundary stays non-navigable
 irrelevant screenshots. Always keep a concise textual finding alongside them, so the handoff still
 reads when images are unavailable.
 
+## Saved links and files
+
+Use `mcp__frizz__link` with `label` and `target` for a dev server, working document, report or download
+the human should keep at hand. It stays underneath the prompt. Reuse the label to update its destination;
+read registrations with `activity` and remove one with `unlink`. Register existing files, using an
+absolute path outside the project root. A saved reference is not a running process or a completion gate.
+
 ## Quality bar
 
 - Verify behavior end-to-end before calling anything done. A green suite over a stubbed implementation

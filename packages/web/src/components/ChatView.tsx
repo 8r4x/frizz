@@ -69,6 +69,7 @@ import { childOpDismisser } from "../lib/dismissChildOp.ts"
 import { agentCompletionCall, subAgentCompletionOutcome } from "../lib/subAgentCompletion.ts"
 import { agentReading } from "../lib/agentReading.ts"
 import { ChildOpRow } from "./ChildOpRow.tsx"
+import { ThreadLinks } from "./ThreadLinks.tsx"
 import { MessageRow, MessageStamp } from "./MessageTimestamp.tsx"
 import { TRANSCRIPT_META_LABEL_CLASS, transcriptMetaChevronClass } from "../lib/transcriptMetaLabels.ts"
 import { InteractionStack } from "./InteractionCards.tsx"
@@ -4028,6 +4029,7 @@ export function BackgroundOpsStrip({
   // drawer's scoped reading ("the ops running underneath THIS child") has none by construction, and
   // listing the parent's here would credit the child with its parent's wait.
   const watchers = parentAgentId ? [] : (thread?.watches ?? []).filter((w) => w.kind === "github")
+  const links = parentAgentId ? [] : thread?.links ?? []
   const total = agents.length + shells.length + watchers.length
   // IS A WATCHER ARMED ON THIS SHELL? A `shell` watch gets NO row of its own — it is not a second thing
   // running, it is a property of the row already here, and drawing both listed one object twice
@@ -4060,7 +4062,7 @@ export function BackgroundOpsStrip({
   // reason raw token counts are kept out of that signature). Scoped to the rows this strip is actually
   // rendering, so it costs nothing when the view is closed. Hooks run before the early return below.
   const shellLines = useBackgroundShellLines(slug, shells.flatMap((s) => (s.id && !s.outputUnavailable ? [s.id] : [])))
-  if (total === 0) return null
+  if (total === 0 && links.length === 0) return null
   return (
     <div className={`flex flex-col gap-0.5 ${className}`} data-background-ops>
       {visibleChildOps(agents, "sheet").map((s, i) => (
@@ -4129,6 +4131,7 @@ export function BackgroundOpsStrip({
           onOpen={() => window.open(githubRefUrl(w.target) ?? `https://github.com/${w.target.replace("#", "/pull/")}`, "_blank", "noreferrer,noopener")}
         />
       ))}
+      <ThreadLinks links={links} />
     </div>
   )
 }

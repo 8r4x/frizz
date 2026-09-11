@@ -420,6 +420,15 @@ export interface PrWatchRow {
  *  completion notification wakes the thread and the row settles, or the row's own timeout elapses and
  *  frizz wakes the thread to re-decide. There is no cursor because there is no stream of events to be
  *  caught up on — a shell finishes once. */
+export interface ThreadLinkRow {
+  id: string
+  thread_slug: string
+  kind: "link" | "file"
+  label: string
+  target: string
+  created_at: number
+}
+
 export interface ThreadWatchRow {
   id: string
   thread_slug: string
@@ -686,6 +695,11 @@ export interface Storage {
    *  by that triple, so a worker re-registering the same wait after a wake gets one row, not two. */
   armThreadWatch(watch: { id: string; slug: string; kind: "shell" | "agent"; target: string; createdAtMs: number; expiresAtMs: number }): ThreadWatchRow
   listThreadWatches(slug: string, opts?: { armedOnly?: boolean }): ThreadWatchRow[]
+  // A label is a stable slot: re-registering it updates the destination without moving the row.
+  upsertThreadLink(link: { id: string; slug: string; kind: "link" | "file"; label: string; target: string; createdAtMs: number }): ThreadLinkRow
+  listThreadLinks(slug: string): ThreadLinkRow[]
+  threadLinksBySlug(): Map<string, ThreadLinkRow[]>
+  dropThreadLink(slug: string, id: string): boolean
   /** Every thread's ARMED watches at once, keyed by slug — the board's read (see groupBySlug above).
    *  Same predicate and same `created_at, id` order as `listThreadWatches(slug, { armedOnly: true })`;
    *  a thread with none is ABSENT from the map. */
@@ -1121,6 +1135,16 @@ export const STORAGE_SCHEMA = `
     -- the row is cancelled and the thread woken, so a registration cannot outlive its own relevance the
     -- way an un-restated fence never could. (An earlier thread_watch, retired 2026-08-14 with different
     -- kinds and no expiry, is dropped from a legacy file before import — see legacy-project-db.ts.)
+    CREATE TABLE IF NOT EXISTS thread_link (
+      id          TEXT PRIMARY KEY,
+      project_id  TEXT NOT NULL,
+      thread_slug TEXT NOT NULL,
+      kind        TEXT NOT NULL CHECK (kind IN ('link', 'file')),
+      label       TEXT NOT NULL,
+      target      TEXT NOT NULL,
+      created_at  INTEGER NOT NULL,
+      UNIQUE (project_id, thread_slug, label)
+    );
     CREATE TABLE IF NOT EXISTS thread_watch (
       id          TEXT PRIMARY KEY,
       project_id  TEXT NOT NULL,
@@ -1217,7 +1241,7 @@ export const STORAGE_SCHEMA = `
 /** Every table this module owns, for the importer and the project purge. */
 export const STORAGE_TABLES = [
   "session", "settings", "tombstone", "adoption_claim", "adoption_retired_attempt", "retired_op",
-  "thread_timer", "pr_watch", "thread_watch", "thread_question", "thread_done", "subagent_steer",
+  "thread_timer", "pr_watch", "thread_watch", "thread_question", "thread_done", "subagent_steer", "thread_link",
 ] as const
 
 /** Idempotent; run by every createStorage and by frizz-db.ts before an import. */
@@ -1711,6 +1735,22 @@ export function createStorage(source: string | Database, projectId: string): Sto
   `)
   const prWatchCursorStmt = scope.prepare("UPDATE pr_watch SET cursor = ? WHERE project_id = @project_id AND id = ? AND state = 'armed'")
   const delPrWatches = scope.prepare("DELETE FROM pr_watch WHERE project_id = @project_id AND thread_slug = ?")
+  const upsertThreadLinkStmt = scope.prepare<{
+    id: string; slug: string; kind: "link" | "file"; label: string; target: string; createdAtMs: number
+  }, ThreadLinkRow>(`
+    INSERT INTO thread_link (project_id, id, thread_slug, kind, label, target, created_at)
+    VALUES (@project_id, @id, @slug, @kind, @label, @target, @createdAtMs)
+    ON CONFLICT (project_id, thread_slug, label) DO UPDATE SET kind = excluded.kind, target = excluded.target
+    RETURNING *
+  `)
+  const threadLinksStmt = scope.prepare<[], ThreadLinkRow>(
+    "SELECT * FROM thread_link WHERE project_id = @project_id ORDER BY created_at, rowid",
+  )
+  const threadLinksBySlugStmt = scope.prepare<[string], ThreadLinkRow>(
+    "SELECT * FROM thread_link WHERE project_id = @project_id AND thread_slug = ? ORDER BY created_at, rowid",
+  )
+  const dropThreadLinkStmt = scope.prepare("DELETE FROM thread_link WHERE project_id = @project_id AND thread_slug = ? AND id = ?")
+  const delThreadLinks = scope.prepare("DELETE FROM thread_link WHERE project_id = @project_id AND thread_slug = ?")
   const armThreadWatchStmt = scope.prepare(`
     INSERT INTO thread_watch (project_id, id, thread_slug, kind, target, state, created_at, expires_at, settled_at)
     VALUES (@project_id, @id, @slug, @kind, @target, 'armed', @createdAtMs, @expiresAtMs, NULL)
@@ -1894,6 +1934,7 @@ export function createStorage(source: string | Database, projectId: string): Sto
     // to wake, and the scheduler polls every armed row.
     delPrWatches.run(existing.slug)
     delThreadWatches.run(existing.slug)
+    delThreadLinks.run(existing.slug)
     delThreadQuestions.run(existing.slug)
     delThreadDone.run(existing.slug)
     delSubAgentSteers.run(existing.slug)
@@ -2493,6 +2534,10 @@ export function createStorage(source: string | Database, projectId: string): Sto
     // woken by an expiry re-registers the same wait, and a worker that simply calls twice must not end
     // up with two rows to drop — so an existing armed row is RETURNED rather than replaced. Replacing
     // would silently move an expiry the human may already be reading on the card.
+    upsertThreadLink: (link) => upsertThreadLinkStmt.get(link)!,
+    listThreadLinks: (slug) => threadLinksBySlugStmt.all(slug),
+    threadLinksBySlug: () => groupBySlug(threadLinksStmt.all()),
+    dropThreadLink: (slug, id) => dropThreadLinkStmt.run(slug, id).changes === 1,
     armThreadWatch: (w) => {
       const existing = armedThreadWatchStmt.get(w.slug, w.kind, w.target)
       if (existing) return existing

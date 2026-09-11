@@ -28,6 +28,10 @@ import {
   ListOwnThreadTimersInput,
   ListOwnThreadActivityInput,
   OwnThreadActivityResult,
+  UpsertOwnLinkInput,
+  UpsertOwnLinkResult,
+  DropOwnLinkInput,
+  DropOwnLinkResult,
   OwnThreadTimersResult,
   TIMER_MAX_ARMED,
   type ThreadTimerView,
@@ -138,6 +142,7 @@ import {
 import { openExternalUrl } from "./open-external.ts"
 import { openLocalFile, readLocalMarkdown, resolveOpenableFile, readLocalTextFile } from "./local-file.ts"
 import { openableFileRoots } from "./project.ts"
+import { resolveThreadLink, threadLinkView } from "./thread-links.ts"
 import { ghInstalled, ghAuthed, ghRepo, gitGithubRemote, listItems, hydrateIssue, hydratePr, renderGithubPrompt, effectiveTemplate, DEFAULT_GITHUB_PROMPT } from "./github.ts"
 import { createGithubHovercardService } from "./github-hovercard.ts"
 import { slugify, resolveSlug, resolveLegacyThreadFile, loadWorkerPrompt, scratchpadOrientation, frizzConfigBlock, coldResumePermission } from "./dispatch.ts"
@@ -2551,7 +2556,7 @@ export function createRouter(ctx: AppContext) {
         // The WATCHES are already readable: each armed one rides its live item as `watchId`, and the
         // scheduler settles a watch the tick its target stops being live, so an armed row always has an
         // item to ride. The QUESTIONS had nowhere at all — hence their own list.
-        return { activity, questions: openQuestionViews(input.slug) }
+        return { activity, questions: openQuestionViews(input.slug), links: ctx.storage.listThreadLinks(input.slug).map(threadLinkView) }
       },
     }),
 
@@ -2566,6 +2571,33 @@ export function createRouter(ctx: AppContext) {
     // binary naming them and gets a 404, which is the honest answer: its arguments do not fit this
     // registry (there is no `for:` in them at all), so an alias would have to invent the one field that
     // must not be guessed at.
+
+    upsertOwnLink: mutation({
+      input: UpsertOwnLinkInput,
+      output: UpsertOwnLinkResult,
+      handler: async ({ input }) => {
+        const row = ctx.storage.getSession(input.slug)
+        if (!row) throw new Error(`thread ${input.slug} is not registered`)
+        if (row.state === "archived" || row.archived === 1) throw new Error("Reopen this thread before registering a link")
+        const destination = resolveThreadLink(input.target, ctx.project.dir, openRoots)
+        const link = ctx.storage.upsertThreadLink({
+          id: `lnk_${randomUUID().replace(/-/g, "").slice(0, 12)}`,
+          slug: input.slug, label: input.label, ...destination, createdAtMs: Date.now(),
+        })
+        // Unlike a watch or question, a saved destination does not revoke a completion.
+        ctx.board.refresh()
+        return { link: threadLinkView(link) }
+      },
+    }),
+    dropOwnLink: mutation({
+      input: DropOwnLinkInput,
+      output: DropOwnLinkResult,
+      handler: async ({ input }) => {
+        const dropped = ctx.storage.dropThreadLink(input.slug, input.id)
+        if (dropped) ctx.board.refresh()
+        return { dropped }
+      },
+    }),
 
     // ---- REGISTERED PR WATCHERS (add / drop / list) ---------------------------------------------
     // The worker's own PR watchers, from `mcp__frizz__watch_pr`. Same caller and therefore the same rules

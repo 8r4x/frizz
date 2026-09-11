@@ -12,7 +12,8 @@ import { AskedQuestionSchema, BoardDiffer, PermissionMode, SnoozeUntil, ThreadSl
 import type { Bus } from "./bus.ts"
 import type { Project } from "./project.ts"
 import { isHeadlessRow, isBrokerClaudeRow, sessionTitleLocked, type ThreadQuestionRow } from "./storage.ts"
-import type { Storage, SessionRow, PrWatchRow, ThreadTimerRow, ThreadWatchRow } from "./storage.ts"
+import type { Storage, SessionRow, PrWatchRow, ThreadTimerRow, ThreadWatchRow, ThreadLinkRow } from "./storage.ts"
+import { threadLinkView } from "./thread-links.ts"
 import { normalizeObservedThreadModel } from "./backend/thread-profiles.ts"
 import type { Tailer, SessionTelemetry, FenceView } from "./tailer.ts"
 import type { InteractionChange } from "./interaction-store.ts"
@@ -1320,11 +1321,12 @@ export function registeredDoneFence(
 // working it ran continuously, and the board RPC that idles at 4.5-10ms was measured at 49-1069ms
 // (median ~270ms) with 220 blocked-loop warnings in the server's own log.
 //
-// Batched, the same rebuild issues FIVE statements total. Nothing about the projection changes: each
+// Batched, those five registries issue five statements total; saved links add one more. Each
 // batched read carries the identical predicate and ORDER BY as the per-slug one it replaces (see the
 // `groupBySlug` note in storage.ts), and a thread with no rows is simply absent from the map, which is
 // why every read below spells the fallback `?? []` — the empty array the per-thread call returned.
 interface ThreadRegistries {
+  links: Map<string, ThreadLinkRow[]>
   prWatches: Map<string, PrWatchRow[]>
   timers: Map<string, ThreadTimerRow[]>
   questions: Map<string, ThreadQuestionRow[]>
@@ -1334,6 +1336,7 @@ interface ThreadRegistries {
 
 function readThreadRegistries(storage: Storage): ThreadRegistries {
   return {
+    links: storage.threadLinksBySlug(),
     prWatches: storage.armedPrWatchesBySlug(),
     timers: storage.armedThreadTimersBySlug(),
     questions: storage.threadQuestionsBySlug(),
@@ -1534,6 +1537,7 @@ function sessionThreadView(
     lastAssistantAt: tele?.lastAssistantAt,
     subAgents: stampStoppable(tele?.subAgents ?? [], row),
     bgShells: stampStoppableShells(tele?.bgShells ?? [], row),
+    links: (registries.links.get(row.slug) ?? []).map(threadLinkView),
     // ONE SOURCE: the FENCE. Both kinds are derived from what the worker wrote — `prs:` entries
     // become the github rows, `watch:` lines the shell rows — so this strip lists exactly what will
     // actually wake the thread, and the two cannot drift into claiming different things. There is no

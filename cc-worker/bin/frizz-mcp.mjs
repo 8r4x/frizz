@@ -672,7 +672,7 @@ const ACTIVITY = {
   description:
     "EVERYTHING YOU CURRENTLY HAVE OUT, with the id each one is named by — your background shells, your " +
     "sub-agents, your armed timers, the pull requests you registered, the `wch_…` of every watch holding " +
-    "one of them, and every QUESTION still owed an answer.\n\n" +
+    "one of them, every QUESTION still owed an answer, and saved links/files with their lnk_ ids.\n\n" +
     "WHY YOU NEED IT: an ```awaiting fence names what you are waiting on BY ID, and frizz checks every " +
     "one against what is actually live. A name that matches nothing is not a park — you are bumped and " +
     "your thread queues. The same goes for the ids `unwatch` and `unask` take, and for the id you put in " +
@@ -684,7 +684,36 @@ const ACTIVITY = {
   inputSchema: { type: "object", properties: {}, required: [] },
 }
 
-const TOOLS = [SPAWN_THREAD, GOAL, TIMER, WATCH_PR, WATCH, UNWATCH, ASK, UNASK, DONE, TITLE, ACTIVITY]
+const LINK = {
+  name: "link",
+  description: "Register a labeled URL or local file underneath this thread's prompt, alongside agents and shells. " +
+    "Use for dev servers, working documents, reports, and downloads the human will need again. " +
+    "The same label updates its existing row without duplicating or reordering it. " +
+    "HTTP(S) destinations render as Link; local files render as File and use Frizz's existing file reader/opener. " +
+    "Files must exist. Relative paths resolve from the project root; use absolute paths for worktrees. " +
+    "Registration survives rests and restarts, but does not start, monitor, or verify a server. " +
+    "It never blocks done or parks the thread. Read registrations with activity; remove one with unlink.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      label: { type: "string", description: "Short destination label, such as Open dev server or Working plan. Reuse it to update that row." },
+      target: { type: "string", description: "An HTTP(S) URL, file:// URL, or existing local file path. No credentials in URLs." },
+    },
+    required: ["label", "target"],
+    additionalProperties: false,
+  },
+}
+const UNLINK = {
+  name: "unlink",
+  description: "Remove one saved link/file from this thread by its lnk_ id (returned by link or listed by activity). " +
+    "Only removes the registration: it never deletes a file or stops a server.",
+  inputSchema: {
+    type: "object", properties: { id: { type: "string", description: "The lnk_ id of a registration on this thread." } },
+    required: ["id"], additionalProperties: false,
+  },
+}
+
+const TOOLS = [SPAWN_THREAD, GOAL, TIMER, WATCH_PR, WATCH, UNWATCH, ASK, UNASK, DONE, TITLE, ACTIVITY, LINK, UNLINK]
 
 /** @type {Record<string, (args: Record<string, unknown>) => Promise<string>>} */
 const HANDLERS = {
@@ -699,6 +728,27 @@ const HANDLERS = {
   [TITLE.name]: title,
   [UNWATCH.name]: unwatch,
   [ACTIVITY.name]: activity,
+  [LINK.name]: link,
+  [UNLINK.name]: unlink,
+}
+
+/** @param {Record<string, unknown>} args @returns {Promise<string>} */
+async function link(args) {
+  const label = typeof args.label === "string" ? args.label.trim() : ""
+  const target = typeof args.target === "string" ? args.target.trim() : ""
+  if (!label || !target) throw new Error("`label` and `target` are required")
+  const result = (await callRpc("upsertOwnLink", { slug: threadSlug(), label, target }))?.result
+  const saved = result?.link
+  if (!saved?.id) throw new Error("Frizz did not return a saved link")
+  return `Registered ${saved.kind} ${saved.id}: ${saved.label}\n${saved.target}\n\nThis reference stays underneath the prompt. It does not assert a server is running or block completion. Remove it with unlink.`
+}
+
+/** @param {Record<string, unknown>} args @returns {Promise<string>} */
+async function unlink(args) {
+  const id = typeof args.id === "string" ? args.id.trim() : ""
+  if (!id) throw new Error("`id` is required — take it from link or activity")
+  const result = (await callRpc("dropOwnLink", { slug: threadSlug(), id }))?.result
+  return result?.dropped ? `Removed registration ${id}. No file was deleted and no server was stopped.` : `No registration ${id} on this thread.`
 }
 
 /** The `title` handler: register this thread's considered name.
@@ -726,6 +776,9 @@ async function activity() {
   const result = (await callRpc("listOwnThreadActivity", { slug: threadSlug() }))?.result
   const items = Array.isArray(result?.activity) ? result.activity : []
   const questions = Array.isArray(result?.questions) ? result.questions : []
+  const links = Array.isArray(result?.links) ? result.links : []
+  const linksBlock = links.length === 0 ? "" : "\n\nSaved links and files (not running work; remove with unlink):\n" +
+    links.map((link) => `  ${link.id}  ${link.kind}: ${link.label}\n    ${link.target}`).join("\n")
   // THE QUESTIONS ARE NOT PART OF THE FENCE, so they are printed in their own section and never fed to
   // the fence builder below. A question waits on a person; there is no `questions:` key to write it into.
   const askedBlock = questions.length === 0 ? "" : (
@@ -740,14 +793,14 @@ async function activity() {
       return (
         "Nothing is RUNNING on this thread — no background shells, no sub-agents, no armed timers, no " +
         "registered PRs. So an ```awaiting fence would have nothing to name, and a fence naming nothing " +
-        "is not a park." + askedBlock
+        "is not a park." + askedBlock + linksBlock
       )
     }
     return (
       "Nothing is running on this thread — no background shells, no sub-agents, no armed timers, no " +
       "registered PRs, and no open questions.\n\nSo there is nothing to wait on: an ```awaiting fence " +
       "would have nothing to name, and a fence naming nothing is not a park. End with ```done, or with " +
-      "a ```question if you need the human."
+      "a ```question if you need the human." + linksBlock
     )
   }
   const lines = items.map((i) => {
@@ -775,7 +828,7 @@ async function activity() {
     "```\n\nDrop the lines you are not actually waiting on — a dev server you left running is not a wait." +
     "\n\nBETTER THAN NAMING A SHELL IN THE FENCE: `watch` REGISTERS the wait, so it survives your turn " +
     "ending and you never restate it. Anything already marked `[watched as …]` above needs no fence line." +
-    askedBlock
+    askedBlock + linksBlock
   )
 }
 

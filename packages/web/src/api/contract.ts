@@ -14,6 +14,10 @@
 // nothing but the `PROCEDURES` data table as a value. Transport concerns (fetch, RpcCallOpts, the
 // Proxy) live in rpc.ts, which is browser-only and never enters the server program.
 import type {
+  UpsertOwnLinkInput,
+  UpsertOwnLinkResult,
+  DropOwnLinkInput,
+  DropOwnLinkResult,
   BoardSnapshot,
   Settings,
   DispatchInput,
@@ -202,6 +206,8 @@ export interface Api {
   // THE WORKER'S OWN WATCHES on its own running work, called by `mcp__frizz__watch` / `unwatch`. Same
   // story as the PR watchers above: declared for the drift gate, never called from the browser.
   addOwnWatch(input: AddOwnWatchInput): Promise<AddOwnWatchResult>
+  upsertOwnLink(input: UpsertOwnLinkInput): Promise<UpsertOwnLinkResult>
+  dropOwnLink(input: DropOwnLinkInput): Promise<DropOwnLinkResult>
   dropOwnWatch(input: DropOwnWatchInput): Promise<DropOwnWatchResult>
   // THE WORKER'S REGISTERED QUESTIONS. `ask`/`unask` are the worker's and are declared here for the
   // drift gate alone; the two below ARE called from the browser — they are what the question card does.
@@ -377,6 +383,8 @@ export const PROCEDURES = {
   dropOwnPrWatch: "mutation",
   listOwnPrWatches: "mutation",
   addOwnWatch: "mutation",
+  upsertOwnLink: "mutation",
+  dropOwnLink: "mutation",
   dropOwnWatch: "mutation",
   ask: "mutation",
   unask: "mutation",
