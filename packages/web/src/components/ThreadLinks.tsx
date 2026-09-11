@@ -3,9 +3,12 @@ import type { ThreadLinkView } from "@frizz/shared"
 import { CHILD_ARROW, CHILD_ARROW_CLASS } from "../lib/childOps.ts"
 import { openLocalPath } from "../lib/local-file-links.ts"
 
-// Option A: the activity-row grammar, without a liveness marker or a trailing open icon.
+// The activity-row grammar, without a liveness marker or a trailing open icon.
+// Ink gaps measured at dsf 6 in both fonts: arrow→icon 6.85–8.47px, icon→kind 7–7.84px.
+// The wider kind→label space is a fixed column, keeping labels aligned across Link and File.
 const ROW = "group flex min-w-0 items-baseline gap-1.5 rounded-sm py-0.5 text-left text-[11.5px] leading-5 outline-none focus-visible:ring-1 focus-visible:ring-fg/60"
 // Both glyphs are symmetric vertically; the resolved cap height follows the font setting.
+// Measured ink-to-cap residual: 0px in sans and mono, at desktop and 390px widths.
 const ICON = "h-[1em] w-[1em] shrink-0 self-baseline translate-y-[calc(0.5em_-_0.5cap)] text-muted/45"
 
 export function ThreadLinks({ links }: { links: readonly ThreadLinkView[] }) {

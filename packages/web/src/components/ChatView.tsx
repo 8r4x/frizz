@@ -3982,13 +3982,14 @@ export function PermPolicyDenialCard({ policy, denies }: { policy: NonNullable<T
   )
 }
 
-// The persistent BACKGROUND-OPS strip, anchored above the composer: one quiet row per LIVE op the
+// The persistent BACKGROUND-OPS strip, anchored below the composer: one quiet row per LIVE op the
 // worker is running across rests — sub-agents (drill-in) and background shells (display-only) — so a
 // worker that "launched a CI watcher then came to rest" never reads as idle, and a final message like
 // "waiting for the watcher to complete" has a visible home. Visible whenever ops are live, INCLUDING
 // mid-turn (it folds in the old at-rest SubAgentBanner — one surface beats two, and the anchored
 // position under the composer reads as ambient status rather than transcript content). A 30s tick keeps
 // elapsed fresh even when no board push arrives (a steadily-running op changes nothing to re-push).
+// Saved links/files follow their own divider; they keep the strip visible without starting that tick.
 export function BackgroundOpsStrip({
   slug,
   className = "px-4 pb-2 pt-1",

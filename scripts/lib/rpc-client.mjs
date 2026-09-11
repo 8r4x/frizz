@@ -34,9 +34,10 @@ export class RpcError extends Error {
   }
 }
 
-/** A client bound to one running frizz server. `query`/`mutate` return the UNWRAPPED result. */
-export function createRpcClient(baseUrl) {
+/** A client bound to one running Frizz server, optionally its project id/slug. Results are UNWRAPPED. */
+export function createRpcClient(baseUrl, project) {
   const origin = new URL(baseUrl).origin
+  const prefix = project ? `${FRIZZ_ROUTE_PREFIX}/${encodeURIComponent(project)}` : FRIZZ_ROUTE_PREFIX
 
   const send = async (method, init, url) => {
     const res = await fetch(url, { ...init, headers: { ...(init.headers ?? {}), origin } })
@@ -57,7 +58,7 @@ export function createRpcClient(baseUrl) {
     origin,
     /** GET /_frizz/rpc/<method>?input=… — for router `query` procedures. */
     query(method, input) {
-      const url = new URL(`${FRIZZ_ROUTE_PREFIX}/rpc/${method}`, baseUrl)
+      const url = new URL(`${prefix}/rpc/${method}`, baseUrl)
       if (input !== undefined) url.searchParams.set("input", JSON.stringify(input))
       return send(method, {}, url)
     },
@@ -66,7 +67,7 @@ export function createRpcClient(baseUrl) {
       return send(
         method,
         { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(input ?? {}) },
-        new URL(`${FRIZZ_ROUTE_PREFIX}/rpc/${method}`, baseUrl),
+        new URL(`${prefix}/rpc/${method}`, baseUrl),
       )
     },
     /** Resolves once /_frizz/health answers with the health JSON, or gives up after `timeoutMs`. */
@@ -76,7 +77,7 @@ export function createRpcClient(baseUrl) {
         // `.ok` alone is not readiness: the SPA shell answers 200 to anything it does not recognize,
         // so the probe must see the health BODY before it believes the server is up.
         try {
-          const res = await fetch(new URL(`${FRIZZ_ROUTE_PREFIX}/health`, baseUrl))
+          const res = await fetch(new URL(`${prefix}/health`, baseUrl))
           if (res.ok && (await res.json())?.ok !== undefined) return true
         } catch {}
         if (Date.now() > deadline) return false

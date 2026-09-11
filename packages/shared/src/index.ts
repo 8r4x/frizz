@@ -2294,7 +2294,6 @@ export const ProviderError = z.object({
 })
 export type ProviderError = z.infer<typeof ProviderError>
 
-// One sidebar row: frizz board thread + runtime overlay.
 // Saved destinations, not live work. They survive rests and never hold a thread open.
 export const ThreadLinkView = z.object({
   id: z.string(),
@@ -2317,6 +2316,7 @@ export type DropOwnLinkInput = z.infer<typeof DropOwnLinkInput>
 export const DropOwnLinkResult = z.object({ dropped: z.boolean() }).strict()
 export type DropOwnLinkResult = z.infer<typeof DropOwnLinkResult>
 
+// One sidebar row: frizz board thread + runtime overlay.
 export const ThreadView = z.object({
   id: ThreadSlug, // slug; filename is <slug>.md
   title: z.string(),

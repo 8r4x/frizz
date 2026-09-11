@@ -413,13 +413,7 @@ export interface PrWatchRow {
   cursor: string | null
 }
 
-/** A worker's registered WATCH on its own running work — a background shell it launched or a sub-agent
- *  it dispatched (plans/rest-by-registration.md, 2026-08-26).
- *
- *  ONE-SHOT, unlike PrWatchRow: the thing it names either finishes, in which case the runtime's own
- *  completion notification wakes the thread and the row settles, or the row's own timeout elapses and
- *  frizz wakes the thread to re-decide. There is no cursor because there is no stream of events to be
- *  caught up on — a shell finishes once. */
+/** A saved destination, independent of running work and completion. */
 export interface ThreadLinkRow {
   id: string
   thread_slug: string
@@ -429,6 +423,13 @@ export interface ThreadLinkRow {
   created_at: number
 }
 
+/** A worker's registered WATCH on its own running work — a background shell it launched or a sub-agent
+ *  it dispatched (plans/rest-by-registration.md, 2026-08-26).
+ *
+ *  ONE-SHOT, unlike PrWatchRow: the thing it names either finishes, in which case the runtime's own
+ *  completion notification wakes the thread and the row settles, or the row's own timeout elapses and
+ *  frizz wakes the thread to re-decide. There is no cursor because there is no stream of events to be
+ *  caught up on — a shell finishes once. */
 export interface ThreadWatchRow {
   id: string
   thread_slug: string
@@ -691,15 +692,15 @@ export interface Storage {
   // Persist what has already been reported. Guarded on `armed` so a cursor written after the worker
   // dropped the row cannot resurrect it.
   setPrWatchCursor(id: string, cursor: string): boolean
-  /** Register a watch, or return the armed one already covering this (thread, kind, target). Idempotent
-   *  by that triple, so a worker re-registering the same wait after a wake gets one row, not two. */
-  armThreadWatch(watch: { id: string; slug: string; kind: "shell" | "agent"; target: string; createdAtMs: number; expiresAtMs: number }): ThreadWatchRow
-  listThreadWatches(slug: string, opts?: { armedOnly?: boolean }): ThreadWatchRow[]
   // A label is a stable slot: re-registering it updates the destination without moving the row.
   upsertThreadLink(link: { id: string; slug: string; kind: "link" | "file"; label: string; target: string; createdAtMs: number }): ThreadLinkRow
   listThreadLinks(slug: string): ThreadLinkRow[]
   threadLinksBySlug(): Map<string, ThreadLinkRow[]>
   dropThreadLink(slug: string, id: string): boolean
+  /** Register a watch, or return the armed one already covering this (thread, kind, target). Idempotent
+   *  by that triple, so a worker re-registering the same wait after a wake gets one row, not two. */
+  armThreadWatch(watch: { id: string; slug: string; kind: "shell" | "agent"; target: string; createdAtMs: number; expiresAtMs: number }): ThreadWatchRow
+  listThreadWatches(slug: string, opts?: { armedOnly?: boolean }): ThreadWatchRow[]
   /** Every thread's ARMED watches at once, keyed by slug — the board's read (see groupBySlug above).
    *  Same predicate and same `created_at, id` order as `listThreadWatches(slug, { armedOnly: true })`;
    *  a thread with none is ABSENT from the map. */
@@ -1126,15 +1127,7 @@ export const STORAGE_SCHEMA = `
       ON pr_watch(project_id, state);
     CREATE INDEX IF NOT EXISTS pr_watch_slug
       ON pr_watch(project_id, thread_slug, state, created_at);
-    -- A worker's registered WATCHES on its own running work (2026-08-26). See
-    -- plans/rest-by-registration.md: a wait stops being a line the worker re-writes at every rest and
-    -- becomes a row it creates once, which the human sees in the queue and which wakes the thread itself.
-    --
-    -- KIND is stored and checked against the target's own shape at registration, so a PR ref can never
-    -- arm as a shell. EXPIRES_AT is REQUIRED, chosen by the worker for this particular wait: on elapse
-    -- the row is cancelled and the thread woken, so a registration cannot outlive its own relevance the
-    -- way an un-restated fence never could. (An earlier thread_watch, retired 2026-08-14 with different
-    -- kinds and no expiry, is dropped from a legacy file before import — see legacy-project-db.ts.)
+    -- Saved destinations have no liveness or expiry. The label is a stable slot within one thread.
     CREATE TABLE IF NOT EXISTS thread_link (
       id          TEXT PRIMARY KEY,
       project_id  TEXT NOT NULL,
@@ -1145,6 +1138,15 @@ export const STORAGE_SCHEMA = `
       created_at  INTEGER NOT NULL,
       UNIQUE (project_id, thread_slug, label)
     );
+    -- A worker's registered WATCHES on its own running work (2026-08-26). See
+    -- plans/rest-by-registration.md: a wait stops being a line the worker re-writes at every rest and
+    -- becomes a row it creates once, which the human sees in the queue and which wakes the thread itself.
+    --
+    -- KIND is stored and checked against the target's own shape at registration, so a PR ref can never
+    -- arm as a shell. EXPIRES_AT is REQUIRED, chosen by the worker for this particular wait: on elapse
+    -- the row is cancelled and the thread woken, so a registration cannot outlive its own relevance the
+    -- way an un-restated fence never could. (An earlier thread_watch, retired 2026-08-14 with different
+    -- kinds and no expiry, is dropped from a legacy file before import — see legacy-project-db.ts.)
     CREATE TABLE IF NOT EXISTS thread_watch (
       id          TEXT PRIMARY KEY,
       project_id  TEXT NOT NULL,
@@ -2530,14 +2532,14 @@ export function createStorage(source: string | Database, projectId: string): Sto
     dropPrWatch: (slug, id, settledAtMs) => dropPrWatchStmt.run(settledAtMs, id, slug).changes === 1,
     settlePrWatch: (id, settledAtMs) => settlePrWatchStmt.run(settledAtMs, id).changes === 1,
     setPrWatchCursor: (id, cursor) => prWatchCursorStmt.run(cursor, id).changes === 1,
-    // IDEMPOTENT BY (thread, kind, target), which is what the partial unique index enforces. A worker
-    // woken by an expiry re-registers the same wait, and a worker that simply calls twice must not end
-    // up with two rows to drop — so an existing armed row is RETURNED rather than replaced. Replacing
-    // would silently move an expiry the human may already be reading on the card.
     upsertThreadLink: (link) => upsertThreadLinkStmt.get(link)!,
     listThreadLinks: (slug) => threadLinksBySlugStmt.all(slug),
     threadLinksBySlug: () => groupBySlug(threadLinksStmt.all()),
     dropThreadLink: (slug, id) => dropThreadLinkStmt.run(slug, id).changes === 1,
+    // IDEMPOTENT BY (thread, kind, target), which is what the partial unique index enforces. A worker
+    // woken by an expiry re-registers the same wait, and a worker that simply calls twice must not end
+    // up with two rows to drop — so an existing armed row is RETURNED rather than replaced. Replacing
+    // would silently move an expiry the human may already be reading on the card.
     armThreadWatch: (w) => {
       const existing = armedThreadWatchStmt.get(w.slug, w.kind, w.target)
       if (existing) return existing
