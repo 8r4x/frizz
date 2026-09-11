@@ -66,7 +66,14 @@ import type { ReactElement, ReactNode, RefObject } from "react"
 // matches the row's pt-1) so it never exceeds the row height. Bare glyphs — the group draws no box
 // around them (its backing is the rail's own base colour under the row's hover wash; see the strip in
 // ThreadRow), and only the one under the pointer paints its own square.
-const ROW_ACTION_CLASS = "flex h-[19px] w-[19px] items-center justify-center rounded text-muted/70 outline-none transition-colors hover:bg-panel-2 hover:text-fg"
+// OPAQUE PAINT, TRANSLUCENT BOX — `text-muted opacity-70`, never `text-muted/70`. The unpin is a lucide
+// glyph FILLED and STROKED in currentColor, and an SVG paints the stroke over the fill: with an alpha
+// colour the ring lands at ~0.8 alpha where it overlaps the 0.7 fill, so the pin read as a darker
+// outline around a lighter middle (maintainer 2026-09-11: "slightly dimmer in the middle. It looks
+// insane"). Group opacity composites the finished glyph once, so fill and stroke read as one solid
+// body. Identical for the stroke-only door and Retry; `disabled:opacity-50` still wins, as a variant
+// utility over a bare one.
+const ROW_ACTION_CLASS = "flex h-[19px] w-[19px] items-center justify-center rounded text-muted opacity-70 outline-none transition-[color,opacity] hover:bg-panel-2 hover:text-fg hover:opacity-100"
 
 export const SIDEBAR_COLUMN_CLASS =
   "sticky top-0 self-start h-screen w-[clamp(272px,34vw,680px)] shrink-0 flex flex-col justify-center max-[800px]:static max-[800px]:h-auto max-[800px]:w-full max-[800px]:justify-start max-[800px]:pt-16"
@@ -823,7 +830,10 @@ function PinnedMark() {
     <span
       aria-hidden
       data-rail-pin-mark
-      className="-ml-1 flex h-[19px] w-[19px] shrink-0 items-center justify-center self-start text-muted/55 transition-opacity group-hover:opacity-0 group-focus-within:opacity-0"
+      // `text-muted opacity-55`, not `text-muted/55`: the mark is filled AND stroked, and an alpha colour
+      // compounds where the stroke overlaps the fill — see ROW_ACTION_CLASS. The hover hide is the same
+      // opacity axis, and the variant wins over the bare 55.
+      className="-ml-1 flex h-[19px] w-[19px] shrink-0 items-center justify-center self-start text-muted opacity-55 transition-opacity group-hover:opacity-0 group-focus-within:opacity-0"
     >
       <Pin size={12} fill="currentColor" />
     </span>
