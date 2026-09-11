@@ -1,9 +1,63 @@
 import { execFile, spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
-import { isAbsolute } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 
 export const PRODUCTION_REEXEC_FLAG = "--_frizz-production-reexec";
+
+export interface NpmInvocation {
+  command: string;
+  /** Arguments that go BEFORE the npm subcommand (the npm-cli.js script when node runs npm directly). */
+  prefixArgs: string[];
+}
+
+/**
+ * How to start npm from this process. `execFile("npm", …)` is not enough on Windows. There npm is only
+ * a `npm.cmd` shim. A shell-less spawn cannot find the shim (`spawn npm ENOENT`), and Node refuses to
+ * run a `.cmd` file without a shell. The reliable form is the one every shim ends in: this node binary
+ * running `npm-cli.js`. Three places can hold that script, in this order:
+ *
+ *   1. beside `npm_execpath`, which npm sets for a bin it runs itself (`npx frizz`, `npm exec`);
+ *   2. beside node.exe (the Windows installer layout);
+ *   3. under `../lib/node_modules` (the POSIX installer layout).
+ *
+ * A global bin started from a shell has no `npm_execpath`, so it gets the npm that ships with node.
+ * On POSIX the bare `npm` command is the fallback, which is the behaviour before this helper existed.
+ * On Windows there is no working fallback: the bare name only reaches the shim, and a swallowed spawn
+ * error would end the board with a success message. So Windows throws instead.
+ */
+export function resolveNpmInvocation(
+  env: NodeJS.ProcessEnv = process.env,
+  execPath: string = process.execPath,
+  exists: (path: string) => boolean = existsSync,
+  platform: NodeJS.Platform = process.platform
+): NpmInvocation {
+  const nodeDir = dirname(execPath);
+  const candidates = [
+    // pnpm, yarn and bun set `npm_execpath` too, to their own entry file. Their directories hold no
+    // `npm-cli.js`, so the existence check below skips them.
+    env.npm_execpath ? join(dirname(env.npm_execpath), "npm-cli.js") : undefined,
+    join(nodeDir, "node_modules", "npm", "bin", "npm-cli.js"),
+    join(nodeDir, "..", "lib", "node_modules", "npm", "bin", "npm-cli.js"),
+  ].filter((candidate): candidate is string => candidate !== undefined);
+  const script = candidates.find((candidate) => exists(candidate));
+  if (script) return { command: execPath, prefixArgs: [script] };
+  if (platform === "win32") {
+    throw new Error(`npm-cli.js not found beside ${execPath} (searched: ${candidates.join(", ")})`);
+  }
+  return { command: "npm", prefixArgs: [] };
+}
+
+/**
+ * Whether this process can replace itself with the successor. `process.execve` EXISTS on every
+ * platform from Node 23.11, but on Windows it only throws ERR_FEATURE_UNAVAILABLE_ON_PLATFORM
+ * (measured on Node 24.15, Windows Server 2022). A `typeof` check therefore passes there, and the
+ * update would dispose the pane host and the tunnel and then throw, after the board was drained.
+ * The platform is the only thing that can be checked without making the call.
+ */
+export function canReexecInPlace(platform: NodeJS.Platform = process.platform, execve: unknown = process.execve): boolean {
+  return platform !== "win32" && typeof execve === "function";
+}
 /**
  * Print the absolute path of the launcher bundle that is running and exit 0. Internal: this is how
  * an OLDER launcher finds the entry of the release it resolved through npm, so it can execve into it
@@ -148,9 +202,9 @@ export function reexecIntoRegistrySuccessor(
 }
 
 /**
- * Start the successor detached — the fallback for a runtime without `process.execve` (Windows).
- * This terminal is not handed to it: the launcher ends, and the board serves from a pid this
- * window can no longer signal. The caller has to say so.
+ * Start the successor detached — the fallback for a runtime where `process.execve` does not work
+ * (Windows, see `canReexecInPlace`). This terminal is not handed to it: the launcher ends, and the
+ * board serves from a pid this window can no longer signal. The caller has to say so.
  */
 export function handoffToRegistrySuccessor(
   successor: RegistrySuccessor,
@@ -174,7 +228,9 @@ export function handoffToRegistrySuccessor(
 export const npmRegistryReleaseAdapter: RegistryReleaseAdapter = {
   latestVersion(packageName) {
     return new Promise((resolveVersion, reject) => {
-      execFile("npm", ["view", `${packageName}@latest`, "version", "--json"], { encoding: "utf8" }, (error, stdout) => {
+      let npm: NpmInvocation;
+      try { npm = resolveNpmInvocation(); } catch (error) { return reject(error); }
+      execFile(npm.command, [...npm.prefixArgs, "view", `${packageName}@latest`, "version", "--json"], { encoding: "utf8", windowsHide: true }, (error, stdout) => {
         if (error) return reject(new Error(`could not check npm for ${packageName}: ${error.message}`));
         try {
           const parsed = JSON.parse(stdout) as unknown;
@@ -187,11 +243,14 @@ export const npmRegistryReleaseAdapter: RegistryReleaseAdapter = {
   },
   npmExec({ packageSpec, bin, args, cwd, env }) {
     return new Promise((settle) => {
+      let npm: NpmInvocation;
+      try { npm = resolveNpmInvocation(); } catch (error) { return settle({ code: null, signal: null, stdout: "", stderr: (error as Error).message }); }
       // The explicit package spec forces npm to resolve/install a new cache entry before running it.
-      const child = spawn("npm", ["exec", "--yes", `--package=${packageSpec}`, "--", bin, ...args], {
+      const child = spawn(npm.command, [...npm.prefixArgs, "exec", "--yes", `--package=${packageSpec}`, "--", bin, ...args], {
         cwd,
         env,
         stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
       });
       let stdout = "";
       let stderr = "";
@@ -202,6 +261,9 @@ export const npmRegistryReleaseAdapter: RegistryReleaseAdapter = {
     });
   },
   spawnDetached({ entry, args, cwd, env }) {
-    return spawn(process.execPath, [entry, ...args], { cwd, env, detached: true, stdio: "ignore" });
+    // `detached` gives the successor no console of its own, and `windowsHide` keeps the children it
+    // starts from opening one. Measured on Windows Server 2022: without `windowsHide` a forked child of
+    // a console-less parent gets a visible console window, and closing that window stops the board.
+    return spawn(process.execPath, [entry, ...args], { cwd, env, detached: true, stdio: "ignore", windowsHide: true });
   },
 };

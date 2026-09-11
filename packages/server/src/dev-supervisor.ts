@@ -851,6 +851,12 @@ class Supervisor implements DevSupervisor {
           // parent-only flags are invalid or dangerous for a file-backed control-plane child.
           execArgv: [],
           stdio: ["inherit", "inherit", "inherit", "ipc"],
+          // A registry update leaves this supervisor with no console on Windows (its successor starts
+          // detached). A console program forked from a console-less parent gets a new, VISIBLE console
+          // window, and closing that window would stop the board. `windowsHide` keeps the window from
+          // appearing (measured 2026-09-07: hwnd 0 for the child and its children). No effect elsewhere.
+          // `fork` passes it to `spawn` at runtime; `ForkOptions` in @types/node 24 does not declare it.
+          ...({ windowsHide: true } as object),
         })
       } catch (error) {
         const message = `child spawn failed: ${error instanceof Error ? error.message : error}; watching for a corrective edit`

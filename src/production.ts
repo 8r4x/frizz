@@ -60,7 +60,7 @@ import {
 } from "@frizz/server/project-launch";
 import { createSupervisorShutdownHandler, startDevSupervisor } from "@frizz/server/dev-supervisor";
 import {
-  handoffToRegistrySuccessor, npmRegistryReleaseAdapter, planRegistryUpdate, PRODUCTION_PRINT_LAUNCHER_FLAG, PRODUCTION_REEXEC_FLAG,
+  canReexecInPlace, handoffToRegistrySuccessor, npmRegistryReleaseAdapter, planRegistryUpdate, PRODUCTION_PRINT_LAUNCHER_FLAG, PRODUCTION_REEXEC_FLAG,
   reexecIntoRegistrySuccessor, resolveRegistrySuccessor, type RegistrySuccessor,
 } from "./production-update.ts";
 import {
@@ -509,7 +509,7 @@ async function runSupervisor(port: number, token: string): Promise<never> {
       if (!successor) throw new Error("no update was prepared");
       const { plan } = successor;
       const successorEnv = { ...env, FRIZZ_REGISTRY_PACKAGE: plan.packageName, FRIZZ_REGISTRY_VERSION: plan.latestVersion };
-      if (typeof process.execve === "function") {
+      if (canReexecInPlace()) {
         // Same as frizz-dev's handoff: execve keeps this pid, this terminal and this stdio, so the
         // updated Frizz is the FOREGROUND process the operator started — ctrl-c still stops it, the
         // readout keeps narrating, closing the window still takes it down. The maintainer asked for
@@ -526,7 +526,7 @@ async function runSupervisor(port: number, token: string): Promise<never> {
         // keyed project resources, so neither process copies, deletes, nor recreates them.
         reexecIntoRegistrySuccessor(successor, { port, env: successorEnv });
       }
-      // No execve on this runtime (Windows): the successor starts detached with its stdio closed, so
+      // No working execve on this runtime (Windows): the successor starts detached with its stdio closed, so
       // this terminal is not handed to it — the process simply ends, the shell prompt returns, and
       // the board is still serving from a PID this window can no longer signal. Said plainly, that
       // is an update; unsaid, it is indistinguishable from Frizz dying.
