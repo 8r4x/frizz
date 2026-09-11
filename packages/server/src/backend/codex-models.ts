@@ -47,7 +47,26 @@ function toCodexModel(raw: unknown): { model: CodexModel; priority: number } | u
   // back to the first supported level when the cache's default is absent/unsupported.
   const defaultEffort = def && efforts.includes(def) ? def : efforts[0]!
   const priority = typeof m.priority === "number" && Number.isFinite(m.priority) ? m.priority : Number.MAX_SAFE_INTEGER
-  return { model: { slug, displayName, defaultEffort, efforts }, priority }
+  // The window pair (`context_window` / `max_context_window`) feeds the Settings "Context window"
+  // presets. Carried only when the cache has a usable number — a missing or junk field leaves the key
+  // off rather than inventing a 0 the drawer would then offer as a preset.
+  const window = (key: string): number | undefined => {
+    const v = m[key]
+    return typeof v === "number" && Number.isInteger(v) && v > 0 ? v : undefined
+  }
+  const contextWindow = window("context_window")
+  const maxContextWindow = window("max_context_window")
+  return {
+    model: {
+      slug,
+      displayName,
+      defaultEffort,
+      efforts,
+      ...(contextWindow === undefined ? {} : { contextWindow }),
+      ...(maxContextWindow === undefined ? {} : { maxContextWindow }),
+    },
+    priority,
+  }
 }
 
 // Parse the raw cache JSON → the listed models ordered by priority ascending (1 = codex's default).

@@ -60,17 +60,28 @@ test("the drawer no longer duplicates the composer's controls or offers vestigia
   assert.doesNotMatch(source, /Auto-resume after usage limits/)
 })
 
-test("the Claude permission control offers only the two headless-safe modes and warns while bypassing", () => {
+test("the Claude permission control offers only the two headless-safe modes, with no caption under it", () => {
   // The select is fed the shared two-option set, not the full PermissionMode enum, and an out-of-range
   // stored value displays as the "auto" floor the server would actually dispatch with.
   assert.match(source, /options=\{CLAUDE_DISPATCH_PERMISSION_OPTIONS\}/)
   assert.match(source, /value=\{draft\.permissionMode === "bypassPermissions" \? "bypassPermissions" : "auto"\}/)
-  // Choosing bypass says what it costs, in the same quiet register as the notification hint.
-  assert.match(source, /\{draft\.permissionMode === "bypassPermissions" && <BypassHint \/>\}/)
-  const hint = source.slice(source.indexOf("function BypassHint"), source.indexOf("function PermHint"))
-  assert.match(hint, /without asking you first/)
+  // The bypass caption ("New Claude threads will run every command … without asking you first") is
+  // gone: the help tooltip already says what bypass means, and the line under the control only
+  // repeated it (maintainer 2026-09-11: "I really don't think we need the little explanatory caption").
+  assert.doesNotMatch(source, /BypassHint/)
+  assert.doesNotMatch(source, /without asking you first/)
   // The old "Permission is NOT a setting" note described the world before this control existed.
   assert.doesNotMatch(source, /Permission is NOT a setting/)
+})
+
+test("the Codex context window presets come from the catalogue, not a hand-typed ladder", () => {
+  // The same query the composer uses, so the presets track codex's own catalogue refreshes.
+  assert.match(source, /useQuery\(\{ queryKey: \["codexModels"\], queryFn: \(\) => rpc\.codexModels\(\) \}\)/)
+  assert.match(source, /codexContextWindowOptions\(models\.data, stored\)/)
+  // No round-number ladder survives in the Codex band: those were never numbers codex runs at. (The
+  // Claude band's own ladder is a different contract — a CAP on a 1M launch — and keeps its 1M row.)
+  const codex = source.slice(source.indexOf("function CodexSection"), source.indexOf("function PromptsSection"))
+  assert.doesNotMatch(codex, /"400000"|"600000"|"800000"|"1000000"/)
 })
 
 test("notification recovery aligns with its control and keeps recovery instructions visible", () => {

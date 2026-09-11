@@ -185,3 +185,25 @@ test("readCodexModels: reads a real cache from CODEX_HOME; a MISSING cache degra
     rmSync(home, { recursive: true, force: true })
   }
 })
+
+test("the window pair rides each model when the cache carries it, and is simply absent when it does not", () => {
+  // Real shape from ~/.codex/models_cache.json on codex-cli 0.153.2 (2026-09-11): GPT-5.6 lists a 272K
+  // stock window and an 872K maximum; Spark's two numbers coincide at 128K.
+  const entry = (slug: string, extra: Record<string, unknown>) => ({
+    slug, display_name: slug, visibility: "list", priority: 1, default_reasoning_level: "medium",
+    supported_reasoning_levels: [{ effort: "medium", description: "" }], ...extra,
+  })
+  const models = parseCodexModelsCache(JSON.stringify({ models: [
+    entry("gpt-5.6-sol", { context_window: 272_000, max_context_window: 872_000 }),
+    entry("gpt-5.3-codex-spark", { context_window: 128_000, max_context_window: 128_000 }),
+    entry("old-cache-shape", {}),
+    entry("junk", { context_window: "272000", max_context_window: 0 }),
+  ] }))
+  const by = Object.fromEntries(models.map((m) => [m.slug, m]))
+  assert.equal(by["gpt-5.6-sol"]!.contextWindow, 272_000)
+  assert.equal(by["gpt-5.6-sol"]!.maxContextWindow, 872_000)
+  assert.equal(by["gpt-5.3-codex-spark"]!.maxContextWindow, 128_000)
+  // Neither key is present at all, so a consumer can tell "unknown" from a number.
+  assert.ok(!("contextWindow" in by["old-cache-shape"]!) && !("maxContextWindow" in by["old-cache-shape"]!))
+  assert.ok(!("contextWindow" in by["junk"]!) && !("maxContextWindow" in by["junk"]!), "a string or a 0 is not a window")
+})

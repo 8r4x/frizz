@@ -117,6 +117,13 @@ export const CodexModel = z.object({
   displayName: z.string(),
   defaultEffort: z.string(),
   efforts: z.array(z.string()),
+  // The model's stock context window and the largest one it accepts, in tokens, straight from the
+  // cache's `context_window` / `max_context_window` (272K / 872K on GPT-5.6, 128K / 128K on Spark).
+  // The Settings "Context window" presets are built from these so the drawer names the numbers codex
+  // will actually run at (maintainer 2026-09-11: "reflect the actual numbers"). Optional: a cache from
+  // before the fields existed, or the degraded fallback, simply carries neither.
+  contextWindow: z.number().int().positive().optional(),
+  maxContextWindow: z.number().int().positive().optional(),
 })
 export type CodexModel = z.infer<typeof CodexModel>
 
