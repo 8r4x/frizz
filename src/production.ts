@@ -21,7 +21,7 @@ import { LOOPBACK_BIND_HOST } from "@frizz/server/local-origin";
 import {
   establishCloudConfig,
 } from "./cloud.ts";
-import { Readout, renderSupervisorActivity, tildePath } from "./readout.ts";
+import { noticeOnlyReadout, Readout, renderSupervisorActivity, tildePath } from "./readout.ts";
 import {
   appendCrashRecord,
   attachTerminalMirror,
@@ -59,7 +59,10 @@ import {
   tryAcquireProjectLaunchOwner,
 } from "@frizz/server/project-launch";
 import { createSupervisorShutdownHandler, startDevSupervisor } from "@frizz/server/dev-supervisor";
-import { handoffToRegistrySuccessor, npmRegistryReleaseAdapter, planRegistryUpdate, PRODUCTION_REEXEC_FLAG } from "./production-update.ts";
+import {
+  handoffToRegistrySuccessor, npmRegistryReleaseAdapter, planRegistryUpdate, PRODUCTION_PRINT_LAUNCHER_FLAG, PRODUCTION_REEXEC_FLAG,
+  reexecIntoRegistrySuccessor, resolveRegistrySuccessor, type RegistrySuccessor,
+} from "./production-update.ts";
 import {
   assertLaunchPrerequisites,
   assertRequiredExecutables,
@@ -101,6 +104,13 @@ function resolvePackageVersion(): string {
 const PACKAGE_VERSION = resolvePackageVersion();
 const rawArgs = process.argv.slice(2);
 const reexec = rawArgs.includes(PRODUCTION_REEXEC_FLAG);
+// Answered before anything else is touched: an OLDER launcher runs this through `npm exec` to learn
+// where npm installed this release, then execve's into it. Nothing here may need a project, a lock,
+// a Node floor or a terminal — the whole exchange is one path on stdout.
+if (rawArgs.includes(PRODUCTION_PRINT_LAUNCHER_FLAG)) {
+  console.log(fileURLToPath(import.meta.url));
+  process.exit(0);
+}
 const args = rawArgs.filter((arg) => arg !== PRODUCTION_REEXEC_FLAG);
 const fail = (error: unknown): never => {
   console.error(`frizz: ${error instanceof Error ? error.message : error}`);
@@ -240,6 +250,14 @@ const logger: Logger = setAmbientLogger(
 const readout = reexec || process.env.FRIZZ_PRODUCTION_SUPERVISOR === "1"
   ? undefined
   : new Readout({ debug: options.debug, version: PACKAGE_VERSION });
+/**
+ * Where supervisor lifecycle beats print. Normally the boot readout — but a launcher that execve'd
+ * itself into this release through Update Frizz has no boot to narrate and still owns the operator's
+ * terminal, so it gets a notice-only one rather than falling silent for the rest of the session. The
+ * detached fallback successor has no terminal at all (stdio ignored) and stays quiet, as before.
+ */
+const activityReadout =
+  readout ?? (reexec && process.stdout.isTTY ? noticeOnlyReadout({ version: PACKAGE_VERSION }) : undefined);
 attachTerminalMirror(logger, options.debug || process.env.FRIZZ_DEBUG === "1");
 readout?.plan([
   { key: "server", label: "Server" },
@@ -418,7 +436,9 @@ async function runSupervisor(port: number, token: string): Promise<never> {
   // Resolve the child beside this bundle rather than from @frizz/server (whose .ts cannot run
   // under node_modules). In a source checkout this launcher is never executed — frizz-dev uses index.ts.
   const childEntry = fileURLToPath(new URL("./dev-child.js", import.meta.url));
-  let plannedUpdate: Awaited<ReturnType<typeof planRegistryUpdate>> | undefined;
+  // The release npm has already installed for the pending update — resolved while the board is still
+  // up, so the handoff below has nothing left to do that can fail quietly.
+  let plannedSuccessor: RegistrySuccessor | undefined;
 
   // Whether the registry actually has something newer, refreshed on a timer and READ FROM CACHE.
   // The status endpoint is polled by every open tab, so it must never reach the network; and the
@@ -468,32 +488,51 @@ async function runSupervisor(port: number, token: string): Promise<never> {
     // The terminal that owns the board says so when the board goes down and comes back. Everything
     // here is triggered from a browser tab or by a crash, so without this the foreground process is
     // the last place to learn what happened to it.
-    onActivity: (event) => renderSupervisorActivity(readout, event),
+    onActivity: (event) => renderSupervisorActivity(activityReadout, event),
     updateRestart: async () => {
       try {
         const plan = await planRegistryUpdate(PACKAGE_NAME, PACKAGE_VERSION, npmRegistryReleaseAdapter);
         if (!plan) { updateAvailable = false; updateVersion = undefined; return { state: "failed" as const, message: `Frizz ${PACKAGE_VERSION} is already current` }; }
-        plannedUpdate = plan;
         updateVersion = plan.latestVersion;
-        // npm only writes its own cache. The healthy supervisor is deliberately left up until the
-        // server has drained its child and proxy immediately before durableReexec below.
-        return { state: "ready" as const, message: `Frizz ${plan.latestVersion} will start in a new npm execution cache` };
+        // npm only writes its own cache, and this is where an install goes wrong if it is going to:
+        // the release is fetched, built and asked for its entry while the healthy supervisor is still
+        // up, so a failure here is a failed update with the board still serving — not, as before
+        // 2026-09-10, a successor dying unseen after the old owner had already quit.
+        plannedSuccessor = await resolveRegistrySuccessor(plan, { cwd: workspace.root, env }, npmRegistryReleaseAdapter);
+        return { state: "ready" as const, message: `Frizz ${plan.latestVersion} is installed in its own npm execution cache` };
       } catch (error) {
         return { state: "failed" as const, message: error instanceof Error ? error.message : String(error) };
       }
     },
     durableReexec: async () => {
-      const plan = plannedUpdate ?? await planRegistryUpdate(PACKAGE_NAME, PACKAGE_VERSION, npmRegistryReleaseAdapter);
-      if (!plan) throw new Error("Frizz is already current");
-      handoffToRegistrySuccessor(plan, { port, projectDir: workspace.root, cwd: workspace.root, env }, npmRegistryReleaseAdapter);
-      // This exit is the ONE that has to explain itself. The successor npm resolved is detached with
-      // its stdio closed, so this terminal is not handed to it — the process simply ends, the shell
-      // prompt returns, and the board is still serving from a PID this window can no longer signal.
-      // Said plainly, that is an update; unsaid, it is indistinguishable from Frizz dying.
+      const successor = plannedSuccessor;
+      if (!successor) throw new Error("no update was prepared");
+      const { plan } = successor;
+      const successorEnv = { ...env, FRIZZ_REGISTRY_PACKAGE: plan.packageName, FRIZZ_REGISTRY_VERSION: plan.latestVersion };
+      if (typeof process.execve === "function") {
+        // Same as frizz-dev's handoff: execve keeps this pid, this terminal and this stdio, so the
+        // updated Frizz is the FOREGROUND process the operator started — ctrl-c still stops it, the
+        // readout keeps narrating, closing the window still takes it down. The maintainer asked for
+        // exactly that (2026-09-10) after the detached form below left a board nobody's terminal
+        // could reach. The successor announces itself once its first child is up; this line covers
+        // the boot in between.
+        activityReadout?.notice("progress", "Updating", `reloading this launcher in place on Frizz ${plan.latestVersion}`);
+        // Raw mode would otherwise survive the exec on the same tty, and the successor installs its own
+        // pane host. The tunnel is handed back too: execve keeps this pid's children, so a cloudflared
+        // left here would outlive every handle to it and strand the hostname on a port nobody serves.
+        paneHost?.dispose();
+        remote?.stop();
+        // The successor adopts the same tokenized project lease. SQLite and provider sessions are
+        // keyed project resources, so neither process copies, deletes, nor recreates them.
+        reexecIntoRegistrySuccessor(successor, { port, env: successorEnv });
+      }
+      // No execve on this runtime (Windows): the successor starts detached with its stdio closed, so
+      // this terminal is not handed to it — the process simply ends, the shell prompt returns, and
+      // the board is still serving from a PID this window can no longer signal. Said plainly, that
+      // is an update; unsaid, it is indistinguishable from Frizz dying.
+      handoffToRegistrySuccessor(successor, { port, cwd: workspace.root, env: successorEnv }, npmRegistryReleaseAdapter);
       readout?.notice("done", "Updated", `Frizz ${plan.latestVersion} is taking over on port ${port}`);
       readout?.note(`\n  Frizz ${plan.latestVersion} now runs in the background — ctrl-c here no longer reaches it. Stop it with ${PACKAGE_NAME} --stop.\n`);
-      // The successor adopts the same tokenized project lease. SQLite and provider sessions are
-      // keyed project resources, so neither process copies, deletes, nor recreates them.
       process.exit(0);
     },
   });
@@ -534,7 +573,7 @@ async function runSupervisor(port: number, token: string): Promise<never> {
     // Acknowledge the first signal on the spot; the drain that follows is bounded but not instant.
     onStop: () => {
       logger.info("launcher", "stop signal received; draining the control plane");
-      readout?.notice("progress", "Stopping", "draining the control plane — press ctrl-c again to force");
+      activityReadout?.notice("progress", "Stopping", "draining the control plane — press ctrl-c again to force");
     },
     exit: (code) => {
       logger.info("launcher", `stopped with code ${code}`);
@@ -562,6 +601,9 @@ async function runSupervisor(port: number, token: string): Promise<never> {
   process.on("SIGHUP", stop);
   void supervisor.stopRequested.then(stop);
   await supervisor.firstBoot;
+  // The execve'd generation prints no boot block (it is not an interactive launch), so this one line
+  // is the only thing that tells the operator the update finished and this terminal still owns it.
+  if (reexec) activityReadout?.notice("done", "Updated", `Frizz ${PACKAGE_VERSION} is serving on port ${port} · ctrl-c to stop`);
   return await new Promise<never>(() => {});
 }
 
