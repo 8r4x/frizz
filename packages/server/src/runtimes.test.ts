@@ -16,6 +16,7 @@ import {
   CLAUDE_AGENT_SDK_VERSION, CLAUDE_CODE_VERSION, describeRuntime, extractNpmTarball, provisionRuntime, provisionedBinary,
   resolveRuntimes, runtimeCoordinates, sweepRuntimes, type RuntimeCoordinates,
 } from "./runtimes.ts"
+import { leaseRuntime, liveRuntimeLeases, runtimeVersionDir } from "./runtime-lease.ts"
 
 // --- a tiny tar writer, so the fixtures can carry what real tar tools refuse to write (an escaping
 // --- path, a symlink beside a file, a GNU long name) -----------------------------------------------
@@ -247,11 +248,67 @@ test("sweep: retires the other versions and a stale partial, keeps the pin and a
   }
   const old = Date.now() - 2 * 24 * 60 * 60 * 1000
   utimesSync(join(root, "claude", ".partial-2.1.207-1"), old / 1000, old / 1000)
-  const removed = sweepRuntimes("claude", root, CLAUDE_CODE_VERSION)
-  assert.deepEqual(removed.map((p) => p.slice(root.length + 1)).sort(), [join("claude", ".partial-2.1.207-1"), join("claude", "2.1.180")])
+  const sweep = sweepRuntimes("claude", root, CLAUDE_CODE_VERSION)
+  assert.deepEqual(sweep.removed.map((p) => p.slice(root.length + 1)).sort(), [join("claude", ".partial-2.1.207-1"), join("claude", "2.1.180")])
+  assert.deepEqual(sweep.kept, [])
   assert.ok(existsSync(join(root, "claude", CLAUDE_CODE_VERSION)))
   assert.ok(existsSync(join(root, "claude", ".partial-2.1.207-2")))
-  assert.deepEqual(sweepRuntimes("codex", root, codexCoords.label), [], "a backend with no directory sweeps nothing")
+  assert.deepEqual(sweepRuntimes("codex", root, codexCoords.label), { removed: [], kept: [] }, "a backend with no directory sweeps nothing")
+  rmSync(root, { recursive: true, force: true })
+})
+
+// A provisioned version directory as provisionRuntime leaves it: the marker plus the binary it names.
+function provisionedDir(root: string, backend: "claude" | "codex", label: string, binary: string): string {
+  const dir = join(root, backend, label)
+  mkdirSync(join(dir, binary, ".."), { recursive: true })
+  writeFileSync(join(dir, binary), "")
+  writeFileSync(join(dir, "provisioned.json"), JSON.stringify({ backend, label, binary }))
+  return dir
+}
+
+test("sweep: a superseded version a live process leases is kept and reported, not retired", () => {
+  // The 2026-09-10 failure: a newer pin's boot swept the directory the running server still forked from.
+  const root = scratch()
+  const old = provisionedDir(root, "claude", "2.1.267", "claude")
+  provisionedDir(root, "claude", CLAUDE_CODE_VERSION, "claude")
+  const release = leaseRuntime(join(old, "claude"), "server")
+  const sweep = sweepRuntimes("claude", root, CLAUDE_CODE_VERSION)
+  assert.deepEqual(sweep.removed, [])
+  assert.deepEqual(sweep.kept, [{ dir: old, leases: [{ pid: process.pid, role: "server" }] }])
+  assert.ok(existsSync(join(old, "claude")), "the leased binary survives")
+  // Released: the next sweep retires it.
+  release()
+  assert.deepEqual(sweepRuntimes("claude", root, CLAUDE_CODE_VERSION), { removed: [old], kept: [] })
+  rmSync(root, { recursive: true, force: true })
+})
+
+test("sweep: a lease whose holder is dead is pruned and the directory retired", () => {
+  const root = scratch()
+  const old = provisionedDir(root, "claude", "2.1.267", "claude")
+  provisionedDir(root, "claude", CLAUDE_CODE_VERSION, "claude")
+  // Beyond any pid the kernel hands out (pid_max is 99999 on macOS, 4194304 on Linux by default), and
+  // a corrupt lease beside it: both must count as "nobody".
+  mkdirSync(join(old, ".leases"))
+  writeFileSync(join(old, ".leases", "4194303.json"), JSON.stringify({ pid: 4194303, role: "server", bin: join(old, "claude"), at: "" }))
+  writeFileSync(join(old, ".leases", "torn.json"), "{")
+  assert.deepEqual(liveRuntimeLeases(old), [])
+  assert.equal(existsSync(join(old, ".leases", "4194303.json")), false, "a dead holder's lease is pruned on read")
+  assert.deepEqual(sweepRuntimes("claude", root, CLAUDE_CODE_VERSION), { removed: [old], kept: [] })
+  rmSync(root, { recursive: true, force: true })
+})
+
+test("lease: the version directory is found from either layout, and a PATH bin gets no lease", () => {
+  const root = scratch()
+  const claude = provisionedDir(root, "claude", "2.1.267", "claude")
+  const codex = provisionedDir(root, "codex", "0.154.0", join("vendor", "aarch64-apple-darwin", "bin", "codex"))
+  assert.equal(runtimeVersionDir(join(claude, "claude")), claude)
+  assert.equal(runtimeVersionDir(join(codex, "vendor", "aarch64-apple-darwin", "bin", "codex")), codex)
+  const stray = join(root, "elsewhere", "claude")
+  mkdirSync(join(root, "elsewhere"))
+  writeFileSync(stray, "")
+  assert.equal(runtimeVersionDir(stray), undefined)
+  leaseRuntime(stray, "server")()
+  assert.deepEqual(readdirSync(join(root, "elsewhere")), ["claude"], "no .leases directory appears beside an unprovisioned bin")
   rmSync(root, { recursive: true, force: true })
 })
 

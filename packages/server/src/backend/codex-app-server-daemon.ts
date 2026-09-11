@@ -21,6 +21,7 @@ import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs"
 import { dirname } from "node:path"
 import { StringDecoder } from "node:string_decoder"
 import { sweepStaleSockets } from "./stale-socket-sweep.ts"
+import { leaseRuntime } from "../runtime-lease.ts"
 
 interface DaemonConfig {
   projectId: string
@@ -96,6 +97,10 @@ function lineReader(onLine: (line: string) => void, onOverflow: () => void): (ch
 
 function main(): void {
   const config = readConfig()
+  // Tell a sweeping Frizz (runtimes.ts) that this daemon still runs out of that version directory:
+  // the app-server spawns helpers (codex-code-mode-host) from beside its own binary long after boot,
+  // so a retired directory breaks a daemon that looked perfectly alive.
+  const releaseRuntimeLease = leaseRuntime(config.codexBin, "codex-app-server")
   const child = spawn(config.codexBin, config.appServerArgs ?? ["app-server", "--stdio"], {
     cwd: config.cwd,
     env: config.env,
@@ -149,7 +154,7 @@ function main(): void {
       }))
     } catch {}
   }
-  const die = (code: number, reason: string): never => { writeExitBreadcrumb(reason); cleanup(); process.exit(code) }
+  const die = (code: number, reason: string): never => { writeExitBreadcrumb(reason); releaseRuntimeLease(); cleanup(); process.exit(code) }
 
   const armIdleExit = (): void => {
     if (idleTimer) clearTimeout(idleTimer)

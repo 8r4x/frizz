@@ -26,6 +26,7 @@ import { randomUUID } from "node:crypto"
 import { fileURLToPath } from "node:url"
 import { createClaudeQueryFactory } from "./claude-agent-sdk.ts"
 import { inheritWorkerEnvironment } from "./worker-env.ts"
+import { leaseRuntime } from "../runtime-lease.ts"
 import { projectMcpServers, workerMcpServers, type WorkerMcpServers } from "./project-mcp-servers.ts"
 import { claudeCompactionWindowOf } from "./types.ts"
 import { createClaudeBrokerDiagnosticWriter, createClaudeBrokerExitWriter, type ClaudeBrokerExitReason } from "./claude-broker-diagnostics.ts"
@@ -157,6 +158,9 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
     ? createClaudeBrokerExitWriter(config.diagnosticLogPath, { daemonPid: process.pid, generation })
     : undefined
 
+  // Tell a sweeping Frizz (runtimes.ts) that this daemon still runs out of that version directory.
+  // A daemon outlives the server that forked it, so the server's own lease is not enough.
+  const releaseRuntimeLease = leaseRuntime(config.executablePath, "claude-broker")
   const factory = createClaudeQueryFactory({ enabled: true, executablePath: config.executablePath })
   // The worker inherits frizz's environment minus frizz's own control plane (see worker-env.ts). The
   // frizz worker vars it DOES need (FRIZZ_THREAD, FRIZZ_PERM_DIR) ride workerEnv and are merged on
@@ -416,6 +420,7 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
   async function shutdown(code: number, reason: ClaudeBrokerExitReason, detail?: string): Promise<void> {
     if (closed) return; closed = true
     writeExit?.(reason, detail)
+    releaseRuntimeLease()
     clearTimeout(idleTimer); clearInterval(reach)
     // Owner-checked cleanup: never delete a successor's record/socket. A corpse whose record was
     // already overwritten must leave the live daemon's socket alone.

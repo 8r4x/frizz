@@ -38,6 +38,13 @@
 // `~/.codex/packages/standalone/releases/`) when it happens to hold the exact pin. It would save one
 // download, but both installers prune those directories on their own schedule, and a pin that can
 // vanish under a running server is a worse failure than a download.
+//
+// THE SWEEP IS LEASE-AWARE since 2026-09-10, because it was itself the "pin that can vanish under a
+// running server": a source-tree stack pinned to 2.1.268 booted against the machine's real root and
+// retired `claude/2.1.267/` while the running 0.12.9 server still forked every broker from it — every
+// new thread died with "Claude executable is not executable" behind a 30s "did not become ready". A
+// server now leases the pin it resolved and each detached daemon leases the binary it runs
+// (runtime-lease.ts); sweepRuntimes skips a version directory with a live lease and logs why.
 
 import { createHash } from "node:crypto"
 import {
@@ -50,6 +57,7 @@ import { pipeline } from "node:stream/promises"
 import { createGunzip } from "node:zlib"
 import { CODEX_APP_SERVER_SUPPORTED_VERSION } from "./backend/codex-app-server.ts"
 import { frizzRoots } from "./frizz-paths.ts"
+import { leaseRuntime, liveRuntimeLeases } from "./runtime-lease.ts"
 
 /** The Claude Agent SDK Frizz bundles. Must equal packages/claude-agent-sdk-runtime's dependency. */
 export const CLAUDE_AGENT_SDK_VERSION = "0.3.268"
@@ -475,20 +483,28 @@ export async function provisionRuntime(backend: RuntimeBackend, options: Provisi
   }
 }
 
+export interface RuntimeSweep {
+  /** Version directories and stale partials that were removed. */
+  removed: string[]
+  /** Superseded version directories left in place because a live process still leases them. */
+  kept: Array<{ dir: string; leases: Array<{ pid: number; role: string }> }>
+}
+
 /**
- * Retire what the current pin superseded: every other version directory of this backend, and any
+ * Retire what the current pin superseded: every other version directory of this backend that no
+ * live process leases (runtime-lease.ts — a server or daemon still running out of it), and any
  * partial left by a run that died more than a day ago (a younger one may still be mid-download in
- * another process). Returns what it removed, for the log.
+ * another process). Returns what it removed and what it kept, for the log.
  */
-export function sweepRuntimes(backend: RuntimeBackend, root: string, keepLabel: string, now = Date.now()): string[] {
+export function sweepRuntimes(backend: RuntimeBackend, root: string, keepLabel: string, now = Date.now()): RuntimeSweep {
   const backendDir = join(root, backend)
   let entries: string[]
   try {
     entries = readdirSync(backendDir)
   } catch {
-    return []
+    return { removed: [], kept: [] }
   }
-  const removed: string[] = []
+  const sweep: RuntimeSweep = { removed: [], kept: [] }
   for (const entry of entries) {
     if (entry === keepLabel) continue
     const full = join(backendDir, entry)
@@ -498,11 +514,17 @@ export function sweepRuntimes(backend: RuntimeBackend, root: string, keepLabel: 
       } catch {
         continue
       }
+    } else {
+      const leases = liveRuntimeLeases(full)
+      if (leases.length > 0) {
+        sweep.kept.push({ dir: full, leases: leases.map(({ pid, role }) => ({ pid, role })) })
+        continue
+      }
     }
     rmSync(full, { recursive: true, force: true })
-    removed.push(full)
+    sweep.removed.push(full)
   }
-  return removed
+  return sweep
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -539,7 +561,15 @@ async function resolveOne(backend: RuntimeBackend, explicit: string | undefined,
       onProgress: (message) => options.onProgress?.(backend, message),
     })
     if (provisioned.fetched) log("info", `runtimes: provisioned ${backend} ${provisioned.label} at ${provisioned.bin}`)
-    for (const retired of sweepRuntimes(backend, root, coordinates.label)) log("info", `runtimes: retired ${retired}`)
+    // Lease BEFORE sweeping: another Frizz on this machine (a stack booted from a source tree with a
+    // newer pin, the successor of an in-place update) sweeps on ITS boot, and this is what tells it
+    // the pin resolved here is still in use.
+    leaseRuntime(provisioned.bin, "server")
+    const sweep = sweepRuntimes(backend, root, coordinates.label)
+    for (const retired of sweep.removed) log("info", `runtimes: retired ${retired}`)
+    for (const { dir, leases } of sweep.kept) {
+      log("info", `runtimes: kept ${dir} — still used by ${leases.map((lease) => `${lease.role} pid ${lease.pid}`).join(", ")}`)
+    }
     return { bin: provisioned.bin, source: "provisioned", version: provisioned.label }
   } catch (err) {
     const note = err instanceof Error ? err.message : String(err)
