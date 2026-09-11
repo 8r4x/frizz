@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { test } from "node:test"
 import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
-import { PANEL_ARROW_GEOMETRY, RestartActionButton, RestartFailureNotice, UPDATE_RESTART_ICON_ROTATION, UpdateRestartPopover } from "./RestartFrizzButton.tsx"
+import { isBadgeRelease, PANEL_ARROW_GEOMETRY, RestartActionButton, RestartFailureNotice, UPDATE_RESTART_ICON_ROTATION, UpdateRestartPopover } from "./RestartFrizzButton.tsx"
 
 test("Update Frizz presents one calm sentence whose highlight is that threads are untouched", () => {
   const html = renderToStaticMarkup(createElement(UpdateRestartPopover, { open: true, update: true }))
@@ -62,20 +62,29 @@ test("Update and restart is one compact icon-only action with an accessible name
   assert.doesNotMatch(html, /cursor-wait/)
 })
 
-// The popover only opens on hover, so the button itself is the one passive surface that can say "an
-// update exists". The dot is gated on a CONFIRMED newer version: frizz-dev is permanently in update
-// mode (a source rebuild is always meaningful), and a badge that never goes out is no badge.
-test("the button wears an update dot only for a confirmed newer registry version", () => {
-  const badged = renderToStaticMarkup(createElement(RestartActionButton, { update: true, busy: false, updateVersion: "0.5.0", onClick: () => undefined }))
+// Patch updates remain one click away, but the passive yellow interruption is reserved for a new
+// release line. Before 1.0 that means the next minor, e.g. 0.4.x -> 0.5.0.
+test("the button wears an update dot only for a new release line", () => {
+  const badged = renderToStaticMarkup(createElement(RestartActionButton, { update: true, busy: false, version: "0.4.2", updateVersion: "0.5.0", onClick: () => undefined }))
   assert.match(badged, /bg-accent/)
   for (const [name, props] of [
     ["frizz-dev's version-less update mode", { update: true, busy: false }],
     ["an up-to-date registry install", { update: false, busy: false }],
-    ["an update already in flight", { update: true, busy: true, updateVersion: "0.5.0" }],
-  ] as [string, { update: boolean; busy: boolean; updateVersion?: string }][]) {
+    ["a routine patch update", { update: true, busy: false, version: "0.4.2", updateVersion: "0.4.3" }],
+    ["an update already in flight", { update: true, busy: true, version: "0.4.2", updateVersion: "0.5.0" }],
+  ] as [string, { update: boolean; busy: boolean; version?: string; updateVersion?: string }][]) {
     const html = renderToStaticMarkup(createElement(RestartActionButton, { ...props, onClick: () => undefined }))
     assert.doesNotMatch(html, /bg-accent/, name)
   }
+})
+
+test("release-line comparison handles pre-1.0 minors, majors, and unknown versions", () => {
+  assert.equal(isBadgeRelease("0.4.2", "0.5.0"), true)
+  assert.equal(isBadgeRelease("0.4.2", "1.0.0"), true)
+  assert.equal(isBadgeRelease("1.8.4", "2.0.0"), true)
+  assert.equal(isBadgeRelease("0.4.2", "0.4.3"), false)
+  assert.equal(isBadgeRelease("v0.4.2", "v0.5.0"), true)
+  assert.equal(isBadgeRelease("checkout", "0.5.0"), false)
 })
 
 test("busy Update and restart keeps only the clockwise spinner inside the button", () => {

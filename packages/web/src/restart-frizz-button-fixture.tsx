@@ -10,7 +10,9 @@ import { store } from "./store.ts"
 const params = new URLSearchParams(window.location.search)
 document.documentElement.dataset.font = params.get("font") === "mono" ? "mono" : "sans"
 // ?versionless drops the registry launcher's version fields, i.e. the frizz-dev / legacy popover.
-const versions = params.has("versionless") ? {} : { version: "0.4.2", updateVersion: "0.5.0" }
+const versions = params.has("versionless")
+  ? {}
+  : { version: "0.4.2", updateVersion: params.has("patch") ? "0.4.3" : "0.5.0" }
 
 const nativeFetch = window.fetch.bind(window)
 window.fetch = async (input, init) => {
@@ -58,7 +60,7 @@ function Fixture() {
                 // The real control's own shape: the card hangs off the SAME relative wrapper as the
                 // button, whose `-mx-1.5` ink trim is what `-left-1.5` on the panel backs out of.
                 <div className="relative">
-                  <RestartActionButton update busy={false} updateVersion="0.5.0" onClick={() => undefined} />
+                  <RestartActionButton update busy={false} version="0.4.2" updateVersion="0.5.0" onClick={() => undefined} />
                   <RestartFailureNotice update message={failureMessage} onDismiss={() => undefined} />
                 </div>
               )

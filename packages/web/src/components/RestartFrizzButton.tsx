@@ -10,6 +10,21 @@ import { STATUS_ROW_ACTION, STATUS_ROW_ICON } from "../lib/statusRow.ts"
 // Keep this exported contract covered by the focused component test when either icon or animation changes.
 export const UPDATE_RESTART_ICON_ROTATION = "clockwise"
 
+/**
+ * The update stays actionable for every newer package, but the passive badge is reserved for a new
+ * release line: 0.12.x -> 0.13.0, or 1.x -> 2.0.0. Unknown versions fail quiet rather than turning
+ * the status-row accent into a permanent generic update light.
+ */
+export function isBadgeRelease(currentVersion: string | undefined, updateVersion: string | undefined): boolean {
+  const releaseLine = (value: string | undefined): [major: number, minor: number] | null => {
+    const match = value && /^v?(\d+)\.(\d+)\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u.exec(value)
+    return match ? [Number(match[1]), Number(match[2])] : null
+  }
+  const current = releaseLine(currentVersion)
+  const update = releaseLine(updateVersion)
+  return current !== null && update !== null && (current[0] !== update[0] || current[1] !== update[1])
+}
+
 // The generic spelling, kept for the launchers that cannot name versions: frizz-dev (an update
 // rebuilds from source, so there is no version to name) and a registry launcher whose registry probe
 // has not answered yet. A registry launcher that HAS observed a newer version gets the specific
@@ -194,6 +209,7 @@ export function RestartFailureNotice({
 export function RestartActionButton({
   update,
   busy,
+  version,
   updateVersion,
   onFocus,
   onBlur,
@@ -201,7 +217,9 @@ export function RestartActionButton({
 }: {
   update: boolean
   busy: boolean
-  /** When present, a CONFIRMED newer registry version — the one case that earns the badge dot. */
+  /** The running registry version, used with updateVersion to decide whether this is a new release line. */
+  version?: string
+  /** A confirmed newer registry version. Patch updates stay actionable but do not earn the badge dot. */
   updateVersion?: string
   onFocus?: () => void
   onBlur?: () => void
@@ -220,14 +238,13 @@ export function RestartActionButton({
       onClick={onClick}
     >
       <RefreshCw size={STATUS_ROW_ICON} aria-hidden="true" className={busy ? "animate-spin" : undefined} />
-      {/* The popover only opens on hover, so without this mark an available update is invisible.
-          Gated on a NAMED newer version, never on `update` alone — frizz-dev is always in update mode
-          (a source rebuild is always meaningful), and a permanently lit badge is no badge at all. */}
+      {/* The popover only opens on hover, so the mark calls out a new RELEASE LINE, not routine patch
+          churn. frizz-dev remains unbadged because it has no package versions to compare. */}
       {/* 4px at a 2px inset, both MEASURED (dsf-8 crop + geometry, 2026-08-24): RefreshCw's ink corner
           sits at 4.75px inset, so a 5px dot at 2.5px touched the top-right arrowhead tip; this circle's
           ink clears that tip by ~1.9px, and the 2px inset keeps the whole dot inside the focus ring's
           rounded-md corner arc (an inset under ~1.76px pokes through it at 45°). */}
-      {update && !busy && updateVersion && (
+      {update && !busy && isBadgeRelease(version, updateVersion) && (
         <span aria-hidden="true" className="absolute right-[2px] top-[2px] h-[4px] w-[4px] rounded-full bg-accent" />
       )}
     </button>
@@ -251,8 +268,8 @@ export function RestartFrizzButton() {
   // copied into local state on mount. Two things follow. This button no longer contributes one of the
   // three /_frizz/control/status requests a single navigation used to make (t+58/61/63ms, 2026-09-04).
   // And it now tracks a status that CHANGES: a registry launcher starts update-optimistic and
-  // versionless, so `updateVersion` — the field that lights the badge dot — normally lands after the
-  // first answer, and the frozen mount snapshot could never show it.
+  // versionless, so the version pair that decides whether to light the badge dot normally lands after
+  // the first answer, and the frozen mount snapshot could never show it.
   const status = useSupervisorStatus().data ?? null
   const updateAvailable = canUpdateRestart(status)
   const versions = { version: status?.version, updateVersion: status?.updateVersion }
@@ -325,6 +342,7 @@ export function RestartFrizzButton() {
       <RestartActionButton
         update={updateAvailable}
         busy={busy}
+        version={versions.version}
         updateVersion={versions.updateVersion}
         onFocus={() => setOpen(true)}
         onBlur={() => setOpen(false)}
