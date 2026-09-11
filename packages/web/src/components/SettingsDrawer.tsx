@@ -482,9 +482,16 @@ function PromptsSection({
 // A section header in the transcript's centered-divider idiom (see ChatView's EventLine): a small
 // muted label flanked by faint hairlines, so a settings group reads as a titled band rather than a
 // left-aligned caption.
+//
+// It carries its own vertical margin on top of the body's uniform `gap-6`, asymmetric on purpose: the
+// band belongs to the fields BELOW it, so the larger step is above (24 + 16 = 40px from the previous
+// control to the hairline) and the smaller one below (24 + 4 = 28px to the first label). With the
+// body gap alone the rule sat a uniform 24px from both neighbours and read as one more row in the
+// list rather than a break between groups (maintainer 2026-09-11: "a little more space between each
+// hairline divider").
 function DividerLabel({ label }: { label: string }) {
   return (
-    <div className="flex items-center gap-2.5 text-[11px] uppercase tracking-wide text-muted/70">
+    <div className="mt-4 mb-1 flex items-center gap-2.5 text-[11px] uppercase tracking-wide text-muted/70">
       <span aria-hidden className="h-px flex-1 bg-border/60" />
       <span className="shrink-0">{label}</span>
       <span aria-hidden className="h-px flex-1 bg-border/60" />
