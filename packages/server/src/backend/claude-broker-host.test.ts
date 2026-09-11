@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { delimiter, join } from "node:path"
 import { test } from "node:test"
-import { resolveClaudeExecutableAbsolute } from "./claude-broker-host.ts"
+import { forkBroker, resolveClaudeExecutableAbsolute } from "./claude-broker-host.ts"
 
 // The npm `.cmd` stub, verbatim from a real `npm i -g @anthropic-ai/claude-code` on Windows Server
 // 2022 (claude 2.1.220). Its whole job is to call the native exe that ships inside the package.
@@ -98,5 +98,81 @@ test("an unresolvable name fails loudly rather than handing the SDK a bare name"
     assert.throws(() => resolveClaudeExecutableAbsolute("definitely-not-installed", { PATH: empty }), /could not resolve/)
   } finally {
     rmSync(empty, { recursive: true, force: true })
+  }
+})
+
+// --- forkBroker: a daemon that dies before its record is a NAMED failure, not a 30s timeout -----------
+//
+// 2026-09-10: the pinned Claude binary directory had been swept under the running server, so every new
+// daemon died in under a second with "Claude executable is not executable" — written to its own
+// diagnostics log — and the operator saw only "did not become ready" after the full deadline.
+
+/** A scratch daemon entry. The script reads FRIZZ_CLAUDE_BROKER like the real one and does `body`. */
+function scratchDaemon(dir: string, name: string, body: string): string {
+  const entry = join(dir, `${name}.mjs`)
+  writeFileSync(entry, [
+    'import { appendFileSync, writeFileSync } from "node:fs"',
+    "const config = JSON.parse(process.env.FRIZZ_CLAUDE_BROKER)",
+    body,
+    "",
+  ].join("\n"))
+  return entry
+}
+
+function forkOptions(dir: string, daemonEntry: string) {
+  return { stateDir: dir, cwd: dir, sessionId: "11111111-2222-4333-8444-555555555555", executablePath: process.execPath, env: {}, daemonEntry, timeoutMs: 30_000 }
+}
+
+test("forkBroker: a daemon that dies with an exit record rejects at once and quotes the cause", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-broker-fork-"))
+  try {
+    const entry = scratchDaemon(dir, "dies", [
+      'appendFileSync(config.diagnosticLogPath, JSON.stringify({ at: new Date().toISOString(), daemonPid: process.pid, generation: config.generation, exit: { reason: "uncaught-exception", detail: "Claude executable is not executable" } }) + "\\n")',
+      "process.exit(1)",
+    ].join("\n"))
+    const started = Date.now()
+    await assert.rejects(forkBroker(forkOptions(dir, entry)), (error: Error) => {
+      assert.match(error.message, /exited before it became ready/u)
+      assert.match(error.message, /exit code 1/u)
+      assert.match(error.message, /Claude executable is not executable/u)
+      return true
+    })
+    assert.ok(Date.now() - started < 5_000, "rejected on the exit event, not at the 30s deadline")
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("forkBroker: a daemon that exits without writing anything still fails fast, and says the record is missing", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-broker-fork-"))
+  try {
+    const entry = scratchDaemon(dir, "silent", "process.exit(0)")
+    const started = Date.now()
+    await assert.rejects(forkBroker(forkOptions(dir, entry)), (error: Error) => {
+      assert.match(error.message, /exited before it became ready \(exit code 0\)/u)
+      assert.match(error.message, /left no exit record/u)
+      return true
+    })
+    assert.ok(Date.now() - started < 5_000)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("forkBroker: control — a daemon that publishes its record and stays up resolves", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-broker-fork-"))
+  let daemonPid: number | undefined
+  try {
+    const entry = scratchDaemon(dir, "lives", [
+      "writeFileSync(config.recordPath, JSON.stringify({ daemonPid: process.pid, socketPath: config.socketPath, sessionId: config.sessionId, generation: config.generation, createdAt: new Date().toISOString() }))",
+      "setInterval(() => {}, 1000)",
+    ].join("\n"))
+    const record = await forkBroker(forkOptions(dir, entry))
+    daemonPid = record.daemonPid
+    assert.equal(record.generation.length, 36)
+    assert.ok(daemonPid > 0)
+  } finally {
+    if (daemonPid) { try { process.kill(daemonPid, "SIGKILL") } catch {} }
+    rmSync(dir, { recursive: true, force: true })
   }
 })

@@ -7,7 +7,7 @@ import { accessSync, constants as fsConstants, mkdirSync, readFileSync, readdirS
 import { delimiter, dirname, isAbsolute, join } from "node:path"
 import { resolveDetachedDaemonEntry } from "../detached-daemons.ts"
 import type { BrokerRecord, ClaudeBrokerConfig } from "./claude-agent-broker.ts"
-import { claudeBrokerDiagnosticLogPath } from "./claude-broker-diagnostics.ts"
+import { claudeBrokerDiagnosticLogPath, describeClaudeBrokerExit, readClaudeBrokerExit } from "./claude-broker-diagnostics.ts"
 import { frizzIpcPath } from "./ipc-path.ts"
 import type { WorkerMcpServers } from "./project-mcp-servers.ts"
 
@@ -232,9 +232,10 @@ export function forkBroker(options: ForkBrokerOptions): Promise<BrokerRecord> {
   const socketPath = claudeBrokerSocketPath(options.stateDir, options.sessionId)
   const recordPath = claudeBrokerRecordPath(options.stateDir, options.sessionId)
   mkdirSync(dirname(recordPath), { recursive: true })
+  const generation = randomUUID()
   const config: ClaudeBrokerConfig = {
     socketPath, cwd: options.cwd, sessionId: options.sessionId, executablePath: options.executablePath,
-    permissionMode: options.permissionMode, env: options.env, recordPath, generation: randomUUID(),
+    permissionMode: options.permissionMode, env: options.env, recordPath, generation,
     // The daemon writes its own death forensics here. Same dir as the record, so a session's socket,
     // record and diagnostics stay together and a project teardown removes all three.
     diagnosticLogPath: claudeBrokerDiagnosticLogPath(options.stateDir, options.sessionId),
@@ -253,14 +254,54 @@ export function forkBroker(options: ForkBrokerOptions): Promise<BrokerRecord> {
   child.unref()
 
   const deadline = Date.now() + (options.timeoutMs ?? 30_000)
+  // The cause a dead daemon recorded for itself (claude-broker-diagnostics.ts), keyed to THIS fork's
+  // generation so a predecessor's death is never quoted as this one's.
+  const recordedCause = () => readClaudeBrokerExit(options.stateDir, options.sessionId, generation)
   return new Promise<BrokerRecord>((resolve, reject) => {
+    let settled = false
+    let timer: NodeJS.Timeout | undefined
+    const settle = (outcome: () => void) => {
+      if (settled) return
+      settled = true
+      if (timer) clearTimeout(timer)
+      outcome()
+    }
     const poll = () => {
       const record = readBrokerRecord(recordPath)
-      if (record && pidAlive(record.daemonPid)) return resolve(record)
-      if (Date.now() > deadline) return reject(new Error(`Claude broker for session ${options.sessionId} did not become ready`))
-      setTimeout(poll, 50)
+      if (record && pidAlive(record.daemonPid)) return settle(() => resolve(record))
+      if (Date.now() > deadline) {
+        // A daemon that died AND wrote its exit record is named here too: the deadline path is what
+        // an operator sees when the exit event was missed (a frizz restart between fork and death).
+        const exit = recordedCause()
+        return settle(() => reject(new Error(
+          `Claude broker for session ${options.sessionId} did not become ready${exit ? `: ${describeClaudeBrokerExit(exit)}` : ""}`,
+        )))
+      }
+      timer = setTimeout(poll, 50)
     }
-    child.once("error", reject)
+    child.once("error", (error) => settle(() => reject(error)))
+    // A daemon that dies before publishing its record used to be indistinguishable from a slow one:
+    // the poll ran the full 30s and rejected with nothing but "did not become ready", while the cause
+    // sat in the diagnostics log the daemon had written on its way out (2026-09-10: the pinned
+    // binary directory had been swept, the daemon died in under a second with "Claude executable is
+    // not executable", and the operator got the opaque timeout for every new thread). `exit` still
+    // fires for a detached, unref'd child while this process lives, so reject on the spot and quote
+    // the record. The daemon's synchronous exit write can trail the OS exit notification by a few
+    // ms, so the read is retried briefly before "left no exit record" is accepted as the answer.
+    child.once("exit", (code, signal) => {
+      if (settled) return
+      const how = signal ? `signal ${signal}` : `exit code ${code ?? "unknown"}`
+      const until = Date.now() + 500
+      const read = () => {
+        if (settled) return
+        const exit = recordedCause()
+        if (!exit && Date.now() < until) { setTimeout(read, 25); return }
+        settle(() => reject(new Error(
+          `Claude broker for session ${options.sessionId} exited before it became ready (${how}): ${describeClaudeBrokerExit(exit)}`,
+        )))
+      }
+      read()
+    })
     poll()
   })
 }
