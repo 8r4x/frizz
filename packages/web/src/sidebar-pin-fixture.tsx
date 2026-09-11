@@ -79,6 +79,18 @@ const pinnedStalled = {
   pinnedAt: PINNED_AT,
 } as unknown as ThreadView
 
+// PINNED and DONE: the pin holds the row at the top of the rail, and the row is grayed exactly as it
+// would be in the Done band — the dim rides the row's state, not the band (maintainer 2026-09-11).
+const pinnedDone = {
+  ...base,
+  id: "pinned-done",
+  title: "Land the archived-row dim on the pinned band",
+  runtime: "turn-idle",
+  state: "archived",
+  archived: true,
+  pinnedAt: PINNED_AT,
+} as unknown as ThreadView
+
 // Unpinned and STALLED, for contrast: pin, door, Retry.
 const unpinnedStalled = {
   ...base,
@@ -101,7 +113,7 @@ const activeLong = {
   runtime: "running",
 } as unknown as ThreadView
 
-const threads = [unpinnedLong, pinnedLong, pinnedShort, pinnedStalled, unpinnedStalled, activeLong]
+const threads = [unpinnedLong, pinnedLong, pinnedShort, pinnedStalled, pinnedDone, unpinnedStalled, activeLong]
 store.board = { threads } as BoardSnapshot
 
 createRoot(document.getElementById("root")!).render(
@@ -113,6 +125,7 @@ createRoot(document.getElementById("root")!).render(
           <ThreadRow t={pinnedLong} />
           <ThreadRow t={pinnedShort} />
           <ThreadRow t={pinnedStalled} />
+          <ThreadRow t={pinnedDone} />
           <ThreadRow t={unpinnedStalled} />
           <ThreadRow t={activeLong} />
         </div>

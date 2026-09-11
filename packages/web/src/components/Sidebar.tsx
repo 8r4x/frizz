@@ -550,6 +550,14 @@ export const ThreadRow = memo(function ThreadRow({
   // Snoozed rows are uniformly grayed as a whole; provisional titles retain their local dim treatment.
   // A thread awaiting its OWN live sub-agent/Monitor is not Snoozed and stays fully active.
   const snoozed = !legacy && isSnoozed(t)
+  // A DONE THREAD IS GRAYED WHEREVER IT ROWS — the Done band, and the pinned band just the same
+  // (maintainer 2026-09-11: "a thread that's marked as done should always be grayed out, even if it's
+  // pinned"). The pin freezes a row's PLACE, never its state, so the dim has to ride the ROW rather than
+  // the band it happens to sit in; the two dims share one treatment so the rail has exactly one way of
+  // saying "nothing here is moving". Read off the indicator's own predicate, so a running-yet-archived
+  // thread — which sectionOf files under Active with its spinner — keeps its full weight there too.
+  const done = !legacy && sessionIndicatorKind(t) === "archived"
+  const dim = snoozed || done
   const dimLabel = !legacy && titleIsProvisional(t)
   // The rows with an obvious single next action carry that verb INLINE, instead of making you open the
   // thread to find it. offersRetry (groups.ts) picks them: a STALLED row (the [!] mark — process
@@ -581,7 +589,7 @@ export const ThreadRow = memo(function ThreadRow({
   return (
     <div
       data-sidebar-item={t.id}
-      className={`group relative flex min-w-0 items-start rounded-md transition-[color,opacity] after:pointer-events-none after:absolute after:inset-0 after:rounded-md after:bg-white/[0.04] after:opacity-0 after:transition-opacity hover:after:opacity-100 ${legacy ? "opacity-80" : snoozed ? "opacity-65 hover:opacity-90 focus-within:opacity-90" : ""}`}
+      className={`group relative flex min-w-0 items-start rounded-md transition-[color,opacity] after:pointer-events-none after:absolute after:inset-0 after:rounded-md after:bg-white/[0.04] after:opacity-0 after:transition-opacity hover:after:opacity-100 ${legacy ? "opacity-80" : dim ? "opacity-65 hover:opacity-90 focus-within:opacity-90" : ""}`}
     >
       {/* The reading position owns a real, in-row rail rather than borrowing the status-icon column.
           The marker spans the row's complete visual height, including wrapped titles and subtitles,
@@ -618,7 +626,7 @@ export const ThreadRow = memo(function ThreadRow({
               8px is ~2 word spaces at 13px, which reads as the title running into its own timestamp.
               12px is a gutter, and it costs the title 4px it does not miss. */}
           <span className="flex min-w-0 items-baseline gap-3">
-            <span className={`min-w-0 flex-1 break-words text-[13px] leading-[19px] ${dimLabel ? "text-fg/50" : snoozed ? "text-fg/75" : "text-fg/90"}`}>
+            <span className={`min-w-0 flex-1 break-words text-[13px] leading-[19px] ${dimLabel ? "text-fg/50" : dim ? "text-fg/75" : "text-fg/90"}`}>
               <TitleWithTrailers title={displayTitle(t)}>
                 {!legacy && <ProviderMark backend={t.backend} className="ml-1" />}
                 {/* MEASURED 2026-08-19, the first time this tag ever rendered (it was written for a
