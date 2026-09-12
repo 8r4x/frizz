@@ -736,14 +736,22 @@ export function editedFileCount(tools: readonly FileWritingTool[]): number {
   const files = new Set<string>()
   for (const tool of tools) {
     for (const edit of tool.edits ?? (tool.edit ? [tool.edit] : [])) {
-      if (edit.file.trim()) files.add(edit.file.trim())
+      const file = edit.file.trim()
+      if (file && !UNRESOLVED_PLACEHOLDER.test(file)) files.add(file)
     }
     if (tool.edit || tool.edits?.length) continue
     const detail = tool.detail?.trim()
-    if (detail && FILE_WRITING_TOOL_NAMES.has(normalizedToolName(tool.name))) files.add(detail)
+    if (detail && !UNRESOLVED_PLACEHOLDER.test(detail) && FILE_WRITING_TOOL_NAMES.has(normalizedToolName(tool.name))) files.add(detail)
   }
   return files.size
 }
+
+/**
+ * A `${…}` left in a path is a codex exec-wrapper placeholder the server could not fill (a loop
+ * variable, an expression), not a file the worker wrote. The rail (server/edited-files.ts) skips it by
+ * the same test; the card keeps it, because the card shows what the script said.
+ */
+const UNRESOLVED_PLACEHOLDER = /\$\{/
 
 export function settledToolActivityLabel(total: number, editedFiles = 0): string {
   const calls = `Ran ${total} tool ${total === 1 ? "call" : "calls"}`

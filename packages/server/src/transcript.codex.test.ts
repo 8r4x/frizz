@@ -624,6 +624,72 @@ test("exec wrapper scanning ignores tools-like text in comments", () => {
   assert.equal(call.cwd, "/tmp/fixture")
 })
 
+test("exec wrapper apply_patch in a template literal fills `${const}` placeholders from the script's own bindings", () => {
+  // A zod thread (2026-09-12) bound its scratch dir once and interpolated it into the patch header. Read
+  // verbatim, the header named a directory called `${s}`, and the rail drew it as one. The chained
+  // binding and the escaped backticks in the body are both what the real script did.
+  const source = [
+    'const root = "/p/zod";',
+    "const s = `${root}/.frizz/threads/29ef9673`;",
+    "text(await tools.apply_patch(`*** Begin Patch",
+    "*** Add File: ${s}/remove-pattern-results.md",
+    "+# Boolean-pattern removal",
+    "+Completed in \\`da373f84\\`.",
+    "*** End Patch`))",
+  ].join("\n")
+  const [call] = parseCodexTranscript(rollout([
+    { type: "response_item", payload: { type: "custom_tool_call", call_id: "patch", name: "exec", input: source } },
+  ]))[0].tools
+  assert.equal(call.name, "Edit")
+  assert.equal(call.detail, "/p/zod/.frizz/threads/29ef9673/remove-pattern-results.md")
+  assert.equal(call.edit?.file, "/p/zod/.frizz/threads/29ef9673/remove-pattern-results.md")
+  assert.equal(call.edit?.old, "")
+  assert.equal(call.edit?.new, "# Boolean-pattern removal\nCompleted in `da373f84`.")
+})
+
+test("a placeholder nothing static binds stays verbatim, and a `const` inside the patch body binds nothing", () => {
+  // `${dir}` is never declared as a string; the only `const dir = "…"` in the script is a LINE OF THE
+  // PATCH, which must not be mistaken for a binding. `${file}` is a loop variable — no static reading
+  // can settle it, so the header keeps the placeholder and the rail's readers drop the row.
+  const source = [
+    "for (const file of ['a.ts']) await tools.apply_patch(`*** Begin Patch",
+    "*** Update File: ${dir}/${file}",
+    "@@",
+    '-const dir = "decoy"',
+    '+const dir = "other"',
+    "*** End Patch`)",
+  ].join("\n")
+  const [call] = parseCodexTranscript(rollout([
+    { type: "response_item", payload: { type: "custom_tool_call", call_id: "loop", name: "exec", input: source } },
+  ]))[0].tools
+  assert.equal(call.name, "Edit")
+  assert.equal(call.detail, "${dir}/${file}")
+  assert.equal(call.edit?.file, "${dir}/${file}")
+})
+
+test("the fill reaches a wrapped view_image path and an exec_command cmd, in a split wrapper and a lone one", () => {
+  const split = [
+    'const s = "/p/zod/.frizz/threads/29ef9673";',
+    "image((await tools.view_image({path:`${s}/compiled-product.png`})).image_url);",
+    "text(await tools.exec_command({cmd:`ls ${s}`, workdir:`${s}`}));",
+  ].join("\n")
+  const [view, run] = parseCodexTranscript(rollout([
+    { type: "response_item", payload: { type: "custom_tool_call", call_id: "split", name: "exec", input: split } },
+  ]))[0].tools
+  assert.equal(view.name, "View image")
+  assert.equal(view.detail, "/p/zod/.frizz/threads/29ef9673/compiled-product.png")
+  assert.equal(run.name, "Bash")
+  assert.equal(run.command, "ls /p/zod/.frizz/threads/29ef9673")
+  assert.equal(run.cwd, "/p/zod/.frizz/threads/29ef9673")
+
+  const lone = 'const s = "/p/zod/.frizz/threads/29ef9673";\nconst r = await tools.view_image({path:`${s}/shot.png`}); image(r.image_url);'
+  const [only] = parseCodexTranscript(rollout([
+    { type: "response_item", payload: { type: "custom_tool_call", call_id: "lone", name: "exec", input: lone } },
+  ]))[0].tools
+  assert.equal(only.name, "View image")
+  assert.equal(only.detail, "/p/zod/.frizz/threads/29ef9673/shot.png")
+})
+
 test("real wrapped web and image calls expose the query/path without image blobs", () => {
   const search = `const r = await tools.web__run({search_query:[{q:"Codex rollout schema"}],response_length:"short"}); text(r);`
   const view = `const r = await tools.view_image({path:"/tmp/evidence.png",detail:"original"}); image(r.image_url);`

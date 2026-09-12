@@ -690,6 +690,8 @@ test("edited files are counted once per file, whatever shape the write arrived i
   // A codex apply_patch the server could not reconstruct (a Delete File, a multi-file hunk) arrives
   // named Edit with the file only in `detail`.
   assert.equal(editedFileCount([{ name: "Edit", detail: "src/gone.ts" }, { name: "apply_patch", detail: "src/gone.ts" }]), 1)
+  // A `${…}` left in a path is a codex exec-wrapper placeholder the server could not fill, not a file.
+  assert.equal(editedFileCount([{ name: "Edit", detail: "${dir}/a.ts", edit: { file: "${dir}/a.ts" } }, { name: "apply_patch", detail: "${p}" }]), 0)
 })
 
 function eventMessage(sourceId: string, text: string, at = "2026-07-30T12:00:01.000Z"): ChatMessage {
