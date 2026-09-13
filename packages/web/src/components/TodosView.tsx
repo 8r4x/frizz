@@ -991,12 +991,14 @@ const QueueCard = memo(function QueueCard({ thread, leaving, frozen, onResolve, 
   // Where the worker PLACED its registered questions — the message whose empty ```question qst_… marker
   // names each one (lib/questionShadow). A placed card renders inside that message and leaves its
   // anchor group; the tail stack still carries the one "Send answers" for the whole rest.
-  const placement = useMemo(() => placeQuestions(messages, thread?.questions ?? []), [messages, thread?.questions])
+  // At rest only a marker in the CURRENT rest places; a stale one from the asking rest lets the card
+  // fall back to the tail, where the rest the human is reading actually is.
+  const atRest = thread.runtime !== "running" && thread.runtime !== "spawning"
+  const placement = useMemo(() => placeQuestions(messages, thread?.questions ?? [], { atRest }), [atRest, messages, thread?.questions])
   const questionAnchors = useMemo(() => {
     const tail: RegisteredQuestionView[] = []
     const byAnchor = new Map<number, RegisteredQuestionView[]>()
     const tailAnchor = messages.length - 1
-    const atRest = thread.runtime !== "running" && thread.runtime !== "spawning"
     const unplaced = (thread?.questions ?? []).filter((q) => !placement.placedIds.has(q.id))
     for (const [anchor, group] of questionsByAnchor(messages, unplaced, { atRest })) {
       if (anchor >= tailAnchor) { tail.push(...group); continue }
@@ -1005,7 +1007,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, frozen, onResolve, 
       else byAnchor.set(anchor, [...group])
     }
     return { byAnchor, tail }
-  }, [messages, placement.placedIds, thread.runtime, thread?.questions])
+  }, [atRest, messages, placement.placedIds, thread?.questions])
   // A thread dispatched after the free-form fence was retired never gets a fence controller: a
   // ```question with a body is prose there, drawn read-only, and the registered card is the only
   // answerable thing (shared QUESTION_FENCE_RETIRED_AT). A legacy thread keeps the whole fence path.

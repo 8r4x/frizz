@@ -303,8 +303,10 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
   const shadowedByMessage = useMemo(() => registeredStandingAt(messages, thread?.questions ?? []), [messages, thread?.questions])
   // Where the worker PLACED its registered questions — the message whose empty ```question qst_… marker
   // names each one (lib/questionShadow). A placed card renders in that slot and is subtracted from its
-  // anchor group; every other question renders at its anchor as before.
-  const placement = useMemo(() => placeQuestions(messages, thread?.questions ?? []), [messages, thread?.questions])
+  // anchor group; every other question renders at its anchor as before. At rest only a marker in the
+  // CURRENT rest places: a stale one from the rest that asked the question would otherwise strand the
+  // card up there while the handoff below it drew a bare Send button.
+  const placement = useMemo(() => placeQuestions(messages, thread?.questions ?? [], { atRest: !running }), [messages, running, thread?.questions])
   // A thread dispatched after the free-form fence was retired never gets a fence controller: a
   // ```question with a body is prose there, drawn read-only, and the registered card is the only
   // answerable thing (shared QUESTION_FENCE_RETIRED_AT). A legacy thread keeps the whole fence path.
