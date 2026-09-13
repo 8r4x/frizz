@@ -200,6 +200,16 @@ export function ThreadSheet({ id, slug, depth, widthDepth, initiallyOpen }: { id
           aria-describedby={undefined}
           tabIndex={-1}
           onEscapeKeyDown={(event) => {
+            // An Escape typed INTO a field that claims the key — the composer's climb-out blur, the
+            // title editor's cancel — is that field's, never this sheet's dismiss. Radix observes
+            // the key at document CAPTURE, ahead of the field's own handler, so the field's
+            // stopPropagation arrives too late: refusing the dismiss here is the only way the
+            // composer's promise ("must not also pop a drawer") ever held. Measured 2026-09-13:
+            // Escape in a drawer's composer blurred it AND closed the drawer.
+            if (event.target instanceof Element && event.target.closest("[data-claims-escape]")) {
+              event.preventDefault()
+              return
+            }
             // Plain sheets are invisible to Radix's layer stack. Defer to DrawerStack when one
             // sits above this dialog, including its exit animation, or one Escape closes BOTH.
             // Do not stop propagation here: the top plain sheet still needs this key.

@@ -8,7 +8,7 @@ import { queueCardTargetY, showToast, store } from "../store.ts"
 import { pageScrollY } from "../lib/pageScrollLock.ts"
 import { rpc } from "../api/rpc.ts"
 import { useBoard, asThreads, useTranscript } from "../hooks.ts"
-import { orderQueue, queued, displayTitle, lastActiveLabelAt } from "../groups.ts"
+import { orderQueue, queued, lastActiveLabelAt } from "../groups.ts"
 import { tailAskIdx, useLiveAnswering } from "../lib/answering.ts"
 import { shouldSubmitStagedEnter } from "../lib/composerKeyboard.ts"
 import { hasQuestionBlock } from "../lib/questionBlocks.ts"
@@ -30,7 +30,7 @@ import { ThreadComposerBox } from "./ThreadComposerBox.tsx"
 import { BackgroundOpsStrip, ThreadSlugContext, QueueDismissContext } from "./ChatView.tsx"
 import { HeaderActions } from "./HeaderActions.tsx"
 import { ThreadLifecycleFooter } from "./ThreadLifecycleFooter.tsx"
-import { AiRenameButton } from "./AiRenameButton.tsx"
+import { ThreadTitle } from "./ThreadTitle.tsx"
 import { DispatchForm } from "./NewThreadModal.tsx"
 import { StatusRow } from "./StatusRow.tsx"
 import { InteractionStack } from "./InteractionCards.tsx"
@@ -1271,14 +1271,10 @@ const QueueCard = memo(function QueueCard({ thread, leaving, frozen, onResolve, 
           bottom corners (a rounded-top + border-b would read as squared/doubled edges inside the shell). */}
       <div className={`sticky top-0 z-10 flex items-center gap-2 bg-panel px-5 py-3.5 max-[800px]:top-10 ${collapsed ? BLOCK_RADIUS : `${BLOCK_RADIUS_TOP} border-b border-border/60`}`}>
         <div className="min-w-0 flex-1">
-          {/* The title row is the refresh mark's hover zone — `min-w-0 shrink` on the name rather than
-              `flex-1`, so a short title does not push the mark to the far side of the card. */}
-          <div className="group/thread-title flex min-w-0 items-center gap-2">
-            <div className="min-w-0 shrink truncate font-semibold text-[15px] leading-snug" title={displayTitle(thread)}>
-              {displayTitle(thread)}
-            </div>
-            <AiRenameButton thread={thread} />
-          </div>
+          {/* The name is the same ThreadTitle the drawer header renders: click it to type a new title,
+              hover it for the Claude refresh mark. It was a plain div with only the refresh mark until
+              2026-09-13 ("I should be able to click on it to retitle it"). */}
+          <ThreadTitle thread={thread} className="leading-snug" />
           <LastActive at={lastActiveLabelAt(thread)} fallbackAt={thread.spawnedAt} className="mt-0.5 block truncate text-[11px] leading-tight text-muted/75" />
           {/* status_text is worker-authored frontmatter prose — only decision-relevant when the
               thread is actually waiting on the human, so it renders ONLY for needs-human threads (the
@@ -1297,8 +1293,8 @@ const QueueCard = memo(function QueueCard({ thread, leaving, frozen, onResolve, 
             gate, a thread ended up carrying a Retry button while reading as calm at-rest elsewhere
             (maintainer 2026-07-23, twice). A card that stalled out is the one queue state with an obvious
             recovery verb, so it surfaces here rather than forcing you to open the thread; other lifecycle actions
-            (Mark as done / Snooze) stay in the footer. (Rename lives by the title in the thread drawer,
-            not here — the queue is a triage surface.) The open arrow is a LINK to the
+            (Mark as done / Snooze) stay in the footer; both rename verbs live on the title itself
+            (ThreadTitle). The open arrow is a LINK to the
             standalone thread page and opens it in a NEW TAB (maintainer 2026-08-03) — it used to slide
             the side drawer over the card, re-painting the panel you were already reading. Either way
             the queue's own scroll position is untouched. */}
