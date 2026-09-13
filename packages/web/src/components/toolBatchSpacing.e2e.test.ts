@@ -88,10 +88,11 @@ for (const [surface, query, column] of [
   }, async () => {
     const { browser, page, errors } = await launch()
     try {
-      const fixtureUrl = (state: "live" | "gap" | "settled") => {
+      const fixtureUrl = (state: "live" | "gap" | "settled", bg: "running" | "finished" = "running") => {
         const url = new URL("/tool-batch-spacing-fixture.html", baseUrl)
         if (query) url.searchParams.set("surface", "child")
         if (state !== "live") url.searchParams.set("state", state)
+        if (bg === "finished") url.searchParams.set("bg", "finished")
         return url.href
       }
 
@@ -235,6 +236,24 @@ for (const [surface, query, column] of [
       for (const g of prose) {
         assert.ok(g.gap >= PROSE_MIN, `prose boundary must keep its break, got ${g.gap}px`)
       }
+
+      // THE SAME TRANSCRIPT WITH THE BACKGROUND SHELL FINISHED. The card was ejected because it was the
+      // reader's handle on something still running; once its completion has landed it draws no mark and
+      // reads `done · 45s` exactly like a foreground Bash, and standing alone between two digests it read
+      // as "a random uncollapsed bash call" (maintainer 2026-09-12; "Fold it once finished", 2026-09-13).
+      // So it folds: the digest/card/digest arrangement above becomes ONE digest carrying all seven.
+      await page.goto(fixtureUrl("settled", "finished"), { waitUntil: "networkidle0" })
+      await page.waitForFunction((n) => document.querySelectorAll("[data-transcript-column]").length > n, {}, column)
+      const folded = await page.evaluate((idx) => {
+        const scope = document.querySelectorAll("[data-transcript-column]")[idx]
+        const labels = [...scope.querySelectorAll<HTMLElement>("[data-tool-activity] button")].map((button) => button.getAttribute("aria-label") ?? "")
+        const visibleCards = [...scope.querySelectorAll<HTMLElement>(".frizz-bash")].filter((card) => card.offsetParent !== null).length
+        return { labels, visibleCards }
+      }, column)
+      assert.equal(folded.visibleCards, 0, "a finished background shell keeps no card of its own")
+      assert.equal(folded.labels.length, 2, "…so the run it split is whole again: two prose-delimited runs")
+      assert.match(folded.labels[0], /Expand 7 tool calls: Ran 7 tool calls/, "the first run carries the shell and the calls either side of it")
+      assert.match(folded.labels[1], /Expand 3 tool calls: Ran 3 tool calls/, "the second run is untouched")
 
       assert.deepEqual(errors, [], "no console/page errors")
     } finally {

@@ -4548,13 +4548,14 @@ export function projectRetiredBackgroundOps(
   const isRetired = (tool: TranscriptToolCall): boolean =>
     tool.shellId !== undefined && (ownerGone || retired.has(tool.shellId)) && tool.status === "pending"
   // `backgroundState` SURVIVES the retirement. It briefly did not, and erasing it is what put a shell
-  // killed two days earlier into the live shimmer: that field is the marker the client's
-  // `isToolActivityException` reads to keep a background op OUT of the coalesced tool run, so a
-  // retired call stripped of it became an ordinary tool call — and `liveToolActivityTail` reads the
-  // newest ordinary call in the tail, so the bottom row read "Restarting the census sweep · 11m 57s"
-  // (maintainer 2026-08-01). Nothing needed the erasure: every live reading — the ops strip
+  // killed two days earlier into the live shimmer: a retired call stripped of it was indistinguishable
+  // from an ordinary tool call, and `liveToolActivityTail` read the newest call in the tail, so the
+  // bottom row read "Restarting the census sweep · 11m 57s" (maintainer 2026-08-01). A FINISHED
+  // background op folds into the coalesced run on the client now like any settled call (2026-09-13), so
+  // the field is no longer what keeps it out of the run — it is what lets `liveToolActivityTail` drop a
+  // finished detached op from the gerund reading. Every other live reading — the ops strip
   // (isLiveTranscriptBackgroundTool), the liveness dot (hasRunningToolIndicator), the "background
-  // running" label — is already gated on `status === "pending"`, which `cancelled` fails on its own.
+  // running" label — is gated on `status === "pending"`, which `cancelled` fails on its own.
   const projectTool = (tool: TranscriptToolCall): TranscriptToolCall =>
     isRetired(tool) ? { ...tool, status: "cancelled" } : tool
   const out: TranscriptMessage[] = []

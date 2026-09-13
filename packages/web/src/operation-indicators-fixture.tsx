@@ -214,10 +214,11 @@ createRoot(document.getElementById("root")!).render(
               disclosure once settled — marking those would put a dot on every Read and Grep. */}
           <ToolCardRouter t={{ name: "Bash", detail: "Run the unit suite", desc: "Run the unit suite", command: "npm test", status: "completed", durationMs: 32_000, count: 1 }} />
           <ToolCardRouter t={{ name: "Bash", detail: "Typecheck", desc: "Typecheck", command: "npm run typecheck", status: "failed", exitCode: 1, durationMs: 12_000, count: 1 }} />
-          {/* Resolved BACKGROUND: also no mark. This is the row that most invites a finished glyph — a
-              detached task never folds back into the disclosure (isToolActivityException), so its card
-              is permanent and it is tempting to keep marking it. It states "done · 1 min 36 sec"
-              instead. Detachment does not earn a mark in this column; being ALIVE does. */}
+          {/* Resolved BACKGROUND: also no mark, and in a real transcript no card of its own either — a
+              finished detached task folds back into the disclosure like any settled call
+              (isToolActivityException, 2026-09-13), so this row is the shape it takes when the reader
+              expands that disclosure. It states "done · 1 min 36 sec". Detachment does not earn a mark
+              in this column; being ALIVE does. */}
           <ToolCardRouter t={{ name: "Bash", detail: "Warm the artifact cache", desc: "Warm the artifact cache", command: "nub scripts/warm-cache.mjs", backgroundState: "background", status: "completed", durationMs: 96_000, count: 1 }} />
         </ThreadSlugContext.Provider>
       </div>
