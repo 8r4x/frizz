@@ -62,3 +62,33 @@ That refactor is roughly the size of the issue watcher itself: it moves code rat
 1. Do the generalization first, as its own effort, moving GitHub behind the provider interface with no behaviour change. It is the part that gets harder every time a provider lands without it.
 2. GitLab second, because its CLI fits the sign-in premise exactly and its report is a port of GitHub's.
 3. Linear third, once the key-source question is settled; without an official CLI its "signed in" story is an environment variable, and that should be a deliberate choice rather than an accident of which community CLI happened to be installed.
+
+## Alternative raised 2026-09-14: a generic change-detecting command watcher
+
+The maintainer's counter-proposal, after the issue watcher landed: register an arbitrary shell command; Frizz runs it once at registration to take a baseline, keeps running it on a cadence, and wakes the worker only when the output changes. This section is the assessment; nothing is decided.
+
+**What it buys.** One mechanism covers the whole long tail this document sizes provider by provider — a GitLab MR, a Linear issue, an npm publish, a deploy URL, a CI run by id, a file on disk — because the worker writes the command and the "signed in to their CLI" premise becomes literally the command (`glab mr view 12 --output json`, `npm view frizz version`, `curl -s …`). The provider-generic registry refactor above stops being a prerequisite for GitLab and Linear: each becomes a skill snippet showing the right command and projection, with no server code. It is also the durable form of the wait the worker contract already teaches (`Monitor` with an until-loop, or a sub-agent owning the wait), which today dies with the session.
+
+**What the bespoke PR watcher knows that "output changed" does not.** Every one of these was a bug report before it was a rule, and a generic watcher re-exposes each unless the worker projects the output carefully:
+
+- Terminal-verdict-only for CI, keyed on the head commit (`checksChanged` in `scheduler.ts`): `gh pr view --json statusCheckRollup` changes on every per-job transition, so a change-detector on it fires several times per CI run.
+- Gated-after-gated is quiet on any commit; red-again-on-a-new-commit is loud.
+- The registration-instant baseline and the `seen` cursor for comments, and the measured noise list (`pr-watch-noise.ts`) for deploy-preview and coverage bots.
+- The wake says WHAT to do (permalink to the exact comment, "ask a maintainer for the approval") rather than "something changed".
+- Batching: 20 refs per GraphQL request and a rate-limit budget, versus one subprocess per watcher per tick — the fan-out that `PR_STATUS_FALLBACK_LIMIT = 4` exists to contain.
+
+So the generic watcher complements the GitHub ones rather than replacing them: keep the bespoke watchers where the semantics are known and paid for, and use the generic one for everything else.
+
+**A shape that would work.**
+
+- `mcp__frizz__watch_cmd` (`add` / `list` / `drop`): `command` (run with `sh -c`, cwd pinned to the project dir, no stdin, 30s timeout, output capped), `every` (a duration, floor 30s, default 60s), `for` (required, the PR watcher's ceilings), `label`, and an optional settle rule (`exit0`, or a regex on the output) so a wait with a known end can end itself instead of running out its `for`.
+- Registration runs the command once, synchronously, and returns the baseline output so the worker sees exactly what will be diffed; it refuses only when the command cannot be spawned or times out, since a non-zero exit may be the state being waited on.
+- One `cmd_watch` row per registration; the cursor holds the last output's hash, its head and tail, the exit code and the run instant. Identical `(cwd, command)` pairs across threads run once per tick, as identical PR refs do.
+- Change means the normalized output (trailing whitespace stripped) or the exit code differs. The wake body is a capped unified diff of the two outputs plus the exit-code change, under an armed trailer — a diff of JSON is a good steer for a model, and it is what `changes` already is on the PR wake. One undelivered report per row, re-minted as the PR watcher's is.
+- A concurrency gate on the runs (four at a time, like the fallback), and the poll's usual once-per-distinct-failure logging.
+- Board: a `command` row under the resting card and the ops strip with its label, last-changed age and next run; it counts as a registered wait the way a PR watcher does (a visible queue handoff, never Snoozed).
+- The tool description carries the footgun in the open: project the output (`--jq '{state, comments: .comments | length}'`) or the watcher fires on a timestamp.
+
+**The one decision that is the maintainer's.** The server would run worker-written commands on its own cadence, with its own environment and credentials (`gh`'s token, `HOME`), outside the worker's permission mode, and after the worker's session has ended. A worker already runs arbitrary commands in its own session, so the trust boundary is not new — but the permission gate is bypassed and the run outlives the session, which is a posture question rather than an engineering one.
+
+**Size.** About the issue watcher: one table, one evaluation function that is simpler than either GitHub one, one tool, the board rows and tests. Roughly a day, with the real-runtime check being a registered `npm view` or `gh run view` against a real target.
