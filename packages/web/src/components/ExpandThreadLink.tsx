@@ -1,6 +1,7 @@
 import type { MouseEvent } from "react"
 import { Maximize2 } from "lucide-react"
 import { captureFullscreenEnterAnchor, rememberFullscreenOrigin } from "../lib/fullscreenHandoff.ts"
+import { armFullscreenMorph } from "../lib/fullscreenMorph.ts"
 import { spaNavigate } from "../lib/router.ts"
 import { prefersReducedMotion } from "../lib/sheet.ts"
 import { isPlainLeftClick, standaloneThreadHref } from "../lib/standaloneThreadRoute.ts"
@@ -45,6 +46,10 @@ export function ExpandThreadLink({ slug, size = 14, className, label = "Open ful
       // unique). The /full page's thread column wears the same name statically, so the browser morphs
       // one into the other. A sidebar-row door has no tagged ancestor — the column then simply fades in.
       surface.style.viewTransitionName = "thread-chat"
+      // And start the morph from the part of it the reader can SEE: a tall card scrolled to its middle
+      // has a box that begins far above the viewport, and morphing from the whole box swept the entire
+      // screen downward (lib/fullscreenMorph).
+      armFullscreenMorph(surface)
     }
     spaNavigate(href, { viewTransition: animate })
   }

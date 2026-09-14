@@ -1542,6 +1542,30 @@ a[href] {
   animation-duration: 200ms;
   animation-timing-function: cubic-bezier(0, 0, 0.2, 1);
 }
+/* THE FORWARD MORPH STARTS FROM THE VISIBLE PART OF THE CARD, not its whole box. The browser's own
+   group keyframes run from the old element's full border box, and a tall queue card scrolled to its
+   middle has a box that starts a thousand pixels above the viewport — so the whole screen rushed
+   downward for 200ms while the column faded in over it. The door measures the part of the surface
+   that is on screen (lib/fullscreenMorph.ts) and hands it here as `--frizz-vt-from-*`; the `to` side
+   stays the group's own computed geometry, so only the start moves. `data-vt-door` is set by the
+   door and cleared render-phase on the way back, so the reverse leg — whose old element is the
+   /full column, always fully on screen — keeps the browser's keyframes. The old snapshot is still
+   the whole card: the negative top margin slides the reader's part up to the group's top edge, and
+   it is a percentage of the group's width because the snapshot is sized by that width and scales
+   with it as the card's width morphs into the column's. */
+html[data-vt-door="expand"]::view-transition-group(thread-chat) {
+  animation-name: frizz-vt-chat-from-visible;
+}
+@keyframes frizz-vt-chat-from-visible {
+  from {
+    transform: translate(var(--frizz-vt-from-x), var(--frizz-vt-from-y));
+    width: var(--frizz-vt-from-w);
+    height: var(--frizz-vt-from-h);
+  }
+}
+html[data-vt-door="expand"]::view-transition-old(thread-chat) {
+  margin-block-start: var(--frizz-vt-old-shift, 0%);
+}
 @keyframes frizz-vt-rail-in {
   from {
     opacity: 0;

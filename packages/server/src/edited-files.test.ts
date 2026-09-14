@@ -21,6 +21,15 @@ test("an unreconstructed apply_patch counts by name + detail; a Bash SUMMARY nev
   assert.deepEqual(out.map((f) => f.path), ["/r/d.ts"])
 })
 
+test("a path still carrying a `${…}` placeholder is a codex script's variable, not a row", () => {
+  // The projection fills `${const}` from the script's own bindings (transcript.ts); what it could not
+  // fill — a loop variable, an expression — is not a file, and a row for it would open nothing.
+  const out = editedFilesOf([
+    msg("t", { name: "Edit", detail: "${dir}/a.ts", edit: { file: "${dir}/a.ts" } }, { name: "apply_patch", detail: "${p}" }, { name: "Edit", edit: { file: "/r/b.ts" } }),
+  ])
+  assert.deepEqual(out.map((f) => f.path), ["/r/b.ts"])
+})
+
 // ---- Shell writes (see the header): the reading that makes a heredoc-authored file visible. ----
 
 const bash = (command: string) => ({ name: "Bash", detail: command.split("\n")[0], command })

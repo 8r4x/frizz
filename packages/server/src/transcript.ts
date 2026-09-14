@@ -3171,7 +3171,7 @@ function codexExecWrapperCards(source: string, callId?: string): CodexToolCards 
         continue
       }
       // Keyed per view, not per call: two views in one script are two snapshots (see viewImageCall).
-      const view = viewImageCall(jsStringProperty(call.args, "path"), `${callId ?? source}:view:${views.length}`)
+      const view = viewImageCall(wrappedStringProperty(source, call.args, "path"), `${callId ?? source}:view:${views.length}`)
       views.push(view)
       order.push(view)
     }
@@ -3199,8 +3199,8 @@ function codexExecWrapperCall(source: string, callId?: string, calls = wrappedIn
 
 function wrappedSingleCall(call: WrappedInvocation, source: string, callId?: string): TranscriptToolCall {
   if (call.name === "exec_command") {
-    const cmd = jsStringProperty(call.args, "cmd") ?? jsStringProperty(call.args, "command")
-    const cwd = jsStringProperty(call.args, "workdir") ?? jsStringProperty(call.args, "cwd")
+    const cmd = wrappedStringProperty(source, call.args, "cmd") ?? wrappedStringProperty(source, call.args, "command")
+    const cwd = wrappedStringProperty(source, call.args, "workdir") ?? wrappedStringProperty(source, call.args, "cwd")
     if (cmd) return { name: "Bash", detail: bashSummary(cmd), command: capCommand(cmd), cwd }
   }
 
@@ -3236,7 +3236,7 @@ function wrappedSingleCall(call: WrappedInvocation, source: string, callId?: str
   }
 
   if (call.name === "view_image") {
-    const path = jsStringProperty(call.args, "path")
+    const path = wrappedStringProperty(source, call.args, "path")
     return viewImageCall(path, callId ?? path)
   }
 
@@ -3359,11 +3359,27 @@ function readJsString(source: string, start: number): { value: string; end: numb
   return { value, end }
 }
 
-function jsStringProperty(source: string, key: string): string | undefined {
+function jsStringPropertyAt(source: string, key: string): { value: string; at: number } | undefined {
   const re = new RegExp("(?:[\\\"']?" + key + "[\\\"']?)\\s*:\\s*", "g")
   const m = re.exec(source)
   if (!m) return undefined
-  return readJsString(source, re.lastIndex)?.value
+  const parsed = readJsString(source, re.lastIndex)
+  return parsed ? { value: parsed.value, at: re.lastIndex } : undefined
+}
+
+function jsStringProperty(source: string, key: string): string | undefined {
+  return jsStringPropertyAt(source, key)?.value
+}
+
+// A path or command out of a wrapped call's argument object, with its `${const}` placeholders filled
+// from the script (fillTemplatePlaceholders): codex interpolates a bound directory into a view_image
+// path and an exec_command cmd exactly as it does into a patch header — the zod rollout behind the fill
+// viewed `${s}/compiled-product.png` and its siblings eight times, and each card had no picture to
+// show because no file exists under that name.
+function wrappedStringProperty(script: string, args: string, key: string): string | undefined {
+  const found = jsStringPropertyAt(args, key)
+  if (!found) return undefined
+  return isTemplateLiteral(args, found.at) ? fillTemplatePlaceholders(found.value, wrappedStringBindings(script)) : found.value
 }
 
 function jsNumberProperty(source: string, key: string): number | undefined {
@@ -3374,20 +3390,68 @@ function jsNumberProperty(source: string, key: string): number | undefined {
   return Number.isFinite(value) ? value : undefined
 }
 
+// The script's `const name = <string literal>` bindings, in declaration order. Walked with the same
+// string/comment skipping as wrappedInvocations, so a `const` that sits INSIDE a string — the patch body
+// of an apply_patch that adds a `const` line to some TS file — binds nothing; the old `\bconst` regex
+// read those too, which was harmless while a binding was only ever looked up by name and is not once it
+// is substituted into a path. A template-literal binding is filled from the bindings above it, so
+// `const s = \`${root}/.frizz\`` resolves when `root` was declared first.
 function wrappedStringBindings(source: string): Map<string, string> {
   const out = new Map<string, string>()
-  const re = /\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*/g
-  let m: RegExpExecArray | null
-  while ((m = re.exec(source))) {
-    const parsed = readJsString(source, re.lastIndex)
-    if (parsed) out.set(m[1], parsed.value)
+  for (let i = 0; i < source.length; i++) {
+    const c = source[i]
+    if (c === "\"" || c === "'" || c.charCodeAt(0) === 96) {
+      i = skipJsString(source, i)
+      continue
+    }
+    if (c === "/" && source[i + 1] === "/") {
+      const end = source.indexOf("\n", i + 2)
+      if (end === -1) break
+      i = end
+      continue
+    }
+    if (c === "/" && source[i + 1] === "*") {
+      const end = source.indexOf("*/", i + 2)
+      if (end === -1) break
+      i = end + 1
+      continue
+    }
+    if (!source.startsWith("const", i) || (i > 0 && /[\w$]/.test(source[i - 1]))) continue
+    const m = source.slice(i).match(/^const\s+([A-Za-z_$][\w$]*)\s*=\s*/)
+    if (!m) continue
+    const at = i + m[0].length
+    const parsed = readJsString(source, at)
+    if (!parsed) continue
+    if (!out.has(m[1])) out.set(m[1], isTemplateLiteral(source, at) ? fillTemplatePlaceholders(parsed.value, out) : parsed.value)
+    i = parsed.end
   }
   return out
 }
 
+function isTemplateLiteral(source: string, at: number): boolean {
+  return source.charCodeAt(at) === 96
+}
+
+// `${name}` placeholders in a template literal, filled from the script's own const string bindings —
+// the ONE kind of interpolation a static reading can settle. Codex builds patch text this way when a
+// path repeats: `const s = "/p/zod/.frizz/threads/<id>"; tools.apply_patch(\`*** Begin Patch\n*** Add
+// File: ${s}/results.md …\`)`. Read verbatim (readJsString decodes escapes and nothing else), that
+// header named a file under a directory called `${s}`, and the rail drew it as one (maintainer
+// 2026-09-12: "what happened with these paths?") — a path no worker wrote, which the repo-carried filter
+// could not drop because git has no opinion on a directory that does not exist. 21 of the 2033 rollouts
+// on this machine carry a placeholder in an apply_patch header. Anything else inside `${…}` — a loop
+// variable, an expression, a binding this scanner did not see — stays verbatim: the card shows what the
+// script said, and the readers of `edit.file` (edited-files.ts, toolActivity.ts) treat an unresolved
+// placeholder as no path at all rather than as a file to open.
+function fillTemplatePlaceholders(value: string, bindings: ReadonlyMap<string, string>): string {
+  return value.replace(/\$\{\s*([A-Za-z_$][\w$]*)\s*\}/g, (whole, name: string) => bindings.get(name) ?? whole)
+}
+
 function wrappedPatch(source: string, args: string): string | undefined {
   const direct = readJsString(args, 0)?.value
-  if (direct?.includes("Begin Patch")) return direct
+  if (direct?.includes("Begin Patch")) {
+    return isTemplateLiteral(args, 0) ? fillTemplatePlaceholders(direct, wrappedStringBindings(source)) : direct
+  }
   const id = args.match(/^([A-Za-z_$][\w$]*)\b/)?.[1]
   const bound = id ? wrappedStringBindings(source).get(id) : undefined
   return bound?.includes("Begin Patch") ? bound : undefined
@@ -4484,13 +4548,14 @@ export function projectRetiredBackgroundOps(
   const isRetired = (tool: TranscriptToolCall): boolean =>
     tool.shellId !== undefined && (ownerGone || retired.has(tool.shellId)) && tool.status === "pending"
   // `backgroundState` SURVIVES the retirement. It briefly did not, and erasing it is what put a shell
-  // killed two days earlier into the live shimmer: that field is the marker the client's
-  // `isToolActivityException` reads to keep a background op OUT of the coalesced tool run, so a
-  // retired call stripped of it became an ordinary tool call — and `liveToolActivityTail` reads the
-  // newest ordinary call in the tail, so the bottom row read "Restarting the census sweep · 11m 57s"
-  // (maintainer 2026-08-01). Nothing needed the erasure: every live reading — the ops strip
+  // killed two days earlier into the live shimmer: a retired call stripped of it was indistinguishable
+  // from an ordinary tool call, and `liveToolActivityTail` read the newest call in the tail, so the
+  // bottom row read "Restarting the census sweep · 11m 57s" (maintainer 2026-08-01). A FINISHED
+  // background op folds into the coalesced run on the client now like any settled call (2026-09-13), so
+  // the field is no longer what keeps it out of the run — it is what lets `liveToolActivityTail` drop a
+  // finished detached op from the gerund reading. Every other live reading — the ops strip
   // (isLiveTranscriptBackgroundTool), the liveness dot (hasRunningToolIndicator), the "background
-  // running" label — is already gated on `status === "pending"`, which `cancelled` fails on its own.
+  // running" label — is gated on `status === "pending"`, which `cancelled` fails on its own.
   const projectTool = (tool: TranscriptToolCall): TranscriptToolCall =>
     isRetired(tool) ? { ...tool, status: "cancelled" } : tool
   const out: TranscriptMessage[] = []

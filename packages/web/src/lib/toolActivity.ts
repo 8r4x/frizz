@@ -50,12 +50,19 @@ function normalizedToolName(name: string): string {
  * else).
  *
  *   • A DISPATCH — it starts, addresses or blocks on a child agent.
- *   • A BACKGROUND op — `run_in_background` Bash and Monitor (`backgroundState: "background"`), plus the
- *     blocked `&` job the Bash parser flags `"unknown"`. These used to fold into
- *     the run like any other call, which meant a detached dev server, a CI watcher and a wait-for-agents
- *     poller were all invisible behind `Ran 7 tool calls` — the one class of call whose whole point is
- *     that it is still going after the batch that started it (maintainer 2026-08-01: "eject background
- *     tasks from the tool call collapsing logic. It's important that those show up in the chat").
+ *   • A LIVE BACKGROUND op — `run_in_background` Bash and Monitor (`backgroundState: "background"`)
+ *     while still `pending`, plus the blocked `&` job the Bash parser flags `"unknown"`. These used to
+ *     fold into the run like any other call, which meant a detached dev server, a CI watcher and a
+ *     wait-for-agents poller were all invisible behind `Ran 7 tool calls` — the one class of call whose
+ *     whole point is that it is still going after the batch that started it (maintainer 2026-08-01:
+ *     "eject background tasks from the tool call collapsing logic. It's important that those show up in
+ *     the chat"). ONLY WHILE IT IS GOING, though: once the shell's terminal <task-notification> has
+ *     landed the call is `completed`/`failed`/`cancelled`, the completion wake divider is the visible
+ *     record, and the card — which by then draws no mark and reads `done · 20s` exactly like a
+ *     foreground Bash — was standing alone between two digests for a reason nothing on it stated
+ *     (maintainer 2026-09-12: "why this random uncollapsed bash call??"; 2026-09-13: "Fold it once
+ *     finished"). So a finished background op folds back into the run — see finishedBackgroundOp. The
+ *     `"unknown"` job never gets a completion signal, so it keeps its card whatever its status.
  *     An ORPHANED POLL wears the same `"unknown"` and is deliberately NOT here — see orphanedPoll.
  *   • A call whose RESULT IS A PICTURE — an image `Read`, a `take_screenshot`, a SendUserFile delivery
  *     carrying images. The reason is different but no weaker: the whole content of the card is something
@@ -86,10 +93,23 @@ export function isToolActivityException(tool: Pick<
     || tool.agentId !== undefined
     || tool.sendTo !== undefined
     || tool.sendBody !== undefined
-    || (tool.backgroundState !== undefined && !orphanedPoll(tool))
+    || (tool.backgroundState !== undefined && !orphanedPoll(tool) && !finishedBackgroundOp(tool))
     || isPictureTool(tool)
     || isSettledAsk(tool)
     || SUB_AGENT_TOOL_NAMES.has(normalizedToolName(tool.name))
+}
+
+/**
+ * A detached op whose terminal signal has landed. The card was the reader's handle on something still
+ * running; with the process gone that handle points at nothing, and the completion wake divider already
+ * says what happened to it — so the call is history like any other and folds into the run.
+ *
+ * `"background"` only. The `"unknown"` state is a job frizz could not track, so no completion ever
+ * arrives to settle it; a settled `"unknown"` call is the launch's own result (the hook refusing the `&`
+ * job, say), not the process ending, and the card stays.
+ */
+function finishedBackgroundOp(tool: Pick<TranscriptToolCall, "backgroundState" | "status">): boolean {
+  return tool.backgroundState === "background" && settledToolCall(tool)
 }
 
 /** A native AskUserQuestion that has SETTLED — its result landed, answered or not. This is the copy the
@@ -369,7 +389,14 @@ function settledToolCall(tool: Pick<TranscriptToolCall, "status">): boolean {
  */
 export function liveToolActivityTail(entries: readonly ToolActivityMessage[]): TranscriptToolCall | undefined {
   const run = liveToolActivityRun(entries)
-  return run?.tools.some((tool) => !settledToolCall(tool)) ? run.tools.at(-1) : undefined
+  if (!run) return undefined
+  // A FINISHED detached op is not a step of the turn: it folds into the run now (finishedBackgroundOp),
+  // and the server pins a below-the-window launch at the transcript's tail, so a shell killed days ago
+  // can sit as the last call of a live run. Naming it handed exactly that to the shimmer once before
+  // ("Restarting the census sweep · 11m 57s", maintainer 2026-08-01). It is dropped from the reading;
+  // the newest of what remains still drives it, straggler or not (see the test of that name).
+  const tools = run.tools.filter((tool) => !finishedBackgroundOp(tool))
+  return tools.some((tool) => !settledToolCall(tool)) ? tools.at(-1) : undefined
 }
 
 /**
@@ -736,14 +763,22 @@ export function editedFileCount(tools: readonly FileWritingTool[]): number {
   const files = new Set<string>()
   for (const tool of tools) {
     for (const edit of tool.edits ?? (tool.edit ? [tool.edit] : [])) {
-      if (edit.file.trim()) files.add(edit.file.trim())
+      const file = edit.file.trim()
+      if (file && !UNRESOLVED_PLACEHOLDER.test(file)) files.add(file)
     }
     if (tool.edit || tool.edits?.length) continue
     const detail = tool.detail?.trim()
-    if (detail && FILE_WRITING_TOOL_NAMES.has(normalizedToolName(tool.name))) files.add(detail)
+    if (detail && !UNRESOLVED_PLACEHOLDER.test(detail) && FILE_WRITING_TOOL_NAMES.has(normalizedToolName(tool.name))) files.add(detail)
   }
   return files.size
 }
+
+/**
+ * A `${…}` left in a path is a codex exec-wrapper placeholder the server could not fill (a loop
+ * variable, an expression), not a file the worker wrote. The rail (server/edited-files.ts) skips it by
+ * the same test; the card keeps it, because the card shows what the script said.
+ */
+const UNRESOLVED_PLACEHOLDER = /\$\{/
 
 export function settledToolActivityLabel(total: number, editedFiles = 0): string {
   const calls = `Ran ${total} tool ${total === 1 ? "call" : "calls"}`

@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { join } from "node:path"
 import { createServer } from "node:http"
 import { once } from "node:events"
-import { measureTextContrast, measureControlContrast } from "./light-mode-contrast.mjs"
+import { measureTextContrast, measureControlContrast, measureThreadTitleInk } from "./light-mode-contrast.mjs"
 
 export async function checkSurfaceStates({ page, url, font, palette, out, check, result }) {
   const name = `${palette}-${font}`
@@ -22,6 +22,54 @@ export async function checkSurfaceStates({ page, url, font, palette, out, check,
   const running = await page.evaluate(async () => (await import("/src/store.ts")).store.board.threads.find(t => t.id === "theme-running").runtime)
   assert.equal(running, "running")
   check(`${name} real Rested, Active, Snoozed and Done bands`)
+
+  // Upstream shares ThreadTitle between the queue and the drawer. Keep both editing paths and
+  // their semantic focus treatment covered when either header changes during palette migrations.
+  for (const width of [1440, 390]) {
+    await page.setViewport({ width, height: 1000, deviceScaleFactor: 1 })
+    for (const surface of ['queue', 'full']) {
+      await page.goto(surface === 'queue' ? url : `${url}/thread/theme-question/full`, { waitUntil: 'networkidle2' })
+      if (surface === 'queue') {
+        const item = width === 390 ? '[data-mobile-thread-row="theme-question"]' : '[data-sidebar-item="theme-question"]'
+        await page.waitForSelector(item)
+        await page.click(item)
+      }
+      const root = surface === 'queue' && width !== 390 ? '[data-queue-card="theme-question"]' : '[data-thread-header]'
+      const title = `${root} button[title="Edit title"]`
+      const editor = `${root} input[aria-label="Thread title"]`
+      await page.waitForSelector(title, { visible: true })
+      const original = await page.$eval(title, el => el.textContent)
+      await page.click(title)
+      await page.waitForFunction(selector => document.querySelector(selector) === document.activeElement, {}, editor)
+      assert.equal(await page.$eval(editor, el => el.value), original)
+      await page.keyboard.type('A cancelled theme edit')
+      await page.keyboard.press('Escape')
+      await page.waitForSelector(editor, { hidden: true })
+      assert.equal(await page.$eval(title, el => el.textContent), original)
+      for (const value of ['A verified theme edit', original]) {
+        await page.click(title)
+        await page.waitForFunction(selector => document.querySelector(selector) === document.activeElement, {}, editor)
+        await page.keyboard.type(value)
+        await page.keyboard.press('Enter')
+        await page.waitForFunction(({ selector, value }) => {
+          const el = document.querySelector(selector)
+          return el?.textContent === value && !el.disabled
+        }, {}, { selector: title, value })
+      }
+      await page.keyboard.press('Tab')
+      await page.focus(title)
+      assert.equal(await page.$eval(title, el => el.matches(':focus-visible') && el.classList.contains('focus-visible:ring-focus-ink-60')), true)
+      await contrast(`title-${surface}-${width}`)
+      result[`${name}-title-${surface}-${width}-ink`] = await measureThreadTitleInk(page, title)
+      await page.setViewport({ width, height: 1000, deviceScaleFactor: 8 })
+      const row = await (await page.$(title)).evaluateHandle(el => el.parentElement)
+      await row.screenshot({ path: join(out, `${name}-title-${surface}-${width}.png`) })
+      await row.dispose()
+      await page.setViewport({ width, height: 1000, deviceScaleFactor: 1 })
+    }
+  }
+  check(`${name} queue and fullscreen title focus, rename and cancel at desktop and phone widths`)
+  await page.setViewport({ width: 1440, height: 1000, deviceScaleFactor: 1 })
 
   await page.goto(`${url}/thread/theme-question/full`, { waitUntil: "networkidle2" })
   await page.click("[data-question-option] > button")

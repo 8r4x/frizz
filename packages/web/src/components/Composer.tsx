@@ -623,6 +623,9 @@ export function Composer({
           ref={taRef}
           onScroll={backdropSegments ? syncContextScroll : undefined}
           data-surface={surface}
+          // Escape here BLURS (onKeyDown below); the enclosing ThreadSheet reads this to leave the
+          // key to us instead of dismissing itself on the same press.
+          data-claims-escape
           value={prose}
           autoFocus={autoFocus}
           disabled={busy}

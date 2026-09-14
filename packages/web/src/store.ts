@@ -2,6 +2,7 @@ import { proxy } from "valtio"
 import type { BoardSnapshot, ThreadView, BoardDelta } from "@frizz/shared"
 import { applyBoardDelta } from "@frizz/shared"
 import type { ComposerContextItem } from "./lib/composerContext.ts"
+import { disarmFullscreenMorph } from "./lib/fullscreenMorph.ts"
 import { closeDrawerAnimated, focusDrawer } from "./lib/overlays.ts"
 import { isPageScrollLocked, pageScrollY, requestScrollAfterUnlock } from "./lib/pageScrollLock.ts"
 import { resolveThreadRoute } from "./lib/threadRouteState.ts"
@@ -329,6 +330,11 @@ export function noteStandaloneThreadRender(slug: string): void {
 }
 
 export function primeFullscreenReturn(routedSlug: string | undefined): void {
+  // The forward door started its morph from the visible part of the board surface; this render is
+  // inside the REVERSE transition's update callback, so dropping that here — before the browser builds
+  // the reverse leg's pseudo-elements — is what hands the return morph back to the browser's own
+  // keyframes. Unconditional: any way back to the board retires it (lib/fullscreenMorph).
+  disarmFullscreenMorph()
   const slug = lastStandaloneSlug
   lastStandaloneSlug = null
   if (!slug) return

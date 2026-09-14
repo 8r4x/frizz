@@ -153,6 +153,9 @@ try {
   }
   const contrastFailures = Object.entries(result).filter(([key]) => key.startsWith('light-') && key.endsWith('-contrast')).flatMap(([surface, readings]) => readings.filter(reading => !reading.disabled && reading.ratio < 4.5).map(reading => ({ surface, ...reading })))
   assert.deepEqual(contrastFailures, [], "Light text meets 4.5:1 contrast on every sampled surface")
+  for (const [key, ink] of Object.entries(result).filter(([key]) => key.startsWith('light-') && key.endsWith('-ink'))) {
+    assert.deepEqual(ink, result[key.replace(/^light-/, 'dark-')], 'Theme changes preserve upstream title alignment and spacing')
+  }
   assert.deepEqual(errors, [], "No console or page errors")
   check("Console and page errors are clean")
 } catch (error) {

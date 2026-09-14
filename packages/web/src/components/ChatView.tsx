@@ -9,7 +9,7 @@ import type { AskQuestion, AwaitingHint, BgShellView, PendingAsk, RegisteredQues
 import { store, threadBySlug, pushDrawer, pushSubAgentDrawer, pushBackgroundShellDrawer, showToast } from "../store.ts"
 import { useBackgroundShellLines, useBoard, useProjectDir, useTranscript, type ChatMessage, type TranscriptData } from "../hooks.ts"
 import { rpc } from "../api/rpc.ts"
-import { displayTitle, lastActiveLabelAt } from "../groups.ts"
+import { lastActiveLabelAt } from "../groups.ts"
 import { stripFrontmatter } from "../lib/markdown.ts"
 import { useMarkdownHtml, useInlineMarkdownHtml } from "../lib/useMarkdown.ts"
 import { splitComposerValue, splitProseAttachments } from "../lib/imagePaths.ts"
@@ -54,12 +54,11 @@ import { prefs } from "../lib/prefs.ts"
 import { getThemeSnapshot, subscribeTheme } from "../lib/theme.ts"
 import { isVisualizationThemeAck, visualizationThemeMessage } from "../lib/visualizationThemeProtocol.ts"
 import { canAdoptThread } from "../lib/adoption.ts"
-import { THREAD_TITLE_MAX_LENGTH, manualThreadTitleSeed, threadTitleToCommit } from "../lib/threadTitle.ts"
 import { THREAD_HEADER_CLASS, THREAD_HEADER_CONTROLS_CLASS, THREAD_HEADER_TITLE_CLASS } from "../lib/threadHeaderLayout.ts"
 import { ThreadActionBar } from "./ThreadActionBar.tsx"
 import { HeaderActions } from "./HeaderActions.tsx"
 import { ThreadLifecycleFooter, StateButton } from "./ThreadLifecycleFooter.tsx"
-import { AiRenameButton } from "./AiRenameButton.tsx"
+import { ThreadTitle } from "./ThreadTitle.tsx"
 import { threadLifecycleAvailability } from "../lib/threadLifecycle.ts"
 import { ToolDisclosureHeader } from "./ToolDisclosureHeader.ts"
 import { subAgentProfileCell } from "../lib/subAgentProfile.ts"
@@ -305,8 +304,10 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
   const shadowedByMessage = useMemo(() => registeredStandingAt(messages, thread?.questions ?? []), [messages, thread?.questions])
   // Where the worker PLACED its registered questions — the message whose empty ```question qst_… marker
   // names each one (lib/questionShadow). A placed card renders in that slot and is subtracted from its
-  // anchor group; every other question renders at its anchor as before.
-  const placement = useMemo(() => placeQuestions(messages, thread?.questions ?? []), [messages, thread?.questions])
+  // anchor group; every other question renders at its anchor as before. At rest only a marker in the
+  // CURRENT rest places: a stale one from the rest that asked the question would otherwise strand the
+  // card up there while the handoff below it drew a bare Send button.
+  const placement = useMemo(() => placeQuestions(messages, thread?.questions ?? [], { atRest: !running }), [messages, running, thread?.questions])
   // A thread dispatched after the free-form fence was retired never gets a fence controller: a
   // ```question with a body is prose there, drawn read-only, and the registered card is the only
   // answerable thing (shared QUESTION_FENCE_RETIRED_AT). A legacy thread keeps the whole fence path.
@@ -1511,24 +1512,6 @@ export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue
   const board = useBoard()
   const thread = threadBySlug(board, slug)
   const markComplete = useMutation({ mutationFn: () => rpc.markComplete({ slug }) })
-  const renameTitle = useMutation({ mutationFn: (title: string) => rpc.renameThread({ slug, title }) })
-  const [editingTitle, setEditingTitle] = useState(false)
-  const [titleDraft, setTitleDraft] = useState("")
-  const titleInputRef = useRef<HTMLInputElement>(null)
-  useEffect(() => {
-    if (!editingTitle) return
-    const frame = requestAnimationFrame(() => {
-      titleInputRef.current?.focus()
-      titleInputRef.current?.select()
-    })
-    return () => cancelAnimationFrame(frame)
-  }, [editingTitle])
-  // A drawer can switch slugs without remounting this header. Never carry a half-entered title into
-  // another thread; changing selection has the same semantics as cancelling with Escape.
-  useEffect(() => {
-    setEditingTitle(false)
-    setTitleDraft("")
-  }, [slug])
   // The "Frizz document" header affordance opens .frizz/<slug>.md (threadBody). Many session threads have
   // no such file — a session thread's working files are its own business — so it would dead-end on
   // "No thread file found". Gate it on the doc actually having body content (same stripFrontmatter the
@@ -1538,34 +1521,6 @@ export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue
   const hasDoc = stripFrontmatter(docQ.data?.markdown ?? "").trim().length > 0
   if (!thread) return null
   const showTerminalCommand = thread.kind === "session" && thread.foreign !== true
-  // Manual rename is registry metadata for either backend. Claude additionally owns a native AI
-  // rename; Codex has no equivalent and must never be shown a fake slash-command affordance.
-  const isForeign = thread.foreign === true
-  const canRename = thread.kind === "session" && !isForeign
-  const shownTitle = displayTitle(thread)
-  function cancelRename(): void {
-    setEditingTitle(false)
-    setTitleDraft("")
-  }
-  function commitRename(): void {
-    const title = threadTitleToCommit(titleDraft, shownTitle)
-    setEditingTitle(false)
-    if (!title) {
-      setTitleDraft("")
-      return
-    }
-    renameTitle.mutate(title, {
-      onSuccess: () => {
-        setTitleDraft("")
-        showToast("Thread renamed")
-      },
-      onError: (error) => {
-        setTitleDraft(title)
-        setEditingTitle(true)
-        showToast(error instanceof Error ? error.message : "Could not rename thread")
-      },
-    })
-  }
   return (
     <header
       data-thread-header
@@ -1578,49 +1533,9 @@ export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue
             the closing half of the fullscreen door, in the door's own slot in the action strip below
             (HeaderActions `collapse`). */}
         <div className="min-w-0 leading-tight">
-          {/* Keep the title's display wrapper content-sized. Long names still truncate inside the
-              remaining header width, but short names do not claim the whole row as a click target. */}
-          <div className="group/thread-title flex min-w-0 items-center gap-2">
-            {editingTitle ? (
-              <input
-                ref={titleInputRef}
-                aria-label="Thread title"
-                value={titleDraft}
-                maxLength={THREAD_TITLE_MAX_LENGTH}
-                onChange={(event) => setTitleDraft(event.target.value)}
-                onBlur={commitRename}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault()
-                    commitRename()
-                  } else if (event.key === "Escape") {
-                    event.preventDefault()
-                    cancelRename()
-                  }
-                }}
-                className="min-w-0 flex-1 rounded-md border border-border bg-elevated px-1.5 py-1 font-semibold text-[15px] text-fg outline-none focus:border-accent"
-              />
-            ) : canRename ? (
-              <button
-                type="button"
-                title="Edit title"
-                aria-label={`Edit thread title: ${shownTitle}`}
-                disabled={renameTitle.isPending}
-                onClick={() => {
-                  setTitleDraft(manualThreadTitleSeed(shownTitle, thread.id))
-                  setEditingTitle(true)
-                }}
-                className="min-w-0 max-w-full shrink truncate rounded px-0.5 -mx-0.5 font-semibold text-[15px] text-left outline-none transition-colors hover:bg-panel-2 focus-visible:ring-1 focus-visible:ring-focus-ink-60 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                {shownTitle}
-              </button>
-            ) : (
-              <div className="min-w-0 max-w-full shrink truncate px-0.5 -mx-0.5 font-semibold text-[15px]" title={shownTitle}>
-                {shownTitle}
-              </div>
-            )}
-            <AiRenameButton thread={thread} hidden={editingTitle} />
-          </div>
+          {/* The name and both rename verbs — click to type, hover for the Claude refresh — are the
+              shared ThreadTitle, the same element the queue card's header renders. */}
+          <ThreadTitle thread={thread} />
           <LastActive at={lastActiveLabelAt(thread)} fallbackAt={thread.spawnedAt} className="mt-0.5 block truncate text-[11px] leading-tight text-muted-75" />
         </div>
       </div>
@@ -2145,7 +2060,8 @@ function MinimalToolActivity({ tools, at }: { tools: CollapsedTool[]; at?: strin
 
 // Default-minimal tool rendering. Ordinary calls become one gerund disclosure regardless of provider
 // batching. Dedicated block tools split the run and remain visible: sub-agent and send cards, and — as
-// of 2026-08-01 — every background/detached lifecycle (see lib/toolActivity.isToolActivityException).
+// of 2026-08-01 — every LIVE background/detached lifecycle; a finished one folds back in as of
+// 2026-09-13 (see lib/toolActivity.isToolActivityException).
 function ToolCalls({ tools, at }: { tools: CollapsedTool[]; dense?: boolean; at?: string }) {
   const runs: { exceptional: boolean; tools: CollapsedTool[] }[] = []
   for (const tool of tools) {

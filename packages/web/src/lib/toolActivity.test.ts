@@ -690,6 +690,8 @@ test("edited files are counted once per file, whatever shape the write arrived i
   // A codex apply_patch the server could not reconstruct (a Delete File, a multi-file hunk) arrives
   // named Edit with the file only in `detail`.
   assert.equal(editedFileCount([{ name: "Edit", detail: "src/gone.ts" }, { name: "apply_patch", detail: "src/gone.ts" }]), 1)
+  // A `${…}` left in a path is a codex exec-wrapper placeholder the server could not fill, not a file.
+  assert.equal(editedFileCount([{ name: "Edit", detail: "${dir}/a.ts", edit: { file: "${dir}/a.ts" } }, { name: "apply_patch", detail: "${p}" }]), 0)
 })
 
 function eventMessage(sourceId: string, text: string, at = "2026-07-30T12:00:01.000Z"): ChatMessage {
@@ -771,18 +773,55 @@ test("the newest call in the landed tail names the live gerund", () => {
 
 // The maintainer's screenshot: the shimmer read "Restarting the census sweep · 11m 57s" for a shell they
 // had force-killed two days earlier. The server pins a below-the-window background launch at the TAIL of
-// the transcript, and the retirement projection used to strip `backgroundState` off it — which is the one
-// field that keeps a background op out of the coalesced run. Stripped, the killed shell was just the
-// newest ordinary call in the tail, and this function handed its description to the shimmer.
+// the transcript, and the retirement projection used to strip `backgroundState` off it — which left the
+// killed shell as the newest ordinary call in the tail, and this function handed its description to the
+// shimmer. The field survives now, and since 2026-09-13 a FINISHED background op folds into the run like
+// any other settled call — so the guard is no longer "it keeps its card" but "the gerund never names it",
+// even when a live call sits beside it in the same run.
 test("a retired background op never becomes the live gerund", () => {
   const retired = toolMessage("pinned-bg:abc", [
     tool("Bash", { command: "node census.ts", desc: "Restart the census sweep", backgroundState: "background", status: "cancelled", shellId: "toolu_sh" }),
   ])
   const compact = coalesceToolActivityMessages([toolMessage("a", [tool("Read", { detail: "src/a.ts", status: "completed" })]), retired])
 
-  assert.equal(isToolActivityException(retired.tools[0]), true, "it is still a background card, not run filler")
-  assert.equal(compact.length, 2, "and it never folds into the run above it")
+  assert.equal(isToolActivityException(retired.tools[0]), false, "a killed shell is history, not a handle on anything")
+  assert.equal(compact.length, 1, "so it folds into the run above it")
   assert.equal(liveToolActivityTail(compact), undefined)
+
+  // The dangerous shape: the pinned launch lands as the LAST call of a run that is still executing.
+  const straggler = tool("Read", { detail: "src/b.ts", status: "pending" })
+  const live = coalesceToolActivityMessages([toolMessage("a", [straggler]), retired])
+  assert.equal(live.length, 1)
+  assert.equal(liveToolActivityTail(live), straggler, "the newest call that is NOT a finished detached op drives the gerund")
+})
+
+// A background shell's card is the reader's handle on a process that outlives the batch — and only that.
+// Once its terminal <task-notification> has landed the card drew no mark and read `done · 20s` exactly like
+// a foreground Bash, yet still stood alone between two digests: `Ran 43 tool calls` / the card / `Ran 1
+// tool call`, with nothing on it saying why (maintainer 2026-09-12: "why this random uncollapsed bash
+// call??", then "Fold it once finished"). The completion wake divider is the visible record of the run.
+test("a background shell keeps its own card while it runs and folds into the run once finished", () => {
+  const shell = (status: TranscriptToolCall["status"]) =>
+    tool("Bash", { command: "cargo check", desc: "Type-checking the standalone phantom eval tool", backgroundState: "background", status })
+  const before = tool("Read", { detail: "src/a.ts", status: "completed" })
+  const after = tool("Edit", { detail: "src/a.ts", status: "completed" })
+
+  assert.equal(isToolActivityException(shell("pending")), true, "still going — the card is the only handle on it")
+  const running = coalesceToolActivityMessages([toolMessage("a", [before]), toolMessage("bg", [shell("pending")]), toolMessage("c", [after])])
+  assert.deepEqual(running.map((entry) => entry.message.sourceId), ["a", "bg", "c"], "a live launch splits the run: digest / card / digest")
+
+  for (const status of ["completed", "failed", "cancelled"] as const) {
+    assert.equal(isToolActivityException(shell(status)), false, `${status}: the process is gone, the card points at nothing`)
+    const finished = coalesceToolActivityMessages([toolMessage("a", [before]), toolMessage("bg", [shell(status)]), toolMessage("c", [after])])
+    assert.deepEqual(finished.map((entry) => entry.message.sourceId), ["a"], `${status}: one digest`)
+    assert.deepEqual(finished[0].message.tools.map((call) => call.name), ["Read", "Bash", "Edit"], `${status}: carrying the shell in order`)
+  }
+
+  // A status-less call is a pre-restart transcript where completion is unobservable; it keeps its card,
+  // like every other reading that treats "no status" as "not settled".
+  assert.equal(isToolActivityException(shell(undefined)), true)
+  // The `"unknown"` job never gets a completion signal, so settling the CALL is not the process ending.
+  assert.equal(isToolActivityException(tool("Bash", { command: "node worker.mjs &", backgroundState: "unknown", status: "failed" })), true)
 })
 
 test("a Windows project root shortens labels the same way, and the board's homeDir collapses to ~ (Windows audit 2026-09-11, finding 12)", () => {

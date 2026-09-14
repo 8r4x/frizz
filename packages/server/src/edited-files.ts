@@ -49,11 +49,18 @@ function normalizedToolName(name: string): string {
   return name.trim().toLowerCase().replace(/[_-]+/g, " ")
 }
 
+// A `${…}` left in a path is a codex exec-wrapper placeholder the projection could not fill — a loop
+// variable, an expression — not a directory the worker wrote (transcript.ts, fillTemplatePlaceholders).
+// It stays on the card, which shows what the script said; it stays OFF the rail, whose rows open the
+// file they name. The web digest (toolActivity.ts editedFileCount) applies the same test.
+const UNRESOLVED_PLACEHOLDER = /\$\{/
+
 export function editedFilePath(tool: ToolLike): string | null {
   const structured = tool.edit?.file.trim()
-  if (structured) return structured
+  if (structured) return UNRESOLVED_PLACEHOLDER.test(structured) ? null : structured
   const detail = tool.detail?.trim()
-  return detail && FILE_WRITING_TOOL_NAMES.has(normalizedToolName(tool.name)) ? detail : null
+  if (!detail || UNRESOLVED_PLACEHOLDER.test(detail)) return null
+  return FILE_WRITING_TOOL_NAMES.has(normalizedToolName(tool.name)) ? detail : null
 }
 
 // `path.resolve` treats a leading tilde as an ordinary segment, so `cd ~/.cache/nub/worktrees/x &&

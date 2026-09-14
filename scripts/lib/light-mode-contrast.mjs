@@ -103,3 +103,34 @@ export async function measureAppearanceInk(page) {
     return { font: document.documentElement.dataset.font, size: style.fontSize, capHeight: cap, capCenter: baseline - cap / 2, glyphCenter: (top + bottom) / 2, residual: +(baseline - cap / 2 - (top + bottom) / 2).toFixed(3) }
   })
 }
+
+export async function measureThreadTitleInk(page, selector) {
+  return page.$eval(selector, title => {
+    // The title and refresh hit boxes overlap by design, so use geometry rather than the
+    // pixel-gap instrument (which would include the neighbouring mark in each sample).
+    const node = [...title.childNodes].find(node => node.nodeType === Node.TEXT_NODE && node.textContent.trim())
+    const span = document.createElement('span')
+    title.insertBefore(span, node)
+    span.append(node)
+    const probe = document.createElement('span')
+    probe.style.cssText = 'display:inline-block;width:0;height:0;padding:0;margin:0;border:0'
+    span.append(probe)
+    const baseline = probe.getBoundingClientRect().bottom
+    const left = span.getBoundingClientRect().left
+    probe.remove()
+    const style = getComputedStyle(span)
+    const ctx = document.createElement('canvas').getContext('2d')
+    ctx.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`
+    const cap = ctx.measureText('H').actualBoundingBoxAscent
+    const text = ctx.measureText(node.textContent)
+    title.insertBefore(node, span)
+    span.remove()
+    const rects = [...title.parentElement.querySelectorAll('svg path,svg polyline')].map(el => el.getBoundingClientRect())
+    const glyph = { left: Math.min(...rects.map(r => r.left)), top: Math.min(...rects.map(r => r.top)), bottom: Math.max(...rects.map(r => r.bottom)) }
+    return {
+      font: document.documentElement.dataset.font,
+      residual: +(baseline - cap / 2 - (glyph.top + glyph.bottom) / 2).toFixed(3),
+      gap: +(glyph.left - left - text.actualBoundingBoxRight).toFixed(3),
+    }
+  })
+}
