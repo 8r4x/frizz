@@ -64,7 +64,7 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
     rpc.send({ jsonrpc: "2.0", method: "notifications/initialized" })
     rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/list" })
     const list = await rpc.next(2)
-    assert.deepEqual(list.result.tools.map((t: { name: string }) => t.name), ["spawn_thread", "goal", "timer", "watch_pr", "watch", "unwatch", "ask", "unask", "done", "title", "activity", "link", "unlink"])
+    assert.deepEqual(list.result.tools.map((t: { name: string }) => t.name), ["spawn_thread", "goal", "timer", "watch_pr", "watch_issue", "watch", "unwatch", "ask", "unask", "done", "title", "activity", "link", "unlink"])
     assert.deepEqual(list.result.tools.find((t: { name: string }) => t.name === "link").inputSchema.required, ["label", "target"])
     assert.deepEqual(list.result.tools.find((t: { name: string }) => t.name === "unlink").inputSchema.required, ["id"])
     for (const required of ["prompt", "model", "effort"]) {
@@ -1441,6 +1441,70 @@ test("`activity` with only a question open does not send the worker to ```done",
     assert.match(text, /1 question still owed an answer/)
     assert.match(text, /qst_ab12cd34ef56/)
     assert.doesNotMatch(text, /End with ```done/, "an open question blocks done — do not point at it")
+  } finally {
+    rpc.kill()
+    http.close()
+  }
+})
+
+// `watch_issue` OVER THE REAL STDIO TRANSPORT (2026-09-14) — the issue twin of the `watch_pr` case above,
+// against the same three RPCs: the add carries `kind: "issue"`, and `list` reads back ONLY the issues.
+test("`watch_issue` registers, lists and drops against the CALLING thread, and lists only issues", async () => {
+  const seen: Array<{ url: string; body: any }> = []
+  const replies: any[] = [
+    { id: "isw_abc123", target: "acme/app#7", alreadyArmed: false, expiresAt: "2026-12-13T00:00:00.000Z", watches: [{ id: "isw_abc123", target: "acme/app#7", kind: "issue", state: "armed", createdAt: "2026-09-14T00:00:00.000Z" }] },
+    {
+      watches: [
+        { id: "prw_zzz", target: "acme/app#391", kind: "pull", state: "armed", createdAt: "2026-09-14T00:00:00.000Z" },
+        { id: "isw_abc123", target: "acme/app#7", kind: "issue", state: "armed", createdAt: "2026-09-14T00:00:00.000Z", issue: { state: "open", title: "Crash on start", comments: 3, polledAt: "2026-09-14T00:05:00.000Z" } },
+      ],
+    },
+    { dropped: true, watches: [{ id: "prw_zzz", target: "acme/app#391", kind: "pull", state: "armed", createdAt: "2026-09-14T00:00:00.000Z" }] },
+  ]
+  const http = createServer((req, res) => {
+    let body = ""
+    req.on("data", (c) => (body += c))
+    req.on("end", () => {
+      seen.push({ url: req.url ?? "", body: JSON.parse(body) })
+      res.writeHead(200, { "content-type": "application/json" })
+      res.end(JSON.stringify({ result: replies.shift() ?? null }))
+    })
+  })
+  await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve))
+  const port = (http.address() as { port: number }).port
+  const stateDir = mkdtempSync(join(tmpdir(), "frizz-mcp-"))
+  writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ port }))
+  const rpc = startServer({ FRIZZ_STATE_DIR: stateDir, FRIZZ_THREAD_SLUG: "watching-thread" })
+  try {
+    rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
+    await rpc.next(1)
+
+    rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "watch_issue", arguments: { action: "add", target: "https://github.com/acme/app/issues/7", for: "90d" } } })
+    const added = await rpc.next(2)
+    assert.equal(added.result.isError, undefined)
+    assert.deepEqual(seen[0], { url: "/_frizz/rpc/addOwnPrWatch", body: { slug: "watching-thread", target: "https://github.com/acme/app/issues/7", for: "90d", kind: "issue" } })
+    assert.match(added.result.content[0].text, /Watching issue acme\/app#7 as isw_abc123 until 2026-12-13/)
+    assert.match(added.result.content[0].text, /issues: \[acme\/app#7\]/)
+
+    rpc.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "watch_issue", arguments: { action: "list" } } })
+    const listed = await rpc.next(3)
+    assert.equal(seen[1].url, "/_frizz/rpc/listOwnPrWatches")
+    assert.match(listed.result.content[0].text, /isw_abc123  acme\/app#7  "Crash on start"  —  open, 3 comments/)
+    assert.doesNotMatch(listed.result.content[0].text, /prw_zzz/, "a PR is not listed by the issue tool")
+
+    rpc.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "watch_issue", arguments: { action: "drop", id: "isw_abc123" } } })
+    const dropped = await rpc.next(4)
+    assert.deepEqual(seen[2], { url: "/_frizz/rpc/dropOwnPrWatch", body: { slug: "watching-thread", id: "isw_abc123" } })
+    assert.match(dropped.result.content[0].text, /Watcher isw_abc123 dropped/)
+    assert.match(dropped.result.content[0].text, /No issues are watched/)
+
+    // The handler's own refusals: no `for` is refused before the server is contacted.
+    const before = seen.length
+    rpc.send({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "watch_issue", arguments: { action: "add", target: "acme/app#7" } } })
+    const noFor = await rpc.next(5)
+    assert.equal(noFor.result.isError, true)
+    assert.match(noFor.result.content[0].text, /`for` is required/)
+    assert.equal(seen.length, before)
   } finally {
     rpc.kill()
     http.close()
