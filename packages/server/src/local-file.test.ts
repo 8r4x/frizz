@@ -44,6 +44,22 @@ test("Windows URL-shaped paths read, watch and open without bypassing trusted ro
   assert.throws(() => resolveLocalFile("relative.md", [trusted]), /absolute/)
 })
 
+test("a Windows root and a path spelled in another case are one directory", { skip: process.platform !== "win32" }, (t) => {
+  // `d:\dev\…` under a root git reported as `D:\Development\…` is the same file, and refusing it as
+  // "outside Frizz's trusted roots" is how a live file link died for a difference of case alone.
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "frizz-local-case-")))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const file = join(root, "Plan.md")
+  writeFileSync(file, "# Plan\n")
+  assert.equal(resolveLocalFile(file.toLowerCase(), [root.toUpperCase()]), realpathSync(file.toLowerCase()))
+  assert.equal(readLocalMarkdown(file.toUpperCase(), [root.toLowerCase()]).markdown, "# Plan\n")
+  // Containment itself still holds: a sibling of the root is out however it is spelled.
+  const outside = join(realpathSync(tmpdir()), `frizz-local-case-outside-${process.pid}.md`)
+  writeFileSync(outside, "secret")
+  t.after(() => rmSync(outside, { force: true }))
+  assert.throws(() => readLocalMarkdown(outside.toLowerCase(), [root]), /trusted roots/)
+})
+
 // A ChildProcess stand-in that settles the way a real spawn does: asynchronously, through a `spawn`
 // or an `error` EVENT. The `error` is emitted with no listener of the fake's own, so an opener that
 // forgot to attach one would throw out of the microtask and kill the test process — which is the
