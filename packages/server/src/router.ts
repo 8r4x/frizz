@@ -154,7 +154,7 @@ import { readAuthSnapshot } from "./backend/auth-status.ts"
 import { liveThreadsForBackend, runProviderLogout } from "./backend/account-actions.ts"
 import { threadProfileOptions, validateThreadProfile } from "./backend/thread-profiles.ts"
 import { adoptionRuntimeBinding, type AdoptionPaneLookup, type ExpectedAdoptionPane } from "./adoption-recovery.ts"
-import { parsePrRef, readGithubStatusBook, GITHUB_STATUS_SETTING } from "./awaiting.ts"
+import { parseIssueRef, parsePrRef, readGithubIssueStatusBook, readGithubStatusBook, GITHUB_ISSUE_STATUS_SETTING, GITHUB_STATUS_SETTING } from "./awaiting.ts"
 import { isBrokerClaudeRow, type SessionRow, type Storage, type SubAgentSteerRow } from "./storage.ts"
 import type { SessionTelemetry } from "./tailer.ts"
 import { providerResumeCommand } from "./external-terminal.ts"
@@ -814,14 +814,18 @@ export function createRouter(ctx: AppContext) {
   // disagree about the same PR — they are one projection of one book.
   function armedPrWatchViews(slug: string): PrWatchView[] {
     const github = readGithubStatusBook(ctx.storage.getSetting(GITHUB_STATUS_SETTING))
+    const issues = readGithubIssueStatusBook(ctx.storage.getSetting(GITHUB_ISSUE_STATUS_SETTING))
     return ctx.storage.listPrWatches(slug, { armedOnly: true }).map((w) => {
       const target = `${w.owner}/${w.repo}#${w.number}`
+      const kind = w.kind === "issue" ? "issue" as const : "pull" as const
       return {
         id: w.id,
         target,
+        kind,
         state: w.state,
         createdAt: new Date(w.created_at).toISOString(),
-        ...(github[target] ? { github: github[target] } : {}),
+        ...(kind === "pull" && github[target] ? { github: github[target] } : {}),
+        ...(kind === "issue" && issues[target] ? { issue: issues[target] } : {}),
       }
     })
   }
@@ -2549,8 +2553,9 @@ export function createRouter(ctx: AppContext) {
         }
         for (const w of ctx.storage.listPrWatches(input.slug, { armedOnly: true })) {
           activity.push({
-            kind: "pr", id: `${w.owner}/${w.repo}#${w.number}`, label: `${w.owner}/${w.repo}#${w.number}`,
+            kind: w.kind === "issue" ? "issue" : "pr", id: `${w.owner}/${w.repo}#${w.number}`, label: `${w.owner}/${w.repo}#${w.number}`,
             since: new Date(w.created_at).toISOString(),
+            ...(w.expires_at ? { until: new Date(w.expires_at).toISOString() } : {}),
           })
         }
         // The WATCHES are already readable: each armed one rides its live item as `watchId`, and the
@@ -2612,17 +2617,23 @@ export function createRouter(ctx: AppContext) {
         if (row.state === "archived" || row.archived === 1) {
           throw new Error("Reopen this thread before registering a watcher on it")
         }
+        // A PULL REQUEST unless the caller says `issue` (2026-09-14, `mcp__frizz__watch_issue`). Same
+        // registry and same rules below; the ref grammar, the probe and the refusal wording branch.
+        const kind = input.kind ?? "pull"
+        const noun = kind === "issue" ? "issue" : "pull request"
         // REFUSED, not stored. A watcher on a ref frizz cannot parse is one that can never fire, and a
         // worker that registers one comes to rest believing it is covered.
-        const ref = parsePrRef(input.target)
+        const ref = kind === "issue" ? parseIssueRef(input.target) : parsePrRef(input.target)
         if (!ref) {
-          throw new Error(`\`${input.target}\` is not a pull request I can watch — give owner/repo#123 or a PR URL`)
+          throw new Error(`\`${input.target}\` is not ${kind === "issue" ? "an issue" : "a pull request"} I can watch — give owner/repo#123 or ${kind === "issue" ? "an issue" : "a PR"} URL`)
         }
         const armed = ctx.storage.listPrWatches(input.slug, { armedOnly: true })
         // IDEMPOTENT ON THE PR. Re-registering after a compaction is the COMMON case — the worker has
         // forgotten what it holds and is being careful — and a duplicate would mean two wakes per event,
-        // which reads to the operator as the watcher misfiring.
-        const existing = armed.find((w) => w.owner === ref.owner && w.repo === ref.repo && w.number === ref.number)
+        // which reads to the operator as the watcher misfiring. Per KIND as well as ref: an issue and a
+        // PR cannot share a number in one repo, so the same number registered both ways is a mistake
+        // the probe catches on whichever one is wrong, never two watchers on one thing.
+        const existing = armed.find((w) => w.kind === kind && w.owner === ref.owner && w.repo === ref.repo && w.number === ref.number)
         const target = `${ref.owner}/${ref.repo}#${ref.number}`
         if (existing) {
           // The ORIGINAL expiry, which this call left alone — the re-registration is a no-op and must
@@ -2631,7 +2642,7 @@ export function createRouter(ctx: AppContext) {
           return { id: existing.id, target, alreadyArmed: true, expiresAt, watches: armedPrWatchViews(input.slug) }
         }
         if (armed.length >= PR_WATCH_MAX_ARMED) {
-          throw new Error(`this thread already watches ${armed.length} pull requests (the limit is ${PR_WATCH_MAX_ARMED}) — drop one first`)
+          throw new Error(`this thread already watches ${armed.length} pull requests and issues (the limit is ${PR_WATCH_MAX_ARMED}) — drop one first`)
         }
         // A MISSING `for` IS AN OLD WORKER, not a bad one — its MCP binary predates the field and
         // cannot send it (see AddOwnPrWatchInput). It gets a bounded default rather than an error,
@@ -2651,19 +2662,20 @@ export function createRouter(ctx: AppContext) {
         // org, no such repo, no `gh` on its PATH) is a watcher that fails every minute in silence while
         // the worker rests believing it is covered (a user's board, 2026-08-25: 12h+). Checked after the
         // idempotent short-circuit above, so a re-registration during a GitHub blip still answers.
-        const probe = await ctx.probePr(ref)
+        const probe = kind === "issue" ? await ctx.probeIssue(ref) : await ctx.probePr(ref)
         if (!probe.ok) {
           throw new Error(
-            `\`${target}\` cannot be watched — the server's \`gh\` could not read it: ${probe.reason}. ` +
+            `\`${target}\` cannot be watched as ${kind === "issue" ? "an issue" : "a pull request"} — the server's \`gh\` could not read it: ${probe.reason}. ` +
             "Frizz polls with the `gh` of the process it runs as, not yours: check `gh auth status` there and that the repo is " +
             "reachable, then register again. If GitHub itself was briefly down, registering again in a minute is enough.",
           )
         }
         const now = Date.now()
-        const id = `prw_${randomUUID().replace(/-/g, "").slice(0, 12)}`
+        // The id prefix names the kind, so a `drop` id in a transcript reads as what it dropped.
+        const id = `${kind === "issue" ? "isw" : "prw"}_${randomUUID().replace(/-/g, "").slice(0, 12)}`
         // A registration trumps a done — see setOwnThreadTimer.
         ctx.storage.clearThreadDone(input.slug)
-        ctx.storage.armPrWatch({ id, slug: input.slug, owner: ref.owner, repo: ref.repo, number: ref.number, createdAtMs: now, expiresAtMs: now + forMs })
+        ctx.storage.armPrWatch({ id, slug: input.slug, kind, owner: ref.owner, repo: ref.repo, number: ref.number, createdAtMs: now, expiresAtMs: now + forMs })
         ctx.board.refresh()
         return { id, target, alreadyArmed: false, expiresAt: new Date(now + forMs).toISOString(), ...clampedFrom, watches: armedPrWatchViews(input.slug) }
       },
@@ -2901,7 +2913,7 @@ export function createRouter(ctx: AppContext) {
             id: w.id,
             what: `${w.kind === "agent" ? "sub-agent" : "shell"}: ${w.label ? `${w.label} (${w.target})` : w.target}`,
           })),
-          ...armedPrWatchViews(input.slug).map((w) => ({ id: w.id, what: `pull request: ${w.target}` })),
+          ...armedPrWatchViews(input.slug).map((w) => ({ id: w.id, what: `${w.kind === "issue" ? "issue" : "pull request"}: ${w.target}` })),
           ...ctx.storage
             .listThreadTimers(input.slug, { armedOnly: true })
             .map((t) => ({ id: t.id, what: `timer, fires ${new Date(t.fire_at).toISOString()}` })),

@@ -6,7 +6,7 @@ import { join } from "node:path"
 import { wakeDeliveryToken } from "@frizz/shared"
 import { createStorage, type Storage, type SessionRow } from "./storage.ts"
 import { createScheduler, parsePrRef, ghPrViewArgs, evalRollup, parseGithubReviewActivities, isBotGithubActor, MID_TURN_HOLD_MAX_MS, type GithubReviewActivity, type PrRef, type PrStatus } from "./scheduler.ts"
-import { createGithubReviewFetcher } from "./github-review.ts"
+import { createGithubReviewFetcher, type GithubReviewFetchResult } from "./github-review.ts"
 import { createWakeDeliveryStore, WAKE_QUIET_WINDOW_MS } from "./wake-store.ts"
 import type { Tailer, SessionTelemetry, FenceView, TurnState, BgShellView } from "./tailer.ts"
 
@@ -126,12 +126,12 @@ interface Harness {
   storage: Storage
   /** Register a PR watcher the way `mcp__frizz__watch_pr` does. A `pr-watch:` fence line DECLARES a wait
    *  and no longer arms anything (2026-08-14), so every test below that expects a wake registers first. */
-  watch(slug: string, ref: string): void
+  watch(slug: string, ref: string, kind?: "pull" | "issue"): void
   tele: Map<string, SessionTelemetry>
   resumes: { slug: string; message: string; deliveryId?: string }[]
   clock: { ms: number }
   pr: { result: PrStatus | undefined; calls: PrRef[] }
-  review: { result: GithubReviewActivity[] | undefined; calls: PrRef[] }
+  review: { result: GithubReviewActivity[] | GithubReviewFetchResult | undefined; calls: (PrRef & { kind?: string })[] }
   make(over?: Partial<Parameters<typeof createScheduler>[0]>): ReturnType<typeof createScheduler>
 }
 
@@ -141,7 +141,9 @@ function harness(): Harness {
   const resumes: { slug: string; message: string; deliveryId?: string }[] = []
   const clock = { ms: Date.parse("2026-07-09T12:00:00.000Z") }
   const pr: { result: PrStatus | undefined; calls: PrRef[] } = { result: undefined, calls: [] }
-  const review: { result: GithubReviewActivity[] | undefined; calls: PrRef[] } = { result: undefined, calls: [] }
+  // `result` may be a full fetch result (with an `issue` or `pr` half) or the bare activity list the
+  // older cases hand back — the scheduler normalizes either.
+  const review: { result: GithubReviewActivity[] | GithubReviewFetchResult | undefined; calls: (PrRef & { kind?: string })[] } = { result: undefined, calls: [] }
   let watchSeq = 0
   return {
     storage,
@@ -150,11 +152,11 @@ function harness(): Harness {
     clock,
     pr,
     review,
-    watch(slug, ref) {
+    watch(slug, ref, kind = "pull") {
       const m = /^([^/]+)\/([^#]+)#(\d+)$/.exec(ref)
       if (!m) throw new Error(`bad ref ${ref}`)
       storage.armPrWatch({
-        id: `prw_${++watchSeq}`, slug, owner: m[1], repo: m[2], number: Number(m[3]), createdAtMs: clock.ms - 60_000,
+        id: `${kind === "issue" ? "isw" : "prw"}_${++watchSeq}`, slug, kind, owner: m[1], repo: m[2], number: Number(m[3]), createdAtMs: clock.ms - 60_000,
         // Far out: these cases are about ACTIVITY, not the expiry sweep, which would otherwise settle
         // the watcher out from under them.
         expiresAtMs: clock.ms + 24 * 3600_000,
@@ -2632,4 +2634,87 @@ test("coalesce: the mid-turn hold has a ceiling — a wake held longer than MID_
   assert.deepEqual(h.resumes.map((r) => r.message), ["resume the audit"], "released into the running turn's queue rather than starved")
   assert.equal(createWakeDeliveryStore(h.storage.scope).list()[0]?.state, "delivered")
   h.storage.close()
+})
+
+// ---- ISSUE WATCHERS (2026-09-14) ------------------------------------------------------------------------
+// `mcp__frizz__watch_issue` arms a `pr_watch` row with `kind: "issue"`. The poll asks GitHub for the ISSUE,
+// never falls back to `gh pr view`, baselines what predates the registration exactly as a PR watcher
+// does, and reports comments, label and assignee movement, and the close — with the issue's own trailer.
+const issueSnap = (over: Partial<NonNullable<Extract<GithubReviewFetchResult, { status: "ok" }>["issue"]>> = {}) =>
+  ({ state: "OPEN", title: "Crash on start", labels: ["bug"], assignees: [], comments: 1, ...over })
+
+test("issue-watch: polls the ISSUE kind with no gh fallback, baselines, then wakes on a new comment with the issue trailer", async () => {
+  const h = harness()
+  h.watch("r", "acme/app#7", "issue")
+  h.storage.upsertSession(row("r"))
+  h.tele.set("r", { ...tele(awaiting([{ kind: "issue", value: "acme/app#7" }])), lastActivityAt: iso(h.clock.ms) })
+  h.review.result = { status: "ok", issue: issueSnap(), activity: [
+    { id: "comment:old", actor: "alice", actorType: "User", at: iso(h.clock.ms - 120_000), kind: "comment" },
+  ] }
+  await h.make().tick()
+  assert.equal(h.resumes.length, 0, "a comment that predates the registration is the worker's own news")
+  assert.equal(h.review.calls[0]?.kind, "issue", "the fetcher is asked for the issue, not the pull request")
+  assert.equal(h.pr.calls.length, 0, "an issue never falls back to `gh pr view`")
+
+  h.clock.ms += 61_000
+  const at = iso(h.clock.ms)
+  h.review.result = { status: "ok", issue: issueSnap({ comments: 2 }), activity: [
+    { id: "comment:new", actor: "carol", actorType: "User", at, kind: "comment", url: "https://github.com/acme/app/issues/7#issuecomment-2" },
+    { id: "comment:old", actor: "alice", actorType: "User", at: iso(h.clock.ms - 181_000), kind: "comment" },
+  ] }
+  const s = h.make()
+  await s.tick()
+  await s.tick()
+  assert.equal(h.resumes.length, 1)
+  assert.ok(h.resumes[0].message.startsWith(`👤 New GitHub comment on acme/app#7 from @carol at ${at}. Read that exact comment`))
+  assert.match(h.resumes[0].message, /\(Registered issue watcher — STILL ARMED/)
+  assert.doesNotMatch(h.resumes[0].message, /CI|Registered PR watcher/, "an issue wake never speaks the PR vocabulary")
+})
+
+test("issue-watch: a label moving and a new assignee are one state line; the close settles the row with GitHub's reason", async () => {
+  const h = harness()
+  h.watch("r", "acme/app#7", "issue")
+  h.storage.upsertSession(row("r"))
+  h.tele.set("r", { ...tele(awaiting([{ kind: "issue", value: "acme/app#7" }])), lastActivityAt: iso(h.clock.ms) })
+  h.review.result = { status: "ok", issue: issueSnap(), activity: [] }
+  await h.make().tick()
+  assert.equal(h.resumes.length, 0, "the first poll records labels and assignees and says nothing")
+
+  h.clock.ms += 61_000
+  h.review.result = { status: "ok", issue: issueSnap({ labels: ["bug", "confirmed"], assignees: ["alice"] }), activity: [] }
+  let s = h.make()
+  await s.tick()
+  await s.tick()
+  assert.equal(h.resumes.length, 1)
+  assert.match(h.resumes[0].message, /^🔔 acme\/app#7: labels \+confirmed; assigned to @alice\.$/m)
+
+  h.clock.ms += 61_000
+  h.review.result = { status: "ok", issue: issueSnap({ state: "CLOSED", stateReason: "NOT_PLANNED", labels: ["bug", "confirmed"], assignees: ["alice"] }), activity: [] }
+  s = h.make()
+  await s.tick()
+  await s.tick()
+  assert.equal(h.resumes.length, 2)
+  assert.match(h.resumes[1].message, /^⏰ acme\/app#7 was CLOSED\.$/m)
+  assert.match(h.resumes[1].message, /GitHub's reason: not planned\./)
+  assert.match(h.resumes[1].message, /closed issue/)
+  assert.equal(h.storage.listPrWatches("r", { armedOnly: true }).length, 0, "a closed issue settles its watcher")
+
+  h.clock.ms += 61_000
+  h.review.calls.length = 0
+  await h.make().tick()
+  assert.equal(h.review.calls.length, 0, "a settled watcher is never polled again")
+})
+
+test("issue-watch: the expiry wake names the issue tool, not watch_pr", async () => {
+  const h = harness()
+  h.storage.upsertSession(row("r"))
+  h.storage.armPrWatch({ id: "isw_x", slug: "r", kind: "issue", owner: "acme", repo: "app", number: 7, createdAtMs: h.clock.ms - 3600_000, expiresAtMs: h.clock.ms - 1 })
+  h.tele.set("r", { ...tele(), lastActivityAt: iso(h.clock.ms) })
+  const s = h.make()
+  await s.tick()
+  await s.tick()
+  assert.equal(h.resumes.length, 1)
+  assert.match(h.resumes[0].message, /Your watcher on acme\/app#7 has expired/)
+  assert.match(h.resumes[0].message, /nothing on that issue will wake/)
+  assert.match(h.resumes[0].message, /mcp__frizz__watch_issue/)
 })

@@ -399,6 +399,10 @@ export interface ThreadTimerRow {
 export interface PrWatchRow {
   id: string
   thread_slug: string
+  /** A pull request or an issue (2026-09-14). One table for both because they are one act — "wake me
+   *  when this thing on GitHub moves" — with one ref grammar, one expiry rule and one drop verb; the
+   *  poll branches on this to ask GitHub a different question and to say different things back. */
+  kind: "pull" | "issue"
   owner: string
   repo: string
   number: number
@@ -671,7 +675,8 @@ export interface Storage {
   // The same shape as the timers above and for the same reason: a thread may hold many, each with its own
   // identity, so the record of intent is a TABLE. `id` is minted by the caller so the row and the
   // scheduler's delivery ids agree without a read-back.
-  armPrWatch(watch: { id: string; slug: string; owner: string; repo: string; number: number; createdAtMs: number; expiresAtMs: number }): void
+  /** `kind` defaults to `pull` — the registry was PR-only until 2026-09-14 and every older caller means that. */
+  armPrWatch(watch: { id: string; slug: string; kind?: "pull" | "issue"; owner: string; repo: string; number: number; createdAtMs: number; expiresAtMs: number }): void
   /** Every armed watcher whose expiry has passed — settled by the scheduler, not polled again. */
   expiredPrWatches(nowMs: number): PrWatchRow[]
   // A thread's watchers, oldest first. `armedOnly` is what the worker's tool reads back and what the
@@ -1117,6 +1122,9 @@ export const STORAGE_SCHEMA = `
       created_at  INTEGER NOT NULL,
       settled_at  INTEGER,
       cursor      TEXT,
+      -- 'pull' or 'issue' (2026-09-14). Defaulted so every row written before issues existed reads as
+      -- the pull request it was; added to a live file by the ALTER in ensureStorageSchema.
+      kind        TEXT NOT NULL DEFAULT 'pull',
       -- When this watcher stops polling by itself. REQUIRED at registration (2026-08-15): a PR nobody
       -- ever touches would otherwise be polled forever, and the thread parked on it would wait forever
       -- with it. Nullable in the column only so an imported older row reads; the tool refuses to arm
@@ -1256,6 +1264,15 @@ export function ensureStorageSchema(db: Database): void {
   for (const column of ["pinned_at TEXT"]) {
     try {
       db.exec(`ALTER TABLE session ADD COLUMN ${column}`)
+    } catch {
+      // duplicate column — the file already has it
+    }
+  }
+  // Same stack, other tables. `pr_watch.kind` (2026-09-14): an issue watcher is a row in the PR
+  // watcher's table, and every live file predates the column.
+  for (const [table, column] of [["pr_watch", "kind TEXT NOT NULL DEFAULT 'pull'"]] as const) {
+    try {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN ${column}`)
     } catch {
       // duplicate column — the file already has it
     }
@@ -1711,8 +1728,8 @@ export function createStorage(source: string | Database, projectId: string): Sto
     WHERE project_id = @project_id AND slug = ? AND park_bumps > 0
   `)
   const armPrWatchStmt = scope.prepare(`
-    INSERT INTO pr_watch (project_id, id, thread_slug, owner, repo, number, state, created_at, settled_at, cursor, expires_at)
-    VALUES (@project_id, @id, @slug, @owner, @repo, @number, 'armed', @createdAtMs, NULL, NULL, @expiresAtMs)
+    INSERT INTO pr_watch (project_id, id, thread_slug, kind, owner, repo, number, state, created_at, settled_at, cursor, expires_at)
+    VALUES (@project_id, @id, @slug, @kind, @owner, @repo, @number, 'armed', @createdAtMs, NULL, NULL, @expiresAtMs)
   `)
   const expiredPrWatchesStmt = scope.prepare<[number], PrWatchRow>(
     "SELECT * FROM pr_watch WHERE project_id = @project_id AND state = 'armed' AND expires_at IS NOT NULL AND expires_at <= ? ORDER BY expires_at, id",
@@ -2520,7 +2537,7 @@ export function createStorage(source: string | Database, projectId: string): Sto
     resetSignoffNudges: (slug) => void resetNudgesStmt.run(slug),
     countParkBump: (slug, anchor) => void countParkBumpStmt.run(anchor, slug),
     resetParkBumps: (slug) => void resetParkBumpsStmt.run(slug),
-    armPrWatch: (watch) => void armPrWatchStmt.run(watch),
+    armPrWatch: (watch) => void armPrWatchStmt.run({ ...watch, kind: watch.kind ?? "pull" }),
     listPrWatches: (slug, opts) =>
       (opts?.armedOnly ? armedPrWatchesBySlugStmt : prWatchesBySlugStmt).all(slug),
     // Grouped off `armedPrWatchesStmt` — the scheduler's own whole-project read, which already carries

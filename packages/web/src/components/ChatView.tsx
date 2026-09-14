@@ -64,7 +64,7 @@ import { FOREGROUND_MARK_AFTER_MS, foregroundToolIsRunning, hasRunningToolIndica
 import { formatRuntimeElapsed, formatToolDuration } from "../lib/durationLabels.ts"
 import { githubRefUrl } from "../lib/githubRef.ts"
 import { useNowMs } from "../lib/liveClock.ts"
-import { CHILD_OPEN_TITLE, CHILD_QUIET_SHELL_TITLE, CHILD_RESTED_DOT_CLASS, CHILD_RESTED_TITLE, CHILD_STALE_DOT_CLASS, CHILD_STALE_TITLE, checksCounterLabel, childOpSubtree, mergeBackgroundShells, shellLinesLabel, visibleChildOps, type TranscriptShellRecord } from "../lib/childOps.ts"
+import { CHILD_OPEN_TITLE, CHILD_QUIET_SHELL_TITLE, CHILD_RESTED_DOT_CLASS, CHILD_RESTED_TITLE, CHILD_STALE_DOT_CLASS, CHILD_STALE_TITLE, checksCounterLabel, childOpSubtree, issueCounterLabel, mergeBackgroundShells, shellLinesLabel, visibleChildOps, type TranscriptShellRecord } from "../lib/childOps.ts"
 import { childOpDismisser } from "../lib/dismissChildOp.ts"
 import { agentCompletionCall, subAgentCompletionOutcome } from "../lib/subAgentCompletion.ts"
 import { agentReading } from "../lib/agentReading.ts"
@@ -86,7 +86,7 @@ import { settledAskView } from "../lib/interactionQuestion.ts"
 import { FRAMED_IMAGE, ImageFrame } from "./ImageFrame.tsx"
 // The resting card, shared with the queue (TodosView passes it the event-Snooze; these two surfaces
 // deliberately pass no action — see the module header).
-import { AwaitingBackgroundCard, AwaitingWaitTable, hasAwaitingWaitRows, showsRestingCard, watchStatusLine } from "./AwaitingBackgroundCard.tsx"
+import { AwaitingBackgroundCard, AwaitingWaitTable, hasAwaitingWaitRows, issueStatusLine, showsRestingCard, watchStatusLine } from "./AwaitingBackgroundCard.tsx"
 import { lastRest } from "../lib/restAnchor.ts"
 import { SnoozeCard, showsSnoozeCard } from "./SnoozeCard.tsx"
 // Re-exported from their new homes so existing importers (TodosView, the fixtures) keep one
@@ -4076,10 +4076,14 @@ export function BackgroundOpsStrip({
           // screen while the thread WORKS, and the card that rendered the full reading is only drawn at
           // rest. A watcher row used to say a ref and an age, which is the one pair that cannot answer
           // "is anything wrong with it". Absent until the first poll answers, never a fabricated 0.
-          counter={checksCounterLabel(w.github)}
+          // An ISSUE has no checks to count, so its counter is its conversation size — the one number
+          // that says whether anybody has answered — and "closed" once it is.
+          counter={w.subject === "issue" ? issueCounterLabel(w.issue) : checksCounterLabel(w.github)}
           counterTone={w.github?.checks === "failing" ? "danger" : undefined}
-          counterTitle={w.github ? `${w.target} — ${watchStatusLine(w.github)}` : undefined}
-          onOpen={() => window.open(githubRefUrl(w.target) ?? `https://github.com/${w.target.replace("#", "/pull/")}`, "_blank", "noreferrer,noopener")}
+          counterTitle={w.subject === "issue"
+            ? (w.issue ? `${w.target} — ${issueStatusLine(w.issue)}` : undefined)
+            : (w.github ? `${w.target} — ${watchStatusLine(w.github)}` : undefined)}
+          onOpen={() => window.open(githubRefUrl(w.target, w.subject === "issue" ? "issue" : "pull") ?? `https://github.com/${w.target.replace("#", w.subject === "issue" ? "/issues/" : "/pull/")}`, "_blank", "noreferrer,noopener")}
         />
       ))}
       <ThreadLinks links={links} />

@@ -1850,6 +1850,7 @@ test("every registered PR watcher gets a row, with the instant it was registered
     target: "colinhacks/zod#6382",
     state: "armed",
     createdAt: FENCE_AT,
+    subject: "pull",
   }])
 })
 
@@ -2250,4 +2251,20 @@ test("resolveLiveWatchTarget: a sub-agent resolves by its runtime agentId as wel
   assert.deepEqual(resolveLiveWatchTarget(tele, "a01b2d20b32feab11"), { kind: "agent", label: "the reviewer" })
   assert.deepEqual(resolveLiveWatchTarget(tele, "toolu_A"), { kind: "agent", label: "the reviewer" })
   assert.equal(resolveLiveWatchTarget(tele, "bGHOST"), undefined)
+})
+
+// AN ISSUE REGISTRATION IS A GITHUB ROW WITH ITS OWN SUBJECT (2026-09-14). Same kind — one place on every
+// surface that lists waits — with `subject: "issue"`, an id that cannot collide with a PR of the same
+// number, and its reading from the ISSUE book rather than the PR one.
+test("a registered issue watcher gets a github row with subject issue, read from the issue book", () => {
+  const issueBook = { "acme/app#7": { state: "open" as const, title: "Crash on start", comments: 3, polledAt: FENCE_AT } }
+  const views = fenceWatchViews(
+    "t", parked({ kind: "issue", value: "acme/app#7" }), FENCE_AT, {},
+    [{ target: "acme/app#7", kind: "issue", createdAt: FENCE_AT }, { target: "acme/app#7", kind: "pull", createdAt: FENCE_AT }],
+    [], [], issueBook,
+  )
+  assert.deepEqual(views.map((v) => [v.id, v.subject, v.issue?.title, v.github]), [
+    ["github:t:issue:acme/app#7", "issue", "Crash on start", undefined],
+    ["github:t:acme/app#7", "pull", undefined, undefined],
+  ])
 })

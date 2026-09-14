@@ -258,9 +258,13 @@ exactly ONE of them.
     It also tells you when CI is HELD FOR AN APPROVAL, which is the one reading that never resolves on
     its own: a fork or first-time contributor's workflows wait for a maintainer to press the button, so
     that wake is your cue to go and ask rather than to keep parking.
+  - \`issues:\` — GitHub issues you REGISTERED with \`mcp__frizz__watch_issue\`, written \`owner/repo#N\`.
+    Same shape as \`prs:\`, same register-first rule. That tool wakes you on every later comment, when a
+    label moves or someone is assigned, and once more when the issue closes — the wait for a reporter's
+    reproduction or a maintainer's triage. An issue has no CI and no merge, so it never says either.
   - \`for:\` — **REQUIRED**, and a DURATION: \`30s\`, \`15m\`, \`2h\`, \`3d\`. Never an instant. When it runs
     out frizz brings you back to re-check everything; re-parking is fine and uncapped. Capped at a day,
-    except on a park naming ONLY \`prs:\`, where it runs to a year.
+    except on a park naming ONLY \`prs:\` and \`issues:\`, where it runs to a year.
   - **A PULL REQUEST IN SOMEONE ELSE'S REPO TAKES MONTHS, SO ASK FOR MONTHS** — \`for: 180d\`, and give
     \`mcp__frizz__watch_pr\` the same. It moves on its maintainers' clock, not yours, so a short \`for:\`
     expires against a PR nothing has touched: a wake carrying no news, and a re-arm, once per expiry
@@ -281,8 +285,9 @@ exactly ONE of them.
   - **WAITING ON A PERSON IS A REGISTERED QUESTION** — \`mcp__frizz__ask\`. There is no human gate, no
     prose park, and no question fence.
   - **CI, RELEASES, DEPLOYS AND MERGE PROGRESSION ARE AUTOMATABLE — never \` \`\`\`awaiting \` them
-    BLINDLY.** For a pull request, \`mcp__frizz__watch_pr\`. For anything else stay ACTIVE: dispatch a
-    sub-agent to own the wait (its return re-invokes you), or set a timer and name it here.
+    BLINDLY.** For a pull request, \`mcp__frizz__watch_pr\`; for a GitHub issue, \`mcp__frizz__watch_issue\`.
+    For anything else stay ACTIVE: dispatch a sub-agent to own the wait (its return re-invokes you), or
+    set a timer and name it here.
   - **THE PARK SURVIVES A RESTART.** Registration and fence are both durable, so frizz brings you back
     (\`{{FRIZZ_RESUME_CMD}}\`) even if its own server or your daemon is replaced while you wait.
   - **A follow-up clears the previous fence.** If the human says "back to awaiting", never answer that
@@ -674,7 +679,8 @@ the handoff.
 rested thread out of the queue.
 
 - **Resting until a condition is met** (the usual CI / PR / release wait) → for a pull request,
-  \`mcp__frizz__watch_pr\`; for anything else dispatch a SUB-AGENT to own the wait. It runs the watcher
+  \`mcp__frizz__watch_pr\`; for a GitHub issue, \`mcp__frizz__watch_issue\`; for anything else dispatch a
+  SUB-AGENT to own the wait. It runs the watcher
   to completion in its own foreground and returns the verdict; you stay Active and its return
   re-invokes you. Foreground Bash caps at ~10 min, so a longer wait loops until its terminal
   condition. A helper must not hand back while its own watcher is still live.

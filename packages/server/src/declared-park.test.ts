@@ -784,3 +784,22 @@ test("an ANSWERED question no longer refuses the park", async () => {
     assert.equal(h.queued().length, 0, "a settled row is not a standing question")
   } finally { h.close() }
 })
+
+// ---- `issues:` (2026-09-14) ---------------------------------------------------------------------------
+test("unaccountedItems: an `issues:` entry is checked against the ISSUE registrations, by URL or ref, never against the PRs", () => {
+  const live = { shells: new Set<string>(), agents: new Set<string>(), timers: new Set<string>(), prs: new Set(["acme/app#7"]), issues: new Set(["acme/app#9"]) }
+  assert.deepEqual(unaccountedItems([{ kind: "issue", value: "https://github.com/acme/app/issues/9" }], live), [])
+  assert.deepEqual(unaccountedItems([{ kind: "issue", value: "acme/app#9" }], live), [])
+  assert.equal(unaccountedItems([{ kind: "issue", value: "acme/app#7" }], live).length, 1, "a PR registration does not account for an issue entry")
+  assert.equal(unaccountedItems([{ kind: "pr", value: "acme/app#9" }], live).length, 1, "nor an issue registration for a `prs:` entry")
+  // A caller written before issues existed passes no `issues` set: an issue entry is then unaccounted,
+  // which is the safe direction (bumped, never silently parked).
+  const older = { shells: new Set<string>(), agents: new Set<string>(), timers: new Set<string>(), prs: new Set<string>() }
+  assert.equal(unaccountedItems([{ kind: "issue", value: "acme/app#9" }], older).length, 1)
+})
+
+test("parkForMaxMs: a park naming only issues and PRs earns the year; an issue beside a shell keeps the day", () => {
+  assert.equal(parkForMaxMs({ items: [{ kind: "issue", value: "acme/app#9" }], forMs: 1 }), PR_WATCH_FOR_MAX_MS)
+  assert.equal(parkForMaxMs({ items: [{ kind: "issue", value: "acme/app#9" }, { kind: "pr", value: "acme/app#7" }], forMs: 1 }), PR_WATCH_FOR_MAX_MS)
+  assert.equal(parkForMaxMs({ items: [{ kind: "issue", value: "acme/app#9" }, { kind: "shell", value: "bash_1" }], forMs: 1 }), AWAITING_FOR_MAX_MS)
+})

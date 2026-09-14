@@ -212,3 +212,23 @@ test("awaitingProseBlock: prose survives, machinery strips, emptiness is null", 
   assert.equal(awaitingProseBlock(""), null)
   assert.equal(awaitingProseBlock(undefined), null)
 })
+
+// ---- `issues:` (2026-09-14) ---------------------------------------------------------------------------
+test("prWatchRefs: an `issues:` entry is a chip with the issue path, deduped apart from a PR of the same number", () => {
+  const refs = prWatchRefs([
+    { kind: "issue", value: "acme/app#7" },
+    { kind: "pr", value: "acme/app#7" },
+    { kind: "issue", value: "acme/app#7" },
+    { kind: "issue", value: "not a ref" },
+  ])
+  assert.deepEqual(refs, [
+    { ref: "acme/app#7", url: "https://github.com/acme/app/issues/7" },
+    { ref: "acme/app#7", url: "https://github.com/acme/app/pull/7" },
+    { ref: "not a ref", url: null },
+  ])
+})
+
+test("hintGloss: an issue-only fence glosses as the issue; a PR still wins when both are named", () => {
+  assert.equal(hintGloss([{ kind: "issue", value: "acme/app#7" }, { kind: "for", value: "3d" }]), "Issue acme/app#7")
+  assert.equal(hintGloss([{ kind: "issue", value: "acme/app#7" }, { kind: "pr", value: "acme/app#391" }]), "PR acme/app#391")
+})
