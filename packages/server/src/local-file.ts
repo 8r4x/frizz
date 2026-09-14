@@ -26,6 +26,9 @@ function isUnder(real: string, root: string): boolean {
 // (artifact dirs), while the open action gates to home-and-below (see the router) so a referenced file
 // like ~/.claude/CLAUDE.md can open — still confined, never the whole filesystem.
 export function resolveLocalFile(rawPath: string, roots: readonly string[]): string {
+  // A file URL's pathname keeps `/` before a Windows drive (`/D:/docs/plan.md`).
+  // Normalize here so readers, watchers and openers agree, but leave POSIX names untouched.
+  if (process.platform === "win32") rawPath = rawPath.replace(/^\/([a-zA-Z]:[\\/])/, "$1")
   if (!isAbsolute(rawPath)) throw new Error("Local path must be absolute")
   let real: string
   try { real = realpathSync(rawPath) } catch { throw new Error("Local file was not found") }
