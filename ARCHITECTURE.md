@@ -331,19 +331,13 @@ A worker is NOT whatever `claude` or `codex` is first on the operator's PATH —
 - **The sweep keeps only the current pin**, plus any `.partial-*` younger than a day (another process may be mid-download). Nothing under `runtimes/` is precious — it is the cache root, regenerable by definition.
 - **Not reused on purpose:** the vendors' own versioned installs (`~/.local/share/claude/versions/`, `~/.codex/packages/standalone/releases/`). Both prune on their own schedule, and a pin that can vanish under a running server is worse than one download.
 
-## Experimental Codex app-server bridge foundation
+## Codex app-server bridge (the only Codex transport)
 
-- Disabled by default. `FRIZZ_CODEX_APP_SERVER_BRIDGE=1` constructs a lazy internal bridge; it does
-  not change dispatch defaults or `backendFor`. The generic scoped interaction
-  cards can reflect bridge-owned journal rows, but no default user flow creates those rows.
-- The bridge can start new sessions and resume only native thread ids in its own SQLite ownership
-  table. Existing/default/TUI Codex sessions are never imported or migrated.
-- The protocol gate accepts exactly installed Codex `0.144.1`, audited from generated protocol plus
-  immutable source tag `rust-v0.144.1` (`44918ea10c0f99151c6710411b4322c2f5c96bea`), over child stdio
-  JSONL after `initialize` / `initialized`. Upgrades require a new exact source/protocol audit,
-  fingerprint, fixtures, and diagnostic expectation; semver ranges are never accepted. It rejects
-  versioned `jsonrpc` envelopes, bounds and serializes inbound records, and never retains stderr text.
-  No PTY or terminal scraping.
+**Codex is a first-class backend, not an experiment.** A `backend: "codex"` dispatch runs through `backend/codex-app-server.ts` and nothing else, since 2026-08-02 (`f926288f`: "both backends have exactly one transport now — codex → app-server, claude → broker"). The old opt-in flag is gone: `codexAppServerBridgeEnabled()` returns true unconditionally and the context wires the bridge at boot. This section read "Disabled by default … do not enable this flag" until 2026-09-14, and a worker that trusted it over `dispatch.ts` reported Codex as unfinished work to the maintainer — prefer the code.
+
+- The bridge is deliberately not an `AgentBackend`: it starts new sessions and resumes only native thread ids in its own SQLite ownership table, so no existing/default/TUI Codex session can cross the boundary. The default transport is the native listener (`codex app-server --listen unix://`, `FRIZZ_CODEX_NATIVE_LISTEN`), which owns its own socket and outlives every Frizz process; the hand-written daemon is the fallback.
+- **The audited coordinate is `CODEX_APP_SERVER_SUPPORTED_VERSION`** (`0.154.0` at the time of writing, source tag `rust-v0.154.0`), and the acceptance rule is a FLOOR that refuses and a CEILING that only warns (`codexVersionVerdict`): an older binary is refused because it may lack params Frizz sends; a newer one runs with one loud warning, because the protocol is additive and `codex-protocol-conformance.test.ts` asks the installed binary for its own schema and fails when a param Frizz sends is gone. Moving the pin is a re-audit at the matching immutable Rust tag, then new fixtures. Frizz provisions that exact binary itself (see Provisioned runtimes).
+- The wire is JSON-RPC after `initialize` / `initialized`. It rejects versioned `jsonrpc` envelopes, bounds and serializes inbound records, and never retains stderr text. No PTY or terminal scraping. `turn/steer` delivers a mid-turn follow-up and `turn/interrupt` stops a turn; both are wired.
 - The child receives an explicit minimal environment, not `process.env`: executable/runtime/home,
   locale/temp, OS credential-store plumbing, proxy/custom-CA settings, and only the audited built-in
   Codex/OpenAI auth/provider variables. Frizz, GitHub, Anthropic, AWS, Node injection, and arbitrary
@@ -357,7 +351,7 @@ A worker is NOT whatever `claude` or `codex` is first on the operator's PATH —
 - Exact response semantics are intentionally narrow: additional permissions expose turn/session
   grants plus deny (the server treats an empty granted profile as no grant), while
   `request_user_input` exposes only answer. That protocol has no decline/cancel response; cancelling
-  work belongs to a separate future `turn/interrupt` control, not a fabricated interaction choice.
+  work is the separate `turn/interrupt` client request, never a fabricated interaction choice.
 - Registry replacement/deletion atomically cancels old delivery rows and detaches the exact native
   binding before a lifecycle hook removes it and terminates the child. Bridge disconnect/close
   detaches active bindings, and action authority requires a live connection plus the exact active
@@ -368,6 +362,4 @@ A worker is NOT whatever `claude` or `codex` is first on the operator's PATH —
   `reconnect-required`. Transport ids, provider context/responses, and secret values never cross this
   RPC boundary. The board retains pending thread visibility but removes queued/sent work from Needs
   You until a genuinely actionable request exists.
-- Dispatch selection remains intentionally deferred. Do not enable this flag as a user-facing default
-  until dedicated turn-interrupt UX, secure secret-answer delivery, custom-provider environment
-  policy, independent review, and real end-to-end live-thread validation are complete.
+- Still out of scope on purpose: arbitrary custom-provider `env_key` forwarding (above) and secret user-input delivery, which fails closed until a transient escrow exists.
