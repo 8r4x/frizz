@@ -327,6 +327,63 @@ const WATCH_PR = {
   },
 }
 
+const WATCH_ISSUE = {
+  name: "watch_issue",
+  description:
+    "REGISTER A GITHUB ISSUE and frizz brings you back whenever something happens on it — every later " +
+    "comment, from a human or a bot alike, a label added or removed, someone assigned, and the issue " +
+    "closing. Register it, come to rest, and you are woken. Drop it when it stops mattering.\n\n" +
+    "IT REPORTS REPEATEDLY, like `watch_pr` and unlike a timer: one registration covers the whole life " +
+    "of the issue, and it settles itself when the issue closes, because there is then nothing left to " +
+    "report. There is no CI and no merge on an issue, so those are the only things it can say.\n\n" +
+    "USE IT WHEN THE NEXT STEP IS SOMEONE ELSE'S REPLY ON AN ISSUE — a reporter you asked for a " +
+    "reproduction, a maintainer you asked to triage, a discussion you are waiting to see resolved. " +
+    "Nothing else watches for you: your runtime knows nothing about GitHub, and an ```awaiting fence " +
+    "STATES what you are waiting on without creating any wait at all. This tool is the wait. A PULL " +
+    "REQUEST is `watch_pr`, not this — `gh issue view` refuses a PR number, and so does this.\n\n" +
+    "THE ```awaiting FENCE IS STILL WORTH WRITING, for the same reason it is beside `watch_pr`: it is " +
+    "how you come to REST without frizz asking for a handoff, and how the human sees what you wait for. " +
+    "Register the watcher, then name the same issue in the fence's `issues:` list, with the same long " +
+    "`for:`.\n\n" +
+    "GIVE IT A LONG `for` — an issue in someone else's repo moves on their clock, and a short watcher " +
+    "expires against an issue nobody has touched: a wake with nothing in it. Months are free; real " +
+    "activity wakes you the instant it lands either way.\n\n" +
+    "REGISTERING IS IDEMPOTENT per issue: asking twice returns the SAME id and says so, so re-registering " +
+    "after a compaction is safe. `list` reads back the issues watched on this thread without changing " +
+    "anything. You can only ever watch an issue on your OWN thread.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      action: {
+        type: "string",
+        enum: ["add", "list", "drop"],
+        description:
+          "`add` registers a watcher (idempotent per issue); `drop` withdraws one by id; `list` reads " +
+          "back every issue armed on this thread, with its latest state, without changing anything.",
+      },
+      target: {
+        type: "string",
+        description:
+          "Required for `add`. The issue, as `owner/repo#123` or a GitHub issue URL. A ref that cannot " +
+          "be parsed, a PR URL, or an issue the server's own `gh` cannot read, is REFUSED rather than " +
+          "stored — a watcher that can never fire is worse than none. A refusal names the reason.",
+      },
+      for: {
+        type: "string",
+        description:
+          "REQUIRED for `add`. How long to watch, as a DURATION — `2h`, `3d`, `180d` (max 365d). Never " +
+          "an instant, and there is no default. The watcher settles itself when this runs out and tells " +
+          "you. An issue you are waiting on someone else to answer deserves MONTHS.",
+      },
+      id: {
+        type: "string",
+        description: "Required for `drop`. The watcher id returned by `add` (or listed by `list`).",
+      },
+    },
+    required: ["action"],
+  },
+}
+
 // The registry that replaces a ```awaiting fence's `shells:` line: a wait the worker CREATES rather
 // than one it restates at every rest. Two tools rather than one action-switch, because they are two
 // verbs and a worker reaching for `unwatch` should find `unwatch`. See plans/rest-by-registration.md.
@@ -717,7 +774,9 @@ const UNLINK = {
   },
 }
 
-const TOOLS = [SPAWN_THREAD, GOAL, TIMER, WATCH_PR, WATCH, UNWATCH, ASK, UNASK, DONE, TITLE, ACTIVITY, LINK, UNLINK]
+// WATCH_ISSUE rides at the END (2026-09-14): the tool list is read by position in frizz-mcp.test.ts, and a
+// worker's runtime reads it by name, so the order costs nothing and appending breaks nothing.
+const TOOLS = [SPAWN_THREAD, GOAL, TIMER, WATCH_PR, WATCH, UNWATCH, ASK, UNASK, DONE, TITLE, ACTIVITY, LINK, UNLINK, WATCH_ISSUE]
 
 /** @type {Record<string, (args: Record<string, unknown>) => Promise<string>>} */
 const HANDLERS = {
@@ -725,6 +784,7 @@ const HANDLERS = {
   [GOAL.name]: goal,
   [TIMER.name]: timer,
   [WATCH_PR.name]: watchPr,
+  [WATCH_ISSUE.name]: watchIssue,
   [WATCH.name]: watch,
   [ASK.name]: ask,
   [UNASK.name]: unask,
@@ -819,9 +879,9 @@ async function activity() {
   // keys are PLURAL sequences, so an id printed on its own line is no longer something a worker can copy
   // into a fence — it has to see the shape. This tool is where the contract sends a worker that has lost
   // an id, so printing the retired one-line-per-item form would teach the very grammar frizz refuses.
-  const byKind = { shell: [], agent: [], timer: [], pr: [] }
+  const byKind = { shell: [], agent: [], timer: [], pr: [], issue: [] }
   for (const i of items) if (byKind[i.kind] && i.id) byKind[i.kind].push(i.id)
-  const block = Object.entries({ shells: byKind.shell, agents: byKind.agent, timers: byKind.timer, prs: byKind.pr })
+  const block = Object.entries({ shells: byKind.shell, agents: byKind.agent, timers: byKind.timer, prs: byKind.pr, issues: byKind.issue })
     .filter(([, ids]) => ids.length > 0)
     .map(([key, ids]) => `  ${key}: [${ids.join(", ")}]`)
   return (
@@ -1337,7 +1397,9 @@ async function timer(args) {
 /** How the armed PR-watcher set reads back, on every action, so a worker never needs a second call.
  * @param {{ watches?: Array<{id: string, target: string, github?: {checks: string, running: number, passed: number, failed: number, failing: string[], merge: string, state: string}}> }|undefined} result */
 function armedPrWatchList(result) {
-  const watches = Array.isArray(result?.watches) ? result.watches : []
+  // Only the PULL REQUESTS: the registry holds issues too (`watch_issue`), and each tool reads back its
+  // own kind so a worker asking where its PRs stand is not told about an issue it registered elsewhere.
+  const watches = (Array.isArray(result?.watches) ? result.watches : []).filter((w) => w.kind !== "issue")
   if (!watches.length) return "No pull requests are watched on this thread — nothing will wake you."
   const lines = watches.map((w) => {
     const g = w.github
@@ -1354,6 +1416,23 @@ function armedPrWatchList(result) {
     return `  ${w.id}  ${w.target}  —  ${state}${g && g.state === "open" && g.merge === "mergeable" ? ", mergeable" : ""}`
   })
   return `Watched on this thread now:\n${lines.join("\n")}`
+}
+
+/** The issue twin of armedPrWatchList: the ISSUES watched on this thread, with each one's last-polled state.
+ * @param {{ watches?: Array<{id: string, kind?: string, target: string, issue?: {state: string, stateReason?: string, title?: string, comments: number}}> }|undefined} result */
+function armedIssueWatchList(result) {
+  const watches = (Array.isArray(result?.watches) ? result.watches : []).filter((w) => w.kind === "issue")
+  if (!watches.length) return "No issues are watched on this thread — nothing will wake you."
+  const lines = watches.map((w) => {
+    const i = w.issue
+    const state = !i
+      ? "not polled yet"
+      : i.state === "closed"
+        ? `closed${i.stateReason ? ` (${i.stateReason.replace(/_/g, " ")})` : ""}`
+        : `open, ${i.comments} comment${i.comments === 1 ? "" : "s"}`
+    return `  ${w.id}  ${w.target}${i?.title ? `  "${i.title}"` : ""}  —  ${state}`
+  })
+  return `Issues watched on this thread now:\n${lines.join("\n")}`
 }
 
 /** The armed watches on this thread, as the read-back prints them. */
@@ -1491,7 +1570,7 @@ async function done(args) {
     parts.push(
       `${watches.length} registration${watches.length === 1 ? "" : "s"} still armed:\n${watches.join("\n")}\n` +
       "A live wait means the thing you were waiting for has not happened. Wait for it, or drop the ones " +
-      "that stopped mattering (`unwatch`, or `watch_pr` with `action: \"drop\"`, or `timer` cancel).",
+      "that stopped mattering (`unwatch`, or `watch_pr` / `watch_issue` with `action: \"drop\"`, or `timer` cancel).",
     )
   }
   parts.push("There is no force parameter. Resolve them and call `done` again.")
@@ -1543,6 +1622,53 @@ async function watchPr(args) {
     `${head}${clamped}\n\nNAME IT IN YOUR \`\`\`awaiting FENCE TOO (\`prs: [${ref}]\`) — the watcher does the ` +
     `waking, the fence is what lets you come to rest and shows the human what you are waiting for.\n\n` +
     `DROP IT when it stops mattering (\`action: "drop", id: "${id}"\`).\n\n${armedPrWatchList(result)}`
+  )
+}
+
+/** The `watch_issue` handler: register, withdraw, or read back this thread's issue watchers. The same
+ * three RPCs as `watchPr` — one registry — with `kind: "issue"` on the add.
+ * @param {Record<string, unknown>} args @returns {Promise<string>} */
+async function watchIssue(args) {
+  const slug = threadSlug()
+  const action = typeof args.action === "string" ? args.action.trim() : ""
+  if (action !== "add" && action !== "list" && action !== "drop") {
+    throw new Error("`action` must be one of \"add\", \"list\" or \"drop\"")
+  }
+
+  if (action === "list") {
+    return armedIssueWatchList((await callRpc("listOwnPrWatches", { slug }))?.result)
+  }
+
+  if (action === "drop") {
+    const id = typeof args.id === "string" ? args.id.trim() : ""
+    if (!id) throw new Error("`id` is required to drop a watcher — take it from `add` or from `list`")
+    const result = (await callRpc("dropOwnPrWatch", { slug, id }))?.result
+    const head = result?.dropped
+      ? `Watcher ${id} dropped. It will not wake you.`
+      : `No ARMED watcher ${id} on this thread — it was already settled, or the id is not one of yours.`
+    return `${head}\n\n${armedIssueWatchList(result)}`
+  }
+
+  const target = typeof args.target === "string" ? args.target.trim() : ""
+  if (!target) throw new Error("`target` is required — the issue, as `owner/repo#123` or a GitHub issue URL")
+  const forValue = typeof args.for === "string" ? args.for.trim() : ""
+  if (!forValue) throw new Error("`for` is required — a DURATION like `3d`, `30d` or `180d` (max 365d), never an instant")
+  const result = (await callRpc("addOwnPrWatch", { slug, target, for: forValue, kind: "issue" }))?.result
+  const id = result?.id ?? "(unknown)"
+  const ref = result?.target ?? target
+  const until = result?.expiresAt ? ` until ${result.expiresAt}` : ""
+  const head = result?.alreadyArmed
+    ? `Already watching ${ref} as ${id}${until} — nothing new was registered, its original expiry stands, and you will be woken once per event.`
+    : `Watching issue ${ref} as ${id}${until}. Frizz wakes you on every later comment, on a label or ` +
+      "assignee change, and when the issue closes; the registration survives your turn ending, a compaction and a frizz restart."
+  const clamped = result?.clampedFrom
+    ? `\n\nYOUR \`for: ${result.clampedFrom}\` WAS CAPPED at the ceiling — the expiry above is what you ` +
+      "actually hold. Nothing else about the watcher changed."
+    : ""
+  return (
+    `${head}${clamped}\n\nNAME IT IN YOUR \`\`\`awaiting FENCE TOO (\`issues: [${ref}]\`) — the watcher does the ` +
+    `waking, the fence is what lets you come to rest and shows the human what you are waiting for.\n\n` +
+    `DROP IT when it stops mattering (\`action: "drop", id: "${id}"\`).\n\n${armedIssueWatchList(result)}`
   )
 }
 
