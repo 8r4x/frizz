@@ -17,7 +17,11 @@ export interface LocalMarkdownTarget {
   filePath?: string
 }
 
-const WINDOWS_ABSOLUTE_PATH = /^[a-zA-Z]:[\\/]/
+// A drive letter is one character, and so is the shortest legal URL scheme, so `C:/docs/plan.md` and
+// `x://host/p` share a prefix. The lookahead is what tells them apart: a URL's separator is DOUBLE.
+// Without it a single-letter scheme was classified as a Windows path and rendered as a live file
+// button that opens nothing.
+const WINDOWS_ABSOLUTE_PATH = /^[a-zA-Z]:[\\/](?![\\/])/
 
 // Editor deep-link schemes that all share VS Code's URL grammar: `<scheme>://file/<path>[:line[:col]]`.
 // Agents under user-level "link every file" instructions write these (`[plan.md](cursor://file/<abs>)`)
@@ -30,8 +34,12 @@ const EDITOR_FILE_URL = /^(?:cursor|vscode|vscode-insiders|windsurf):\/\/file\/(
 
 // A `file:` URL's pathname keeps a slash before a Windows drive (`/C:/docs/plan.md`), and an editor
 // deep link can carry the same shape. That slash leaves the value neither a POSIX path nor a Windows
-// one, so every server gate reads it as a path that is not there. Drop it here, where a URL is being
-// turned back into a filesystem path; a POSIX path is left exactly as written.
+// one, so every server gate reads it as a path that is not there. Drop it here, and on a plain
+// destination too — a tool that serializes a `file:` URL by hand writes the same `/D:/a.md` shape.
+// This is LEXICAL and cannot consult the server's platform, so it accepts one deliberate loss: a real
+// POSIX path whose first segment is literally `C:` (`/C:/dir/a.md`) is unrooted as well. A directory
+// named after a drive letter is vanishingly rare; a mangled Windows path is not.
+// Every OTHER POSIX path is left exactly as written.
 function unrootDrive(path: string): string {
   return path.replace(/^\/+([A-Za-z]:[\\/])/, "$1")
 }

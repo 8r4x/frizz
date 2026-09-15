@@ -80,6 +80,10 @@ test("a Windows drive path is a file path the server can act on; a remote host i
   assert.deepEqual(localMarkdownTarget("file:///D:/Development/frizz/AGENTS.md"), { display: "D:/Development/frizz/AGENTS.md", filePath: "D:/Development/frizz/AGENTS.md" })
   assert.deepEqual(localMarkdownTarget("/D:/Development/frizz/AGENTS.md"), { display: "D:/Development/frizz/AGENTS.md", filePath: "D:/Development/frizz/AGENTS.md" })
   assert.deepEqual(localMarkdownTarget("cursor://file//C:/Users/me/plan.md"), { display: "C:/Users/me/plan.md", filePath: "C:/Users/me/plan.md" })
+  // A one-character URL scheme shares the drive path's prefix and must NOT become a file button. The
+  // separator count is the whole difference: a path has one, a URL has two.
+  assert.equal(localMarkdownTarget("x://host/p"), null)
+  assert.equal(localMarkdownTarget("m://mail/inbox"), null)
   // A UNC share is still not a file this machine's server resolves.
   assert.deepEqual(localMarkdownTarget("file://fileserver/share/shot.png"), { display: "file://fileserver/share/shot.png" })
 })
