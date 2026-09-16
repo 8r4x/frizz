@@ -115,6 +115,17 @@ ${fault === "exit" ? "throw new Error('INJECTED_BOOT_FAILURE');" : ""}
     assert.ok(boot.test(contents), "hang injection must follow the real early disconnect guard")
     contents = contents.replace(boot, "await new Promise(()=>setInterval(()=>{},1000)); $&")
   }
+  if (fault === "slow") {
+    const boot = /(?:const|var) server = await startServer\d*\(/u
+    assert.ok(boot.test(contents), "slow boot must follow the real early disconnect guard")
+    assert.match(contents, /function createBootProgressPublisher\(/u, "use the artifact's real progress publisher")
+    contents = contents.replace(boot, `
+      const _progress = createBootProgressPublisher(target.stateDir);
+      const _progressTimer = setInterval(() => _progress("runtimes: downloading slow fixture"), 500);
+      await new Promise(resolve => setTimeout(resolve, 35_000));
+      clearInterval(_progressTimer);
+      $&`)
+  }
   writeFileSync(entry, instrumentation + contents)
   if (fault === "missing") rmSync(join(directory, "web-dist/index.html"))
   // npm must not run this: an install that touches the sentinel is a test failure.
@@ -186,11 +197,12 @@ async function secondLaunch(expectedExit) {
 }
 
 try {
-  const serverVersion = JSON.parse(readFileSync(join(workspace, "packages/server-release/package.json"), "utf8")).version
-  assert.equal(serverVersion, "0.13.0", "update fixture baseline must match shell bootstrap pin")
   const shellDir = join(root, "shell")
   mkdirSync(shellDir); cpSync(join(workspace, "dist"), join(shellDir, "dist"), { recursive: true })
   const manifest = JSON.parse(readFileSync(join(workspace, "package.json"), "utf8"))
+  // These are local fixture coordinates, independent of either package's current release version.
+  manifest.version = "0.13.0"
+  manifest.frizzServer.version = "0.13.0"
   delete manifest.devDependencies; delete manifest.scripts; delete manifest.pnpm
   const shellRelease = pack(shellDir, manifest)
   const legacyTarball = argument("legacy-tarball")
@@ -201,7 +213,7 @@ try {
     packages.get("frizz").releases.set(legacy.version, { manifest: legacy, tarball, integrity: `sha512-${createHash("sha512").update(tarball).digest("base64")}` })
   }
   serverFixture("0.13.0")
-  serverFixture("0.13.1")
+  serverFixture("0.13.1", "slow")
   serverFixture("0.13.2", "epoch")
   serverFixture("0.13.3", "missing")
   serverFixture("0.13.4", "exit")
@@ -319,6 +331,10 @@ try {
   assert.equal(alive(initialPid), true)
   await until("selection version advanced", () => selected().version === "0.13.1")
   assert.equal(children().filter((event) => event.event === "start" && event.version === "0.13.1").length, 1)
+  const slowStart = children().find((event) => event.event === "start" && event.version === "0.13.1")
+  const slowReady = children().find((event) => event.event === "ready" && event.version === "0.13.1")
+  assert.ok(slowReady.at - slowStart.at > 30_000, "a progressing boot must outlive the former flat 30s timeout")
+  record("progressing-boot-passed", { elapsedMs: slowReady.at - slowStart.at })
   record("slow-update-and-concurrent-actions-passed", { pid: shellPid })
   for (const worker of workers) {
     assert.deepEqual(workerRecord(worker.backend), worker.daemon, "same detached provider daemon must survive the update")
