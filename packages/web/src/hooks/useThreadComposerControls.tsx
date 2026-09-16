@@ -55,18 +55,16 @@ export function useThreadComposerControls(slug: string): { busy: boolean; footer
   // the backend handoff.
   const busy = localBusy || threadFollowUpBlocked(thread)
 
-  const storedModel = thread.model?.trim()
+  const model = thread.model?.trim()
   const effort = thread.effort?.trim()
   const backend = thread.backend === "codex" ? "codex" : thread.backend === "acp" ? "acp" : "claude"
   // An ACP thread's model slug is `acp:<agent>[@<model>]`. The AGENT cannot be swapped under a live
-  // session — so the grid pill names it from the catalogue and offers no other row — while the model
-  // inside it is the dropdown's beside the pill, exactly as in the dispatch composer. The same
-  // catalogue query the dispatch composer runs; react-query serves both from one fetch.
+  // session, so the thread's one control is the model inside it (AcpModelSelect below); the agent's
+  // label only names that control. The same catalogue query the dispatch composer runs; react-query
+  // serves both from one fetch.
   const acpAgents = useQuery({ queryKey: ["acpAgents"], queryFn: () => rpc.acpAgents(), enabled: backend === "acp" })
-  const acpAgentId = backend === "acp" ? acpAgentIdFromModel(storedModel) : undefined
-  const acpModelId = backend === "acp" ? acpModelIdFromModel(storedModel) : undefined
-  // The grid is keyed on the bare agent slug for an ACP thread (see ResolvedDispatchPreferences).
-  const model = acpAgentId ? acpModelSlug(acpAgentId) : storedModel
+  const acpAgentId = backend === "acp" ? acpAgentIdFromModel(model) : undefined
+  const acpModelId = backend === "acp" ? acpModelIdFromModel(model) : undefined
   // OPTIMISTIC PENDING. The profile control is backed by a runtime handoff that can take a half-second
   // or more, and the board's own pending bit only appears once the server has claimed the row — so
   // picking a model used to produce NO visible response at all until it landed, which reads as a dropped
@@ -78,20 +76,14 @@ export function useThreadComposerControls(slug: string): { busy: boolean; footer
   const optimisticProfile = profile.isPending ? profile.variables : undefined
   const pendingModel = thread.profilePendingModel ?? optimisticProfile?.model
   const pendingEffort = thread.profilePendingEffort ?? optimisticProfile?.effort
-  // An ACP model change is the dropdown's to show as pending, not the grid pill's (the agent slug
-  // never changes), so the pill sees no pending state and the dropdown shows the in-flight pick.
+  // An ACP model change is the dropdown's to show as pending: the in-flight pick, until the row's
+  // model catches up.
   const optimisticAcpModelId = backend === "acp" && optimisticProfile ? acpModelIdFromModel(optimisticProfile.model) : undefined
   const profileOptions = profiles.data?.options ?? []
   const { modelSelectable } = threadProfileControlState(profileOptions, model, effort, thread.runtime === "exited")
   const catalogLoaded = profiles.data !== undefined
   const acpAgentLabel = acpAgents.data?.find((agent) => agent.id === acpAgentId)?.label ?? acpAgentId
-  const profileGroups = [{
-    id: backend,
-    label: backend === "codex" ? "Codex" : backend === "acp" ? "ACP agents" : "Claude Code",
-    options: backend === "acp"
-      ? (model && acpAgentLabel ? [{ model, label: acpAgentLabel, efforts: [] }] : [])
-      : profileOptions,
-  }]
+  const profileGroups = [{ id: backend, label: backend === "codex" ? "Codex" : "Claude Code", options: profileOptions }]
   const composerStatus = threadComposerStatus(profiles.isError ? (profiles.error as Error).message : undefined)
 
   // WHAT THE OPERATOR IS LOOKING AT, and it is deliberately not `thread.permissionMode` raw: a thread
@@ -137,28 +129,33 @@ export function useThreadComposerControls(slug: string): { busy: boolean; footer
         // pair drift apart from each other.
         className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-0.5"
       >
-        <ProfileGridSelector
-          groups={profileGroups}
-          value={{ provider: backend, model, effort: backend === "acp" ? "" : effort }}
-          pending={backend !== "acp" && (pendingModel || pendingEffort)
-            ? { provider: backend, model: pendingModel, effort: pendingEffort }
-            : undefined}
-          onValueChange={({ model: nextModel, effort: nextEffort }) => changeProfile({ model: nextModel, effort: nextEffort })}
-          placeholder={profiles.isPending ? "Profile loading…" : "Profile unknown"}
-          ariaLabel="Thread model and effort"
-          menuAriaLabel={backend === "acp" ? "ACP agent for this thread" : `Choose ${backend === "codex" ? "Codex" : "Claude Code"} model and effort`}
-          title={backend === "acp"
-            ? "An ACP agent runs on its own CLI's model and effort; the agent itself cannot change on a live thread"
-            : modelSelectable
-            ? thread.runtime === "exited"
-              ? "Saved per thread and applied when this conversation resumes"
-              : "Change this idle conversation's model and reasoning effort"
-            : "The current live backend profile is unavailable; controls fail closed"}
-          disabled={backend === "acp" || busy || !catalogLoaded || !modelSelectable || profiles.isError}
-          compact
-          side="top"
-          className="min-w-0 max-w-[min(72%,20rem)] px-1.5 py-0.5"
-        />
+        {backend !== "acp" && (
+          <ProfileGridSelector
+            groups={profileGroups}
+            value={{ provider: backend, model, effort }}
+            pending={pendingModel || pendingEffort
+              ? { provider: backend, model: pendingModel, effort: pendingEffort }
+              : undefined}
+            onValueChange={({ model: nextModel, effort: nextEffort }) => changeProfile({ model: nextModel, effort: nextEffort })}
+            placeholder={profiles.isPending ? "Profile loading…" : "Profile unknown"}
+            ariaLabel="Thread model and effort"
+            menuAriaLabel={`Choose ${backend === "codex" ? "Codex" : "Claude Code"} model and effort`}
+            title={modelSelectable
+              ? thread.runtime === "exited"
+                ? "Saved per thread and applied when this conversation resumes"
+                : "Change this idle conversation's model and reasoning effort"
+              : "The current live backend profile is unavailable; controls fail closed"}
+            disabled={busy || !catalogLoaded || !modelSelectable || profiles.isError}
+            compact
+            side="top"
+            className="min-w-0 max-w-[min(72%,20rem)] px-1.5 py-0.5"
+          />
+        )}
+        {/* An ACP thread carries ONE control, the model inside its agent. The agent itself is not a
+            choice on a live thread — a session belongs to the process that opened it, exactly as a
+            thread never moves between Claude Code and Codex — so no pill names it as one (a disabled
+            agent pill stood here for a day and read as a switch; maintainer 2026-09-16: "that
+            shouldn't be possible"). The sidebar mark and the dropdown's tooltip say which agent. */}
         {backend === "acp" && acpAgentId && (
           <AcpModelSelect
             agentId={acpAgentId}
@@ -168,7 +165,7 @@ export function useThreadComposerControls(slug: string): { busy: boolean; footer
             onValueChange={(nextModelId) => changeProfile({ model: acpModelSlug(acpAgentId, nextModelId), effort: "" })}
             disabled={busy}
             side="top"
-            className="min-w-0 max-w-[min(50%,14rem)] px-1.5 py-0.5"
+            className="min-w-0 max-w-[min(72%,20rem)] px-1.5 py-0.5"
           />
         )}
         {backend === "claude" && (
