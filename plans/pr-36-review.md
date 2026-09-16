@@ -4,9 +4,40 @@ Reviewed 2026-09-16. This is an investigation record, not current product docume
 
 ## Recommendation
 
-**Merge with changes, not as-is.** Light mode is a useful feature, and the implementation's architecture is appropriate. Fix two remaining low-contrast text states, add their browser coverage, then reconcile with current local `main` and rerun the gates. Neither a rewrite nor closing the feature proposal is warranted.
+**Request visual changes before merging.** Light mode is useful and its architecture is appropriate. The latest head fixes the two text-contrast findings below, but the light palette still mixes several cool grays, pale-blue sent messages and gold selection. Simplify the large surfaces to a restrained neutral hierarchy before treating the design as ready. The earlier recommendation focused too narrowly on contrast compliance.
 
 The review made no product changes and posted nothing on GitHub.
+
+## Sans-serif and palette follow-up
+
+Fresh captures on 2026-09-16 use head `35a8f60264bdb57844a47c5a64f0850953f6a92d`, not the original review head. This commit incorporates local `main` through `2d2ee9e4` and the review fixes.
+
+**Sans-serif is already the default**, on local `main` and the PR. The [server default](https://github.com/colinhacks/frizz/blob/35a8f60264bdb57844a47c5a64f0850953f6a92d/packages/server/src/settings.ts#L80), [first-paint guard](https://github.com/colinhacks/frizz/blob/35a8f60264bdb57844a47c5a64f0850953f6a92d/packages/web/index.html#L43-L46), and [runtime font owner](https://github.com/colinhacks/frizz/blob/35a8f60264bdb57844a47c5a64f0850953f6a92d/packages/web/src/lib/font.ts#L23-L26) agree. A fresh isolated server returned `font: "sans"`; a clean Chrome profile rendered `data-font="sans"` with the system sans-serif stack before any font setting was changed. Mono requires an explicit saved choice. The previous diagnostic screenshot showed Mono because the save-status reproduction deliberately switched fonts, not because Mono was the default. No default change is needed.
+
+The real board's computed fills explain the visual concern:
+
+| Surface | Light fill |
+| --- | --- |
+| Transcript card | `#ffffff` |
+| Page and both prompt composers | `#f6f8fa` |
+| Question block | `#f1f4f7` |
+| Sent user prompt | `#dbeafe` |
+
+These come from the [light palette](https://github.com/colinhacks/frizz/blob/35a8f60264bdb57844a47c5a64f0850953f6a92d/packages/web/src/theme.css#L255-L280), not screenshot color processing. The question block and composers are slightly different blue-grays; the sent prompt adds a much stronger blue. Gold remains the selection/action accent. Different surface depths are useful, but this combination draws attention to filled rectangles without a clear relationship between their hues. That is a design judgment, not a claim that different shades are inherently an accessibility failure.
+
+**Smallest revision:** retain the semantic tokens and renderer adapters; tune the light surface, border and user-bubble values as one family. Use white and a small neutral-gray scale for large surfaces, including sent prompts, and reserve accent color for selection, actions and meaningful status. Keep the dark palette unchanged. Compare the real board and question/composer pair in Sans first, then recheck Mono, narrow widths and contrast. This is a palette pass, not a component rewrite; allow roughly half a day including visual review and regression checks.
+
+Fresh evidence, captured at 1440px and 390px with device scale 2:
+
+- [Sans board with both prompt composers and question card](../.frizz/threads/6219833f-167e-41b1-8f63-63259a8ef30e/evidence/sans-current/light-sans-board.png)
+- [Close view of the question, sent prompt and reply composer](../.frizz/threads/6219833f-167e-41b1-8f63-63259a8ef30e/evidence/sans-current/light-sans-question-card.png)
+- [Sans phone view](../.frizz/threads/6219833f-167e-41b1-8f63-63259a8ef30e/evidence/sans-current/light-sans-phone.png)
+- [Settings showing Sans](../.frizz/threads/6219833f-167e-41b1-8f63-63259a8ef30e/evidence/sans-current/light-sans-settings.png)
+- [Reproduction script](../.frizz/threads/6219833f-167e-41b1-8f63-63259a8ef30e/sans-capture.mjs) and [computed readings](../.frizz/threads/6219833f-167e-41b1-8f63-63259a8ef30e/evidence/sans-current/readings.json)
+
+The latest head's provisional title now measures **5.08:1** and the settled Settings “Saved” label **5.41:1** in Light. Both original defects are resolved. The new screenshots were inspected; the phone view has no horizontal overflow, and Chrome recorded no console or page errors. All owned browser/server processes exited and both listening ports were checked closed. The old posting question was withdrawn because it requested fixes already present.
+
+Latest [CI passes](https://github.com/colinhacks/frizz/actions/runs/35146461143); [Pullfrog still fails](https://github.com/colinhacks/frizz/actions/runs/35146460578) on the provider usage limit. This follow-up exercised the real source stack with seeded threads, not a promoted build or live provider dispatch. The complete test and artifact results below remain evidence for the original head only; the newer integration has not received another full review here.
 
 ## Scope and classification
 
@@ -17,7 +48,7 @@ The [PR](https://github.com/colinhacks/frizz/pull/36) is a **FEATURE**, not a bu
 - Compared against local `main`, including `803399d8b8642c5ad615ef9845f4ac55fa369799`. GitHub's base and this machine's active development branch differ.
 - Diff from the shared ancestor: 119 files, 3,117 insertions and 658 deletions, including fixtures, tests and verification scripts.
 
-## Required changes
+## Original findings — resolved in the latest head
 
 ### P2 — remaining dark-mode opacity treatments reduce light text contrast
 
@@ -93,4 +124,4 @@ The exact head's [CI check](https://github.com/colinhacks/frizz/actions/runs/348
 
 Request changes, with this summary; not posted:
 
-> The theme architecture looks sound and the browser and promoted-artifact checks pass. Two light-mode states still miss the stated contrast floor: the provisional sidebar title measures 3.11:1 and the Settings “Saved” label measures 3.24:1. Please replace their remaining opacity treatments with theme-aware ink and add both states to the browser checks before merging.
+> The two reported text-contrast defects are fixed at 35a8f602; the fresh light-mode readings are 5.08:1 and 5.41:1. The remaining concern is the palette itself: blue-gray question blocks and composers, pale-blue sent prompts, white cards and gold selection compete rather than forming a restrained hierarchy. Please simplify the large light-mode surfaces to a neutral family, retain deliberate accent/status colors, and verify the question/composer pair in the default Sans font at desktop and phone widths before merging. The theme architecture does not need a rewrite.
