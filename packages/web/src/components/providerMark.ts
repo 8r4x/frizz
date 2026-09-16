@@ -14,9 +14,13 @@ export interface ProviderMarkDefinition {
 export const PROVIDER_MARK_GEOMETRY: Record<ProviderMarkDefinition["backend"], string> = {
   claude: "size-[11px] translate-y-px",
   codex: "size-[10px]",
-  // A stroked lucide glyph, not a filled brand mark: its ink is the stroke, so it gets the larger box
-  // and no baseline nudge. Re-measure (scripts/ink-gaps.mjs) if the glyph or its stroke width changes.
-  acp: "size-[11px]",
+  // lucide's plug, cropped to its ink (ProviderMark's AcpMark sets the viewBox), so the box IS the ink
+  // and the caller's `ml-1` is 4px of ink gap like the two marks above (uncropped, the 24-unit box
+  // carried 2.75px of dead space per side and drew 6.75px). MEASURED on the rail title (13px
+  // system-ui, visual-review cap-band probe, dsf 6): ink 9.17px tall against a 9.16px cap height,
+  // riding 0.92px HIGH of the cap band before `translate-y-px` — the same 1px drop the Claude
+  // asterisk needs. Re-measure rather than re-guess if the glyph, its stroke or the type scale moves.
+  acp: "h-[11px] w-[6.65px] translate-y-px",
 }
 
 const PROVIDER_MARKS: Record<ProviderMarkDefinition["backend"], ProviderMarkDefinition> = {

@@ -28,7 +28,10 @@ export function ProviderMark({ backend, className }: ProviderMarkProps) {
 // "something is connected here over the protocol". Stroke 2.5 (lucide's default is 2) so the stroked
 // glyph reads at the same weight as the two filled marks beside it at 11px.
 function AcpMark() {
-  return <Plug aria-hidden="true" focusable="false" className="size-full" strokeWidth={2.5} />
+  // viewBox cropped to the plug's ink: its paths span x 6–18 and y 2–22 in lucide's 24-unit box, plus
+  // half the 2.5 stroke on each side. The span in providerMark.ts is sized to this aspect, so the
+  // rendered box is the ink box and the mark spaces like a filled glyph would.
+  return <Plug aria-hidden="true" focusable="false" className="size-full" strokeWidth={2.5} viewBox="4.75 0.75 14.5 22.5" />
 }
 
 function OpenAIMark() {
