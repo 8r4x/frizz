@@ -365,6 +365,8 @@ process.stdin.on("data", (c) => {
       } }) + "\\n")
     } else if (m.method === "thread/start" || m.method === "thread/resume") {
       process.stdout.write(JSON.stringify({ id: m.id, result: { thread: { id: "codex-thread-1", sessionId: "codex-session-1", ephemeral: !!(m.params && m.params.ephemeral) } } }) + "\\n")
+    } else if (m.method === "command/exec") {
+      process.stdout.write(JSON.stringify({ id: m.id, result: { exitCode: 0, stdout: "system/com.apple.configd = {", stderr: "" } }) + "\\n")
     } else if (m.id !== undefined) {
       process.stdout.write(JSON.stringify({ id: m.id, result: {} }) + "\\n")
     }
