@@ -411,6 +411,13 @@ try {
   }
   packages.get("frizz-server").latest = "0.13.7"
   await page.setViewport({ width: 1280, height: 850, deviceScaleFactor: 2 })
+  // Repeated failed boots can exhaust the recovery page's bounded polling budget. The rollback
+  // server is healthy above; exercise its explicit retry link before using the app's update control.
+  const retry = await page.$('a.btn')
+  if (retry && await retry.evaluate((element) => element.textContent.trim() === "Try again")) {
+    await Promise.all([page.waitForNavigation({ waitUntil: "networkidle0" }), retry.click()])
+    record("browser-recovery-retry-passed", { url: page.url() })
+  }
   await delay(600)
   // The real browser button sends the final recovery update, after all injected failures.
   await page.waitForSelector('button[aria-label="Update Frizz"]:not(:disabled)', { visible: true })
