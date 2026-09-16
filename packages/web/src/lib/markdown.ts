@@ -369,12 +369,12 @@ function walk(node: ParentNode, ctx: WalkContext) {
       if (target) {
         const imageUrl = localImageUrlForTarget(target)
         if (imageUrl) {
-          // The server resolves the path and admits only supported images beneath its trusted roots.
+          // The server resolves the path and admits only supported images behind its origin gate.
           // Keep the author's link label and normal Markdown link treatment; only the destination is
           // rewritten so an absolute filesystem path cannot become a bogus same-origin web URL.
           el.setAttribute("href", imageUrl)
           el.setAttribute("title", target.display)
-          el.setAttribute("data-local-path", target.posixPath!)
+          el.setAttribute("data-local-path", target.filePath!)
           el.setAttribute("data-local-image", "true")
         } else {
           // Don't turn a filesystem path into a bogus localhost URL or inert code. The app-wide
@@ -383,12 +383,12 @@ function walk(node: ParentNode, ctx: WalkContext) {
           // handler opens in Frizz's own reader drawer instead. The markup is identical either way (one
           // `data-local-path` button); only the title says which of the two the click will do, because
           // the routing decision belongs to the click handler and not to every producer of a path.
-          const readable = target.posixPath && isLocalMarkdownFile(target.posixPath)
+          const readable = target.filePath && isLocalMarkdownFile(target.filePath)
           const button = document.createElement("button")
           button.type = "button"
           button.className = "local-file-action"
           button.title = readable ? `Read ${target.display}` : target.display
-          if (target.posixPath) button.setAttribute("data-local-path", target.posixPath)
+          if (target.filePath) button.setAttribute("data-local-path", target.filePath)
           while (el.firstChild) button.append(el.firstChild)
           el.replaceWith(button)
           continue
@@ -399,14 +399,13 @@ function walk(node: ParentNode, ctx: WalkContext) {
       const target = localMarkdownTarget(el.getAttribute("src"))
       const imageUrl = target && localImageUrlForTarget(target)
       if (!imageUrl) {
-        // The only Markdown images admitted are local POSIX files through the existing, server-side
-        // allowlisted proxy. Remote/data/file-host images remain disallowed.
+        // Only local files use the server's image proxy. Remote/data/file-host images stay disallowed.
         el.remove()
         continue
       }
       el.setAttribute("src", imageUrl)
       el.setAttribute("title", target.display)
-      el.setAttribute("data-local-path", target.posixPath!)
+      el.setAttribute("data-local-path", target.filePath!)
       el.setAttribute("data-local-image", "true")
       if (!el.getAttribute("alt")) el.setAttribute("alt", target.display)
       // Block prose only — see sanitize's `block`. The attribute loop below still runs on `el`, which

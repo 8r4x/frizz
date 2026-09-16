@@ -12,11 +12,13 @@ export interface LocalMarkdownTarget {
   // Metadata for a local-looking destination. The renderer keeps this out of normal prose unless
   // it needs to expose it as an accessible title for a disabled local link.
   display: string
-  // Present only for a local POSIX path that can be passed to the server's gated image endpoint.
-  posixPath?: string
+  // Present only for an absolute path the server can act on — its gated image endpoint, its Markdown
+  // reader, or the desktop opener. POSIX (`/a/b`) and Windows (`C:\a\b`) alike; see localMarkdownTarget.
+  filePath?: string
 }
 
-const WINDOWS_ABSOLUTE_PATH = /^[a-zA-Z]:[\\/]/
+// Keep one-letter URL schemes such as x://host/p out of the drive-path branch.
+const WINDOWS_ABSOLUTE_PATH = /^[a-zA-Z]:[\\/](?![\\/])/
 
 // Editor deep-link schemes that all share VS Code's URL grammar: `<scheme>://file/<path>[:line[:col]]`.
 // Agents under user-level "link every file" instructions write these (`[plan.md](cursor://file/<abs>)`)
@@ -54,9 +56,13 @@ function isFrizzRoute(href: string): boolean {
 }
 
 /**
- * Classify an anchor/image destination that denotes a filesystem path. `file:` values with a remote
- * host and Windows paths are retained as local text but deliberately have no `posixPath`: they cannot
- * be proxied by a POSIX server endpoint. Protocol-relative URLs (`//cdn.example/...`) remain web URLs.
+ * Classify an anchor/image destination that denotes a filesystem path. A `file:` value with a REMOTE
+ * host is retained as local text but deliberately has no `filePath`: a UNC share is not a file this
+ * machine's server can resolve. Protocol-relative URLs (`//cdn.example/...`) remain web URLs.
+ *
+ * Both POSIX and Windows paths carry an actionable filePath. The server decides whether it can
+ * resolve the path; dropping Windows paths here creates inert buttons and removes inline images.
+ * Leave /C:/... intact: it may be a POSIX path, and only a Windows server may shed that first slash.
  */
 export function localMarkdownTarget(raw: string | null | undefined): LocalMarkdownTarget | null {
   const href = raw?.trim()
@@ -65,11 +71,11 @@ export function localMarkdownTarget(raw: string | null | undefined): LocalMarkdo
   // the decoded value before checking its drive-prefix form.
   const decodedHref = decodePath(href)
 
-  if (WINDOWS_ABSOLUTE_PATH.test(decodedHref)) return { display: decodedHref }
+  if (WINDOWS_ABSOLUTE_PATH.test(decodedHref)) return { display: decodedHref, filePath: decodedHref }
 
   if (decodedHref.startsWith("/") && !decodedHref.startsWith("//") && !isFrizzRoute(decodedHref)) {
     const path = decodedHref
-    return { display: path, posixPath: path }
+    return { display: path, filePath: path }
   }
 
   const editor = EDITOR_FILE_URL.exec(href)
@@ -79,20 +85,20 @@ export function localMarkdownTarget(raw: string | null | undefined): LocalMarkdo
     // the server's opener both strip it themselves, the same as for a bare `README.md:12` path.
     const rest = decodePath(editor[1].replace(/[?#].*$/u, "")).replace(/^\/+/, "")
     if (!rest) return null
-    if (WINDOWS_ABSOLUTE_PATH.test(rest)) return { display: rest }
+    if (WINDOWS_ABSOLUTE_PATH.test(rest)) return { display: rest, filePath: rest }
     const path = `/${rest}`
-    return { display: path, posixPath: path }
+    return { display: path, filePath: path }
   }
 
   if (!/^file:/i.test(href)) return null
   try {
     const url = new URL(href)
     if (url.protocol !== "file:") return null
-    // A UNC/remote file URL is not a local POSIX file the server can safely proxy. It remains a
+    // A UNC/remote file URL is not a local file the server can safely proxy. It remains a
     // non-navigating chip, while an empty or localhost authority can use the existing gated route.
     if (url.hostname && url.hostname !== "localhost") return { display: href }
     const path = decodePath(url.pathname)
-    return { display: path, posixPath: path }
+    return { display: path, filePath: path }
   } catch {
     return { display: href }
   }
@@ -103,12 +109,12 @@ export function localImageUrl(path: string): string {
 }
 
 // Must match the server's image-content-type allowlist. The server still decides whether a path is
-// actually eligible by resolving it and confining it to the active workspace's trusted roots.
+// actually eligible by resolving it to a regular image behind the HTTP origin gate.
 const PROXIED_IMAGE_PATH = /\.(?:png|jpe?g|gif|webp)$/i
 
 export function localImageUrlForTarget(target: LocalMarkdownTarget): string | null {
-  return target.posixPath && PROXIED_IMAGE_PATH.test(target.posixPath)
-    ? localImageUrl(target.posixPath)
+  return target.filePath && PROXIED_IMAGE_PATH.test(target.filePath)
+    ? localImageUrl(target.filePath)
     : null
 }
 
