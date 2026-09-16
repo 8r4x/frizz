@@ -1,12 +1,13 @@
 import * as RadixDialog from "@radix-ui/react-dialog"
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { useIsMutating, useMutation, useQuery } from "@tanstack/react-query"
-import type { AccountBackend, DispatchInput } from "@frizz/shared"
+import { acpModelSlug, type AccountBackend, type DispatchInput } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { showToast, store } from "../store.ts"
 import { Composer } from "./Composer.tsx"
 import { GithubTrigger, useGithubTriggerVisible } from "./GithubTrigger.tsx"
 import { ProfileGridSelector } from "./ProfileGridSelector.tsx"
+import { AcpModelSelect } from "./AcpModelSelect.tsx"
 import { LogoutConfirmModal, SignInModal } from "./SignInModal.tsx"
 import { dispatchProfileGroups } from "../lib/dispatchPreferences.ts"
 import { useDispatchProfile } from "../hooks/useDispatchProfile.ts"
@@ -160,24 +161,42 @@ export function DispatchForm({
       )
     }
     const profileGroups = dispatchProfileGroups(codexList, acpList)
+    const acpAgent = resolved.acpAgentId ? acpList.find((agent) => agent.id === resolved.acpAgentId) : undefined
     return (
-      <ProfileGridSelector
-        groups={profileGroups}
-        contextWindows
-        value={{ provider: resolved.backend, model: resolved.model, effort: resolved.effort }}
-        onValueChange={(selection) => saveProfile({
-          field: "profile",
-          backend: selection.provider as typeof resolved.backend,
-          model: selection.model,
-          // An ACP row has no effort cell, so its selection carries "" — stored as absent.
-          effort: (selection.effort || undefined) as DispatchInput["effort"],
-        })}
-        ariaLabel="Model and effort"
-        title={resolved.modelAvailable && resolved.effortAvailable
-          ? "Model and reasoning effort"
-          : "Saved model or reasoning effort unavailable — choose a supported pair"}
-        className="max-w-[min(21rem,72vw)]"
-      />
+      // gap-x-1.5 between the two pills, the same measured gap the thread composer's strip uses
+      // (useThreadComposerControls): two bordered pills on `gap-x-1` read as one segmented control.
+      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-0.5">
+        <ProfileGridSelector
+          groups={profileGroups}
+          contextWindows
+          // `pickerModel`, not `model`: an ACP row is keyed on the bare agent slug; the model inside
+          // the agent is the dropdown's, below.
+          value={{ provider: resolved.backend, model: resolved.pickerModel, effort: resolved.effort }}
+          onValueChange={(selection) => saveProfile({
+            field: "profile",
+            backend: selection.provider as typeof resolved.backend,
+            model: selection.model,
+            // An ACP row has no effort cell, so its selection carries "" — stored as absent.
+            effort: (selection.effort || undefined) as DispatchInput["effort"],
+          })}
+          ariaLabel="Model and effort"
+          title={resolved.modelAvailable && resolved.effortAvailable
+            ? "Model and reasoning effort"
+            : "Saved model or reasoning effort unavailable — choose a supported pair"}
+          className="max-w-[min(21rem,72vw)]"
+        />
+        {acpAgent && (
+          <AcpModelSelect
+            agentId={acpAgent.id}
+            agentLabel={acpAgent.label}
+            modelId={resolved.acpModelId}
+            // The pick becomes the profile's model slug (`acp:<agent>@<model>`); "" (the agent's own
+            // default) drops the tail.
+            onValueChange={(modelId) => saveProfile({ field: "model", backend: "acp", value: acpModelSlug(acpAgent.id, modelId) })}
+            className="max-w-[min(14rem,40vw)] px-2 py-1"
+          />
+        )}
+      </div>
     )
   }, [resolved, codexList, acpList, profileLoadError, saveProfile])
 

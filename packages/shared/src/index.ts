@@ -3521,7 +3521,9 @@ export type ThreadSkillsResult = z.infer<typeof ThreadSkillsResult>
 export const SetThreadProfileInput = z.object({
   slug: ThreadSlug,
   model: z.string().trim().min(1).max(200),
-  effort: z.string().trim().min(1).max(100),
+  // Absent ONLY for an ACP thread, whose model slug (`acp:<agent>@<model>`) carries no effort axis; the
+  // router refuses a Claude/Codex profile without one rather than storing "".
+  effort: z.string().trim().min(1).max(100).optional(),
 }).strict()
 export type SetThreadProfileInput = z.infer<typeof SetThreadProfileInput>
 export const SetThreadProfileResult = z.object({

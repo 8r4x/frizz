@@ -211,6 +211,20 @@ test("acp-bridge: a dispatch naming a model asks the agent for it, and an unknow
   } finally { await r.bridge.shutdown() }
 })
 
+test("acp-bridge: setModel switches a LIVE session's model in place, notes a refusal, and reports a closed session as not applied", async () => {
+  const r = rig()
+  try {
+    await r.bridge.spawnDispatch({ threadSlug: "t1", sessionId: "s1", cwd: r.stateDir, agentId: "fake", prompt: "hi", userText: "hi" })
+    await untilIdle(r, "s1")
+    assert.deepEqual(await r.bridge.setModel("t1", "s1", "fake/large"), { applied: true, model: "fake/large" })
+    assert.equal(r.bridge.session("t1", "s1")?.model, "fake/large", "the live session now runs on the chosen model")
+    assert.deepEqual(await r.bridge.setModel("t1", "s1", "fake/nonexistent"), { applied: true, model: "fake/large" })
+    assert.match((records(r, "s1").find((x) => x.kind === "acp-note") as { text: string } | undefined)?.text ?? "", /could not switch to fake\/nonexistent/)
+    assert.deepEqual(await r.bridge.setModel("t1", "nope", "fake/large"), { applied: false }, "no live session: the slug reaches the agent on the next open")
+    assert.deepEqual(await r.bridge.setModel("other", "s1", "fake/large"), { applied: false }, "another thread's session is not this thread's to steer")
+  } finally { await r.bridge.shutdown() }
+})
+
 test("acp-bridge: agentModels reads the advertised list through a throwaway session and caches it", async () => {
   const r = rig()
   try {

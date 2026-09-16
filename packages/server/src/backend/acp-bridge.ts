@@ -497,6 +497,18 @@ export class AcpBridge {
     void live.conn.close(reason === "shutdown" ? 1_000 : 3_000)
   }
 
+  /** Switch a LIVE session's model (`session/set_config_option`); `applied: false` when the session is
+   *  not open, in which case the caller's stored slug reaches the agent on the next open. A refusal is
+   *  written to the transcript as a note, exactly as on open, and still counts as applied: the agent
+   *  answered, and the note says what it runs on. */
+  async setModel(threadSlug: string, sessionId: string, modelId: string | null | undefined): Promise<{ applied: boolean; model?: string }> {
+    const live = this.sessions.get(sessionId)
+    if (!live || live.slug !== threadSlug || live.exited || live.conn.closed) return { applied: false }
+    const problem = await this.applyModel(live, modelId)
+    if (problem) live.writer.append({ kind: "acp-note", at: this.now(), text: problem })
+    return { applied: true, ...(live.model ? { model: live.model } : {}) }
+  }
+
   turnLiveness(threadSlug: string, sessionId: string): AcpTurnLiveness | undefined {
     const live = this.sessions.get(sessionId)
     if (!live || live.slug !== threadSlug) return undefined

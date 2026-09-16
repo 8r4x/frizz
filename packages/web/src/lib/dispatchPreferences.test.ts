@@ -18,6 +18,7 @@ test("provider switching restores each runtime's exact model and effort profile"
   assert.deepEqual(resolveDispatchPreferences(preferences, models), {
     backend: "claude",
     model: "sonnet",
+    pickerModel: "sonnet",
     effort: "max",
     codexModel: undefined,
     modelAvailable: true,
@@ -122,4 +123,24 @@ test("the acp model slug carries an optional agent model after @, and model ids 
   assert.equal(acpAgentIdFromModel("acp:"), undefined)
   assert.equal(acpAgentIdFromModel("opus"), undefined)
   assert.equal(acpModelIdFromModel("acp:grok@grok-4.6:fast"), "grok-4.6:fast")
+})
+
+test("an acp profile naming a model resolves the agent for the grid and the model for the dropdown", () => {
+  const agents = [{ id: "opencode", label: "OpenCode", command: "opencode", args: ["acp"], available: true }]
+  const resolved = resolveDispatchPreferences({ ...preferences, backend: "acp", acp: { model: "acp:opencode@openai/gpt-5.5" } }, models, agents)
+  assert.equal(resolved.model, "acp:opencode@openai/gpt-5.5")
+  assert.equal(resolved.pickerModel, "acp:opencode")
+  assert.equal(resolved.acpAgentId, "opencode")
+  assert.equal(resolved.acpModelId, "openai/gpt-5.5")
+  assert.equal(resolved.modelAvailable, true)
+  assert.equal(resolved.effort, "")
+  // The bare agent slug (the agent's own default model) has no model id, and a non-acp profile carries neither.
+  const bare = resolveDispatchPreferences({ ...preferences, backend: "acp", acp: { model: "acp:opencode" } }, models, agents)
+  assert.equal(bare.pickerModel, "acp:opencode")
+  assert.equal(bare.acpModelId, undefined)
+  assert.equal(resolveDispatchPreferences(preferences, models, agents).pickerModel, "sonnet")
+  // Availability is the AGENT's: a model inside an uninstalled agent is unavailable, a model inside an installed one is not judged here.
+  const missing = resolveDispatchPreferences({ ...preferences, backend: "acp", acp: { model: "acp:cursor@gpt-5.5" } }, models, agents)
+  assert.equal(missing.modelAvailable, false)
+  assert.equal(missing.pickerModel, "acp:cursor")
 })

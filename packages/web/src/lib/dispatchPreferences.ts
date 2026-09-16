@@ -1,4 +1,6 @@
 import {
+  acpAgentIdFromModel,
+  acpModelIdFromModel,
   acpModelSlug,
   type AcpAgent,
   type Backend,
@@ -18,9 +20,17 @@ import {
 
 export interface ResolvedDispatchPreferences {
   backend: Backend
+  // The slug dispatch sends: a Claude alias, a Codex slug, or `acp:<agent>[@<model>]`.
   model: string
+  // The model the profile GRID is keyed on. An ACP row is one row per AGENT (`acp:<agent>`), and the
+  // agent's model lives in the dropdown beside the pill — so the grid must never see the `@<model>`
+  // tail, or a saved model would read as "unknown profile" the moment one was chosen.
+  pickerModel: string
   effort: string
   codexModel?: CodexModel
+  // ACP only: the agent id and the model chosen inside it (undefined = the agent's own default).
+  acpAgentId?: string
+  acpModelId?: string
   modelAvailable: boolean
   effortAvailable: boolean
   effortOptions: SelectOption[]
@@ -105,11 +115,16 @@ export function resolveDispatchPreferences(
   const codexModel = backend === "codex"
     ? codexModels.find((candidate) => candidate.slug === model)
     : undefined
+  const acpAgentId = backend === "acp" ? acpAgentIdFromModel(model) : undefined
+  const acpModelId = backend === "acp" ? acpModelIdFromModel(model) : undefined
+  const pickerModel = backend === "acp" && acpAgentId ? acpModelSlug(acpAgentId) : model
+  // An ACP profile is available when its AGENT is installed: the model inside it is the agent's to
+  // honour or refuse (the bridge notes a refusal in the transcript), never a reason to block dispatch.
   const modelAvailable = backend === "claude"
     ? CLAUDE_MODELS.some((candidate) => candidate.value === model)
     : backend === "codex"
       ? codexModels.some((candidate) => candidate.slug === model)
-      : acpAgents.some((candidate) => candidate.available && acpModelSlug(candidate.id) === model)
+      : acpAgents.some((candidate) => candidate.available && candidate.id === acpAgentId)
   const defaultEffort = backend === "claude" ? "high" : codexModel?.defaultEffort ?? ""
   // An ACP agent has no effort axis in Frizz — it runs on its own CLI's model and effort — so its
   // effort is "" and always "available": there is nothing to be unavailable.
@@ -126,8 +141,11 @@ export function resolveDispatchPreferences(
   return {
     backend,
     model,
+    pickerModel,
     effort,
     codexModel,
+    ...(acpAgentId ? { acpAgentId } : {}),
+    ...(acpModelId ? { acpModelId } : {}),
     modelAvailable,
     effortAvailable,
     effortOptions,

@@ -123,6 +123,7 @@ import {
   SetOwnThreadTitleInput,
   SetOwnThreadTitleResult,
   AcpAgent,
+  acpAgentIdFromModel,
   acpModelIdFromModel,
   AcpAgentModels,
   AcpAgentModelsInput,
@@ -2249,7 +2250,20 @@ export function createRouter(ctx: AppContext) {
         // controller that used to follow was Claude-only, so a legacy (unmigrated) codex row must not
         // reach its reattach.
         const profRow = ctx.storage.getSession(input.slug)
-        if (profRow?.backend === "acp") throw new Error("An ACP agent chooses its own model; Frizz offers no profile for it yet")
+        if (profRow?.backend === "acp") {
+          // The model rides the row's slug (`acp:<agent>@<model>`) and has no effort axis. The AGENT
+          // cannot change under a session — the ACP session belongs to the process that opened it —
+          // so a slug naming another agent is refused. A live session takes the model now through
+          // session/set_config_option; otherwise the slug is applied when the session next opens.
+          if (acpAgentIdFromModel(input.model) !== acpAgentIdFromModel(profRow.model ?? "")) {
+            throw new Error("An ACP thread's agent cannot change; pick a model of the same agent")
+          }
+          ctx.storage.setProfile(input.slug, input.model, "")
+          const live = ctx.acpBridge ? await ctx.acpBridge.setModel(input.slug, profRow.session_id, acpModelIdFromModel(input.model)) : { applied: false }
+          ctx.board.refresh()
+          return { effect: live.applied ? "applied" as const : "next-resume" as const }
+        }
+        if (!input.effort) throw new Error(`effort is required for a ${profRow?.backend ?? "claude"} thread`)
         if (profRow?.backend === "codex") {
           ctx.storage.setProfile(input.slug, input.model, input.effort)
           ctx.board.refresh()

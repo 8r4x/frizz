@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type ComponentType } from "react"
 import { keepPreviousData, useIsMutating, useMutation, useQuery } from "@tanstack/react-query"
 import { Check, ChevronLeft, ChevronRight, CircleCheck, CircleDot, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, Github, Inbox, Loader2, MessageSquare } from "lucide-react"
-import type { DispatchInput, DispatchProfileSnapshot, GithubBatchInput, GithubItem } from "@frizz/shared"
+import { acpModelSlug, type DispatchInput, type DispatchProfileSnapshot, type GithubBatchInput, type GithubItem } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { showToast } from "../store.ts"
 import { Overlay } from "./NewThreadModal.tsx"
 import { ProfileGridSelector } from "./ProfileGridSelector.tsx"
+import { AcpModelSelect } from "./AcpModelSelect.tsx"
 import { useDispatchProfile } from "../hooks/useDispatchProfile.ts"
 import { dispatchProfileGroups } from "../lib/dispatchPreferences.ts"
 import { OPAQUE_PORTAL_SURFACE_ABOVE_DIALOG_Z } from "../lib/overlaySurface.ts"
@@ -130,6 +131,7 @@ export function GithubPickerModal({ onClose }: { onClose: () => void }) {
   // Stable identity: ProfileGridSelector memoizes off `groups`, and this modal re-renders on every
   // row toggle.
   const profileGroups = useMemo(() => dispatchProfileGroups(codexList, acpList), [codexList, acpList])
+  const acpAgent = resolved?.acpAgentId ? acpList.find((agent) => agent.id === resolved.acpAgentId) : undefined
   const profile: DispatchProfileSnapshot | undefined = resolved
     ? { backend: resolved.backend, model: resolved.model, effort: (resolved.effort || undefined) as DispatchProfileSnapshot["effort"] }
     : undefined
@@ -280,10 +282,11 @@ export function GithubPickerModal({ onClose }: { onClose: () => void }) {
             UPWARD (side="top") — the footer sits on the modal's bottom edge. */}
         <div className="mt-4 flex items-end justify-between gap-3">
           <div className="min-w-0">
+            <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
             <ProfileGridSelector
               groups={profileGroups}
               contextWindows
-              value={resolved ? { provider: resolved.backend, model: resolved.model, effort: resolved.effort } : undefined}
+              value={resolved ? { provider: resolved.backend, model: resolved.pickerModel, effort: resolved.effort } : undefined}
               onValueChange={(selection) => saveProfile({
                 field: "profile",
                 backend: selection.provider as DispatchProfileSnapshot["backend"],
@@ -300,6 +303,18 @@ export function GithubPickerModal({ onClose }: { onClose: () => void }) {
               menuZClass={OPAQUE_PORTAL_SURFACE_ABOVE_DIALOG_Z}
               className="max-w-[min(21rem,60vw)]"
             />
+            {acpAgent && (
+              <AcpModelSelect
+                agentId={acpAgent.id}
+                agentLabel={acpAgent.label}
+                modelId={resolved?.acpModelId}
+                onValueChange={(modelId) => saveProfile({ field: "model", backend: "acp", value: acpModelSlug(acpAgent.id, modelId) })}
+                side="top"
+                menuZClass={OPAQUE_PORTAL_SURFACE_ABOVE_DIALOG_Z}
+                className="max-w-[min(14rem,30vw)] px-2 py-1"
+              />
+            )}
+            </div>
             {profileError && <p className="mt-1 max-w-[430px] text-[10.5px] text-red-400">{profileError}</p>}
           </div>
           <div className="flex items-center gap-3">

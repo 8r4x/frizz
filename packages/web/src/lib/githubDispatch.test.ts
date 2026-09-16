@@ -79,3 +79,14 @@ test("opening the picker carries no profile state — the modal reads the live p
     closeGithubPicker()
   }
 })
+
+test("an acp profile is judged on its AGENT: a model inside an installed agent dispatches, one inside a missing agent does not", () => {
+  const agents = [
+    { id: "opencode", label: "OpenCode", command: "opencode", args: ["acp"], available: true },
+    { id: "cursor", label: "Cursor", command: "cursor-agent", args: ["acp"], available: false },
+  ]
+  assert.equal(dispatchProfileError({ backend: "acp", model: "acp:opencode@openai/gpt-5.5" }, [codexModel], agents), undefined)
+  assert.equal(dispatchProfileError({ backend: "acp", model: "acp:opencode" }, [codexModel], agents), undefined)
+  assert.match(dispatchProfileError({ backend: "acp", model: "acp:cursor@gpt-5.5" }, [codexModel], agents) ?? "", /not installed/)
+  assert.match(dispatchProfileError({ backend: "acp", model: "acp:nope" }, [codexModel], agents) ?? "", /not in the catalogue/)
+})

@@ -1,5 +1,5 @@
 import {
-  acpModelSlug,
+  acpAgentIdFromModel,
   type AcpAgent,
   type CodexModel,
   type DispatchProfileSnapshot,
@@ -19,7 +19,8 @@ export function dispatchProfileError(
   acpAgents: readonly AcpAgent[] = [],
 ): string | undefined {
   if (profile.backend === "acp") {
-    const agent = acpAgents.find((candidate) => acpModelSlug(candidate.id) === profile.model)
+    // `acp:<agent>@<model>`: the agent must be installed; the model inside it is the agent's to honour.
+    const agent = acpAgents.find((candidate) => candidate.id === acpAgentIdFromModel(profile.model))
     if (!agent) return `ACP agent ${profile.model} is not in the catalogue`
     if (!agent.available) return `${agent.label} is not installed on this machine`
     return undefined
