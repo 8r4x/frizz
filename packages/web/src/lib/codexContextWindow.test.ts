@@ -19,20 +19,21 @@ const CATALOGUE: CodexModel[] = [
   model("gpt-5.3-codex-spark", "GPT-5.3-Codex-Spark", 128_000, 128_000),
 ]
 
-test("the presets are the catalogue's own numbers: the default model's stock window, then each maximum that raises something", () => {
+test("value-first presets include intermediate windows between the catalogue endpoints", () => {
   assert.deepEqual(codexContextWindowOptions(CATALOGUE, undefined), [
-    { value: CODEX_CONTEXT_WINDOW_DEFAULT, label: "Model default (272K on GPT-6-Astra)" },
-    { value: "872000", label: "872K tokens (model maximum)" },
+    { value: CODEX_CONTEXT_WINDOW_DEFAULT, label: "272k (default)" },
+    { value: "472000", label: "472k" },
+    { value: "672000", label: "672k" },
+    { value: "872000", label: "872k (maximum)" },
   ])
-  // No 400K / 600K / 800K / 1M: nothing in the catalogue runs at those.
-  assert.ok(!codexContextWindowOptions(CATALOGUE, undefined).some((o) => /^(400|600|800)K|1M/.test(o.label)))
+  assert.ok(!codexContextWindowOptions(CATALOGUE, undefined).some((o) => /800k|1M/.test(o.label)))
 })
 
 test("a model whose maximum equals its stock window contributes no preset — a raise would change nothing for it", () => {
   const opts = codexContextWindowOptions([model("gpt-5.5", "GPT-5.5", 272_000, 272_000), model("spark", "Spark", 128_000, 128_000)], undefined)
-  // Nothing raisable ⇒ the measured 872K fallback keeps the control usable, labelled as the maximum.
-  assert.deepEqual(opts.map((o) => o.value), [CODEX_CONTEXT_WINDOW_DEFAULT, "872000"])
-  assert.equal(opts[0]!.label, "Model default (272K on GPT-5.5)")
+  // Nothing raisable ⇒ the measured 872k fallback keeps the control usable, labelled as the maximum.
+  assert.deepEqual(opts.map((o) => o.value), [CODEX_CONTEXT_WINDOW_DEFAULT, "472000", "672000", "872000"])
+  assert.equal(opts[0]!.label, "272k (default)")
 })
 
 test("several distinct maxima each name the models they apply to", () => {
@@ -42,31 +43,43 @@ test("several distinct maxima each name the models they apply to", () => {
     model("c", "Gamma", 272_000, 872_000),
   ], undefined)
   assert.deepEqual(opts.slice(1), [
-    { value: "872000", label: "872K tokens (Alpha, Gamma maximum)" },
-    { value: "1000000", label: "1M tokens (Beta maximum)" },
+    { value: "472000", label: "472k" },
+    { value: "672000", label: "672k" },
+    { value: "872000", label: "872k (Alpha, Gamma maximum)" },
+    { value: "1000000", label: "1M (Beta maximum)" },
   ])
 })
 
 test("no catalogue numbers at all (the fallback model, or an old cache) still offers the default and the measured maximum", () => {
   assert.deepEqual(codexContextWindowOptions([model("gpt-5.5", "GPT-5.5")], undefined), [
-    { value: CODEX_CONTEXT_WINDOW_DEFAULT, label: "Model default" },
-    { value: "872000", label: "872K tokens (model maximum)" },
+    { value: CODEX_CONTEXT_WINDOW_DEFAULT, label: "272k (default)" },
+    { value: "472000", label: "472k" },
+    { value: "672000", label: "672k" },
+    { value: "872000", label: "872k (maximum)" },
   ])
-  assert.deepEqual(codexContextWindowOptions(undefined, undefined).map((o) => o.value), [CODEX_CONTEXT_WINDOW_DEFAULT, "872000"])
+  assert.deepEqual(codexContextWindowOptions(undefined, undefined).map((o) => o.value), [CODEX_CONTEXT_WINDOW_DEFAULT, "472000", "672000", "872000"])
 })
 
-test("a stored value outside the ladder is appended so the select never renders blank", () => {
-  const opts = codexContextWindowOptions(CATALOGUE, 600_000)
-  assert.deepEqual(opts.at(-1), { value: "600000", label: "600K tokens" })
+test("a stored custom value stays visible and sorted without duplicating presets", () => {
+  const opts = codexContextWindowOptions(CATALOGUE, 500_000)
+  assert.deepEqual(opts[2], { value: "500000", label: "500k" })
   // …but a stored value that IS a preset is not duplicated.
-  assert.equal(codexContextWindowOptions(CATALOGUE, 872_000).length, 2)
+  assert.equal(codexContextWindowOptions(CATALOGUE, 872_000).length, 4)
+  assert.equal(codexContextWindowOptions(CATALOGUE, 672_000).length, 4)
+})
+
+test("intermediate presets respect changed catalogue endpoints and never duplicate a maximum", () => {
+  assert.deepEqual(codexContextWindowOptions([model("a", "Alpha", 500_000, 672_000)], undefined), [
+    { value: CODEX_CONTEXT_WINDOW_DEFAULT, label: "500k (default)" },
+    { value: "672000", label: "672k (maximum)" },
+  ])
 })
 
 test("formatTokens spells the catalogue's numbers the way the dial does", () => {
-  assert.equal(formatTokens(272_000), "272K")
-  assert.equal(formatTokens(872_000), "872K")
+  assert.equal(formatTokens(272_000), "272k")
+  assert.equal(formatTokens(872_000), "872k")
   assert.equal(formatTokens(1_000_000), "1M")
   assert.equal(formatTokens(1_250_000), "1.25M")
-  assert.equal(formatTokens(258_400), "258.4K")
+  assert.equal(formatTokens(258_400), "258.4k")
   assert.equal(formatTokens(950), "950")
 })

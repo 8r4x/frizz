@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ComponentType } from "react"
-import { keepPreviousData, useMutation, useQuery } from "@tanstack/react-query"
+import { keepPreviousData, useIsMutating, useMutation, useQuery } from "@tanstack/react-query"
 import { Check, ChevronLeft, ChevronRight, CircleCheck, CircleDot, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, Github, Inbox, Loader2, MessageSquare } from "lucide-react"
 import type { DispatchInput, DispatchProfileSnapshot, GithubBatchInput, GithubItem } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
@@ -37,6 +37,7 @@ export function GithubPickerModal({ onClose }: { onClose: () => void }) {
   // picker-local copy that silently diverges). A Codex cache refresh can invalidate the saved pair
   // while the picker is open; the final revalidation below then fails closed rather than downgrading.
   const { resolved, codexList, acpList, loadError, saveProfile } = useDispatchProfile()
+  const savingContext = useIsMutating({ mutationKey: ["contextWindowSet"] }) > 0
 
   const [kind, setKind] = useState<Kind>("issues")
   const [sort, setSort] = useState<Sort>("recent")
@@ -141,7 +142,7 @@ export function GithubPickerModal({ onClose }: { onClose: () => void }) {
     : loadError
       ? "Could not load the model catalogue — reopen once it loads"
       : undefined
-  const dispatchBlocked = profileError ?? (profile ? undefined : "Loading the model catalogue…")
+  const dispatchBlocked = profileError ?? (savingContext ? "Saving context window…" : profile ? undefined : "Loading the model catalogue…")
 
   function startDispatch() {
     if (!profile || dispatchBlocked) {
@@ -281,6 +282,7 @@ export function GithubPickerModal({ onClose }: { onClose: () => void }) {
           <div className="min-w-0">
             <ProfileGridSelector
               groups={profileGroups}
+              contextWindows
               value={resolved ? { provider: resolved.backend, model: resolved.model, effort: resolved.effort } : undefined}
               onValueChange={(selection) => saveProfile({
                 field: "profile",

@@ -19,6 +19,7 @@ import {
 } from "../lib/profileGrid.ts"
 import { registerOpenSelect } from "../lib/selectOverlay.ts"
 import { OPAQUE_PORTAL_SURFACE_Z, OPAQUE_SURFACE_BASE } from "../lib/overlaySurface.ts"
+import { ContextWindowControl } from "./ContextWindowControl.tsx"
 
 function effortLabel(effort: string): string {
   if (effort === "xhigh") return "X-high"
@@ -39,6 +40,7 @@ export function ProfileGridSelector({
   side = "bottom",
   menuZClass = OPAQUE_PORTAL_SURFACE_Z,
   className = "",
+  contextWindows = false,
 }: {
   groups: readonly ProfileGridGroup[]
   value?: Partial<ProfileGridSelection>
@@ -56,8 +58,13 @@ export function ProfileGridSelector({
   // the trigger lives inside, e.g. OPAQUE_PORTAL_SURFACE_ABOVE_DIALOG_Z inside the z-[200] Overlay.
   menuZClass?: string
   className?: string
+  // Project defaults for NEW workers, never a promise to resize a running thread's context.
+  contextWindows?: boolean
 }) {
   const [open, setOpen] = useState(false)
+  const [contextGroup, setContextGroup] = useState<string | null>(null)
+  const contextGroupRef = useRef(contextGroup)
+  contextGroupRef.current = contextGroup
   const openRef = useRef(open)
   const disabledRef = useRef(disabled)
   const unregisterOpenRef = useRef<(() => void) | undefined>(undefined)
@@ -83,9 +90,18 @@ export function ProfileGridSelector({
   disabledRef.current = disabled
 
   function closeFromRegistry() {
+    setContextGroup(null)
     openRef.current = false
     unregisterOpenRef.current = undefined
     setOpen(false)
+  }
+
+  function dismissTopLayer() {
+    if (contextGroupRef.current) {
+      contextGroupRef.current = null
+      setContextGroup(null)
+      unregisterOpenRef.current = registerOpenSelect(dismissTopLayer)
+    } else closeFromRegistry()
   }
 
   useLayoutEffect(() => {
@@ -95,7 +111,7 @@ export function ProfileGridSelector({
       event.stopPropagation()
       event.stopImmediatePropagation()
       unregisterOpenRef.current?.()
-      closeFromRegistry()
+      dismissTopLayer()
     }
     window.addEventListener("keydown", onKeyDown, { capture: true })
     return () => window.removeEventListener("keydown", onKeyDown, { capture: true })
@@ -141,7 +157,8 @@ export function ProfileGridSelector({
         unregisterOpenRef.current = undefined
         openRef.current = next
         setOpen(next)
-        if (next) unregisterOpenRef.current = registerOpenSelect(closeFromRegistry)
+        if (next) unregisterOpenRef.current = registerOpenSelect(dismissTopLayer)
+        else setContextGroup(null)
       }}
     >
       <RadixMenu.Trigger asChild disabled={disabled}>
@@ -170,14 +187,26 @@ export function ProfileGridSelector({
           sideOffset={5}
           collisionPadding={8}
           onEscapeKeyDown={(event) => event.stopPropagation()}
+          onInteractOutside={(event) => {
+            if (event.target instanceof Element && event.target.closest("[data-context-window-menu]")) event.preventDefault()
+          }}
           className={`profile-grid-menu ${menuZClass} ${OPAQUE_SURFACE_BASE} max-h-[min(360px,var(--radix-dropdown-menu-content-available-height))] max-w-[calc(100vw-1rem)] overflow-auto rounded-lg p-1.5 ${typography}`}
         >
           {groups.map((group) => (
             <RadixMenu.Group key={group.id}>
               {group.label && (
-                <RadixMenu.Label className="px-1.5 pb-1 pt-1 text-left font-medium tracking-[0.07em] text-muted/55 first:pt-0.5">
-                  {group.label}
-                </RadixMenu.Label>
+                <div className="profile-grid-header sticky left-0 flex items-baseline justify-between gap-4 px-1.5 pb-1 pt-1 first:pt-0.5">
+                  <RadixMenu.Label className="text-left font-medium tracking-[0.07em] text-muted/55">
+                    {group.label}
+                  </RadixMenu.Label>
+                  {contextWindows && (group.id === "claude" || group.id === "codex") && (
+                    <ContextWindowControl
+                      backend={group.id}
+                      open={contextGroup === group.id}
+                      onOpenChange={(next) => setContextGroup(next ? group.id : null)}
+                    />
+                  )}
+                </div>
               )}
               <RadixMenu.RadioGroup
                 value={currentKey}

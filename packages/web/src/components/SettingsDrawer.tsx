@@ -15,14 +15,11 @@ import { Select } from "./ui/Select.tsx"
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/Popover.tsx"
 import { Tooltip } from "./Tooltip.tsx"
 import { CLAUDE_DISPATCH_PERMISSION_OPTIONS } from "../lib/options.ts"
-import { CODEX_CONTEXT_WINDOW_DEFAULT, codexContextWindowOptions } from "../lib/codexContextWindow.ts"
 
 type NotifPerm = "default" | "granted" | "denied" | "unsupported"
 export const SETTINGS_HELP = {
   permissionMode: "The permission mode new Claude Code threads launch with. Auto runs safe actions and asks you to approve the risky ones in the thread. Bypass launches the worker with --dangerously-skip-permissions: it never asks, so nothing waits on you and nothing is checked either. Takes effect on the next thread you dispatch; to change a thread that already exists, use the picker beside its model in the prompt box. Codex threads always run with full workspace access and are unaffected.",
   promptCacheTtl: "Which prompt-cache tier a new Claude thread writes to. A 1-hour entry costs twice the input price to write, a 5-minute entry 1.25 times; the hour only pays off when the thread's cache actually survives that long. Measured 2026-09-03: cache writes were half of a day's spend and the entries were lost every 15 to 30 minutes regardless, so 5 minutes was the cheaper tier. Automatic leaves the choice to Claude Code, which picks 1 hour on a subscription. Takes effect on the next thread you dispatch and on a thread that resumes after its worker exited.",
-  autoCompactWindow: "How large a new Claude thread's conversation may grow, in tokens, before Claude Code compacts it. Frizz launches every Claude thread with the 1M context window, so without a ceiling a long thread keeps re-sending everything it has read on every turn; 500K halves that at the cost of an earlier summary. Takes effect on the next thread you dispatch and on a thread that resumes after its worker exited; a thread whose worker is already running keeps its current ceiling. A thread's context dial reads against the ceiling it was launched with, not the model's full window.",
-  codexContextWindow: "How much context a new Codex thread runs with, in tokens. The presets are the numbers in Codex's own model catalogue: the default model's stock window, and each larger window a listed model accepts (872K on GPT-5.6 and GPT-6; the model's 1M total minus the 128K it reserves for its reply). Codex compacts at 90% of whatever window the thread has, so a larger window is also a later compaction and a larger prompt re-sent on every turn. A model that does not accept the value keeps its own window (GPT-5.5 stays at 272K). Takes effect on the next thread you dispatch and on a thread Codex picks back up after a restart; a thread its app-server already holds keeps its current window. A thread's context dial reads the usable 95% of the window (828K for 872K).",
   font: "Changes the interface reading font for this browser.",
   localFileOpener: "Chooses how vetted local artifact links open. Markdown files open in Frizz's own reader (which carries an Open action that uses this setting), and image clicks always use the OS default viewer.",
   density: "How much of a diff shows before you ask for it, in this browser. Compact collapses every diff to its header row (click one to open it); Comfortable shows them in full. Applies immediately.",
@@ -82,8 +79,7 @@ function useAutosave() {
     chain.current = chain.current
       .then(() => rpc.settingsSet(next))
       .then((saved) => {
-        // Publish the SERVER's validated copy instead of invalidating: this drawer is the only writer,
-        // so a refetch would re-read what we just sent — and could race a write still queued behind it.
+        // Publish the server's validated copy rather than racing queued writes with a refetch.
         queryClient.setQueryData(["settingsGet"], saved)
         inflight.current -= 1
         retries.current = 0
@@ -262,8 +258,6 @@ export function SettingsDrawer() {
 
             <ClaudeSection draft={draft} setDraft={update} />
 
-            <CodexSection draft={draft} setDraft={update} />
-
             <PromptsSection draft={draft} setDraft={update} />
           </div>
         )}
@@ -321,18 +315,6 @@ const GH_PROMPT_TOKENS: { token: string; gloss: string }[] = [
   { token: "body", gloss: "description" },
 ]
 
-// The compaction-window presets, in tokens. 200K is the plain (non-1M) model window; 1M is the whole
-// window Frizz dispatches with, i.e. "never compact early". The server default is 500K (settings.ts);
-// the constant here only names it for a stored blob that predates the field.
-const DEFAULT_AUTO_COMPACT_WINDOW = 500_000
-const AUTO_COMPACT_WINDOW_OPTIONS = [
-  { value: "200000", label: "200K tokens" },
-  { value: "350000", label: "350K tokens" },
-  { value: "500000", label: "500K tokens (default)" },
-  { value: "750000", label: "750K tokens" },
-  { value: "1000000", label: "1M tokens" },
-]
-
 // The prompt-cache tiers Claude Code understands (CLAUDE_CODE_PROMPT_CACHE_TTL). "auto" passes nothing
 // and the CLI picks for itself — 1 hour on a subscription — so it is the server default (settings.ts).
 const PROMPT_CACHE_TTL_OPTIONS = [
@@ -341,8 +323,8 @@ const PROMPT_CACHE_TTL_OPTIONS = [
   { value: "1h", label: "1 hour" },
 ]
 
-// "Claude" — what applies to Claude Code workers and nothing else. Two fields: the launch permission
-// mode for NEW Claude workers, and their compaction window. Only the two modes a headless worker can actually run in are
+// "Claude" — launch permissions and prompt caching. Context controls live in the new-thread model
+// picker. Only the two modes a headless worker can actually run in are
 // offered (see CLAUDE_DISPATCH_PERMISSION_OPTIONS); the server's workerDispatchPermission enforces the
 // same floor, so a restrictive value left in an old DB can never reach a spawn. A stored mode outside
 // the two reads as the "Auto" floor — which is exactly what would be dispatched — rather than
@@ -367,16 +349,6 @@ function ClaudeSection({
           ariaLabel="Claude permission mode"
         />
       </SettingsField>
-      <SettingsField label="Compaction window" help={SETTINGS_HELP.autoCompactWindow}>
-        <Select
-          variant="bordered"
-          value={String(draft.autoCompactWindow ?? DEFAULT_AUTO_COMPACT_WINDOW)}
-          onValueChange={(v) => setDraft({ ...draft, autoCompactWindow: Number(v) })}
-          options={AUTO_COMPACT_WINDOW_OPTIONS}
-          indicatorPosition="right"
-          ariaLabel="Claude compaction window"
-        />
-      </SettingsField>
       <SettingsField label="Prompt cache tier" help={SETTINGS_HELP.promptCacheTtl}>
         <Select
           variant="bordered"
@@ -385,45 +357,6 @@ function ClaudeSection({
           options={PROMPT_CACHE_TTL_OPTIONS}
           indicatorPosition="right"
           ariaLabel="Claude prompt cache tier"
-        />
-      </SettingsField>
-    </div>
-  )
-}
-
-// "Codex" — what applies to Codex threads and nothing else. One field today: the context window a new
-// thread runs with. The band carries the vendor's name for the same reason the Claude one does, and so
-// the two compaction-shaped dials are never mistaken for one setting that applies to both runtimes: a
-// Claude thread is launched at 1M and CAPPED down, a Codex thread is launched at its stock window and
-// RAISED up, which is why the Claude field says "Compaction window" and this one says "Context window".
-//
-// The presets are the CATALOGUE's numbers (lib/codexContextWindow.ts): "Model default" stores nothing,
-// and every other option is a `max_context_window` some listed model accepts — 872K on GPT-5.6 and
-// GPT-6 as of 2026-09-11. The value rides `model_context_window`, which codex clamps to that maximum
-// and reports at 95% on the context dial (828K for 872K). The same `codexModels` query the composer
-// uses feeds it, so a catalogue refresh moves the presets without a code change.
-function CodexSection({
-  draft,
-  setDraft,
-}: {
-  draft: Settings
-  setDraft: (s: Settings) => void
-}) {
-  const models = useQuery({ queryKey: ["codexModels"], queryFn: () => rpc.codexModels() })
-  const stored = draft.codexContextWindow
-  const value = stored === undefined ? CODEX_CONTEXT_WINDOW_DEFAULT : String(stored)
-  const options = codexContextWindowOptions(models.data, stored)
-  return (
-    <div className="flex flex-col gap-6">
-      <DividerLabel label="Codex" />
-      <SettingsField label="Context window" help={SETTINGS_HELP.codexContextWindow}>
-        <Select
-          variant="bordered"
-          value={value}
-          onValueChange={(v) => setDraft({ ...draft, codexContextWindow: v === CODEX_CONTEXT_WINDOW_DEFAULT ? undefined : Number(v) })}
-          options={options}
-          indicatorPosition="right"
-          ariaLabel="Codex context window"
         />
       </SettingsField>
     </div>

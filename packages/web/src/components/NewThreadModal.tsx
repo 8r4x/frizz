@@ -1,6 +1,6 @@
 import * as RadixDialog from "@radix-ui/react-dialog"
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
-import { useMutation, useQuery } from "@tanstack/react-query"
+import { useIsMutating, useMutation, useQuery } from "@tanstack/react-query"
 import type { AccountBackend, DispatchInput } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { showToast, store } from "../store.ts"
@@ -27,6 +27,7 @@ export function DispatchForm({
 }) {
   // The one durable new-thread profile, shared with the GitHub picker's own selector.
   const { resolved, codexList, acpList, loadError: profileLoadError, saveProfile } = useDispatchProfile()
+  const savingContext = useIsMutating({ mutationKey: ["contextWindowSet"] }) > 0
   // Gate the leftAction slot itself, not just the icon: Composer reserves rail space whenever the
   // prop is set, so a hidden GithubTrigger must mean NO prop — not a null-rendering element.
   const githubTriggerVisible = useGithubTriggerVisible()
@@ -90,7 +91,7 @@ export function DispatchForm({
   }
 
   function submit() {
-    if (!prompt.trim() || !resolved) return
+    if (!prompt.trim() || !resolved || savingContext) return
     // `/login` and `/logout` are frizz-owned aliases for the typed provider account actions — they
     // invoke the sign-in / sign-out flow for the SELECTED backend and never become prompt text.
     const alias = parseAccountAlias(prompt)
@@ -162,6 +163,7 @@ export function DispatchForm({
     return (
       <ProfileGridSelector
         groups={profileGroups}
+        contextWindows
         value={{ provider: resolved.backend, model: resolved.model, effort: resolved.effort }}
         onValueChange={(selection) => saveProfile({
           field: "profile",
@@ -190,7 +192,7 @@ export function DispatchForm({
         placeholder="Describe the task…"
         minHeight={96}
         maxHeight={340}
-        busy={dispatch.isPending}
+        busy={dispatch.isPending || savingContext}
         footer={footer}
         leftAction={githubTriggerVisible ? <GithubTrigger /> : undefined}
       />
