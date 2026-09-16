@@ -2,7 +2,7 @@ import { INTERACTION_PROTOCOL_VERSION, InteractionRequest, type InteractionReque
 import type { InteractionSessionScope, InteractionStore } from "../interaction-store.ts"
 import { redactCredentialSyntax } from "../credential-redaction.ts"
 import { log } from "../logging.ts"
-import { acpAgentSpecs, resolveAcpAgent, type AcpAgentSpec, type ResolvedAcpAgent } from "./acp-agents.ts"
+import { acpAgentSpecs, resolveAcpAgent, type AcpAgentInput, type AcpAgentSpec, type ResolvedAcpAgent } from "./acp-agents.ts"
 import { AcpConnection, AcpRemoteError, AcpRequestError, spawnAcpChild, type AcpSpawn } from "./acp-rpc.ts"
 import { AcpTranscriptWriter, acpTranscriptPath, type AcpRecord } from "./acp-transcript.ts"
 import {
@@ -43,7 +43,7 @@ export interface AcpBridgeOptions {
   /** The operator's environment; filtered through inheritWorkerEnvironment before the child sees it. */
   env?: NodeJS.ProcessEnv
   /** The operator's own agent entries (settings.acpAgents), re-read on every spawn. */
-  customAgents?: () => readonly AcpAgentSpec[] | undefined
+  customAgents?: () => readonly AcpAgentInput[] | undefined
   spawn?: AcpSpawn
   onDiagnostic?: (d: { threadSlug: string; kind: string; message: string }) => void
   /** Called whenever a turn starts or ends, so the board can refresh without polling. */

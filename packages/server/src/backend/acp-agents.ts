@@ -30,6 +30,9 @@ export const ACP_AGENT_CATALOGUE: readonly AcpAgentSpec[] = [
   { id: "kimi", label: "Kimi CLI", command: "kimi", args: ["acp"] },
 ]
 
+/** What the operator writes under `settings.acpAgents`: the spec with `args` optional. */
+export type AcpAgentInput = Omit<AcpAgentSpec, "args"> & { args?: readonly string[] }
+
 export interface ResolvedAcpAgent extends AcpAgentSpec {
   /** The absolute executable, when it was found. */
   bin?: string
@@ -67,7 +70,7 @@ export function findOnPath(command: string, env: NodeJS.ProcessEnv = process.env
 }
 
 /** The catalogue merged with the operator's own entries (theirs win on id), in catalogue order. */
-export function acpAgentSpecs(custom: readonly AcpAgentSpec[] | undefined): AcpAgentSpec[] {
+export function acpAgentSpecs(custom: readonly AcpAgentInput[] | undefined): AcpAgentSpec[] {
   const byId = new Map<string, AcpAgentSpec>()
   for (const spec of ACP_AGENT_CATALOGUE) byId.set(spec.id, spec)
   for (const spec of custom ?? []) if (spec.id && spec.command) byId.set(spec.id, { ...spec, args: [...(spec.args ?? [])] })
@@ -75,14 +78,14 @@ export function acpAgentSpecs(custom: readonly AcpAgentSpec[] | undefined): AcpA
 }
 
 /** Every known agent, with `bin` set for the ones present on this machine. */
-export function listAcpAgents(custom: readonly AcpAgentSpec[] | undefined, env: NodeJS.ProcessEnv = process.env): ResolvedAcpAgent[] {
+export function listAcpAgents(custom: readonly AcpAgentInput[] | undefined, env: NodeJS.ProcessEnv = process.env): ResolvedAcpAgent[] {
   return acpAgentSpecs(custom).map((spec) => {
     const bin = findOnPath(spec.command, env)
     return bin ? { ...spec, bin } : { ...spec }
   })
 }
 
-export function resolveAcpAgent(id: string, custom: readonly AcpAgentSpec[] | undefined, env: NodeJS.ProcessEnv = process.env): ResolvedAcpAgent | undefined {
+export function resolveAcpAgent(id: string, custom: readonly AcpAgentInput[] | undefined, env: NodeJS.ProcessEnv = process.env): ResolvedAcpAgent | undefined {
   const spec = acpAgentSpecs(custom).find((s) => s.id === id)
   if (!spec) return undefined
   const bin = findOnPath(spec.command, env)

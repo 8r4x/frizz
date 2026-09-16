@@ -37,6 +37,7 @@ import { repoCarriedEditedFiles } from "./repo-files.ts"
 import { stripDeliveryMarkers } from "./delivery-marker.ts"
 import { RELAYED_MARKER, relayNotificationBlock } from "./completion-relay.ts"
 import { CODEX_FIRST_FINAL_TITLE_TRANSPORT, CODEX_LEGACY_FIRST_FINAL_TITLE_TRANSPORT, parseCodexLine, createCodexBackend, extractCodexFrizzTitle } from "./backend/codex.ts"
+import { readAcpTranscriptFile } from "./backend/acp-transcript.ts"
 import { discoverTranscriptDir, discoverTranscriptId, DISCOVERY_GRACE_MS } from "./discover.ts"
 import { isClaudeAuthErrorText, parseSignalFence } from "./tailer.ts"
 import { redactCredentialStructure, redactCredentialSyntax } from "./credential-redaction.ts"
@@ -3924,7 +3925,7 @@ interface TranscriptSourceBinding {
   slug: string
   sessionId: string
   nativeId: string
-  backend: "claude" | "codex"
+  backend: "claude" | "codex" | "acp"
   runtimeGeneration: number
   path: string
 }
@@ -3947,7 +3948,7 @@ interface TranscriptCursorPayload {
   slug: string
   sessionId: string
   nativeId: string
-  backend: "claude" | "codex"
+  backend: "claude" | "codex" | "acp"
   runtimeGeneration: number
   fileKey: string
   snapshotBytes: number
@@ -3963,13 +3964,17 @@ function sourceForThread(
 ): TranscriptSourceBinding | undefined {
   const row = storage.getSession(slug)
   if (row) {
-    const backend = row.backend === "codex" ? "codex" : "claude"
+    const backend = row.backend === "codex" ? "codex" : row.backend === "acp" ? "acp" : "claude"
+    // An ACP transcript is FRIZZ-written and keyed by the frizz session id (acp-transcript.ts), so its
+    // native id is the session id even though `agent_session_id` carries the agent's own.
     const nativeId = backend === "codex"
       ? row.agent_session_id ?? row.session_id
-      : row.transcript_id ?? row.session_id
+      : backend === "acp" ? row.session_id : row.transcript_id ?? row.session_id
     const path = backend === "codex"
       ? (backendFor?.("codex") ?? defaultCodexBackend()).transcriptPath(nativeId)
-      : resolveTranscriptPath(project, nativeId)
+      : backend === "acp"
+        ? backendFor?.("acp")?.transcriptPath(nativeId)
+        : resolveTranscriptPath(project, nativeId)
     if (!path) return undefined
     return {
       slug,
@@ -4421,6 +4426,13 @@ export function readThreadTranscript(
     // so the drawer renders codex messages + tool calls instead of an empty pane. The rollout id is
     // `agent_session_id` (the id codex minted, pinned post-discovery); until discovery pins it,
     // transcriptPath returns undefined → [] and the drawer keeps its spinner (the tailer catches up).
+    // An ACP thread's transcript is the file the bridge writes, keyed by the frizz session id; the
+    // ledger projects a queued follow-up (the bridge holds it until the turn ends) as its gray bubble.
+    if (row.backend === "acp") {
+      const path = backendFor?.("acp")?.transcriptPath(row.session_id)
+      const acpLedger = parseDeliveryLedger(row.delivery_ledger)
+      return projectDeliveryLedger(path ? readAcpTranscriptFile(path, row.session_id) : [], acpLedger)
+    }
     if (row.backend === "codex") {
       const backend = backendFor?.("codex") ?? defaultCodexBackend()
       const nativeId = row.agent_session_id ?? row.session_id

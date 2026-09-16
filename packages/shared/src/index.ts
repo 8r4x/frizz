@@ -128,6 +128,16 @@ export const CodexModel = z.object({
 })
 export type CodexModel = z.infer<typeof CodexModel>
 
+// An Agent Client Protocol agent Frizz can launch (server/backend/acp-agents.ts). `available` means
+// its executable was found on the server's PATH; the composer lists only those, as `acp:<id>` models.
+export const AcpAgent = z.object({
+  id: z.string(),
+  label: z.string(),
+  command: z.string(),
+  available: z.boolean(),
+})
+export type AcpAgent = z.infer<typeof AcpAgent>
+
 // A provider-scoped launch profile. The server is the catalogue authority for existing threads:
 // callers receive only models that belong to the row's exact backend and each model carries its
 // complete supported effort set. The intentionally generic shape also lets a future backend expose
@@ -2910,6 +2920,15 @@ export const Settings = z.object({
   // it (codex compacts at 90% of the resolved window). Unset ⇒ nothing is sent and the model's stock
   // window applies. Optional so an old blob parses; defaultSettings leaves it unset.
   codexContextWindow: z.number().int().positive().optional(),
+  // The operator's OWN Agent Client Protocol agents, merged over the built-in catalogue by id
+  // (server/backend/acp-agents.ts). `command` is an executable name on PATH or an absolute path;
+  // `args` is what puts it into ACP mode (`["acp"]`, `["--acp"]`). Optional so an old blob parses.
+  acpAgents: z.array(z.object({
+    id: z.string().trim().min(1).max(64).regex(/^[a-z0-9][a-z0-9._-]*$/i),
+    label: z.string().trim().min(1).max(80),
+    command: z.string().trim().min(1).max(1_024),
+    args: z.array(z.string().max(1_024)).max(32).optional(),
+  })).max(32).optional(),
   // The GitHub batch-dispatch prompt template (the picker's per-item worker prompt). Optional: when
   // unset OR blank the server falls back to its exported DEFAULT_GITHUB_PROMPT. Substitution tokens
   // the server fills: {repo} {n} {title} {url} {labels} {body}. The leading `THREAD: <slug>` tag is
