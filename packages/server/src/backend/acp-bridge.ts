@@ -7,12 +7,13 @@ import { AcpConnection, AcpRemoteError, AcpRequestError, spawnAcpChild, type Acp
 import { AcpTranscriptWriter, acpTranscriptPath, type AcpRecord } from "./acp-transcript.ts"
 import {
   ACP_ERROR_AUTH_REQUIRED, ACP_ERROR_INTERNAL, ACP_ERROR_METHOD_NOT_FOUND, ACP_PROTOCOL_VERSION,
-  AcpInitializeResult, AcpLoadSessionResult, AcpNewSessionResult, AcpPromptResult, AcpRequestPermissionParams, AcpSessionNotification,
+  AcpInitializeResult, AcpLoadSessionResult, AcpNewSessionResult, AcpPromptResult, AcpRequestPermissionParams, AcpSessionNotification, AcpSetConfigOptionResult, type AcpConfigOption,
   contentText, parseSessionUpdate,
   type AcpInitializeResult as AcpInitializeResultType, type AcpMcpServerStdio, type AcpRequestPermissionResult, type AcpToolCallUpdate,
 } from "./acp-types.ts"
 import { FRIZZ_MCP, frizzMcpEnv, type FrizzMcp } from "./types.ts"
 import { inheritWorkerEnvironment } from "./worker-env.ts"
+import type { AcpAgentModels } from "@frizz/shared"
 
 // The ACP backend's bridge: one live agent child per thread, driven over acp-rpc.ts, writing the
 // thread's transcript through acp-transcript.ts. It is the third of three transports and deliberately
@@ -59,6 +60,8 @@ export interface AcpSpawnDispatchInput {
   sessionId: string
   cwd: string
   agentId: string
+  /** One of the agent's advertised model ids (`acp:<agent>@<model>`), or nothing for the agent's own default. */
+  modelId?: string | null
   /** The full first prompt: worker contract, orientation, then the task. */
   prompt: string
   /** What the human actually wrote — the transcript records this, not the contract. */
@@ -76,6 +79,7 @@ export interface AcpFollowUpInput {
   sessionId: string
   cwd: string
   agentId: string
+  modelId?: string | null
   /** The ACP session id pinned on the row, for a resume after a restart. */
   acpSessionId?: string | null
   text: string
@@ -131,6 +135,8 @@ interface LiveSession {
   init: AcpInitializeResultType
   acpSessionId: string
   model?: string
+  /** The config option id the agent files its model under (`model` for every agent seen so far). */
+  modelOptionId?: string
   writer: AcpTranscriptWriter
   /** True while `session/load` replays history — those updates are already in the file. */
   loading: boolean
@@ -142,6 +148,7 @@ interface LiveSession {
 }
 
 const AUTH_HINT = "The agent needs a login first. "
+const ACP_MODEL_CACHE_MS = 10 * 60_000
 
 function clip(text: string, max: number): string { return text.length > max ? `${text.slice(0, max - 1)}…` : text }
 
@@ -266,7 +273,7 @@ export class AcpBridge {
 
   /** Spawn the agent, initialize, and open (or load) a session. Throws an actionable error on any
    *  failure and leaves nothing behind. */
-  private async open(input: { threadSlug: string; sessionId: string; cwd: string; agentId: string; acpSessionId?: string | null }): Promise<{ live: LiveSession; resumed: "loaded" | "fresh" }> {
+  private async open(input: { threadSlug: string; sessionId: string; cwd: string; agentId: string; modelId?: string | null; acpSessionId?: string | null }): Promise<{ live: LiveSession; resumed: "loaded" | "fresh" }> {
     const { threadSlug: slug, sessionId, cwd } = input
     const agent = this.resolveAgent(input.agentId)
     const env = inheritWorkerEnvironment(this.options.env ?? process.env)
@@ -306,8 +313,9 @@ export class AcpBridge {
     if (input.acpSessionId && init.agentCapabilities?.loadSession) {
       live.loading = true
       try {
-        AcpLoadSessionResult.parse(await conn.request("session/load", { sessionId: input.acpSessionId, cwd, mcpServers }))
+        const loaded = AcpLoadSessionResult.parse(await conn.request("session/load", { sessionId: input.acpSessionId, cwd, mcpServers }))
         live.acpSessionId = input.acpSessionId
+        this.adoptModel(live, loaded.configOptions)
         resumed = "loaded"
       } catch (err) {
         if (err instanceof AcpRemoteError && err.error.code === ACP_ERROR_AUTH_REQUIRED) return fail(authError(err))
@@ -318,21 +326,113 @@ export class AcpBridge {
       try {
         const created = AcpNewSessionResult.parse(await conn.request("session/new", { cwd, mcpServers }))
         live.acpSessionId = created.sessionId
-        live.model = this.modelFrom(created.configOptions)
+        this.adoptModel(live, created.configOptions)
       } catch (err) {
         if (err instanceof AcpRemoteError && err.error.code === ACP_ERROR_AUTH_REQUIRED) return fail(authError(err))
         return fail(err instanceof Error ? new Error(`${agent.label} could not open a session: ${err.message}`) : err)
       }
+    }
+    // The thread's chosen model, applied before the header so the header records what is in effect.
+    const modelProblem = await this.applyModel(live, input.modelId)
+    if (resumed === "fresh") {
       writer.append({ kind: "acp-session", at: this.now(), agent: { id: agent.id, ...(init.agentInfo?.name ? { name: init.agentInfo.name } : {}), ...(init.agentInfo?.version ? { version: init.agentInfo.version } : {}) }, acpSessionId: live.acpSessionId, cwd, ...(live.model ? { model: live.model } : {}) })
       if (input.acpSessionId) writer.append({ kind: "acp-note", at: this.now(), text: `Resumed with a fresh ${agent.label} session: the previous one (${input.acpSessionId}) could not be loaded, so the agent no longer has the earlier conversation.` })
     }
+    if (modelProblem) writer.append({ kind: "acp-note", at: this.now(), text: modelProblem })
     this.sessions.set(sessionId, live)
     return { live, resumed }
   }
 
-  private modelFrom(configOptions: AcpNewSessionResult["configOptions"]): string | undefined {
-    const model = configOptions?.find((o) => o.category === "model" || o.id === "model")
-    return typeof model?.currentValue === "string" ? model.currentValue : undefined
+  /** The agent's model option (`category: "model"`, else the one literally named `model`). */
+  private modelOption(configOptions: AcpNewSessionResult["configOptions"]): AcpConfigOption | undefined {
+    return configOptions?.find((o) => o.category === "model") ?? configOptions?.find((o) => o.id === "model")
+  }
+
+  private adoptModel(live: LiveSession, configOptions: AcpNewSessionResult["configOptions"]): void {
+    const option = this.modelOption(configOptions)
+    if (!option) return
+    live.modelOptionId = option.id
+    if (typeof option.currentValue === "string") live.model = option.currentValue
+  }
+
+  /** Ask the agent for the thread's model when it is not already the one in effect. Returns the note
+   *  to write when the agent refused — the thread runs on, on the agent's own model, and says so. */
+  private async applyModel(live: LiveSession, modelId: string | null | undefined): Promise<string | undefined> {
+    if (!modelId || modelId === live.model) return undefined
+    try {
+      const res = AcpSetConfigOptionResult.parse(await live.conn.request("session/set_config_option", { sessionId: live.acpSessionId, configId: live.modelOptionId ?? "model", value: modelId }))
+      this.adoptModel(live, res.configOptions)
+      if (live.model !== modelId && res.configOptions?.length) return `${live.agent.label} did not switch to ${modelId}; the session runs on ${live.model ?? "its own default model"}.`
+      if (!res.configOptions?.length) live.model = modelId
+      return undefined
+    } catch (err) {
+      const message = err instanceof AcpRemoteError ? err.error.message : (err as Error).message
+      this.diagnostic(live.slug, "protocol", `session/set_config_option ${modelId} failed: ${message}`)
+      return `${live.agent.label} could not switch to ${modelId} (${clip(message, 200)}); the session runs on ${live.model ?? "its own default model"}.`
+    }
+  }
+
+  // ---- the model catalogue an agent advertises -----------------------------------------------------
+
+  private readonly modelProbes = new Map<string, Promise<AcpAgentModels>>()
+  private readonly modelCache = new Map<string, AcpAgentModels>()
+
+  /** The models an agent offers, read by opening a throwaway session (there is no other way to ask:
+   *  ACP advertises models only in a session's config options). Cached per agent for ten minutes; a
+   *  probe that cannot open a session (not installed, not logged in) yields an empty list with the
+   *  reason, never a throw, so the composer degrades to the agent's own default. */
+  agentModels(agentId: string, cwd: string, opts: { refresh?: boolean } = {}): Promise<AcpAgentModels> {
+    const cached = this.modelCache.get(agentId)
+    if (cached && !opts.refresh && Date.now() - Date.parse(cached.probedAt) < ACP_MODEL_CACHE_MS) return Promise.resolve(cached)
+    const inflight = this.modelProbes.get(agentId)
+    if (inflight) return inflight
+    const probe = this.probeModels(agentId, cwd).then((result) => {
+      if (!result.error) this.modelCache.set(agentId, result)
+      return result
+    }).finally(() => this.modelProbes.delete(agentId))
+    this.modelProbes.set(agentId, probe)
+    return probe
+  }
+
+  private async probeModels(agentId: string, cwd: string): Promise<AcpAgentModels> {
+    const probedAt = this.now()
+    const empty = (error: string): AcpAgentModels => ({ agentId, models: [], error, probedAt })
+    let agent: ResolvedAcpAgent
+    try { agent = this.resolveAgent(agentId) } catch (err) { return empty((err as Error).message) }
+    const env = inheritWorkerEnvironment(this.options.env ?? process.env)
+    const spawn = this.options.spawn ?? spawnAcpChild
+    let proc: ReturnType<typeof spawnAcpChild>
+    try { proc = spawn({ command: agent.bin!, args: agent.args, cwd, env }) } catch (err) { return empty(`${agent.label} could not start: ${(err as Error).message}`) }
+    const conn = new AcpConnection(proc, {
+      onRequest: () => Promise.reject(new AcpRequestError(ACP_ERROR_METHOD_NOT_FOUND, "probe session takes no requests")),
+      onNotification: () => {},
+      onDiagnostic: (d) => this.diagnostic(`probe:${agentId}`, d.kind, d.message),
+      requestTimeoutMs: this.options.initializeTimeoutMs ?? 60_000,
+    })
+    try {
+      const init = AcpInitializeResult.parse(await conn.request("initialize", {
+        protocolVersion: ACP_PROTOCOL_VERSION,
+        clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
+        clientInfo: { name: "frizz", version: "0" },
+      }))
+      const created = AcpNewSessionResult.parse(await conn.request("session/new", { cwd, mcpServers: [] }))
+      const option = this.modelOption(created.configOptions)
+      const current = typeof option?.currentValue === "string" ? option.currentValue : undefined
+      void init
+      return {
+        agentId,
+        models: (option?.options ?? []).map((o) => ({ id: o.value, name: o.name ?? o.value })),
+        ...(current ? { current } : {}),
+        probedAt,
+      }
+    } catch (err) {
+      const message = err instanceof AcpRemoteError && err.error.code === ACP_ERROR_AUTH_REQUIRED
+        ? `${AUTH_HINT}${agent.label} refused to open a session: ${err.error.message}`
+        : `${agent.label}: ${(err as Error).message}`
+      return empty(clip(message, 400))
+    } finally {
+      await conn.close(500)
+    }
   }
 
   private onExit(live: LiveSession): void {
@@ -570,11 +670,9 @@ export class AcpBridge {
       case "session_info_update":
         if (update.title) live.writer.append({ kind: "title", title: clip(update.title, 200) })
         return
-      case "config_option_update": {
-        const model = this.modelFrom(update.configOptions)
-        if (model) live.model = model
+      case "config_option_update":
+        this.adoptModel(live, update.configOptions)
         return
-      }
       case "plan":
       case "user_message_chunk":
       case "compaction_update":

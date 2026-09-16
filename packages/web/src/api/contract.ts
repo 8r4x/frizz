@@ -68,6 +68,8 @@ import type {
   GithubRefPreviewResult,
   CodexModel,
   AcpAgent,
+  AcpAgentModels,
+  AcpAgentModelsInput,
   QuotaSnapshot,
   AuthSnapshot,
   AccountLogoutInput,
@@ -278,6 +280,9 @@ export interface Api {
   // The ACP agents Frizz can launch, with `available` for the ones on the server's PATH. The composer
   // lists the available ones as `acp:<id>` models (plans/acp-backend.md).
   acpAgents(): Promise<AcpAgent[]>
+  // The models one ACP agent advertises (a throwaway session, cached server-side). Asked only when a
+  // model picker for that agent is open.
+  acpAgentModels(input: AcpAgentModelsInput): Promise<AcpAgentModels>
   // Provider subscription quota (5h + weekly windows) for the sidebar status bar. `force` bypasses
   // the shared freshness window for an explicit user recheck.
   quota(input?: { force?: boolean }, opts?: RpcCallOpts): Promise<QuotaSnapshot>
@@ -423,6 +428,7 @@ export const PROCEDURES = {
   aiRenameThread: "mutation",
   codexModels: "query",
   acpAgents: "query",
+  acpAgentModels: "query",
   quota: "query",
   authStatus: "query",
   accountLogout: "mutation",

@@ -39,6 +39,10 @@ if (mode === "oversized") process.stdout.write("x".repeat(200 * 1024) + "\n")
 const sessions = new Map() // sessionId -> { cancelled: boolean, promptId: id|undefined }
 let sessionSeq = 0
 
+function modelOptions(current) {
+  return [{ id: "model", name: "Model", category: "model", type: "select", currentValue: current, options: [{ value: "fake/small", name: "Fake Small" }, { value: "fake/large", name: "Fake Large" }] }]
+}
+
 async function handle(msg) {
   if (logPath) appendFileSync(logPath, JSON.stringify(msg) + "\n")
   // A response to something we asked (a permission outcome).
@@ -64,7 +68,7 @@ async function handle(msg) {
     case "session/new": {
       const sessionId = `fake_${process.pid}_${++sessionSeq}`
       sessions.set(sessionId, { cancelled: false })
-      reply({ sessionId, configOptions: [{ id: "model", name: "Model", category: "model", type: "select", currentValue: "fake/small", options: [{ value: "fake/small", name: "Fake Small" }] }] })
+      reply({ sessionId, configOptions: modelOptions("fake/small") })
       notify(sessionId, { sessionUpdate: "available_commands_update", availableCommands: [{ name: "help", description: "n/a" }] })
       return
     }
@@ -126,6 +130,15 @@ async function handle(msg) {
       notify(sessionId, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "ONG" }, messageId: "m2" })
       notify(sessionId, { sessionUpdate: "usage_update", used: 1234, size: 200000, cost: { amount: 0, currency: "USD" } })
       reply({ stopReason: "end_turn", usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 } })
+      return
+    }
+    case "session/set_config_option": {
+      const known = ["fake/small", "fake/large"]
+      if (p.configId !== "model") return fail(-32602, `unknown config option ${p.configId}`)
+      if (!known.includes(p.value)) return fail(-32602, `unknown model ${p.value}`)
+      const s = sessions.get(p.sessionId)
+      if (s) s.model = p.value
+      reply({ configOptions: modelOptions(p.value) })
       return
     }
     case "session/cancel": {

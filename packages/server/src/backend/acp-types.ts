@@ -102,6 +102,9 @@ export const AcpNewSessionResult = z.object({
 }).passthrough()
 export type AcpNewSessionResult = z.infer<typeof AcpNewSessionResult>
 
+/** `session/set_config_option` answers with the COMPLETE option list, so dependent changes show at once. */
+export const AcpSetConfigOptionResult = z.object({ configOptions: z.array(AcpConfigOption).nullish() }).passthrough()
+
 /** `session/load` replays history as updates and only then responds `{}` (possibly with config). */
 export const AcpLoadSessionResult = z.object({
   configOptions: z.array(AcpConfigOption).nullish(),

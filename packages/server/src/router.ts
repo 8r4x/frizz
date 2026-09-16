@@ -123,6 +123,9 @@ import {
   SetOwnThreadTitleInput,
   SetOwnThreadTitleResult,
   AcpAgent,
+  acpModelIdFromModel,
+  AcpAgentModels,
+  AcpAgentModelsInput,
 } from "@frizz/shared"
 import { type AppContext } from "./context.ts"
 import { listAcpAgents } from "./backend/acp-agents.ts"
@@ -1780,7 +1783,7 @@ export function createRouter(ctx: AppContext) {
           if (!bridge) throw new Error("The ACP bridge is unavailable; cannot deliver this follow-up")
           const result = await bridge.followUp({
             threadSlug: input.slug, sessionId: row.session_id, cwd: ctx.project.dir,
-            agentId: row.acp_agent ?? "", acpSessionId: row.agent_session_id,
+            agentId: row.acp_agent ?? "", modelId: acpModelIdFromModel(row.model), acpSessionId: row.agent_session_id,
             text: messageForWorker, ...(input.deliveryId ? { deliveryId: input.deliveryId } : {}),
           })
           if (result.acpSessionId !== row.agent_session_id) ctx.storage.setAgentSession(input.slug, result.acpSessionId)
@@ -3341,6 +3344,16 @@ export function createRouter(ctx: AppContext) {
     acpAgents: query({
       output: z.array(AcpAgent),
       handler: async () => listAcpAgents(ctx.getSettings().acpAgents).map((a) => ({ id: a.id, label: a.label, command: a.command, available: a.bin !== undefined })),
+    }),
+    // The models one ACP agent advertises — read by opening a throwaway session in the project dir
+    // (cached in the bridge), so it is a separate query the composer asks only once a model picker
+    // needs it, never on every board load.
+    acpAgentModels: query({
+      input: AcpAgentModelsInput,
+      output: AcpAgentModels,
+      handler: async ({ input }) => ctx.acpBridge
+        ? ctx.acpBridge.agentModels(input.agentId, ctx.project.dir, { refresh: input.refresh === true })
+        : { agentId: input.agentId, models: [], error: "The ACP bridge is unavailable", probedAt: new Date().toISOString() },
     }),
 
     // Provider subscription quota (5h + weekly rate-limit windows) for the sidebar status bar. Codex

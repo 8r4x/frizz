@@ -7,6 +7,7 @@ import {
   type DispatchPreferences,
   type SetDispatchPreferenceInput,
   type Settings,
+  acpModelIdFromModel,
 } from "@frizz/shared"
 import { Bus, Emitter } from "./bus.ts"
 import { resolveProject, permRequestDir, type Project } from "./project.ts"
@@ -947,7 +948,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
       if (row?.backend === "acp") {
         return acpBridge.followUp({
           threadSlug: slug, sessionId: row.session_id, cwd: project.dir,
-          agentId: row.acp_agent ?? "", acpSessionId: row.agent_session_id, text: deliveryMessage, deliveryId,
+          agentId: row.acp_agent ?? "", modelId: acpModelIdFromModel(row.model), acpSessionId: row.agent_session_id, text: deliveryMessage, deliveryId,
         }).then((r) => {
           if (r.acpSessionId !== row.agent_session_id) storage.setAgentSession(slug, r.acpSessionId)
           if (row.exited === 1) storage.setExitedIfCurrent(slug, row.session_id, row.runtime_generation ?? 0, false)

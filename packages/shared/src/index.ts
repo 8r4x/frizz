@@ -138,13 +138,42 @@ export const AcpAgent = z.object({
 })
 export type AcpAgent = z.infer<typeof AcpAgent>
 
-/** The model slug the composer uses for an ACP agent, and its inverse. Model already drives backend in
- *  the web (`backendForModel`), so an agent IS a model there — a slug with this prefix means `acp`. */
+/** The model slug the composer uses for an ACP agent, and its inverses. Model already drives backend in
+ *  the web (`backendForModel`), so an agent IS a model there — a slug with this prefix means `acp`.
+ *
+ *  `acp:<agent>` runs the agent on whatever model its own CLI is configured for; `acp:<agent>@<model>`
+ *  asks for one of the models the agent advertises (`session/set_config_option` on the ACP wire). The
+ *  separator is `@` because agent model ids carry `/` and `:` themselves (`openai/gpt-5.5`). */
 export const ACP_MODEL_PREFIX = "acp:"
-export function acpModelSlug(agentId: string): string { return `${ACP_MODEL_PREFIX}${agentId}` }
-export function acpAgentIdFromModel(model: string | null | undefined): string | undefined {
-  return typeof model === "string" && model.startsWith(ACP_MODEL_PREFIX) ? model.slice(ACP_MODEL_PREFIX.length) || undefined : undefined
+export function acpModelSlug(agentId: string, modelId?: string | null): string {
+  return `${ACP_MODEL_PREFIX}${agentId}${modelId ? `@${modelId}` : ""}`
 }
+function acpSlugParts(model: string | null | undefined): { agent: string; model?: string } | undefined {
+  if (typeof model !== "string" || !model.startsWith(ACP_MODEL_PREFIX)) return undefined
+  const rest = model.slice(ACP_MODEL_PREFIX.length)
+  const at = rest.indexOf("@")
+  const agent = at === -1 ? rest : rest.slice(0, at)
+  const id = at === -1 ? "" : rest.slice(at + 1)
+  return agent ? { agent, ...(id ? { model: id } : {}) } : undefined
+}
+export function acpAgentIdFromModel(model: string | null | undefined): string | undefined { return acpSlugParts(model)?.agent }
+export function acpModelIdFromModel(model: string | null | undefined): string | undefined { return acpSlugParts(model)?.model }
+
+/** One model an ACP agent advertises, and the probe result the composer's model picker reads. */
+export const AcpAgentModel = z.object({ id: z.string(), name: z.string() })
+export type AcpAgentModel = z.infer<typeof AcpAgentModel>
+export const AcpAgentModels = z.object({
+  agentId: z.string(),
+  models: z.array(AcpAgentModel),
+  /** The model the agent opens a session on when Frizz asks for none. */
+  current: z.string().optional(),
+  /** Why the list is empty, when the probe could not open a session (not installed, not logged in…). */
+  error: z.string().optional(),
+  probedAt: z.string(),
+})
+export type AcpAgentModels = z.infer<typeof AcpAgentModels>
+export const AcpAgentModelsInput = z.object({ agentId: z.string().min(1).max(100), refresh: z.boolean().optional() }).strict()
+export type AcpAgentModelsInput = z.infer<typeof AcpAgentModelsInput>
 
 // A provider-scoped launch profile. The server is the catalogue authority for existing threads:
 // callers receive only models that belong to the row's exact backend and each model carries its

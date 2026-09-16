@@ -31,6 +31,7 @@ import { codexSandbox, CODEX_FIRST_OUTPUT_TITLE_DEVELOPER_INSTRUCTIONS } from ".
 import type { CodexAppServerBridge } from "./backend/codex-app-server.ts"
 import type { AcpBridge } from "./backend/acp-bridge.ts"
 import { acpAgentIdFromModel } from "./backend/acp-agents.ts"
+import { acpModelIdFromModel } from "@frizz/shared"
 import { claudeBrokerBridgeEnabled, type ClaudeAgentBrokerBridge } from "./backend/claude-agent-broker-bridge.ts"
 import { claudeUltracodeFlags, resolveClaudeEffort } from "./backend/claude-effort.ts"
 import { ProviderAuthRequiredError } from "./backend/auth-status.ts"
@@ -978,7 +979,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
         const firstPrompt = [loadWorkerPrompt("acp"), scratchpadOrientation(sessionId, kind), frizzConfigBlock(deps.project.dir), prompt]
           .filter(Boolean).join("\n\n")
         try {
-          const spawned = await bridge.spawnDispatch({ threadSlug: slug, sessionId, cwd: deps.project.dir, agentId, prompt: firstPrompt, userText: input.prompt })
+          const spawned = await bridge.spawnDispatch({ threadSlug: slug, sessionId, cwd: deps.project.dir, agentId, modelId: acpModelIdFromModel(model), prompt: firstPrompt, userText: input.prompt })
           deps.storage.upsertSession({
             slug,
             session_id: sessionId,

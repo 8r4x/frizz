@@ -192,3 +192,36 @@ test("acp-bridge: an agent that never completes the handshake fails the dispatch
     await assert.rejects(r.bridge.spawnDispatch({ threadSlug: "t1", sessionId: "s1", cwd: r.stateDir, agentId: "fake", prompt: "go", userText: "go" }), /Fake agent did not complete the ACP handshake/)
   } finally { await r.bridge.shutdown() }
 })
+
+test("acp-bridge: a dispatch naming a model asks the agent for it, and an unknown one leaves a note", async () => {
+  const r = rig()
+  try {
+    const info = await r.bridge.spawnDispatch({ threadSlug: "t1", sessionId: "s1", cwd: r.stateDir, agentId: "fake", modelId: "fake/large", prompt: "hi", userText: "hi" })
+    assert.equal(info.model, "fake/large", "the session opened on the requested model")
+    await untilIdle(r, "s1")
+    const header = records(r, "s1").find((x) => x.kind === "acp-session") as { model?: string }
+    assert.equal(header.model, "fake/large", "the header records the model in effect, not the agent's default")
+    assert.ok(!records(r, "s1").some((x) => x.kind === "acp-note"), "a model the agent accepts leaves no note")
+
+    const other = await r.bridge.spawnDispatch({ threadSlug: "t2", sessionId: "s2", cwd: r.stateDir, agentId: "fake", modelId: "fake/nonexistent", prompt: "hi", userText: "hi" })
+    assert.equal(other.model, "fake/small", "a refused model leaves the session on the agent's own")
+    await untilIdle(r, "s2", "t2")
+    const note = records(r, "s2").find((x) => x.kind === "acp-note") as { text: string } | undefined
+    assert.match(note?.text ?? "", /could not switch to fake\/nonexistent/)
+  } finally { await r.bridge.shutdown() }
+})
+
+test("acp-bridge: agentModels reads the advertised list through a throwaway session and caches it", async () => {
+  const r = rig()
+  try {
+    const first = await r.bridge.agentModels("fake", r.stateDir)
+    assert.deepEqual(first.models, [{ id: "fake/small", name: "Fake Small" }, { id: "fake/large", name: "Fake Large" }])
+    assert.equal(first.current, "fake/small")
+    assert.equal(first.error, undefined)
+    const again = await r.bridge.agentModels("fake", r.stateDir)
+    assert.equal(again, first, "the second read is the cached object, no second child")
+    const missing = await r.bridge.agentModels("nope", r.stateDir)
+    assert.deepEqual(missing.models, [])
+    assert.match(missing.error ?? "", /nope/)
+  } finally { await r.bridge.shutdown() }
+})
