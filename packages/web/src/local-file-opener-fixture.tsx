@@ -64,6 +64,15 @@ createRoot(document.getElementById("root")!).render(
           "The plan survives in [`plan.md`](cursor://file/fixture/plan.md).",
           "",
           "The raw capture is [`trace.json`](vscode://file//fixture/trace.json).",
+          "",
+          // Both drive separators, a file URL pathname, and an inline Windows screenshot.
+          "The Windows write-up is in [`win-report.md`](D:/fixture/win-report.md).",
+          "",
+          "The Windows capture is [`win-trace.json`](D:%5Cfixture%5Cwin-trace.json).",
+          "",
+          "The Windows plan is [`win-plan.md`](file:///D:/fixture/win-plan.md).",
+          "",
+          "![windows alt](D:/fixture/win-shot.png)",
         ].join("\n"), { baseDir: BASE_DIR, homeDir: HOME_DIR }),
       }}
     />

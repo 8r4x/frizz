@@ -1,5 +1,6 @@
 import { readFileSync, realpathSync, statSync } from "node:fs"
 import { extname, isAbsolute } from "node:path"
+import { normalizeLocalPath } from "./local-path.ts"
 
 const IMAGE_CONTENT_TYPE: Record<string, string> = {
   ".png": "image/png",
@@ -17,6 +18,7 @@ export type LocalImageResult =
 // unconfined: the HTTP callers apply Frizz's loopback/origin gate before reaching it, while the
 // extension allowlist, realpath, and regular-file check keep the response limited to image bytes.
 export function resolveLocalImage(rawPath: string | undefined): LocalImageResult {
+  if (rawPath) rawPath = normalizeLocalPath(rawPath)
   if (!rawPath || !isAbsolute(rawPath)) return { status: 400 }
 
   const contentType = IMAGE_CONTENT_TYPE[extname(rawPath).toLowerCase()]
