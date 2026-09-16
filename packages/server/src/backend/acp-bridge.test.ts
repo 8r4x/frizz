@@ -1,0 +1,191 @@
+import { test } from "node:test"
+import assert from "node:assert/strict"
+import { mkdtempSync, readFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { fileURLToPath } from "node:url"
+import Database from "../sqlite.ts"
+import { createInteractionStore, type InteractionStore } from "../interaction-store.ts"
+import { createAcpBridge, type AcpBridge } from "./acp-bridge.ts"
+import { acpTranscriptPath, parseAcpRecord, projectAcpTranscript, type AcpRecord } from "./acp-transcript.ts"
+import { newTailState } from "../tailer.ts"
+import { createAcpBackend } from "./acp-transcript.ts"
+
+// The bridge against the REAL fake agent over REAL stdio and a REAL InteractionStore: what the tailer
+// will fold and the drawer will project is read back from the transcript file the bridge wrote.
+
+const FAKE = fileURLToPath(new URL("./acp.fixtures/fake-acp-agent.mjs", import.meta.url))
+
+interface Rig { bridge: AcpBridge; stateDir: string; store: InteractionStore; status: number; diagnostics: string[] }
+
+function rig(mode = "", opts: { customCommand?: string } = {}): Rig {
+  const stateDir = mkdtempSync(join(tmpdir(), "acp-bridge-"))
+  const store = createInteractionStore(new Database(":memory:"))
+  const r: Rig = { stateDir, store, status: 0, diagnostics: [], bridge: undefined as unknown as AcpBridge }
+  r.bridge = createAcpBridge({
+    projectId: "proj-1",
+    stateDir,
+    interactions: store,
+    env: { ...process.env, FAKE_ACP_MODE: mode },
+    // The fake is "installed" as an operator-configured agent whose command is node itself.
+    customAgents: () => [{ id: "fake", label: "Fake agent", command: opts.customCommand ?? process.execPath, args: opts.customCommand ? [] : [FAKE] }],
+    frizzMcp: { scriptPath: "/opt/frizz/frizz-mcp.mjs", stateDir: "/opt/state", projectId: "proj-1" },
+    onStatusChange: () => { r.status++ },
+    onDiagnostic: (d) => { if (d.kind !== "stderr") r.diagnostics.push(`${d.kind}: ${d.message}`) },
+    flushMs: 20,
+    initializeTimeoutMs: 5_000,
+  })
+  return r
+}
+
+const records = (r: Rig, sessionId: string): AcpRecord[] =>
+  readFileSync(acpTranscriptPath(r.stateDir, sessionId), "utf8").split("\n").map(parseAcpRecord).filter((x): x is AcpRecord => x !== undefined)
+
+async function untilIdle(r: Rig, sessionId: string, slug = "t1", timeoutMs = 5_000): Promise<void> {
+  const t0 = Date.now()
+  for (;;) {
+    const live = r.bridge.turnLiveness(slug, sessionId)
+    if (!live || (!live.turnActive && live.queued === 0)) return
+    if (Date.now() - t0 > timeoutMs) throw new Error("turn did not end")
+    await new Promise((res) => setTimeout(res, 20))
+  }
+}
+
+test("acp-bridge: a dispatch opens a session with the frizz MCP server, runs the first turn, and writes a foldable transcript", async () => {
+  const r = rig()
+  try {
+    const info = await r.bridge.spawnDispatch({ threadSlug: "t1", sessionId: "s1", cwd: r.stateDir, agentId: "fake", prompt: "CONTRACT…\n\nMake hello.txt", userText: "Make hello.txt" })
+    assert.match(info.acpSessionId, /^fake_/)
+    assert.equal(info.agent.name, "FakeAgent")
+    assert.equal(info.model, "fake/small")
+    await untilIdle(r, "s1")
+    const recs = records(r, "s1")
+    assert.deepEqual(recs.map((x) => x.kind), [
+      "acp-session", "user-message", "turn-start", "reasoning", "tool-call", "tool-result", "assistant-text", "context-usage", "turn-end",
+    ])
+    assert.equal((recs[1] as { text?: string }).text, "Make hello.txt", "the transcript records what the human wrote, not the contract")
+    assert.equal((recs[3] as { text: string }).text, "thinking about it")
+    assert.equal((recs[6] as { text: string }).text, "PONG")
+    assert.equal((recs[8] as { finalText?: string }).finalText, "PONG")
+    // The fold the tailer runs: idle, preview from the final text.
+    const s = newTailState("t1", "s1", "/x")
+    const backend = createAcpBackend({ stateDir: r.stateDir })
+    for (const line of readFileSync(acpTranscriptPath(r.stateDir, "s1"), "utf8").split("\n")) backend.foldLine(s, line)
+    assert.equal(s.turn, "idle")
+    assert.equal(s.lastAssistant, "PONG")
+    assert.equal(s.model, "fake/small")
+    // The drawer.
+    const msgs = projectAcpTranscript(readFileSync(acpTranscriptPath(r.stateDir, "s1"), "utf8"))
+    assert.deepEqual(msgs.map((m) => m.role), ["user", "assistant", "assistant"])
+    assert.equal(msgs[2]!.tools[0]!.name, "write")
+    assert.equal(msgs[2]!.tools[0]!.status, "completed")
+    assert.ok(r.status >= 2, "status changed at turn start and end")
+  } finally { await r.bridge.shutdown() }
+})
+
+test("acp-bridge: a follow-up during a turn queues and runs after it; one after rest runs at once", async () => {
+  const r = rig()
+  try {
+    await r.bridge.spawnDispatch({ threadSlug: "t1", sessionId: "s1", cwd: r.stateDir, agentId: "fake", prompt: "count SLOW", userText: "count SLOW" })
+    await new Promise((res) => setTimeout(res, 60))
+    const queued = await r.bridge.followUp({ threadSlug: "t1", sessionId: "s1", cwd: r.stateDir, agentId: "fake", text: "second", deliveryId: "d2" })
+    assert.equal(queued.state, "queued")
+    assert.equal(queued.resumed, "live")
+    assert.equal(r.bridge.turnLiveness("t1", "s1")?.queued, 1)
+    const stop = await r.bridge.interruptTurn("t1", "s1")
+    assert.equal(stop.interrupted, true)
+    await untilIdle(r, "s1")
+    const kinds = records(r, "s1").map((x) => x.kind)
+    const userIdx = kinds.map((k, i) => (k === "user-message" ? i : -1)).filter((i) => i >= 0)
+    assert.equal(userIdx.length, 2, "the queued follow-up ran as its own turn after the cancel")
+    assert.equal(kinds.filter((k) => k === "turn-end").length, 2)
+    assert.ok(kinds.includes("acp-note"), "the cancelled turn left its note")
+    const delivered = await r.bridge.followUp({ threadSlug: "t1", sessionId: "s1", cwd: r.stateDir, agentId: "fake", text: "third" })
+    assert.equal(delivered.state, "delivered")
+    await untilIdle(r, "s1")
+    assert.equal(records(r, "s1").filter((x) => x.kind === "turn-end").length, 3)
+  } finally { await r.bridge.shutdown() }
+})
+
+test("acp-bridge: a permission request becomes a card with canonical decision ids; resolving it answers the agent with its own optionId", async () => {
+  const r = rig("ask-permission")
+  try {
+    await r.bridge.spawnDispatch({ threadSlug: "t1", sessionId: "s1", cwd: r.stateDir, agentId: "fake", prompt: "go", userText: "go" })
+    const scope = { projectId: "proj-1", threadSlug: "t1", sessionId: "s1" }
+    let pending = r.store.listPending(scope)
+    for (let i = 0; i < 100 && pending.length === 0; i++) { await new Promise((res) => setTimeout(res, 20)); pending = r.store.listPending(scope) }
+    assert.equal(pending.length, 1)
+    const card = pending[0]!
+    assert.equal(card.provider.kind, "acp")
+    assert.equal(card.payload.kind, "command-approval")
+    assert.equal((card.payload as { command: { preview: string } }).command.preview, "rm -rf build")
+    assert.deepEqual(card.allowedDecisions.map((d) => [d.id, d.semantic]), [["accept", "approve"], ["acceptForSession", "approve"], ["decline", "deny"]])
+    assert.equal(r.bridge.ownsInteraction(scope, card.id), true)
+    r.store.resolve(scope, { slug: "t1", sessionId: "s1", interactionId: card.id, sessionEpoch: card.owner.sessionEpoch, capabilityRevision: card.owner.capabilityRevision, expectedRecordRevision: card.recordRevision, responseId: "resp-1", decisionId: "accept" })
+    await untilIdle(r, "s1")
+    const result = records(r, "s1").find((x) => x.kind === "tool-result") as { text: string } | undefined
+    assert.equal(result?.text, "removed", "the agent got the allow_once optionId back and completed the tool")
+    assert.equal(r.bridge.ownsInteraction(scope, card.id), false)
+  } finally { await r.bridge.shutdown() }
+})
+
+test("acp-bridge: an open card is cancelled — and the agent answered cancelled — when the session is released", async () => {
+  const r = rig("ask-permission")
+  try {
+    await r.bridge.spawnDispatch({ threadSlug: "t1", sessionId: "s1", cwd: r.stateDir, agentId: "fake", prompt: "go", userText: "go" })
+    const scope = { projectId: "proj-1", threadSlug: "t1", sessionId: "s1" }
+    let pending = r.store.listPending(scope)
+    for (let i = 0; i < 100 && pending.length === 0; i++) { await new Promise((res) => setTimeout(res, 20)); pending = r.store.listPending(scope) }
+    assert.equal(pending.length, 1)
+    r.bridge.releaseSession("t1", "s1", "session-deleted")
+    assert.equal(r.store.listPending(scope).length, 0)
+    assert.equal(r.bridge.turnLiveness("t1", "s1"), undefined)
+  } finally { await r.bridge.shutdown() }
+})
+
+test("acp-bridge: after the session is gone, a follow-up re-opens it with session/load when the agent can", async () => {
+  const r = rig()
+  try {
+    const info = await r.bridge.spawnDispatch({ threadSlug: "t1", sessionId: "s1", cwd: r.stateDir, agentId: "fake", prompt: "go", userText: "go" })
+    await untilIdle(r, "s1")
+    r.bridge.releaseSession("t1", "s1", "session-deleted")
+    const before = records(r, "s1").length
+    const again = await r.bridge.followUp({ threadSlug: "t1", sessionId: "s1", cwd: r.stateDir, agentId: "fake", acpSessionId: info.acpSessionId, text: "more" })
+    assert.equal(again.resumed, "loaded")
+    assert.equal(again.acpSessionId, info.acpSessionId)
+    await untilIdle(r, "s1")
+    const after = records(r, "s1")
+    // The load's replayed history was NOT written again: the new records are exactly the follow-up turn.
+    assert.deepEqual(after.slice(before).map((x) => x.kind), ["user-message", "turn-start", "reasoning", "tool-call", "tool-result", "assistant-text", "context-usage", "turn-end"])
+  } finally { await r.bridge.shutdown() }
+})
+
+test("acp-bridge: an agent without loadSession gets a fresh session and the transcript says so", async () => {
+  const r = rig("no-load")
+  try {
+    const info = await r.bridge.spawnDispatch({ threadSlug: "t1", sessionId: "s1", cwd: r.stateDir, agentId: "fake", prompt: "go", userText: "go" })
+    await untilIdle(r, "s1")
+    r.bridge.releaseSession("t1", "s1", "session-deleted")
+    const again = await r.bridge.followUp({ threadSlug: "t1", sessionId: "s1", cwd: r.stateDir, agentId: "fake", acpSessionId: info.acpSessionId, text: "more" })
+    assert.equal(again.resumed, "fresh")
+    assert.notEqual(again.acpSessionId, info.acpSessionId)
+    const note = records(r, "s1").find((x) => x.kind === "acp-note") as { text: string } | undefined
+    assert.match(note?.text ?? "", /fresh Fake agent session/)
+  } finally { await r.bridge.shutdown() }
+})
+
+test("acp-bridge: a missing executable and an unknown agent fail the dispatch with actionable errors and leave no session", async () => {
+  const r = rig("", { customCommand: "definitely-not-installed-acp-agent" })
+  try {
+    await assert.rejects(r.bridge.spawnDispatch({ threadSlug: "t1", sessionId: "s1", cwd: r.stateDir, agentId: "fake", prompt: "go", userText: "go" }), /is not installed/)
+    await assert.rejects(r.bridge.spawnDispatch({ threadSlug: "t1", sessionId: "s2", cwd: r.stateDir, agentId: "nope", prompt: "go", userText: "go" }), /Unknown ACP agent "nope"/)
+    assert.equal(r.bridge.turnLiveness("t1", "s1"), undefined)
+  } finally { await r.bridge.shutdown() }
+})
+
+test("acp-bridge: an agent that never completes the handshake fails the dispatch, naming the agent", async () => {
+  const r = rig("slow-init")
+  try {
+    await assert.rejects(r.bridge.spawnDispatch({ threadSlug: "t1", sessionId: "s1", cwd: r.stateDir, agentId: "fake", prompt: "go", userText: "go" }), /Fake agent did not complete the ACP handshake/)
+  } finally { await r.bridge.shutdown() }
+})

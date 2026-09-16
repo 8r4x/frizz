@@ -188,8 +188,10 @@ export class AcpConnection {
 
   private write(frame: unknown): boolean {
     if (this.closedReason !== undefined) return false
-    const stdin = this.process.stdin
-    if (!stdin) return false
+    const stdin = this.process.stdin as (NodeJS.WritableStream & { writableEnded?: boolean; destroyed?: boolean }) | null
+    // After close() a late reply (a permission answer resolved by the teardown itself) has nowhere to
+    // go; dropping it is the correct answer, a throw would not be.
+    if (!stdin || stdin.writableEnded || stdin.destroyed) return false
     try { stdin.write(JSON.stringify(frame) + "\n"); return true } catch (err) {
       this.settleClosed((err as Error).message)
       return false
@@ -218,19 +220,21 @@ export class AcpConnection {
       this.options.onDiagnostic?.({ kind: "protocol", message: `unrecognized frame: ${line.slice(0, 500)}` })
       return
     }
-    const frame = parsed.data
-    if ("method" in frame && typeof frame.method === "string") {
-      if ("id" in frame) this.handleRequest(frame.id, frame.method, frame.params)
+    // The union is `.passthrough()` on every arm, so the narrowed members read as `unknown`; the
+    // schema has already checked each shape, so the casts below only restate what it proved.
+    const frame = parsed.data as { id?: JsonRpcId; method?: string; params?: unknown; result?: unknown; error?: JsonRpcError }
+    if (typeof frame.method === "string") {
+      if (frame.id !== undefined) this.handleRequest(frame.id, frame.method, frame.params)
       else this.options.onNotification(frame.method, frame.params)
       return
     }
-    const id = (frame as { id: JsonRpcId }).id
+    const id = frame.id as JsonRpcId
     const p = this.pending.get(id)
     if (!p) { this.options.onDiagnostic?.({ kind: "protocol", message: `response to unknown request id ${String(id)}` }); return }
     this.pending.delete(id)
     if (p.timer) clearTimeout(p.timer)
-    if ("error" in frame) p.reject(new AcpRemoteError(p.method, frame.error))
-    else p.resolve((frame as { result: unknown }).result)
+    if (frame.error !== undefined) p.reject(new AcpRemoteError(p.method, frame.error))
+    else p.resolve(frame.result)
   }
 
   private handleRequest(id: JsonRpcId, method: string, params: unknown): void {

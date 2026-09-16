@@ -2,6 +2,7 @@ import {
   DispatchPreferences,
   type Backend,
   type CodexModel,
+  type DispatchProviderPreferences,
   type PermissionMode,
   type SetDispatchPreferenceInput,
   type Settings,
@@ -55,7 +56,14 @@ export function defaultDispatchPreferences(
     backend,
     claude: backend === "claude" ? selected : { permissionMode: "auto" },
     codex: backend === "codex" ? selected : { permissionMode: "default" },
+    acp: backend === "acp" ? selected : { permissionMode: "auto" },
   }
+}
+
+/** A backend's slot, present for the two original runtimes and defaulted for `acp` on a record that
+ *  predates it. */
+function profileOf(prefs: DispatchPreferences, backend: Backend): DispatchProviderPreferences {
+  return prefs[backend] ?? { permissionMode: "auto" }
 }
 
 // machine record → this project's stored row → the Settings-derived default. Read-time validation
@@ -88,13 +96,13 @@ export function setDispatchPreference(
       ...current,
       backend: update.backend,
       [update.backend]: {
-        ...current[update.backend],
+        ...profileOf(current, update.backend),
         model: update.model,
         effort: update.effort,
       },
     }
   } else {
-    const profile = current[update.backend]
+    const profile = profileOf(current, update.backend)
     next = {
       ...current,
       ...(update.field === "model" ? { backend: update.backend } : {}),

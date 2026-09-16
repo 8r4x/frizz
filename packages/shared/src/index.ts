@@ -102,8 +102,9 @@ export type RuntimeState = z.infer<typeof RuntimeState>
 
 // Which agent CLI a dispatch/thread runs on (Codex-support epic, Phase 3). Mirrors BackendKind in
 // server/backend/types.ts (the wire can't import it — it lives behind the server boundary). A model
-// selection drives this: a Claude model ⇒ "claude", an OpenAI/GPT model ⇒ "codex".
-export const Backend = z.enum(["claude", "codex"])
+// selection drives this: a Claude model ⇒ "claude", an OpenAI/GPT model ⇒ "codex", an `acp:<agent>`
+// slug ⇒ "acp" (any Agent Client Protocol agent; plans/acp-backend.md).
+export const Backend = z.enum(["claude", "codex", "acp"])
 export type Backend = z.infer<typeof Backend>
 
 // One selectable Codex model, derived server-side from the AUTHORITATIVE ~/.codex/models_cache.json
@@ -2946,6 +2947,9 @@ export const DispatchPreferences = z.object({
   backend: Backend,
   claude: DispatchProviderPreferences,
   codex: DispatchProviderPreferences,
+  // Optional because every record written before the ACP backend existed lacks it, and a required
+  // key would fail those records' parse and silently reset the operator's saved profile.
+  acp: DispatchProviderPreferences.optional(),
 })
 export type DispatchPreferences = z.infer<typeof DispatchPreferences>
 

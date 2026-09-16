@@ -3341,7 +3341,8 @@ export function createRouter(ctx: AppContext) {
         // The login CLI finished → the pty is spent; tear it down eagerly so the OAuth bytes don't
         // linger in its replay buffer. Cancel is idempotent.
         if (state === "exited") ctx.loginUtility.cancel(input.attemptId)
-        return { state, auth: auth[backend ?? "claude"] }
+        // The login utility only signs into Claude and Codex; an ACP agent logs in with its own CLI.
+        return { state, auth: backend === "acp" ? "unknown" : auth[backend ?? "claude"] }
       },
     }),
 

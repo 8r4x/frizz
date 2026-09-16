@@ -423,6 +423,9 @@ function workerPermissionMode(m: PermissionMode): PermissionMode {
 export const WORKER_DISPATCH_PERMISSION: Record<BackendKind, PermissionMode> = {
   claude: "auto",
   codex: "bypassPermissions",
+  // An ACP agent's permissions are its own (plans/acp-backend.md, decision 7): Frizz sends no mode and
+  // mirrors whatever the agent asks as a card. The value here is recorded on the row and nothing else.
+  acp: "auto",
 }
 
 // The permission mode a NEW worker of `kind` actually launches with, given the operator's Settings.
@@ -842,7 +845,9 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       // missing binary, timeout) fails OPEN so a network blip never traps a logged-in user. Runs
       // before the scratchpad/spawn/registry so a rejected dispatch leaves zero trace; the browser
       // keeps the draft and opens the sign-in modal off the sentinel message.
-      if (deps.preflightAuth && (await deps.preflightAuth(kind).catch((): ProviderAuth => "unknown")) === "signed-out") {
+      // An ACP agent has no credential Frizz can read: its auth is probed by the agent itself on
+      // session/new, and the bridge turns that refusal into an actionable dispatch error.
+      if (kind !== "acp" && deps.preflightAuth && (await deps.preflightAuth(kind).catch((): ProviderAuth => "unknown")) === "signed-out") {
         throw new ProviderAuthRequiredError(kind)
       }
       // Codex needs the `codex` executable, not just a credential. Probe it here, in the same
