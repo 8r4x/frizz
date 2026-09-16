@@ -50,7 +50,9 @@ export function RestartWorkerButton({ thread }: { thread: ThreadView }) {
 
   if (!devBuild) return null
   if (thread.kind !== "session" || thread.foreign) return null
-  if (thread.backend === "codex") return null
+  // Only a broker-hosted Claude worker has a "same conversation, fresh process" restart; a Codex turn
+  // lives in the app-server and an ACP session in its agent's own child (see lib/restartWorker.ts).
+  if (thread.backend === "codex" || thread.backend === "acp") return null
   if (thread.runtime === "exited") return null
 
   return (

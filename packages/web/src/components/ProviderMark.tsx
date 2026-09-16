@@ -1,4 +1,5 @@
 import type { HTMLAttributes } from "react"
+import { Plug } from "lucide-react"
 import { PROVIDER_MARK_GEOMETRY, providerMarkForBackend } from "./providerMark.ts"
 
 type ProviderMarkProps = Pick<HTMLAttributes<HTMLSpanElement>, "className"> & {
@@ -18,9 +19,16 @@ export function ProviderMark({ backend, className }: ProviderMarkProps) {
       aria-label={provider.label}
       className={`inline-flex shrink-0 text-muted/65 ${PROVIDER_MARK_GEOMETRY[provider.backend]} ${className ?? ""}`}
     >
-      {provider.backend === "codex" ? <OpenAIMark /> : <ClaudeMark />}
+      {provider.backend === "codex" ? <OpenAIMark /> : provider.backend === "acp" ? <AcpMark /> : <ClaudeMark />}
     </span>
   )
+}
+
+// ACP has no brand mark Frizz may copy, and the agent behind a session varies, so the cue is a plug:
+// "something is connected here over the protocol". Stroke 2.5 (lucide's default is 2) so the stroked
+// glyph reads at the same weight as the two filled marks beside it at 11px.
+function AcpMark() {
+  return <Plug aria-hidden="true" focusable="false" className="size-full" strokeWidth={2.5} />
 }
 
 function OpenAIMark() {

@@ -56,14 +56,16 @@ export function defaultDispatchPreferences(
     backend,
     claude: backend === "claude" ? selected : { permissionMode: "auto" },
     codex: backend === "codex" ? selected : { permissionMode: "default" },
-    acp: backend === "acp" ? selected : { permissionMode: "auto" },
+    // The ACP slot exists only once the operator has chosen an agent: it has no permission axis (the
+    // agent's own CLI decides), so there is no default worth writing, and every record written before
+    // the backend existed lacks the key.
+    ...(backend === "acp" ? { acp: selected } : {}),
   }
 }
 
-/** A backend's slot, present for the two original runtimes and defaulted for `acp` on a record that
- *  predates it. */
+/** A backend's slot: always present for the two original runtimes, empty for `acp` until chosen. */
 function profileOf(prefs: DispatchPreferences, backend: Backend): DispatchProviderPreferences {
-  return prefs[backend] ?? { permissionMode: "auto" }
+  return prefs[backend] ?? {}
 }
 
 // machine record → this project's stored row → the Settings-derived default. Read-time validation

@@ -182,6 +182,10 @@ const SlugInput = z.object({ slug: ThreadSlug }).strict()
 // replaced with Settings defaults. Permission is NOT part of the tuple: dispatch stamps it server-side
 // (workerDispatchPermission — the non-interactive floor, raised to bypass only when Settings asks).
 export function validateGithubDispatchProfile(input: z.infer<typeof GithubBatchInput>): void {
+  // An ACP profile carries no effort, and its "model" is an `acp:<agent>` slug the dispatcher resolves
+  // itself (refusing an agent that is not on PATH) — there is no model/effort catalogue to check.
+  if (input.backend === "acp") return
+  if (input.effort === undefined) throw new Error(`Unsupported ${input.backend} model/effort pair: ${input.model} / (no effort)`)
   validateThreadProfile(input.backend, input.model, input.effort)
 }
 

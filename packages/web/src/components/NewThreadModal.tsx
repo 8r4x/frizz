@@ -1,7 +1,7 @@
 import * as RadixDialog from "@radix-ui/react-dialog"
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { useMutation, useQuery } from "@tanstack/react-query"
-import type { Backend, DispatchInput } from "@frizz/shared"
+import type { AccountBackend, DispatchInput } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { showToast, store } from "../store.ts"
 import { Composer } from "./Composer.tsx"
@@ -26,7 +26,7 @@ export function DispatchForm({
   onDispatched?: () => void
 }) {
   // The one durable new-thread profile, shared with the GitHub picker's own selector.
-  const { resolved, codexList, loadError: profileLoadError, saveProfile } = useDispatchProfile()
+  const { resolved, codexList, acpList, loadError: profileLoadError, saveProfile } = useDispatchProfile()
   // Gate the leftAction slot itself, not just the icon: Composer reserves rail space whenever the
   // prop is set, so a hidden GithubTrigger must mean NO prop — not a null-rendering element.
   const githubTriggerVisible = useGithubTriggerVisible()
@@ -43,8 +43,8 @@ export function DispatchForm({
   const authStatus = useQuery({ queryKey: ["authStatus"], queryFn: () => rpc.authStatus(), staleTime: 30_000 })
   // When submit is gated, the built dispatch is stashed here and the sign-in modal opens for this
   // backend; a successful re-check runs the stashed dispatch unchanged.
-  const [signInFor, setSignInFor] = useState<Backend | null>(null)
-  const [logoutFor, setLogoutFor] = useState<Backend | null>(null)
+  const [signInFor, setSignInFor] = useState<AccountBackend | null>(null)
+  const [logoutFor, setLogoutFor] = useState<AccountBackend | null>(null)
   const gatedInputRef = useRef<DispatchInput | null>(null)
 
   // Dispatch does NOT navigate anywhere: you stay on the queue, the new thread appears in the
@@ -71,7 +71,7 @@ export function DispatchForm({
       const auth = /^AUTH_REQUIRED:(claude|codex)$/.exec((e as Error).message)
       if (auth) {
         gatedInputRef.current = input
-        setSignInFor(auth[1] as Backend)
+        setSignInFor(auth[1] as AccountBackend)
         showToast(`Signed out of ${auth[1] === "claude" ? "Claude" : "Codex"}`, { duration: 3000 })
         return
       }
@@ -96,6 +96,10 @@ export function DispatchForm({
     const alias = parseAccountAlias(prompt)
     if (alias) {
       clearPrompt()
+      if (resolved.backend === "acp") {
+        showToast("An ACP agent signs in through its own CLI — Frizz holds no account for it")
+        return
+      }
       if (alias === "login") {
         gatedInputRef.current = null // nothing to dispatch after sign-in — this is a pure account action
         setSignInFor(resolved.backend)
@@ -122,8 +126,9 @@ export function DispatchForm({
       effort: resolved.effort as DispatchInput["effort"],
     }
     // Auth gate: block ONLY on a positive "signed-out" for this dispatch's backend. Loading/unknown/
-    // authed all fall through (fail open) so a flaky or slow read never blocks a logged-in user.
-    if (authStatus.data?.[resolved.backend] === "signed-out") {
+    // authed all fall through (fail open) so a flaky or slow read never blocks a logged-in user. An ACP
+    // agent has no account here at all — its own CLI reports a missing login on the first prompt.
+    if (resolved.backend !== "acp" && authStatus.data?.[resolved.backend] === "signed-out") {
       gatedInputRef.current = input
       setSignInFor(resolved.backend)
       return
@@ -153,7 +158,7 @@ export function DispatchForm({
         />
       )
     }
-    const profileGroups = dispatchProfileGroups(codexList)
+    const profileGroups = dispatchProfileGroups(codexList, acpList)
     return (
       <ProfileGridSelector
         groups={profileGroups}
@@ -162,7 +167,8 @@ export function DispatchForm({
           field: "profile",
           backend: selection.provider as typeof resolved.backend,
           model: selection.model,
-          effort: selection.effort as DispatchInput["effort"] & string,
+          // An ACP row has no effort cell, so its selection carries "" — stored as absent.
+          effort: (selection.effort || undefined) as DispatchInput["effort"],
         })}
         ariaLabel="Model and effort"
         title={resolved.modelAvailable && resolved.effortAvailable
@@ -171,7 +177,7 @@ export function DispatchForm({
         className="max-w-[min(21rem,72vw)]"
       />
     )
-  }, [resolved, codexList, profileLoadError, saveProfile])
+  }, [resolved, codexList, acpList, profileLoadError, saveProfile])
 
   return (
     <div className="w-full flex flex-col gap-3">

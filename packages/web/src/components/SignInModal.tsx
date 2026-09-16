@@ -2,7 +2,7 @@ import * as RadixDialog from "@radix-ui/react-dialog"
 import { Suspense, lazy, useEffect, useRef, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Copy, Check, Loader2 } from "lucide-react"
-import type { AccountLogoutResult, AuthSnapshot, Backend } from "@frizz/shared"
+import type { AccountBackend, AccountLogoutResult, AuthSnapshot } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { showToast } from "../store.ts"
 import { copyTextToClipboard } from "../lib/clipboard.ts"
@@ -24,7 +24,7 @@ export function SignInModal({
   onClose,
   onAuthed,
 }: {
-  backend: Backend
+  backend: AccountBackend
   onClose: () => void
   onAuthed: () => void
 }) {
@@ -202,7 +202,7 @@ export function SignInModal({
 // Confirmation gate for the `/logout` alias. Sign-out is process-GLOBAL account state — it names the
 // provider, warns that new turns will be blocked, and the server additionally refuses to race any
 // live turn for that provider. Never auto-resumes, cancels, or rewrites a thread as a side effect.
-export function LogoutConfirmModal({ backend, onClose }: { backend: Backend; onClose: () => void }) {
+export function LogoutConfirmModal({ backend, onClose }: { backend: AccountBackend; onClose: () => void }) {
   const queryClient = useQueryClient()
   const label = PROVIDER_LABEL[backend]
   const logout = useMutation({

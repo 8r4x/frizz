@@ -77,6 +77,7 @@ window.fetch = async (input, init) => {
     return json({ items: items.slice((page - 1) * perPage, page * perPage), total: items.length, page, pageCount })
   }
   if (url.pathname === "/_frizz/rpc/codexModels") return json(codexModels)
+  if (url.pathname === "/_frizz/rpc/acpAgents") return json([])
   if (url.pathname === "/_frizz/rpc/dispatchPreferencesGet") return json(preferences)
   if (url.pathname === "/_frizz/rpc/githubDispatchBatch") {
     // Isolated seam: the fixture never starts a worker. It records the payload so a test can assert

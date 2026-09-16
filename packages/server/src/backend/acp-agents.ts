@@ -1,5 +1,6 @@
 import { accessSync, constants, statSync } from "node:fs"
 import { delimiter, isAbsolute, join } from "node:path"
+import { ACP_MODEL_PREFIX, acpAgentIdFromModel, acpModelSlug } from "@frizz/shared"
 
 // Which ACP agents Frizz knows how to launch, and which of them this machine actually has.
 //
@@ -38,13 +39,8 @@ export interface ResolvedAcpAgent extends AcpAgentSpec {
   bin?: string
 }
 
-/** The model slug the composer uses for an ACP agent, and its inverse. Model already drives backend in
- *  the web (`backendForModel`), so an agent IS a model there — a slug with this prefix means `acp`. */
-export const ACP_MODEL_PREFIX = "acp:"
-export function acpModelSlug(agentId: string): string { return `${ACP_MODEL_PREFIX}${agentId}` }
-export function acpAgentIdFromModel(model: string | null | undefined): string | undefined {
-  return typeof model === "string" && model.startsWith(ACP_MODEL_PREFIX) ? model.slice(ACP_MODEL_PREFIX.length) || undefined : undefined
-}
+// The `acp:<id>` model-slug grammar lives in @frizz/shared so the composer and the dispatcher cannot drift.
+export { ACP_MODEL_PREFIX, acpAgentIdFromModel, acpModelSlug }
 
 function isExecutableFile(path: string): boolean {
   try {
