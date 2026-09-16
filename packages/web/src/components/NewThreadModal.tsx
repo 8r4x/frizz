@@ -1,12 +1,13 @@
 import * as RadixDialog from "@radix-ui/react-dialog"
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
-import { useMutation, useQuery } from "@tanstack/react-query"
-import type { Backend, DispatchInput } from "@frizz/shared"
+import { useIsMutating, useMutation, useQuery } from "@tanstack/react-query"
+import { acpModelSlug, type AccountBackend, type DispatchInput } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { showToast, store } from "../store.ts"
 import { Composer } from "./Composer.tsx"
 import { GithubTrigger, useGithubTriggerVisible } from "./GithubTrigger.tsx"
 import { ProfileGridSelector } from "./ProfileGridSelector.tsx"
+import { AcpModelSelect } from "./AcpModelSelect.tsx"
 import { LogoutConfirmModal, SignInModal } from "./SignInModal.tsx"
 import { dispatchProfileGroups } from "../lib/dispatchPreferences.ts"
 import { useDispatchProfile } from "../hooks/useDispatchProfile.ts"
@@ -26,7 +27,8 @@ export function DispatchForm({
   onDispatched?: () => void
 }) {
   // The one durable new-thread profile, shared with the GitHub picker's own selector.
-  const { resolved, codexList, loadError: profileLoadError, saveProfile } = useDispatchProfile()
+  const { resolved, codexList, acpList, loadError: profileLoadError, saveProfile } = useDispatchProfile()
+  const savingContext = useIsMutating({ mutationKey: ["contextWindowSet"] }) > 0
   // Gate the leftAction slot itself, not just the icon: Composer reserves rail space whenever the
   // prop is set, so a hidden GithubTrigger must mean NO prop — not a null-rendering element.
   const githubTriggerVisible = useGithubTriggerVisible()
@@ -43,8 +45,8 @@ export function DispatchForm({
   const authStatus = useQuery({ queryKey: ["authStatus"], queryFn: () => rpc.authStatus(), staleTime: 30_000 })
   // When submit is gated, the built dispatch is stashed here and the sign-in modal opens for this
   // backend; a successful re-check runs the stashed dispatch unchanged.
-  const [signInFor, setSignInFor] = useState<Backend | null>(null)
-  const [logoutFor, setLogoutFor] = useState<Backend | null>(null)
+  const [signInFor, setSignInFor] = useState<AccountBackend | null>(null)
+  const [logoutFor, setLogoutFor] = useState<AccountBackend | null>(null)
   const gatedInputRef = useRef<DispatchInput | null>(null)
 
   // Dispatch does NOT navigate anywhere: you stay on the queue, the new thread appears in the
@@ -71,7 +73,7 @@ export function DispatchForm({
       const auth = /^AUTH_REQUIRED:(claude|codex)$/.exec((e as Error).message)
       if (auth) {
         gatedInputRef.current = input
-        setSignInFor(auth[1] as Backend)
+        setSignInFor(auth[1] as AccountBackend)
         showToast(`Signed out of ${auth[1] === "claude" ? "Claude" : "Codex"}`, { duration: 3000 })
         return
       }
@@ -90,12 +92,16 @@ export function DispatchForm({
   }
 
   function submit() {
-    if (!prompt.trim() || !resolved) return
+    if (!prompt.trim() || !resolved || savingContext) return
     // `/login` and `/logout` are frizz-owned aliases for the typed provider account actions — they
     // invoke the sign-in / sign-out flow for the SELECTED backend and never become prompt text.
     const alias = parseAccountAlias(prompt)
     if (alias) {
       clearPrompt()
+      if (resolved.backend === "acp") {
+        showToast("An ACP agent signs in through its own CLI — Frizz holds no account for it")
+        return
+      }
       if (alias === "login") {
         gatedInputRef.current = null // nothing to dispatch after sign-in — this is a pure account action
         setSignInFor(resolved.backend)
@@ -119,11 +125,14 @@ export function DispatchForm({
       // per-thread permission choice; the Settings "Permissions" control (under Claude) owns the default.
       model: resolved.model,
       backend: resolved.backend,
-      effort: resolved.effort as DispatchInput["effort"],
+      // An ACP profile resolves to effort "" (no effort axis); the RPC's enum takes that as ABSENT.
+      // Sending "" failed every ACP dispatch from the composer with "Invalid enum value" (2026-09-16).
+      effort: (resolved.effort || undefined) as DispatchInput["effort"],
     }
     // Auth gate: block ONLY on a positive "signed-out" for this dispatch's backend. Loading/unknown/
-    // authed all fall through (fail open) so a flaky or slow read never blocks a logged-in user.
-    if (authStatus.data?.[resolved.backend] === "signed-out") {
+    // authed all fall through (fail open) so a flaky or slow read never blocks a logged-in user. An ACP
+    // agent has no account here at all — its own CLI reports a missing login on the first prompt.
+    if (resolved.backend !== "acp" && authStatus.data?.[resolved.backend] === "signed-out") {
       gatedInputRef.current = input
       setSignInFor(resolved.backend)
       return
@@ -153,25 +162,45 @@ export function DispatchForm({
         />
       )
     }
-    const profileGroups = dispatchProfileGroups(codexList)
+    const profileGroups = dispatchProfileGroups(codexList, acpList)
+    const acpAgent = resolved.acpAgentId ? acpList.find((agent) => agent.id === resolved.acpAgentId) : undefined
     return (
-      <ProfileGridSelector
-        groups={profileGroups}
-        value={{ provider: resolved.backend, model: resolved.model, effort: resolved.effort }}
-        onValueChange={(selection) => saveProfile({
-          field: "profile",
-          backend: selection.provider as typeof resolved.backend,
-          model: selection.model,
-          effort: selection.effort as DispatchInput["effort"] & string,
-        })}
-        ariaLabel="Model and effort"
-        title={resolved.modelAvailable && resolved.effortAvailable
-          ? "Model and reasoning effort"
-          : "Saved model or reasoning effort unavailable — choose a supported pair"}
-        className="max-w-[min(21rem,72vw)]"
-      />
+      // gap-x-1.5 between the two pills, the same measured gap the thread composer's strip uses
+      // (useThreadComposerControls): two bordered pills on `gap-x-1` read as one segmented control.
+      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-0.5">
+        <ProfileGridSelector
+          groups={profileGroups}
+          contextWindows
+          // `pickerModel`, not `model`: an ACP row is keyed on the bare agent slug; the model inside
+          // the agent is the dropdown's, below.
+          value={{ provider: resolved.backend, model: resolved.pickerModel, effort: resolved.effort }}
+          onValueChange={(selection) => saveProfile({
+            field: "profile",
+            backend: selection.provider as typeof resolved.backend,
+            model: selection.model,
+            // An ACP row has no effort cell, so its selection carries "" — stored as absent.
+            effort: (selection.effort || undefined) as DispatchInput["effort"],
+          })}
+          ariaLabel="Model and effort"
+          title={resolved.modelAvailable && resolved.effortAvailable
+            ? "Model and reasoning effort"
+            : "Saved model or reasoning effort unavailable — choose a supported pair"}
+          className="max-w-[min(21rem,72vw)]"
+        />
+        {acpAgent && (
+          <AcpModelSelect
+            agentId={acpAgent.id}
+            agentLabel={acpAgent.label}
+            modelId={resolved.acpModelId}
+            // The pick becomes the profile's model slug (`acp:<agent>@<model>`); "" (the agent's own
+            // default) drops the tail.
+            onValueChange={(modelId) => saveProfile({ field: "model", backend: "acp", value: acpModelSlug(acpAgent.id, modelId) })}
+            className="max-w-[min(14rem,40vw)] px-2 py-1"
+          />
+        )}
+      </div>
     )
-  }, [resolved, codexList, profileLoadError, saveProfile])
+  }, [resolved, codexList, acpList, profileLoadError, saveProfile])
 
   return (
     <div className="w-full flex flex-col gap-3">
@@ -184,7 +213,7 @@ export function DispatchForm({
         placeholder="Describe the task…"
         minHeight={96}
         maxHeight={340}
-        busy={dispatch.isPending}
+        busy={dispatch.isPending || savingContext}
         footer={footer}
         leftAction={githubTriggerVisible ? <GithubTrigger /> : undefined}
       />

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react"
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react"
 import { useSnapshot } from "valtio"
 import { seedBoard, store } from "../store.ts"
 import { useBoard } from "../hooks.ts"
@@ -7,7 +7,7 @@ import { displayTitle } from "../groups.ts"
 import { resolveThreadRoute } from "../lib/threadRouteState.ts"
 import { projectHref } from "../lib/base-path.ts"
 import { standaloneThreadHref } from "../lib/standaloneThreadRoute.ts"
-import { SHEET_BASE_WIDTH, SHEET_CLOSE_MS, SPLIT_MIN_PX } from "../lib/sheet.ts"
+import { SHEET_BASE_WIDTH, SPLIT_MIN_PX } from "../lib/sheet.ts"
 import type { ThreadView } from "@frizz/shared"
 import { ThreadView as ThreadViewSurface } from "./ChatView.tsx"
 import { DrawerStack } from "./DrawerStack.tsx"
@@ -57,7 +57,7 @@ function standaloneHrefIn(projectSlug: string, slug: string): string {
 
 export function StandaloneThreadPage({ slug }: { slug: string }) {
   const snap = useSnapshot(store)
-  const fileOpen = Boolean(snap.filePanel)
+  const fileOpen = snap.filePanels.some((panel) => !panel.closing)
   const board = useBoard()
   const route = resolveThreadRoute(board, slug)
   const thread = route.kind === "found" ? route.thread : undefined
@@ -82,7 +82,7 @@ export function StandaloneThreadPage({ slug }: { slug: string }) {
     return () => {
       wide.removeEventListener("change", apply)
       store.splitFileViewer = false
-      store.filePanel = null
+      store.filePanels = []
     }
   }, [])
 
@@ -188,55 +188,61 @@ export function StandaloneThreadPage({ slug }: { slug: string }) {
 // ALWAYS its open width — the rail takes the leftmost 340 of it and the rest hangs off the page while
 // nothing is open — so the viewer's own width is a constant and it never re-wraps a line of code to
 // arrive. The rail stays MOUNTED under the pane — its live rows keep polling — but goes inert, so
-// nothing hidden can take focus or a click. The viewer's CONTENT outlives the store entry by the
-// ~200ms slide-out (`held`), so closing plays the same edge back instead of blanking the pane.
+// nothing hidden can take focus or a click. Readers stay mounted under each new layer, including
+// during its slide-out, so dismissing a file reveals exactly the reading position beneath it.
 function SidePane({ slug, thread }: { slug: string; thread: ThreadView }) {
   const snap = useSnapshot(store)
-  const panel = snap.filePanel
-  const [held, setHeld] = useState<string | null>(null)
-  // The open path is read straight off the store rather than out of state, so the document mounts in
-  // the SAME commit that starts the slide. Routed through state it arrived a frame late, and the
-  // panel visibly popped in over an empty pane that had already finished sliding.
-  const current = panel?.path ?? held
-  useEffect(() => {
-    if (panel) {
-      setHeld(panel.path)
-      return
-    }
-    const timer = window.setTimeout(() => setHeld(null), SHEET_CLOSE_MS)
-    return () => window.clearTimeout(timer)
-  }, [panel])
   return (
     <div
       data-side-pane
       className="relative hidden h-full w-[var(--full-pane)] min-h-0 min-w-0 shrink-0 grow-0 overflow-hidden split:block"
     >
-      <div inert={panel ? true : undefined} className="h-full min-h-0">
+      <div inert={snap.filePanels.length > 0 ? true : undefined} className="h-full min-h-0">
         <FocusRail thread={thread} />
       </div>
-      {/* NO LEFT BORDER: the thread column's own right border is already the seam between the two
-          panes, and drawing one here put a second hairline hard against it — a 2px rule the moment a
-          file opened (maintainer 2026-09-01: "make sure there isn't a double-wide pixel between the
-          chat transcript and the code pane"). */}
-      <aside
-        data-file-viewer-slot
-        aria-hidden={!panel}
-        // `translate`, NOT `transform`: Tailwind v4 spells `translate-x-*` with the standalone
-        // `translate` property, so a `transition-[transform,…]` here named a property nothing set and
-        // the pane jumped its full width in one frame and merely FADED in. The pane's own widening
-        // had been standing in for the slide, which is why the dead transition survived until that
-        // widening was taken away.
-        className={`absolute inset-0 transition-[translate,opacity] duration-200 ease-out motion-reduce:transition-none ${panel ? "translate-x-0 opacity-100" : "translate-x-full opacity-0"}`}
-      >
-        {current && (
-          <div className="flex h-full min-h-0 flex-col overflow-hidden bg-panel">
-            {/* Keyed on the path so following a link inside the viewer resets the view toggle and
-                scroll to the new document's top. */}
-            <FileViewerPanel key={current} slug={slug} path={current} />
-          </div>
-        )}
-      </aside>
+      {snap.filePanels.map((panel, i) => (
+        <FilePaneLayer
+          key={panel.id}
+          slug={slug}
+          path={panel.path}
+          closing={!!panel.closing}
+          active={i === snap.filePanels.length - 1 && !panel.closing && snap.splitFileViewer}
+        />
+      ))}
     </div>
+  )
+}
+
+function FilePaneLayer({ slug, path, closing, active }: { slug: string; path: string; closing: boolean; active: boolean }) {
+  const [entered, setEntered] = useState(false)
+  const ref = useRef<HTMLElement>(null)
+  useLayoutEffect(() => {
+    // Establish the offscreen position before the first frame, including a warm/cached document.
+    ref.current?.getBoundingClientRect()
+    const show = () => setEntered(true)
+    const frame = requestAnimationFrame(show)
+    const fallback = window.setTimeout(show, 120)
+    return () => { cancelAnimationFrame(frame); window.clearTimeout(fallback) }
+  }, [])
+  useEffect(() => {
+    if (active) ref.current?.focus({ preventScroll: true })
+  }, [active])
+  const shown = entered && !closing
+  // No left border: the thread's right border already draws the seam. Transition `translate`, not
+  // `transform` — Tailwind v4's translate-x classes set the standalone property.
+  return (
+    <aside
+      ref={ref}
+      tabIndex={-1}
+      data-file-viewer-slot
+      aria-hidden={!active}
+      inert={!active}
+      className={`absolute inset-0 outline-none transition-[translate,opacity] duration-200 ease-out motion-reduce:transition-none ${shown ? "translate-x-0 opacity-100" : "translate-x-full opacity-0"}`}
+    >
+      <div className="flex h-full min-h-0 flex-col overflow-hidden bg-panel">
+        <FileViewerPanel slug={slug} path={path} active={active} />
+      </div>
+    </aside>
   )
 }
 

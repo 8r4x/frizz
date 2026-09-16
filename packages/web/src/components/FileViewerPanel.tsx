@@ -57,7 +57,7 @@ function lineOfOffset(raw: string, offset: number): number {
   return line
 }
 
-export function FileViewerPanel({ slug, path }: { slug: string; path: string }) {
+export function FileViewerPanel({ slug, path, active }: { slug: string; path: string; active: boolean }) {
   // Markdown reads through the reader gate (`.md` only) and renders; anything else reads through the
   // text gate — the same roots since 2026-09-03 — and is source, full stop. The read itself lives in
   // lib/localFileQuery so the rail can PREWARM it on hover through the identical key.
@@ -99,6 +99,8 @@ export function FileViewerPanel({ slug, path }: { slug: string; path: string }) 
   const projectDir = useProjectDir()
   const sessionId = useThreadSessionId(slug)
   useEffect(() => {
+    // Covered readers stay mounted, but only the visible one owns the selection shortcut.
+    if (!active) return
     const composerTextarea = () => document.querySelector<HTMLTextAreaElement>("main[data-standalone-thread] textarea")
     // The caret the reference belongs at, in PROSE coordinates (the textarea's value IS the draft's
     // prose — attachments live on trailing lines the composer peels off). A never-touched textarea
@@ -165,7 +167,7 @@ export function FileViewerPanel({ slug, path }: { slug: string; path: string }) 
     }
     window.addEventListener("keydown", onKey, true)
     return () => window.removeEventListener("keydown", onKey, true)
-  }, [slug, resolved, raw, projectDir, sessionId])
+  }, [active, slug, resolved, raw, projectDir, sessionId])
 
   return (
     <div ref={rootRef} data-file-viewer-panel className="flex h-full min-h-0 flex-col">

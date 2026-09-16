@@ -72,6 +72,7 @@ test("dark palette preserves existing canvases, code, marks and indexed terminal
   const dark = declarations(css.split(':root, :root[data-theme="dark"] {')[1]!.split("}")[0]!)
   const expected = {
     "--frizz-bg": "#0d0e10", "--frizz-panel": "#131519", "--frizz-panel-2": "#181b20", "--frizz-elevated": "#1c1f25", "--frizz-inset": "#090b10",
+    "--frizz-provisional": "color-mix(in oklab, var(--frizz-fg) 50%, transparent)",
     "--frizz-fg": "#e6e7e9", "--frizz-muted": "#8b8f96", "--frizz-accent": "#e8b923", "--frizz-user-bubble": "#d5d7da", "--frizz-user-bubble-fg": "#0d0e10",
     "--frizz-control-border": "#26282d", "--frizz-control-strong": "#33363c", "--code-kw": "#f47067", "--code-com": "#768390", "--code-gutter": "#4b4f57",
     "--gh-fg-success": "#3fb950", "--gh-fg-danger": "#f85149", "--gh-fg-done": "#ab7df8", "--gh-neutral-border": "#3d444d", "--gh-label-fg-mix": "0%",

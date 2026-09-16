@@ -26,6 +26,10 @@ import {
   wakeDeliveryToken,
   PR_WATCH_ARMED_TRAILER,
   PR_WATCH_SPENT_TRAILER,
+  ISSUE_WATCH_ARMED_TRAILER,
+  ISSUE_WATCH_SPENT_TRAILER,
+  issueWatchWakeMessage,
+  splitAwaitingFrontmatter,
   SHELL_DONE_TRAILER,
   type GithubWakeSteer,
 } from "./index.ts"
@@ -595,4 +599,43 @@ test("prose that merely quotes a trailer keeps it, and a trailer mid-message is 
   assert.equal(stripWakeTrailer("nothing frizz composed"), "nothing frizz composed")
   // Nothing composes a body-less trailer, but an empty bubble is a worse failure than the boilerplate.
   assert.equal(stripWakeTrailer(PR_WATCH_ARMED_TRAILER), PR_WATCH_ARMED_TRAILER)
+})
+
+// ---- ISSUE WATCHER WAKES (2026-09-14) -----------------------------------------------------------------
+// The lines keep the PR shapes on purpose, so a tab built before issues existed still draws the divider.
+test("issueWatchWakeMessage: the close line parses as a closed PR-watch wake, with the reason on its own line", () => {
+  const text = issueWatchWakeMessage({ target: "acme/app#7", closed: { reason: "not planned" } })
+  assert.deepEqual(parsePrWatchWake(text), { ref: "acme/app#7", kind: "closed" })
+  assert.match(text, /^GitHub's reason: not planned\.$/m)
+  assert.ok(text.endsWith(ISSUE_WATCH_SPENT_TRAILER))
+  assert.equal(stripWakeTrailer(text).includes("watcher is spent"), false, "the issue trailers strip like the PR ones")
+})
+
+test("issueWatchWakeMessage: state changes and a comment steer share one delivery under the issue trailer", () => {
+  const steer = formatGithubWakeSteer({ ref: "acme/app#7", items: [{ label: "comment", actor: "bob", bot: false }], omitted: 0 })
+  const text = issueWatchWakeMessage({ target: "acme/app#7", changes: ["labels +confirmed", "assigned to @alice"], review: steer })
+  assert.deepEqual(parsePrWatchStateWake(text), { ref: "acme/app#7", detail: "labels +confirmed; assigned to @alice" })
+  assert.equal(parsePrWatchWake(text), null, "no CI line, ever")
+  assert.ok(parseGithubWakeSteer(text.split("\n\n")[1]), "the steer is the second paragraph")
+  assert.ok(text.endsWith(ISSUE_WATCH_ARMED_TRAILER))
+  assert.doesNotMatch(stripWakeTrailer(text), /watch_issue/)
+})
+
+test("prWatchExpiredWakeMessage: an issue's expiry parses through the same head and points at watch_issue", () => {
+  const text = prWatchExpiredWakeMessage("acme/app#7", "issue")
+  assert.deepEqual(parsePrWatchExpiredWake(text), { ref: "acme/app#7" })
+  assert.match(text, /nothing on that issue will wake/)
+  assert.match(text, /mcp__frizz__watch_issue/)
+  assert.match(prWatchExpiredWakeMessage("acme/app#7"), /mcp__frizz__watch_pr/, "the default is still a PR")
+})
+
+test("splitAwaitingFrontmatter: `issues:` is a structural key producing `issue` hints", () => {
+  const { hints, body } = splitAwaitingFrontmatter("issues: [acme/app#7, https://github.com/acme/app/issues/9]\nprs: [acme/app#391]\nfor: 90d\n---\nWaiting on the reporter.")
+  assert.deepEqual(hints, [
+    { kind: "issue", value: "acme/app#7" },
+    { kind: "issue", value: "https://github.com/acme/app/issues/9" },
+    { kind: "pr", value: "acme/app#391" },
+    { kind: "for", value: "90d" },
+  ])
+  assert.equal(body, "Waiting on the reporter.")
 })

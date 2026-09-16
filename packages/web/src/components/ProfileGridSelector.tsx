@@ -15,9 +15,11 @@ import {
   type ProfileGridGroup,
   type ProfileGridMoveKey,
   type ProfileGridSelection,
+  profileGridSelections,
 } from "../lib/profileGrid.ts"
 import { registerOpenSelect } from "../lib/selectOverlay.ts"
 import { OPAQUE_PORTAL_SURFACE_Z, OPAQUE_SURFACE_BASE } from "../lib/overlaySurface.ts"
+import { ContextWindowControl } from "./ContextWindowControl.tsx"
 
 function effortLabel(effort: string): string {
   if (effort === "xhigh") return "X-high"
@@ -38,6 +40,7 @@ export function ProfileGridSelector({
   side = "bottom",
   menuZClass = OPAQUE_PORTAL_SURFACE_Z,
   className = "",
+  contextWindows = false,
 }: {
   groups: readonly ProfileGridGroup[]
   value?: Partial<ProfileGridSelection>
@@ -55,29 +58,30 @@ export function ProfileGridSelector({
   // the trigger lives inside, e.g. OPAQUE_PORTAL_SURFACE_ABOVE_DIALOG_Z inside the z-[200] Overlay.
   menuZClass?: string
   className?: string
+  // Project defaults for NEW workers, never a promise to resize a running thread's context.
+  contextWindows?: boolean
 }) {
   const [open, setOpen] = useState(false)
+  const [contextGroup, setContextGroup] = useState<string | null>(null)
+  const contextGroupRef = useRef(contextGroup)
+  contextGroupRef.current = contextGroup
   const openRef = useRef(open)
   const disabledRef = useRef(disabled)
   const unregisterOpenRef = useRef<(() => void) | undefined>(undefined)
   const cellRefs = useRef(new Map<string, HTMLElement>())
   const committedKeyRef = useRef<string | undefined>(undefined)
   const columns = useMemo(() => profileGridColumns(groups), [groups])
-  const selections = useMemo(
-    () => groups.flatMap((group) => group.options.flatMap((option) => option.efforts.map((effort) => ({
-      provider: group.id,
-      model: option.model,
-      effort,
-    })))),
-    [groups],
-  )
+  const selections = useMemo(() => profileGridSelections(groups), [groups])
   const typography = compact ? PROFILE_GRID_COMPACT_TYPOGRAPHY_CLASS : PROFILE_GRID_TYPOGRAPHY_CLASS
   const triggerInteraction = disabled
     ? "cursor-not-allowed opacity-45"
     : "cursor-pointer transition-colors hover:border-border hover:bg-panel-2 hover:text-fg"
   const known = profileGridSelectionKnown(groups, value)
-  const currentKey = known && value?.provider && value.model && value.effort
-    ? profileGridSelectionKey(value as ProfileGridSelection)
+  // `known` has already checked the effort against the row, and a row with no effort axis (an ACP
+  // agent) is keyed on `effort: ""` — so the key is built whenever the model is known, not only when
+  // the effort is non-empty.
+  const currentKey = known && value?.provider && value.model
+    ? profileGridSelectionKey({ provider: value.provider, model: value.model, effort: value.effort ?? "" })
     : undefined
   const pendingLabel = pending?.model || pending?.effort
     ? profileGridDisplayLabel(groups, pending, "Pending profile")
@@ -86,9 +90,18 @@ export function ProfileGridSelector({
   disabledRef.current = disabled
 
   function closeFromRegistry() {
+    setContextGroup(null)
     openRef.current = false
     unregisterOpenRef.current = undefined
     setOpen(false)
+  }
+
+  function dismissTopLayer() {
+    if (contextGroupRef.current) {
+      contextGroupRef.current = null
+      setContextGroup(null)
+      unregisterOpenRef.current = registerOpenSelect(dismissTopLayer)
+    } else closeFromRegistry()
   }
 
   useLayoutEffect(() => {
@@ -98,7 +111,7 @@ export function ProfileGridSelector({
       event.stopPropagation()
       event.stopImmediatePropagation()
       unregisterOpenRef.current?.()
-      closeFromRegistry()
+      dismissTopLayer()
     }
     window.addEventListener("keydown", onKeyDown, { capture: true })
     return () => window.removeEventListener("keydown", onKeyDown, { capture: true })
@@ -144,7 +157,8 @@ export function ProfileGridSelector({
         unregisterOpenRef.current = undefined
         openRef.current = next
         setOpen(next)
-        if (next) unregisterOpenRef.current = registerOpenSelect(closeFromRegistry)
+        if (next) unregisterOpenRef.current = registerOpenSelect(dismissTopLayer)
+        else setContextGroup(null)
       }}
     >
       <RadixMenu.Trigger asChild disabled={disabled}>
@@ -173,14 +187,26 @@ export function ProfileGridSelector({
           sideOffset={5}
           collisionPadding={8}
           onEscapeKeyDown={(event) => event.stopPropagation()}
+          onInteractOutside={(event) => {
+            if (event.target instanceof Element && event.target.closest("[data-context-window-menu]")) event.preventDefault()
+          }}
           className={`profile-grid-menu ${menuZClass} ${OPAQUE_SURFACE_BASE} max-h-[min(360px,var(--radix-dropdown-menu-content-available-height))] max-w-[calc(100vw-1rem)] overflow-auto rounded-lg p-1.5 ${typography}`}
         >
           {groups.map((group) => (
             <RadixMenu.Group key={group.id}>
               {group.label && (
-                <RadixMenu.Label className="px-1.5 pb-1 pt-1 text-left font-medium tracking-[0.07em] text-muted-55 first:pt-0.5">
-                  {group.label}
-                </RadixMenu.Label>
+                <div className="profile-grid-header sticky left-0 flex items-baseline justify-between gap-4 px-1.5 pb-1 pt-1 first:pt-0.5">
+                  <RadixMenu.Label className="text-left font-medium tracking-[0.07em] text-muted-55">
+                    {group.label}
+                  </RadixMenu.Label>
+                  {contextWindows && (group.id === "claude" || group.id === "codex") && (
+                    <ContextWindowControl
+                      backend={group.id}
+                      open={contextGroup === group.id}
+                      onOpenChange={(next) => setContextGroup(next ? group.id : null)}
+                    />
+                  )}
+                </div>
               )}
               <RadixMenu.RadioGroup
                 value={currentKey}
@@ -206,7 +232,41 @@ export function ProfileGridSelector({
                     <span className={`profile-grid-model-label min-w-0 max-w-[9.5rem] truncate px-1.5 text-left text-muted ${typography}`} title={option.label}>
                       {option.label}
                     </span>
-                    {columns.map((column) => {
+                    {option.efforts.length === 0 && (() => {
+                      // A row with NO effort axis — an ACP agent runs on whatever model and effort its
+                      // own CLI is configured for — is one cell spanning every effort column, keyed
+                      // on `effort: ""` (profileGridOptionEfforts). "Default" is the honest label:
+                      // Frizz sets nothing, the agent's own defaults apply.
+                      const selection = { provider: group.id, model: option.model, effort: "" }
+                      const key = profileGridSelectionKey(selection)
+                      return (
+                        <RadixMenu.RadioItem
+                          key="default"
+                          value={key}
+                          ref={(node) => {
+                            if (node) cellRefs.current.set(key, node)
+                            else cellRefs.current.delete(key)
+                          }}
+                          onKeyDown={(event) => handleCellKeyDown(event, selection)}
+                          onSelect={(event) => {
+                            event.preventDefault()
+                            commitSelection(selection)
+                            unregisterOpenRef.current?.()
+                            closeFromRegistry()
+                          }}
+                          aria-label={`${option.label}, the agent's own defaults`}
+                          title={`${option.label} › the agent's own model and effort`}
+                          className={PROFILE_GRID_CELL_CLASS}
+                          style={{ gridColumn: "2 / -1", justifySelf: "start" }}
+                        >
+                          <span className="grid">
+                            <span aria-hidden="true" className="invisible col-start-1 row-start-1 font-medium">Default</span>
+                            <span className="col-start-1 row-start-1">Default</span>
+                          </span>
+                        </RadixMenu.RadioItem>
+                      )
+                    })()}
+                    {option.efforts.length > 0 && columns.map((column) => {
                       // A column can hold more than one effort name — "ultra" and "ultracode" share the
                       // ceiling — so take whichever name this model actually offers.
                       const effort = column.find((candidate) => option.efforts.includes(candidate))

@@ -83,10 +83,10 @@ export async function measureControlContrast(page, samples) {
   }, samples)
 }
 
-export async function measureAppearanceInk(page) {
-  return page.evaluate(() => {
-    const trigger = document.querySelector('button[aria-label="Appearance"]')
-    if (!trigger) throw new Error("No Appearance control")
+export async function measureAppearanceInk(page, selector = 'button[aria-label="Appearance"]') {
+  return page.evaluate(selector => {
+    const trigger = document.querySelector(selector)
+    if (!trigger) throw new Error(`No control at ${selector}`)
     const text = trigger.querySelector("span")
     const glyph = trigger.querySelector("svg")
     const probe = document.createElement("span")
@@ -101,7 +101,7 @@ export async function measureAppearanceInk(page) {
     const shapes = [...glyph.querySelectorAll("path,polyline,line,circle,rect")].map(el => el.getBoundingClientRect())
     const top = Math.min(...shapes.map(r => r.top)), bottom = Math.max(...shapes.map(r => r.bottom))
     return { font: document.documentElement.dataset.font, size: style.fontSize, capHeight: cap, capCenter: baseline - cap / 2, glyphCenter: (top + bottom) / 2, residual: +(baseline - cap / 2 - (top + bottom) / 2).toFixed(3) }
-  })
+  }, selector)
 }
 
 export async function measureThreadTitleInk(page, selector) {

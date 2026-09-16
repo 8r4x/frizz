@@ -7,6 +7,7 @@ import {
   type DispatchPreferences,
   type SetDispatchPreferenceInput,
   type Settings,
+  acpModelIdFromModel,
 } from "@frizz/shared"
 import { Bus, Emitter } from "./bus.ts"
 import { resolveProject, permRequestDir, type Project } from "./project.ts"
@@ -19,12 +20,14 @@ import { refreshClaudeQuotaInBackground } from "./backend/claude-quota.ts"
 import { createBoard, type BoardManager } from "./board.ts"
 import { createTailer, defaultLogDir, type Tailer } from "./tailer.ts"
 import { createDispatcher, loadWorkerPrompt, scratchpadOrientation, frizzConfigBlock, claudeMcpConfig, resolveFrizzMcp, workerPluginDir, coldResumePermission, type Dispatcher, type FrizzMcpTarget } from "./dispatch.ts"
-import { createScheduler, type Scheduler, probePrReadable, type PrRef, type PrProbe } from "./scheduler.ts"
+import { createScheduler, type Scheduler, probeIssueReadable, probePrReadable, type PrRef, type PrProbe } from "./scheduler.ts"
 import {
 resumeThread,
 } from "./resume.ts"
 import { createClaudeBackend } from "./backend/claude.ts"
 import { createCodexBackend, codexSandbox } from "./backend/codex.ts"
+import { createAcpBackend } from "./backend/acp-transcript.ts"
+import { createAcpBridge, type AcpBridge } from "./backend/acp-bridge.ts"
 import { readClaudePreflightAuth, readCodexAuthState, readCodexBinaryState } from "./backend/auth-status.ts"
 import { createLoginUtility, type LoginUtility } from "./login-utility.ts"
 import type { AgentBackend } from "./backend/types.ts"
@@ -137,6 +140,10 @@ export interface AppContext {
   // Experimental foundation for NEW bridge-owned Codex sessions only. Undefined by default; it is
   // never selected by backendFor and therefore cannot migrate or control an existing TUI session.
   codexAppServer?: CodexAppServerBridge
+  // The generic Agent Client Protocol bridge: any ACP agent the operator has installed, one stdio child
+  // per thread (backend/acp-bridge.ts, plans/acp-backend.md). Always constructed; a dispatch fails with
+  // an actionable message when the chosen agent is not installed.
+  acpBridge?: AcpBridge
   // Session-broker bridge for Claude: the detached daemon that owns every claude thread's SDK session.
   // Undefined only under the FRIZZ_CLAUDE_BROKER_BRIDGE="0" kill switch, which leaves claude no transport.
   claudeBroker?: ClaudeAgentBrokerBridge
@@ -155,6 +162,8 @@ export interface AppContext {
   // the poll could never read is refused with the reason instead of armed in silence. Production wires
   // `probePrReadable` (one `gh pr view`); a test context injects its own answer.
   probePr: (ref: PrRef) => Promise<PrProbe>
+  /** The issue twin, for `mcp__frizz__watch_issue` — `probeIssueReadable` (one `gh issue view`). */
+  probeIssue: (ref: PrRef) => Promise<PrProbe>
   // Per-thread permission changes. Idle standalone TUIs are reopened on the same persisted
   // conversation with backend-native launch flags; busy/ambiguous states fail explicitly.
   // Proves an injected Claude follow-up was actually SUBMITTED, and re-presses Enter when the TUI
@@ -302,6 +311,7 @@ interface PartialContextResources {
   storage?: Storage
   stopSubscriptions?: () => void
   codexAppServer?: CodexAppServerBridge
+  acpBridge?: AcpBridge
   claudeBroker?: ClaudeAgentBrokerBridge
   claudeRuntimeIngest?: ClaudeRuntimeIngest
   board?: BoardManager
@@ -315,6 +325,7 @@ interface PartialContextCleanup {
   scheduler(): Promise<void>
   board(): Promise<void>
   codexAppServer(): Promise<void>
+  acpBridge(): Promise<void>
   claudeBroker(): Promise<void>
   storage(): Promise<void>
 }
@@ -326,6 +337,7 @@ function partialContextCleanup(resources: PartialContextResources): PartialConte
     scheduler: createRetryableCleanup(async () => { await resources.scheduler?.stop() }),
     board: createRetryableCleanup(async () => { await resources.board?.stop() }),
     codexAppServer: createRetryableCleanup(async () => { await resources.codexAppServer?.shutdown() }),
+    acpBridge: createRetryableCleanup(async () => { await resources.acpBridge?.shutdown() }),
     claudeBroker: createRetryableCleanup(async () => { resources.claudeBroker?.close(); resources.claudeRuntimeIngest?.close() }),
     storage: createRetryableCleanup(() => resources.storage?.close()),
   }
@@ -642,7 +654,8 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   }
   const claudeBackend = createClaudeBackend({ logDir: defaultLogDir(project), claudeBin: opts.claudeBin })
   const codexBackend = createCodexBackend({})
-  const backendFor = (kind?: string): AgentBackend => (kind === "codex" ? codexBackend : claudeBackend)
+  const acpBackend = createAcpBackend({ stateDir: project.stateDir })
+  const backendFor = (kind?: string): AgentBackend => (kind === "codex" ? codexBackend : kind === "acp" ? acpBackend : claudeBackend)
   const codexAppServer = codexAppServerBridgeEnabled()
     ? createCodexAppServerBridge({
         projectId: project.id,
@@ -702,6 +715,22 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   // must never hold up (or fail) a boot.
   void codexAppServer?.warmUp()
   opts.startup?.afterPhase?.("Codex app-server bridge")
+
+  // The generic ACP bridge. Nothing to warm up: an ACP child does not outlive the server, so every
+  // thread re-opens its session (session/load, else a fresh one) on its next input.
+  const acpBridge = createAcpBridge({
+    projectId: project.id,
+    stateDir: project.stateDir,
+    frizzMcp: resolveFrizzMcp(frizzMcpTarget),
+    interactions: storage.interactions,
+    env: process.env,
+    customAgents: () => getSettings(storage, home).acpAgents,
+    onStatusChange: () => board?.refresh(),
+  })
+  resources.acpBridge = acpBridge
+  contextUnsubscribers.push(storage.subscribeSessionLifecycle((event) => {
+    acpBridge.releaseSession(event.previous.slug, event.previous.session_id, event.type === "replaced" ? "session-replaced" : "session-deleted")
+  }))
 
   // The consumer for the broker's structured event stream. Until this existed the bridge forwarded
   // every SDK event to a `deps.onEvent` nobody supplied, so the whole stream was dropped and the
@@ -866,6 +895,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     claudeBin: opts.claudeBin,
     backendFor,
     codexAppServer,
+    acpBridge,
     claudeBroker,
     // Auth preflight (claude-auth plan, Slice A): Claude reads its local credential and confirms only
     // a positive signed-out against its CLI (readClaudePreflightAuth — the comment there records why
@@ -911,6 +941,18 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
           return
         }
         return deliverCodexWake({ bridge, storage, cwd: project.dir, row, slug, deliveryMessage, deliveryId })
+      }
+      // ACP wake: the same call the followUp RPC makes — the bridge re-opens the session if the child
+      // is gone and queues behind a running turn. A fresh session id (the agent could not load the old
+      // one) is re-pinned so the next resume asks for the right one.
+      if (row?.backend === "acp") {
+        return acpBridge.followUp({
+          threadSlug: slug, sessionId: row.session_id, cwd: project.dir,
+          agentId: row.acp_agent ?? "", modelId: acpModelIdFromModel(row.model), acpSessionId: row.agent_session_id, text: deliveryMessage, deliveryId,
+        }).then((r) => {
+          if (r.acpSessionId !== row.agent_session_id) storage.setAgentSession(slug, r.acpSessionId)
+          if (row.exited === 1) storage.setExitedIfCurrent(slug, row.session_id, row.runtime_generation ?? 0, false)
+        })
       }
       // Broker Claude wake: no local process to inject into — deliver over the bridge (reconnect the
       // live daemon or cold-resume a dead one), exactly like the followUp RPC. Never reaches the legacy
@@ -1000,12 +1042,14 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     storage,
     interactions: storage.interactions,
     codexAppServer,
+    acpBridge,
     claudeBroker,
     board,
     tailer,
     dispatcher,
     scheduler,
     probePr: probePrReadable,
+    probeIssue: probeIssueReadable,
     stopSubscriptions,
     backendFor,
     getSettings: () => getSettings(storage, home),

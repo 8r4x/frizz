@@ -29,6 +29,9 @@ import { resolveWorkerPluginDir } from "./worker-plugin-dir.ts"
 import { buildWorkerPrompt } from "./workerPrompt.ts"
 import { codexSandbox, CODEX_FIRST_OUTPUT_TITLE_DEVELOPER_INSTRUCTIONS } from "./backend/codex.ts"
 import type { CodexAppServerBridge } from "./backend/codex-app-server.ts"
+import type { AcpBridge } from "./backend/acp-bridge.ts"
+import { acpAgentIdFromModel } from "./backend/acp-agents.ts"
+import { acpModelIdFromModel } from "@frizz/shared"
 import { claudeBrokerBridgeEnabled, type ClaudeAgentBrokerBridge } from "./backend/claude-agent-broker-bridge.ts"
 import { claudeUltracodeFlags, resolveClaudeEffort } from "./backend/claude-effort.ts"
 import { ProviderAuthRequiredError } from "./backend/auth-status.ts"
@@ -423,6 +426,9 @@ function workerPermissionMode(m: PermissionMode): PermissionMode {
 export const WORKER_DISPATCH_PERMISSION: Record<BackendKind, PermissionMode> = {
   claude: "auto",
   codex: "bypassPermissions",
+  // An ACP agent's permissions are its own (plans/acp-backend.md, decision 7): Frizz sends no mode and
+  // mirrors whatever the agent asks as a card. The value here is recorded on the row and nothing else.
+  acp: "auto",
 }
 
 // The permission mode a NEW worker of `kind` actually launches with, given the operator's Settings.
@@ -773,6 +779,9 @@ export interface DispatchDeps {
   // (persisted session + turn/start); the interactive-TUI transport it replaced is gone. Absent ⇒ a
   // codex dispatch fails loudly rather than falling back to a retired path.
   codexAppServer?: CodexAppServerBridge
+  // The generic ACP bridge (context.ts): any Agent Client Protocol agent, one stdio child per thread.
+  // Absent ⇒ an acp dispatch fails loudly.
+  acpBridge?: AcpBridge
   // The Claude session-broker bridge (context.ts). Every claude dispatch runs over it — headless, in a
   // detached daemon, with no terminal and no PTY. Absent ⇒ a claude dispatch fails loudly.
   claudeBroker?: ClaudeAgentBrokerBridge
@@ -842,7 +851,9 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       // missing binary, timeout) fails OPEN so a network blip never traps a logged-in user. Runs
       // before the scratchpad/spawn/registry so a rejected dispatch leaves zero trace; the browser
       // keeps the draft and opens the sign-in modal off the sentinel message.
-      if (deps.preflightAuth && (await deps.preflightAuth(kind).catch((): ProviderAuth => "unknown")) === "signed-out") {
+      // An ACP agent has no credential Frizz can read: its auth is probed by the agent itself on
+      // session/new, and the bridge turns that refusal into an actionable dispatch error.
+      if (kind !== "acp" && deps.preflightAuth && (await deps.preflightAuth(kind).catch((): ProviderAuth => "unknown")) === "signed-out") {
         throw new ProviderAuthRequiredError(kind)
       }
       // Codex needs the `codex` executable, not just a credential. Probe it here, in the same
@@ -950,6 +961,55 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
           try { bridge.releaseSession(slug, sessionId, "session-deleted") } catch { /* best-effort */ }
           cleanupDispatchFiles(scratchRel, { argv: [], env: {}, prewrite: [] }, sessionId)
           throw new Error(`Codex app-server could not start this thread: ${(err as Error).message}. Check that \`codex\` is installed and its app-server protocol matches the pinned revision (re-pin if you upgraded codex).`)
+        }
+      }
+
+      // The generic ACP transport (plans/acp-backend.md). The agent is named by the model slug
+      // (`acp:<agent>` — model drives backend everywhere else too), the worker contract rides the FIRST
+      // prompt because ACP has no system-prompt channel, and the frizz MCP server mounts through
+      // session/new. The bridge writes the transcript the tailer folds; the row pins the ACP session id
+      // in `agent_session_id` (like codex) and the agent id in `acp_agent`.
+      if (kind === "acp") {
+        const bridge = deps.acpBridge
+        const agentId = acpAgentIdFromModel(model)
+        if (!bridge || !agentId) {
+          cleanupDispatchFiles(scratchRel, { argv: [], env: {}, prewrite: [] }, sessionId)
+          throw new Error(!bridge ? "The ACP bridge is unavailable; cannot start this thread." : `An ACP dispatch needs an agent: pick one in the composer (model \`acp:<agent>\`), got ${JSON.stringify(model ?? null)}.`)
+        }
+        const firstPrompt = [loadWorkerPrompt("acp"), scratchpadOrientation(sessionId, kind), frizzConfigBlock(deps.project.dir), prompt]
+          .filter(Boolean).join("\n\n")
+        try {
+          const spawned = await bridge.spawnDispatch({ threadSlug: slug, sessionId, cwd: deps.project.dir, agentId, modelId: acpModelIdFromModel(model), prompt: firstPrompt, userText: input.prompt })
+          deps.storage.upsertSession({
+            slug,
+            session_id: sessionId,
+            thread_name: threadIdentityName(slug),
+            spawned_at: new Date().toISOString(),
+            last_read_at: null,
+            unread: 0,
+            exited: 0,
+            archived: 0,
+            rested_at: null,
+            title_auto: input.title?.trim() ? 0 : 1,
+            title_locked: 0,
+            title: registryTitle,
+            state: "open",
+            meta: null,
+            seen_at: null,
+            transcript_id: null,
+            model: model ?? null,
+            effort: null,
+            permission_mode: permissionMode,
+          })
+          deps.storage.setBackend(slug, "acp")
+          deps.storage.setAgentSession(slug, spawned.acpSessionId)
+          deps.storage.setAcpAgent(slug, agentId)
+          void deps.board.rebuild().catch(() => {})
+          return { slug, sessionId }
+        } catch (err) {
+          try { bridge.releaseSession(slug, sessionId, "session-deleted") } catch { /* best-effort */ }
+          cleanupDispatchFiles(scratchRel, { argv: [], env: {}, prewrite: [] }, sessionId)
+          throw new Error(`The ACP agent could not start this thread: ${(err as Error).message}`)
         }
       }
 

@@ -3574,7 +3574,8 @@ export function createTailer(deps: TailerDeps): Tailer {
     // the TUI's modal chrome by regex — the only way to see a prompt on a screen. No worker renders one
     // now, and a broker thread's approvals arrive as typed permission requests over the control channel
     // anyway.
-    if (turn === "in-flight" && row.backend !== "codex" && permMarkerBlocks(state, row)) {
+    // Codex and ACP approvals are typed interaction cards, never a marker file.
+    if (turn === "in-flight" && row.backend !== "codex" && row.backend !== "acp" && permMarkerBlocks(state, row)) {
       return { permPrompt: true }
     }
     return { permPrompt: false }
@@ -4146,7 +4147,7 @@ export function createTailer(deps: TailerDeps): Tailer {
     const detail = isBrokerClaudeRow(row) && deps.project.stateDir
       ? `no worker terminal to capture (broker runtime). Daemon diagnostics: ${claudeBrokerDiagnosticLogPath(deps.project.stateDir, row.session_id)}`
       : isHeadlessRow(row)
-      ? `no worker terminal to capture (headless ${row.backend === "codex" ? "codex app-server" : "claude broker"} runtime)`
+      ? `no worker terminal to capture (headless ${row.backend === "codex" ? "codex app-server" : row.backend === "acp" ? "ACP agent" : "claude broker"} runtime)`
       // Neither runtime above, i.e. a pre-cutover row. Nothing in this build captures anything, so the
       // old "(pane empty / unavailable)" described output that SHOULD have existed and sent the reader
       // hunting for a screen that cannot exist. Say why there is nothing instead.
@@ -4428,8 +4429,11 @@ export function createTailer(deps: TailerDeps): Tailer {
       // (read-side discovery). So `agent_session_id ?? transcript_id ?? session_id` is the effective stem
       // for either — a claude row (agent_session_id NULL) falls to transcript_id ?? session_id (its old
       // deterministic path); a codex row (transcript_id NULL) falls to agent_session_id ?? session_id.
+      // An ACP row is the exception: its `agent_session_id` is the AGENT's session (kept for
+      // session/load), but the transcript is FRIZZ-written and keyed by the frizz session id
+      // (acp-transcript.ts) — so its stem is always `session_id`.
       const backend = resolveBackend(row.backend)
-      const nativeId = row.agent_session_id ?? row.transcript_id ?? row.session_id
+      const nativeId = row.backend === "acp" ? row.session_id : row.agent_session_id ?? row.transcript_id ?? row.session_id
       const known = states.get(row.slug)
       const runtimeGeneration = row.runtime_generation ?? 0
       // The state this row may KEEP: same session, same native transcript stem, same runtime
@@ -4496,9 +4500,10 @@ export function createTailer(deps: TailerDeps): Tailer {
       // the discovered file silently. Track noTranscript flips so the degraded runtime surfaces promptly.
       // CLAUDE-ONLY: the discovery scan targets the claude log dir + scratchpad sentinel; a codex row
       // locates its rollout by the agent_session_id pinned at dispatch, so running claude discovery on it
-      // would wrongly flag noTranscript (a codex discovery-miss is a separate follow-up).
+      // would wrongly flag noTranscript (a codex discovery-miss is a separate follow-up). An ACP row's
+      // file is deterministic too (frizz writes it), so it takes the same exemption.
       const prevNoTranscript = state.noTranscript
-      if (row.backend !== "codex" && !resolveTranscript(state, row, nowMs)) continue
+      if (row.backend !== "codex" && row.backend !== "acp" && !resolveTranscript(state, row, nowMs)) continue
 
       // First sighting of a session (fresh dispatch OR restored after a server restart): read the
       // whole transcript to date and adopt its state as the baseline WITHOUT firing turn-done /

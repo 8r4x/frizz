@@ -199,19 +199,23 @@ export interface SessionRow {
   // writes. NULL/'tmux' is the PRE-BROKER legacy value, readable on an old database and never written
   // again. Only meaningful for backend='claude' rows.
   claude_runtime?: string | null
+  // Which ACP agent (backend/acp-agents.ts catalogue id — "opencode", "gemini" …) an `acp` row runs on.
+  // The ACP session id lives in `agent_session_id` like codex's. NULL on every other backend.
+  acp_agent?: string | null
 }
 
 /**
  * A HEADLESS thread has no terminal of its own: input goes through a bridge, liveness comes from the
- * bridge / the on-disk transcript, and there is no interactive UI for anything to read back. Both
- * bridge-owned transports are headless — codex over its app-server, claude over its session broker —
- * which between them is every row frizz creates. Use this wherever the intent is "is this row
- * bridge-owned?" rather than a codex- or claude-specific branch; the false side is only ever a
- * legacy row left by the pre-cutover interactive path.
+ * bridge / the on-disk transcript, and there is no interactive UI for anything to read back. Every
+ * bridge-owned transport is headless — codex over its app-server, claude over its session broker, an
+ * ACP agent over its stdio bridge — which between them is every row frizz creates. Use this wherever
+ * the intent is "is this row bridge-owned?" rather than a backend-specific branch; the false side is
+ * only ever a legacy row left by the pre-cutover interactive path.
  */
 export function isHeadlessRow(row: Pick<SessionRow, "backend" | "codex_runtime" | "claude_runtime">): boolean {
   return (row.backend === "codex" && row.codex_runtime === "app-server") ||
-    (row.backend === "claude" && row.claude_runtime === "broker")
+    (row.backend === "claude" && row.claude_runtime === "broker") ||
+    row.backend === "acp"
 }
 
 /** A Claude row whose session lives in the detached broker daemon, not in any terminal. Stamped
@@ -399,6 +403,10 @@ export interface ThreadTimerRow {
 export interface PrWatchRow {
   id: string
   thread_slug: string
+  /** A pull request or an issue (2026-09-14). One table for both because they are one act — "wake me
+   *  when this thing on GitHub moves" — with one ref grammar, one expiry rule and one drop verb; the
+   *  poll branches on this to ask GitHub a different question and to say different things back. */
+  kind: "pull" | "issue"
   owner: string
   repo: string
   number: number
@@ -671,7 +679,8 @@ export interface Storage {
   // The same shape as the timers above and for the same reason: a thread may hold many, each with its own
   // identity, so the record of intent is a TABLE. `id` is minted by the caller so the row and the
   // scheduler's delivery ids agree without a read-back.
-  armPrWatch(watch: { id: string; slug: string; owner: string; repo: string; number: number; createdAtMs: number; expiresAtMs: number }): void
+  /** `kind` defaults to `pull` — the registry was PR-only until 2026-09-14 and every older caller means that. */
+  armPrWatch(watch: { id: string; slug: string; kind?: "pull" | "issue"; owner: string; repo: string; number: number; createdAtMs: number; expiresAtMs: number }): void
   /** Every armed watcher whose expiry has passed — settled by the scheduler, not polled again. */
   expiredPrWatches(nowMs: number): PrWatchRow[]
   // A thread's watchers, oldest first. `armedOnly` is what the worker's tool reads back and what the
@@ -854,6 +863,7 @@ export interface Storage {
   setAgentSession(slug: string, agentSessionId: string): void
   setCodexRuntime(slug: string, runtime: string): void
   setClaudeRuntime(slug: string, runtime: string): void
+  setAcpAgent(slug: string, agentId: string): void
   setProfile(slug: string, model: string, effort: string): void
   setPermissionMode(slug: string, permissionMode: string): void
   setPermissionPending(slug: string, permissionMode: string | null): void
@@ -978,6 +988,8 @@ export const STORAGE_SCHEMA = `
       -- Claude transport discriminator: 'broker' = a session-broker-owned Agent SDK session; NULL/'tmux'
       -- is the pre-broker legacy value, same story.
       claude_runtime TEXT,
+      -- ACP agent id (backend/acp-agents.ts) for backend='acp' rows; also in the ALTER list below.
+      acp_agent TEXT,
       -- THE RECURRING PROMPT (scheduler.ts SOURCES 4, 5 and 7): one text, three independent triggers —
       -- every time the thread rests, every N ms on a clock, and/or every time its context is compacted.
       -- All flags 0 = off; there is no separate enable column, because another flag could only ever
@@ -1117,6 +1129,9 @@ export const STORAGE_SCHEMA = `
       created_at  INTEGER NOT NULL,
       settled_at  INTEGER,
       cursor      TEXT,
+      -- 'pull' or 'issue' (2026-09-14). Defaulted so every row written before issues existed reads as
+      -- the pull request it was; added to a live file by the ALTER in ensureStorageSchema.
+      kind        TEXT NOT NULL DEFAULT 'pull',
       -- When this watcher stops polling by itself. REQUIRED at registration (2026-08-15): a PR nobody
       -- ever touches would otherwise be polled forever, and the thread parked on it would wait forever
       -- with it. Nullable in the column only so an imported older row reads; the tool refuses to arm
@@ -1253,9 +1268,18 @@ export function ensureStorageSchema(db: Database): void {
   // a file that already exists, and every live install predates any column below — so each rides one
   // additive ALTER here, exactly the stack the schema comment above says the unified file was born
   // without. Keep the list append-only; the try/catch is the "already there" case.
-  for (const column of ["pinned_at TEXT"]) {
+  for (const column of ["pinned_at TEXT", "acp_agent TEXT"]) {
     try {
       db.exec(`ALTER TABLE session ADD COLUMN ${column}`)
+    } catch {
+      // duplicate column — the file already has it
+    }
+  }
+  // Same stack, other tables. `pr_watch.kind` (2026-09-14): an issue watcher is a row in the PR
+  // watcher's table, and every live file predates the column.
+  for (const [table, column] of [["pr_watch", "kind TEXT NOT NULL DEFAULT 'pull'"]] as const) {
+    try {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN ${column}`)
     } catch {
       // duplicate column — the file already has it
     }
@@ -1711,8 +1735,8 @@ export function createStorage(source: string | Database, projectId: string): Sto
     WHERE project_id = @project_id AND slug = ? AND park_bumps > 0
   `)
   const armPrWatchStmt = scope.prepare(`
-    INSERT INTO pr_watch (project_id, id, thread_slug, owner, repo, number, state, created_at, settled_at, cursor, expires_at)
-    VALUES (@project_id, @id, @slug, @owner, @repo, @number, 'armed', @createdAtMs, NULL, NULL, @expiresAtMs)
+    INSERT INTO pr_watch (project_id, id, thread_slug, kind, owner, repo, number, state, created_at, settled_at, cursor, expires_at)
+    VALUES (@project_id, @id, @slug, @kind, @owner, @repo, @number, 'armed', @createdAtMs, NULL, NULL, @expiresAtMs)
   `)
   const expiredPrWatchesStmt = scope.prepare<[number], PrWatchRow>(
     "SELECT * FROM pr_watch WHERE project_id = @project_id AND state = 'armed' AND expires_at IS NOT NULL AND expires_at <= ? ORDER BY expires_at, id",
@@ -1975,6 +1999,7 @@ export function createStorage(source: string | Database, projectId: string): Sto
   const agentSessionStmt = scope.prepare("UPDATE session SET agent_session_id = ? WHERE project_id = @project_id AND slug = ?")
   const codexRuntimeStmt = scope.prepare("UPDATE session SET codex_runtime = ? WHERE project_id = @project_id AND slug = ?")
   const claudeRuntimeStmt = scope.prepare("UPDATE session SET claude_runtime = ? WHERE project_id = @project_id AND slug = ?")
+  const acpAgentStmt = scope.prepare("UPDATE session SET acp_agent = ? WHERE project_id = @project_id AND slug = ?")
   // Stamps profile_set_at alongside model/effort: the OPERATOR's set-time. Both backends' setThreadProfile
   // paths write through here, and the stamp is what marks the pair as CHOSEN rather than observed — the
   // board reads it to keep the composer selector on the pick (resolveSessionProfile), and the observed
@@ -2139,6 +2164,7 @@ export function createStorage(source: string | Database, projectId: string): Sto
     runtime_control_revision: row.runtime_control_revision ?? 0,
     codex_runtime: row.codex_runtime ?? null,
     claude_runtime: row.claude_runtime ?? null,
+    acp_agent: row.acp_agent ?? null,
   })
 
   const getAdoptionRuntimeSnapshot = db.transaction((slug: string) => ({
@@ -2520,7 +2546,7 @@ export function createStorage(source: string | Database, projectId: string): Sto
     resetSignoffNudges: (slug) => void resetNudgesStmt.run(slug),
     countParkBump: (slug, anchor) => void countParkBumpStmt.run(anchor, slug),
     resetParkBumps: (slug) => void resetParkBumpsStmt.run(slug),
-    armPrWatch: (watch) => void armPrWatchStmt.run(watch),
+    armPrWatch: (watch) => void armPrWatchStmt.run({ ...watch, kind: watch.kind ?? "pull" }),
     listPrWatches: (slug, opts) =>
       (opts?.armedOnly ? armedPrWatchesBySlugStmt : prWatchesBySlugStmt).all(slug),
     // Grouped off `armedPrWatchesStmt` — the scheduler's own whole-project read, which already carries
@@ -2625,6 +2651,7 @@ export function createStorage(source: string | Database, projectId: string): Sto
     setAgentSession: (slug, agentSessionId) => void agentSessionStmt.run(agentSessionId, slug),
     setCodexRuntime: (slug, runtime) => void codexRuntimeStmt.run(runtime, slug),
     setClaudeRuntime: (slug, runtime) => void claudeRuntimeStmt.run(runtime, slug),
+    setAcpAgent: (slug, agentId) => void acpAgentStmt.run(agentId, slug),
     setProfile: (slug, model, effort) => void profileStmt.run(model, effort, new Date().toISOString(), slug),
     setPermissionMode: (slug, permissionMode) => void permissionModeStmt.run(permissionMode, new Date().toISOString(), slug),
     setPermissionPending: (slug, permissionMode) => void permissionPendingStmt.run(permissionMode, slug),

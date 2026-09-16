@@ -3,7 +3,7 @@ import { Check, ChevronDown } from "lucide-react"
 import { useLayoutEffect, useRef, useState } from "react"
 import { selectDisplayValue, selectRowPadding } from "../../lib/selectLayout.ts"
 import { registerOpenSelect } from "../../lib/selectOverlay.ts"
-import { OPAQUE_PORTAL_SURFACE_CLASS } from "../../lib/overlaySurface.ts"
+import { OPAQUE_PORTAL_SURFACE_Z, OPAQUE_SURFACE_BASE } from "../../lib/overlaySurface.ts"
 import { PROMPT_CONTROL_TYPOGRAPHY_CLASS } from "../../lib/promptControlTypography.ts"
 
 export interface SelectOption {
@@ -88,6 +88,7 @@ export function Select({
   variant = "ghost",
   indicatorPosition = "left",
   side = "bottom",
+  menuZClass = OPAQUE_PORTAL_SURFACE_Z,
   className = "",
 }: {
   value: string
@@ -103,6 +104,10 @@ export function Select({
   variant?: keyof typeof TRIGGER_VARIANT
   indicatorPosition?: "left" | "right"
   side?: "top" | "bottom"
+  // EXACTLY ONE z utility for the portaled menu (see lib/overlaySurface.ts — two z-* classes on one
+  // element resolve by CSS source order, not class order). Override only to clear a higher surface
+  // the trigger lives inside, e.g. OPAQUE_PORTAL_SURFACE_ABOVE_DIALOG_Z inside the z-[200] Overlay.
+  menuZClass?: string
   className?: string
 }) {
   const display = selectDisplayValue(value, options, groups, placeholder)
@@ -186,7 +191,7 @@ export function Select({
           // callback; stop the same native Escape from continuing to Frizz's window-level drawer
           // handler, which would otherwise close both layers in one keypress.
           onEscapeKeyDown={(event) => event.stopPropagation()}
-          className={`${OPAQUE_PORTAL_SURFACE_CLASS} min-w-[var(--radix-dropdown-menu-trigger-width)] max-w-[calc(100vw-1rem)] overflow-hidden rounded-lg p-1 ${promptReadoutTypography}`}
+          className={`${menuZClass} ${OPAQUE_SURFACE_BASE} min-w-[var(--radix-dropdown-menu-trigger-width)] max-w-[calc(100vw-1rem)] overflow-hidden rounded-lg p-1 ${promptReadoutTypography}`}
         >
           <RadixMenu.RadioGroup value={toRadix(value)} onValueChange={(v) => onValueChange(fromRadix(v))} className="max-h-[300px] min-w-0 overflow-y-auto">
             {groups

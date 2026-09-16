@@ -122,8 +122,14 @@ import {
   humanGapNote,
   SetOwnThreadTitleInput,
   SetOwnThreadTitleResult,
+  AcpAgent,
+  acpAgentIdFromModel,
+  acpModelIdFromModel,
+  AcpAgentModels,
+  AcpAgentModelsInput,
 } from "@frizz/shared"
 import { type AppContext } from "./context.ts"
+import { listAcpAgents } from "./backend/acp-agents.ts"
 import { sessionTitleLocked } from "./storage.ts"
 import { mayHaveLiveBackgroundWork, needsFreshProcessForLimit } from "./backend/usage-limit.ts"
 import { appServerTurnStalled, resolveLiveWatchTarget, resolveRecurringPrompt } from "./board.ts"
@@ -154,7 +160,7 @@ import { readAuthSnapshot } from "./backend/auth-status.ts"
 import { liveThreadsForBackend, runProviderLogout } from "./backend/account-actions.ts"
 import { threadProfileOptions, validateThreadProfile } from "./backend/thread-profiles.ts"
 import { adoptionRuntimeBinding, type AdoptionPaneLookup, type ExpectedAdoptionPane } from "./adoption-recovery.ts"
-import { parsePrRef, readGithubStatusBook, GITHUB_STATUS_SETTING } from "./awaiting.ts"
+import { parseIssueRef, parsePrRef, readGithubIssueStatusBook, readGithubStatusBook, GITHUB_ISSUE_STATUS_SETTING, GITHUB_STATUS_SETTING } from "./awaiting.ts"
 import { isBrokerClaudeRow, type SessionRow, type Storage, type SubAgentSteerRow } from "./storage.ts"
 import type { SessionTelemetry } from "./tailer.ts"
 import { providerResumeCommand } from "./external-terminal.ts"
@@ -180,6 +186,10 @@ const SlugInput = z.object({ slug: ThreadSlug }).strict()
 // replaced with Settings defaults. Permission is NOT part of the tuple: dispatch stamps it server-side
 // (workerDispatchPermission — the non-interactive floor, raised to bypass only when Settings asks).
 export function validateGithubDispatchProfile(input: z.infer<typeof GithubBatchInput>): void {
+  // An ACP profile carries no effort, and its "model" is an `acp:<agent>` slug the dispatcher resolves
+  // itself (refusing an agent that is not on PATH) — there is no model/effort catalogue to check.
+  if (input.backend === "acp") return
+  if (input.effort === undefined) throw new Error(`Unsupported ${input.backend} model/effort pair: ${input.model} / (no effort)`)
   validateThreadProfile(input.backend, input.model, input.effort)
 }
 
@@ -258,6 +268,13 @@ export interface CodexTurnTerminator {
   interruptTurn(threadSlug: string, sessionId: string): Promise<{ interrupted: boolean }>
 }
 
+// The ACP bridge's slice of the same contract: a turn is live only while its `session/prompt` is in
+// flight, and interruptTurn resolves once that prompt has returned (or the child was killed).
+export interface AcpTurnTerminator {
+  turnLiveness(threadSlug: string, sessionId: string): { turnActive: boolean } | undefined
+  interruptTurn(threadSlug: string, sessionId: string): Promise<{ interrupted: boolean }>
+}
+
 // Which rows the bridge owns. A LEGACY Codex row — dispatched pre-cutover, `codex_runtime` NULL,
 // migrated only when a follow-up first touches it (see followUp) — was never an app-server thread, so it
 // keeps the registered-runtime terminator, which finds nothing to stop because that row's pre-cutover
@@ -307,7 +324,14 @@ export async function stopThreadRuntime(
   runtime: RegisteredRuntimeTerminator = cachedLivenessTerminator,
   codex?: CodexTurnTerminator,
   claudeBroker?: ClaudeBrokerTerminator,
+  acp?: AcpTurnTerminator,
 ): Promise<"absent" | "stopped"> {
+  if (row.backend === "acp") {
+    // The bridge answers both questions: is a turn running, and stop it (session/cancel, then wait for
+    // the prompt to return). A resting ACP thread costs nothing here.
+    if (!acp?.turnLiveness(row.slug, row.session_id)?.turnActive) return "absent"
+    return (await acp.interruptTurn(row.slug, row.session_id)).interrupted ? "stopped" : "absent"
+  }
   if (isAppServerCodexRow(row)) {
     if (!appServerCodexTurnLive(codex, row)) return "absent"
     if (!codex) throw new Error("The Codex app-server is unavailable; nothing was stopped")
@@ -374,9 +398,10 @@ export async function stopRuntimeBySlug(
   runtime: RegisteredRuntimeTerminator = cachedLivenessTerminator,
   codex?: CodexTurnTerminator,
   claudeBroker?: ClaudeBrokerTerminator,
+  acp?: AcpTurnTerminator,
 ): Promise<{ outcome: "absent" | "stopped"; row?: SessionRow }> {
   const row = storage.getSession(slug)
-  if (row) return { outcome: await stopThreadRuntime(storage, row, runtime, codex, claudeBroker), row }
+  if (row) return { outcome: await stopThreadRuntime(storage, row, runtime, codex, claudeBroker, acp), row }
   if (storage.getAdoptionClaim(slug)) throw new Error("An adoption attempt is in progress; nothing was stopped")
   // A rowless thread name has no durable owner identity. Even a DB lock cannot make a detached worker
   // crash-safe after this process dies, so never issue a reusable-name kill without a row.
@@ -485,6 +510,7 @@ export async function completeRegisteredThread(
   telemetry?: SessionTelemetry,
   codex?: CodexTurnTerminator,
   claudeBroker?: ClaudeBrokerTerminator,
+  acp?: AcpTurnTerminator,
 ): Promise<{ needsConfirmation: boolean; hold?: CompletionHold }> {
   const binding = adoptionRuntimeBinding(storage, row)
   if (binding.kind === "conflict") {
@@ -502,10 +528,13 @@ export async function completeRegisteredThread(
   // confirmation, no termination) and orphan the daemon, the exact codex bug this branch mirrors.
   // A pre-cutover row has no transport left, so it can never be live; every current row is one of the
   // two headless kinds above.
+  // An ACP row is live while its prompt is in flight — the bridge's own reading, same as codex.
   const live = brokerClaude
     ? (claudeBroker?.isDaemonAlive(row.session_id) ?? false)
     : appServerCodex
     ? appServerCodexTurnLive(codex, row)
+    : row.backend === "acp"
+    ? (acp?.turnLiveness(row.slug, row.session_id)?.turnActive ?? false)
     : false
 
   // A live runtime is asked about when it is still working; a dead one when it never finished. The
@@ -517,7 +546,7 @@ export async function completeRegisteredThread(
     // row exactly as it was — an archived row whose worker is still running is the failure this whole
     // change exists to remove, and for codex it is unrecoverable from the UI (the daemon outlives us
     // and an archived thread has no card left to act on).
-    await stopThreadRuntime(storage, row, runtime, codex, claudeBroker)
+    await stopThreadRuntime(storage, row, runtime, codex, claudeBroker, acp)
     // For a standalone registered session this is the postcondition that turns an idempotent kill into
     // a safe completion operation. An adopted binding is already verified by stopRegisteredRuntime, an
     // app-server codex turn by interruptTurn's own proof that the turn retired, and a broker Claude
@@ -542,6 +571,7 @@ export async function stopAndForgetRegisteredRuntime(
   runtime: RegisteredRuntimeTerminator = cachedLivenessTerminator,
   codex?: CodexTurnTerminator,
   claudeBroker?: ClaudeBrokerTerminator,
+  acp?: AcpTurnTerminator,
 ): Promise<SessionRow> {
   const binding = adoptionRuntimeBinding(storage, row)
   if (binding.kind === "conflict") {
@@ -552,7 +582,7 @@ export async function stopAndForgetRegisteredRuntime(
     runtimeGeneration: row.runtime_generation ?? 0,
     adoptionAttemptToken: binding.kind === "bound" ? binding.claim.attempt_token : null,
   }
-  await stopThreadRuntime(storage, row, runtime, codex, claudeBroker)
+  await stopThreadRuntime(storage, row, runtime, codex, claudeBroker, acp)
   const forgotten = storage.forgetSessionIfCurrent(row.slug, expected)
   if (!forgotten) {
     throw new Error("This thread resumed or was replaced while it was being dismissed; the new worker was preserved")
@@ -814,14 +844,18 @@ export function createRouter(ctx: AppContext) {
   // disagree about the same PR — they are one projection of one book.
   function armedPrWatchViews(slug: string): PrWatchView[] {
     const github = readGithubStatusBook(ctx.storage.getSetting(GITHUB_STATUS_SETTING))
+    const issues = readGithubIssueStatusBook(ctx.storage.getSetting(GITHUB_ISSUE_STATUS_SETTING))
     return ctx.storage.listPrWatches(slug, { armedOnly: true }).map((w) => {
       const target = `${w.owner}/${w.repo}#${w.number}`
+      const kind = w.kind === "issue" ? "issue" as const : "pull" as const
       return {
         id: w.id,
         target,
+        kind,
         state: w.state,
         createdAt: new Date(w.created_at).toISOString(),
-        ...(github[target] ? { github: github[target] } : {}),
+        ...(kind === "pull" && github[target] ? { github: github[target] } : {}),
+        ...(kind === "issue" && issues[target] ? { issue: issues[target] } : {}),
       }
     })
   }
@@ -1742,6 +1776,26 @@ export function createRouter(ctx: AppContext) {
         // stale-draft class. The bridge owns the steer-vs-start decision atomically and dedups on
         // deliveryId. A LEGACY Codex row (dispatched before the cutover) is migrated on its first
         // follow-up by adopting its rollout; from then on it is an ordinary app-server thread.
+        // An ACP follow-up goes to the bridge, which delivers it now, queues it behind a running turn
+        // (ACP has no steer), or re-opens the session first when the child is gone (a restart). The
+        // ledger entry is `delivered` or `enqueued` accordingly; a fresh ACP session id is re-pinned.
+        if (row?.backend === "acp") {
+          const bridge = ctx.acpBridge
+          if (!bridge) throw new Error("The ACP bridge is unavailable; cannot deliver this follow-up")
+          const result = await bridge.followUp({
+            threadSlug: input.slug, sessionId: row.session_id, cwd: ctx.project.dir,
+            agentId: row.acp_agent ?? "", modelId: acpModelIdFromModel(row.model), acpSessionId: row.agent_session_id,
+            text: messageForWorker, ...(input.deliveryId ? { deliveryId: input.deliveryId } : {}),
+          })
+          if (result.acpSessionId !== row.agent_session_id) ctx.storage.setAgentSession(input.slug, result.acpSessionId)
+          if (row.exited === 1) ctx.storage.setExitedIfCurrent(input.slug, row.session_id, row.runtime_generation ?? 0, false)
+          if (input.deliveryId) {
+            appendDelivery(ctx.storage, input.slug, { id: input.deliveryId, text: input.message, state: result.state === "queued" ? "enqueued" : "delivered" })
+            ctx.transcriptChange.emit([input.slug])
+          }
+          ctx.board.refresh()
+          return
+        }
         if (row?.backend === "codex") {
           const bridge = ctx.codexAppServer
           if (!bridge) throw new Error("Codex app-server is unavailable; cannot deliver this follow-up")
@@ -2083,6 +2137,7 @@ export function createRouter(ctx: AppContext) {
         // Codex TUI as a Claude composer. That controller is gone (see the Claude branch below), but the
         // BACKEND test stays: followUp branches the same way and migrates such a row on contact.
         const permRow = ctx.storage.getSession(input.slug)
+        if (permRow?.backend === "acp") throw new Error("An ACP agent enforces its own permissions; Frizz has no mode to set on it")
         if (permRow?.backend === "codex") {
           // Persist FIRST and unconditionally: the registry is the operator's stated intent, it is what
           // every later cold resume now carries (resumeSandboxOverride), and it must survive even if the
@@ -2167,7 +2222,9 @@ export function createRouter(ctx: AppContext) {
         const row = ctx.storage.getSession(input.slug)
         if (!row) throw new Error(`thread ${input.slug} has no session to ask for skills`)
         let skills: ThreadSkill[]
-        if (row.backend === "codex") {
+        if (row.backend === "acp") {
+          skills = [] // an ACP agent's skills are its own; the protocol lists commands, not skills
+        } else if (row.backend === "codex") {
           if (!isAppServerCodexRow(row) || !ctx.codexAppServer) {
             throw new Error("This Codex thread has no app-server session to ask for skills")
           }
@@ -2193,6 +2250,20 @@ export function createRouter(ctx: AppContext) {
         // controller that used to follow was Claude-only, so a legacy (unmigrated) codex row must not
         // reach its reattach.
         const profRow = ctx.storage.getSession(input.slug)
+        if (profRow?.backend === "acp") {
+          // The model rides the row's slug (`acp:<agent>@<model>`) and has no effort axis. The AGENT
+          // cannot change under a session — the ACP session belongs to the process that opened it —
+          // so a slug naming another agent is refused. A live session takes the model now through
+          // session/set_config_option; otherwise the slug is applied when the session next opens.
+          if (acpAgentIdFromModel(input.model) !== acpAgentIdFromModel(profRow.model ?? "")) {
+            throw new Error("An ACP thread's agent cannot change; pick a model of the same agent")
+          }
+          ctx.storage.setProfile(input.slug, input.model, "")
+          const live = ctx.acpBridge ? await ctx.acpBridge.setModel(input.slug, profRow.session_id, acpModelIdFromModel(input.model)) : { applied: false }
+          ctx.board.refresh()
+          return { effect: live.applied ? "applied" as const : "next-resume" as const }
+        }
+        if (!input.effort) throw new Error(`effort is required for a ${profRow?.backend ?? "claude"} thread`)
         if (profRow?.backend === "codex") {
           ctx.storage.setProfile(input.slug, input.model, input.effort)
           ctx.board.refresh()
@@ -2273,7 +2344,7 @@ export function createRouter(ctx: AppContext) {
       handler: async ({ input }) => {
         const row = currentOwnedSession(input.slug, input.sessionId)
         const result = await completeRegisteredThread(
-          ctx.storage, row, input.terminateLive, cachedLivenessTerminator, ctx.tailer.get(input.slug), ctx.codexAppServer, ctx.claudeBroker,
+          ctx.storage, row, input.terminateLive, cachedLivenessTerminator, ctx.tailer.get(input.slug), ctx.codexAppServer, ctx.claudeBroker, ctx.acpBridge,
         )
         if (!result.needsConfirmation) ctx.board.refresh()
         return result
@@ -2549,8 +2620,9 @@ export function createRouter(ctx: AppContext) {
         }
         for (const w of ctx.storage.listPrWatches(input.slug, { armedOnly: true })) {
           activity.push({
-            kind: "pr", id: `${w.owner}/${w.repo}#${w.number}`, label: `${w.owner}/${w.repo}#${w.number}`,
+            kind: w.kind === "issue" ? "issue" : "pr", id: `${w.owner}/${w.repo}#${w.number}`, label: `${w.owner}/${w.repo}#${w.number}`,
             since: new Date(w.created_at).toISOString(),
+            ...(w.expires_at ? { until: new Date(w.expires_at).toISOString() } : {}),
           })
         }
         // The WATCHES are already readable: each armed one rides its live item as `watchId`, and the
@@ -2612,17 +2684,23 @@ export function createRouter(ctx: AppContext) {
         if (row.state === "archived" || row.archived === 1) {
           throw new Error("Reopen this thread before registering a watcher on it")
         }
+        // A PULL REQUEST unless the caller says `issue` (2026-09-14, `mcp__frizz__watch_issue`). Same
+        // registry and same rules below; the ref grammar, the probe and the refusal wording branch.
+        const kind = input.kind ?? "pull"
+        const noun = kind === "issue" ? "issue" : "pull request"
         // REFUSED, not stored. A watcher on a ref frizz cannot parse is one that can never fire, and a
         // worker that registers one comes to rest believing it is covered.
-        const ref = parsePrRef(input.target)
+        const ref = kind === "issue" ? parseIssueRef(input.target) : parsePrRef(input.target)
         if (!ref) {
-          throw new Error(`\`${input.target}\` is not a pull request I can watch — give owner/repo#123 or a PR URL`)
+          throw new Error(`\`${input.target}\` is not ${kind === "issue" ? "an issue" : "a pull request"} I can watch — give owner/repo#123 or ${kind === "issue" ? "an issue" : "a PR"} URL`)
         }
         const armed = ctx.storage.listPrWatches(input.slug, { armedOnly: true })
         // IDEMPOTENT ON THE PR. Re-registering after a compaction is the COMMON case — the worker has
         // forgotten what it holds and is being careful — and a duplicate would mean two wakes per event,
-        // which reads to the operator as the watcher misfiring.
-        const existing = armed.find((w) => w.owner === ref.owner && w.repo === ref.repo && w.number === ref.number)
+        // which reads to the operator as the watcher misfiring. Per KIND as well as ref: an issue and a
+        // PR cannot share a number in one repo, so the same number registered both ways is a mistake
+        // the probe catches on whichever one is wrong, never two watchers on one thing.
+        const existing = armed.find((w) => w.kind === kind && w.owner === ref.owner && w.repo === ref.repo && w.number === ref.number)
         const target = `${ref.owner}/${ref.repo}#${ref.number}`
         if (existing) {
           // The ORIGINAL expiry, which this call left alone — the re-registration is a no-op and must
@@ -2631,7 +2709,7 @@ export function createRouter(ctx: AppContext) {
           return { id: existing.id, target, alreadyArmed: true, expiresAt, watches: armedPrWatchViews(input.slug) }
         }
         if (armed.length >= PR_WATCH_MAX_ARMED) {
-          throw new Error(`this thread already watches ${armed.length} pull requests (the limit is ${PR_WATCH_MAX_ARMED}) — drop one first`)
+          throw new Error(`this thread already watches ${armed.length} pull requests and issues (the limit is ${PR_WATCH_MAX_ARMED}) — drop one first`)
         }
         // A MISSING `for` IS AN OLD WORKER, not a bad one — its MCP binary predates the field and
         // cannot send it (see AddOwnPrWatchInput). It gets a bounded default rather than an error,
@@ -2651,19 +2729,20 @@ export function createRouter(ctx: AppContext) {
         // org, no such repo, no `gh` on its PATH) is a watcher that fails every minute in silence while
         // the worker rests believing it is covered (a user's board, 2026-08-25: 12h+). Checked after the
         // idempotent short-circuit above, so a re-registration during a GitHub blip still answers.
-        const probe = await ctx.probePr(ref)
+        const probe = kind === "issue" ? await ctx.probeIssue(ref) : await ctx.probePr(ref)
         if (!probe.ok) {
           throw new Error(
-            `\`${target}\` cannot be watched — the server's \`gh\` could not read it: ${probe.reason}. ` +
+            `\`${target}\` cannot be watched as ${kind === "issue" ? "an issue" : "a pull request"} — the server's \`gh\` could not read it: ${probe.reason}. ` +
             "Frizz polls with the `gh` of the process it runs as, not yours: check `gh auth status` there and that the repo is " +
             "reachable, then register again. If GitHub itself was briefly down, registering again in a minute is enough.",
           )
         }
         const now = Date.now()
-        const id = `prw_${randomUUID().replace(/-/g, "").slice(0, 12)}`
+        // The id prefix names the kind, so a `drop` id in a transcript reads as what it dropped.
+        const id = `${kind === "issue" ? "isw" : "prw"}_${randomUUID().replace(/-/g, "").slice(0, 12)}`
         // A registration trumps a done — see setOwnThreadTimer.
         ctx.storage.clearThreadDone(input.slug)
-        ctx.storage.armPrWatch({ id, slug: input.slug, owner: ref.owner, repo: ref.repo, number: ref.number, createdAtMs: now, expiresAtMs: now + forMs })
+        ctx.storage.armPrWatch({ id, slug: input.slug, kind, owner: ref.owner, repo: ref.repo, number: ref.number, createdAtMs: now, expiresAtMs: now + forMs })
         ctx.board.refresh()
         return { id, target, alreadyArmed: false, expiresAt: new Date(now + forMs).toISOString(), ...clampedFrom, watches: armedPrWatchViews(input.slug) }
       },
@@ -2901,7 +2980,7 @@ export function createRouter(ctx: AppContext) {
             id: w.id,
             what: `${w.kind === "agent" ? "sub-agent" : "shell"}: ${w.label ? `${w.label} (${w.target})` : w.target}`,
           })),
-          ...armedPrWatchViews(input.slug).map((w) => ({ id: w.id, what: `pull request: ${w.target}` })),
+          ...armedPrWatchViews(input.slug).map((w) => ({ id: w.id, what: `${w.kind === "issue" ? "issue" : "pull request"}: ${w.target}` })),
           ...ctx.storage
             .listThreadTimers(input.slug, { armedOnly: true })
             .map((t) => ({ id: t.id, what: `timer, fires ${new Date(t.fire_at).toISOString()}` })),
@@ -2995,7 +3074,7 @@ export function createRouter(ctx: AppContext) {
         if (t && t.runtime !== "exited") {
           throw new Error("only a stalled or exited session can be dismissed — archive a live one instead")
         }
-        await stopAndForgetRegisteredRuntime(ctx.storage, row, cachedLivenessTerminator, ctx.codexAppServer, ctx.claudeBroker)
+        await stopAndForgetRegisteredRuntime(ctx.storage, row, cachedLivenessTerminator, ctx.codexAppServer, ctx.claudeBroker, ctx.acpBridge)
         ctx.tailer.forget(input.slug)
         ctx.board.refresh() // storage-only change — the removed row fans out as a delete delta on SSE
       },
@@ -3132,7 +3211,7 @@ export function createRouter(ctx: AppContext) {
       handler: async ({ input }) => {
         assertLegacyMutationAllowed(input.slug)
         if (input.status === "dismissed") {
-          const stopped = await stopRuntimeBySlug(ctx.storage, input.slug, cachedLivenessTerminator, ctx.codexAppServer, ctx.claudeBroker)
+          const stopped = await stopRuntimeBySlug(ctx.storage, input.slug, cachedLivenessTerminator, ctx.codexAppServer, ctx.claudeBroker, ctx.acpBridge)
           if (stopped.row && !ctx.storage.setExitedIfCurrent(
             stopped.row.slug,
             stopped.row.session_id,
@@ -3253,7 +3332,7 @@ export function createRouter(ctx: AppContext) {
         // with turn/interrupt rather than a kill aimed at a registered runtime it never had. A stop that
         // could not be delivered throws out of here BEFORE setExitedIfCurrent, so the row is never
         // marked exited on the strength of a termination that did not happen.
-        const stopped = await stopRuntimeBySlug(ctx.storage, input.slug, cachedLivenessTerminator, ctx.codexAppServer, ctx.claudeBroker)
+        const stopped = await stopRuntimeBySlug(ctx.storage, input.slug, cachedLivenessTerminator, ctx.codexAppServer, ctx.claudeBroker, ctx.acpBridge)
         if (stopped.row && !ctx.storage.setExitedIfCurrent(
           stopped.row.slug,
           stopped.row.session_id,
@@ -3272,6 +3351,23 @@ export function createRouter(ctx: AppContext) {
     codexModels: query({
       output: z.array(CodexModel),
       handler: async () => readCodexModels(),
+    }),
+
+    // The ACP agents Frizz knows how to launch, with `available` for the ones on this machine's PATH.
+    // The composer lists the available ones as `acp:<id>` models (plans/acp-backend.md, decision 9).
+    acpAgents: query({
+      output: z.array(AcpAgent),
+      handler: async () => listAcpAgents(ctx.getSettings().acpAgents).map((a) => ({ id: a.id, label: a.label, command: a.command, available: a.bin !== undefined })),
+    }),
+    // The models one ACP agent advertises — read by opening a throwaway session in the project dir
+    // (cached in the bridge), so it is a separate query the composer asks only once a model picker
+    // needs it, never on every board load.
+    acpAgentModels: query({
+      input: AcpAgentModelsInput,
+      output: AcpAgentModels,
+      handler: async ({ input }) => ctx.acpBridge
+        ? ctx.acpBridge.agentModels(input.agentId, ctx.project.dir, { refresh: input.refresh === true })
+        : { agentId: input.agentId, models: [], error: "The ACP bridge is unavailable", probedAt: new Date().toISOString() },
     }),
 
     // Provider subscription quota (5h + weekly rate-limit windows) for the sidebar status bar. Codex
@@ -3329,7 +3425,8 @@ export function createRouter(ctx: AppContext) {
         // The login CLI finished → the pty is spent; tear it down eagerly so the OAuth bytes don't
         // linger in its replay buffer. Cancel is idempotent.
         if (state === "exited") ctx.loginUtility.cancel(input.attemptId)
-        return { state, auth: auth[backend ?? "claude"] }
+        // The login utility only signs into Claude and Codex; an ACP agent logs in with its own CLI.
+        return { state, auth: backend === "acp" ? "unknown" : auth[backend ?? "claude"] }
       },
     }),
 
@@ -3593,6 +3690,17 @@ export function createRouter(ctx: AppContext) {
       input: Settings,
       output: Settings,
       handler: async ({ input }) => ctx.setSettings(input),
+    }),
+
+    // Context controls live in the new-thread picker. Patch only the chosen field against the
+    // latest settings, synchronously, rather than replacing unrelated settings from a stale drawer.
+    contextWindowSet: mutation({
+      input: z.object({ backend: z.enum(["claude", "codex"]), tokens: z.number().int().positive().nullable() }),
+      output: Settings,
+      handler: async ({ input }) => ctx.setSettings({
+        ...ctx.getSettings(),
+        [input.backend === "claude" ? "autoCompactWindow" : "codexContextWindow"]: input.tokens ?? undefined,
+      }),
     }),
 
     // Clear the stored settings blob so defaults (incl. the shipped default preamble) apply again.

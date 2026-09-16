@@ -46,6 +46,7 @@ window.fetch = async (input, init) => {
     return json({ backend: "claude", claude: { model: "opus", effort: "high", permissionMode: "auto" }, codex: { model: "gpt-5.6-sol", effort: "medium", permissionMode: "default" } })
   if (url.pathname === "/_frizz/rpc/codexModels")
     return json([{ slug: "gpt-5.6-sol", displayName: "GPT-5.6 Sol", defaultEffort: "medium", efforts: ["low", "medium", "high"] }])
+  if (url.pathname === "/_frizz/rpc/acpAgents") return json([])
   if (url.pathname.startsWith("/_frizz/rpc/")) return json(null)
   return nativeFetch(input, init)
 }

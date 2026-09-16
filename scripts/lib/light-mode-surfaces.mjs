@@ -2,12 +2,25 @@ import assert from "node:assert/strict"
 import { join } from "node:path"
 import { createServer } from "node:http"
 import { once } from "node:events"
-import { measureTextContrast, measureControlContrast, measureThreadTitleInk } from "./light-mode-contrast.mjs"
+import { execFile } from "node:child_process"
+import { promisify } from "node:util"
+import { fileURLToPath } from "node:url"
+import { measureTextContrast, measureControlContrast, measureThreadTitleInk, measureAppearanceInk } from "./light-mode-contrast.mjs"
 
 export async function checkSurfaceStates({ page, url, font, palette, out, check, result }) {
   const name = `${palette}-${font}`
   const shot = async suffix => page.screenshot({ path: join(out, `${name}-${suffix}.png`) })
   const contrast = async suffix => { result[`${name}-${suffix}-contrast`] = await measureTextContrast(page) }
+  const crop = async (selector, suffix) => {
+    const viewport = page.viewport()
+    await page.setViewport({ ...viewport, deviceScaleFactor: 8 })
+    try {
+      const element = await page.$(selector)
+      assert.ok(element, `Missing optical target ${selector}`)
+      await element.screenshot({ path: join(out, `${name}-${suffix}-ink.png`) })
+      await element.dispose()
+    } finally { await page.setViewport(viewport) }
+  }
   await page.setViewport({ width: 1440, height: 1000, deviceScaleFactor: 1 })
   await page.goto(url, { waitUntil: "networkidle2" })
   await page.evaluate(async () => {
@@ -22,6 +35,41 @@ export async function checkSurfaceStates({ page, url, font, palette, out, check,
   const running = await page.evaluate(async () => (await import("/src/store.ts")).store.board.threads.find(t => t.id === "theme-running").runtime)
   assert.equal(running, "running")
   check(`${name} real Rested, Active, Snoozed and Done bands`)
+
+  // A fresh dispatch has no AI title yet; exercise that real row without dispatching a provider.
+  const previousTitle = await page.evaluate(async () => {
+    const { store } = await import('/src/store.ts')
+    const thread = store.board.threads.find(t => t.id === 'theme-running')
+    const saved = { titleAuto: thread.titleAuto, aiTitle: thread.aiTitle, spawnedAt: thread.spawnedAt }
+    Object.assign(thread, { titleAuto: true, aiTitle: '', spawnedAt: new Date().toISOString() })
+    return saved
+  })
+  const provisional = '[data-sidebar-item="theme-running"]'
+  await page.waitForFunction(selector => document.querySelector(selector)?.textContent.includes('Spinning up'), {}, provisional)
+  await contrast('provisional-title')
+  assert.ok(result[`${name}-provisional-title-contrast`].some(row => row.text.includes('Spinning up')), 'The provisional title was actually sampled')
+  await shot('provisional-title')
+  await page.evaluate(async saved => {
+    const { store } = await import('/src/store.ts')
+    Object.assign(store.board.threads.find(t => t.id === 'theme-running'), saved)
+  }, previousTitle)
+  check(`${name} provisional sidebar title`)
+
+  await page.click('[aria-label="Model and effort"]')
+  await page.waitForSelector('[aria-label="Claude Code compaction window"]')
+  await contrast('profile-grid')
+  for (const label of ['Claude Code compaction window', 'Codex context window']) {
+    await page.click(`[aria-label="${label}"]`)
+    await page.waitForSelector('[data-context-window-menu]')
+    await contrast(`context-${label.split(' ')[0].toLowerCase()}`)
+    result[`${name}-context-${label.split(' ')[0].toLowerCase()}-ink`] = await measureAppearanceInk(page, `[aria-label="${label}"]`)
+    await shot(`context-${label.split(' ')[0].toLowerCase()}`)
+    await crop(`[aria-label="${label}"]`, `context-${label.split(' ')[0].toLowerCase()}`)
+    await page.keyboard.press('Escape')
+    await page.waitForSelector('[data-context-window-menu]', { hidden: true })
+  }
+  await page.keyboard.press('Escape')
+  check(`${name} model-grid headers and nested context controls`)
 
   // Upstream shares ThreadTitle between the queue and the drawer. Keep both editing paths and
   // their semantic focus treatment covered when either header changes during palette migrations.
@@ -104,6 +152,19 @@ export async function checkSurfaceStates({ page, url, font, palette, out, check,
   }
   page.off("request", request)
   assert.equal(serverWrites, 0, "Appearance never writes server settings")
+  for (const choice of [font === 'sans' ? 'Mono' : 'Sans', font === 'sans' ? 'Sans' : 'Mono']) {
+    const saved = page.waitForResponse(response => response.url().includes('/rpc/settingsSet') && response.ok())
+    await page.evaluate(choice => [...document.querySelectorAll('.frizz-sheet-panel button')].find(el => el.textContent.trim() === choice).click(), choice)
+    await saved
+    await page.waitForFunction(() => [...document.querySelectorAll('header span')].some(el => el.textContent === 'Saved'))
+    await page.evaluate(async () => {
+      await Promise.all(document.getAnimations().filter(a => a.effect?.getTiming().iterations !== Infinity).map(a => a.finished.catch(() => {})))
+    })
+    await contrast(`settings-saved-${choice.toLowerCase()}`)
+    assert.ok(result[`${name}-settings-saved-${choice.toLowerCase()}-contrast`].some(row => row.text === 'Saved'), 'The actual settings save result was sampled')
+    await shot(`settings-saved-${choice.toLowerCase()}`)
+  }
+  check(`${name} real settings save result`)
   await page.keyboard.press("Tab")
   await page.focus('button[aria-label="Appearance"]')
   await page.evaluate(async () => {
@@ -216,10 +277,11 @@ export async function checkSurfaceStates({ page, url, font, palette, out, check,
   // the document through request interception classifies it public and blocks Vite's loopback HMR.
   const gallery = createServer(async (req, res) => {
     try {
-      const isEntry = req.url.startsWith('/github-hovercard-fixture.html')
+      const integration = req.url.startsWith('/light-mode-integration-fixture.html')
+      const isEntry = integration || req.url.startsWith('/github-hovercard-fixture.html')
       const upstream = await fetch(isEntry ? url : new URL(req.url, url))
       res.writeHead(upstream.status, { 'content-type': upstream.headers.get('content-type') ?? 'application/octet-stream' })
-      res.end(isEntry ? (await upstream.text()).replace('/src/main.tsx', '/src/github-hovercard-fixture.tsx') : Buffer.from(await upstream.arrayBuffer()))
+      res.end(isEntry ? (await upstream.text()).replace('/src/main.tsx', integration ? '/src/light-mode-integration-fixture.tsx' : '/src/github-hovercard-fixture.tsx') : Buffer.from(await upstream.arrayBuffer()))
     } catch (error) { res.writeHead(502); res.end(String(error)) }
   })
   gallery.listen(0, '127.0.0.1')
@@ -236,6 +298,52 @@ export async function checkSurfaceStates({ page, url, font, palette, out, check,
   await page.evaluate(() => scrollTo(0, 0))
   await shot("github-components")
   check(`${name} actual GitHub card components: all states and external label edge cases`)
+  await page.goto(`http://127.0.0.1:${gallery.address().port}/light-mode-integration-fixture.html?font=${font}&theme=${palette}`, { waitUntil: 'networkidle2' })
+  await page.waitForSelector('[data-provider-marks] [role="img"]')
+  assert.equal(await page.$$eval('[data-provider-marks] [role="img"]', els => els.length), 7)
+  assert.equal(await page.$$eval('[data-issue-watches] [data-wait-row]', els => els.length), 4)
+  for (const [label, selectors] of [
+    ['acp-model', '[aria-label="Model for OpenCode"] > span,[aria-label="Model for OpenCode"] > svg'],
+    ['issue-watch', '[data-wait-row="issue:acme/app#1"] > span:first-child svg,[data-wait-row="issue:acme/app#1"] > a'],
+  ]) {
+    const ink = await promisify(execFile)('nub', [fileURLToPath(new URL('../ink-gaps.mjs', import.meta.url)), page.url(), selectors,
+      `--browser=${page.browser().wsEndpoint()}`, '--dsf=8', '--w=390', '--h=1000', '--wait=300', '--pad=0'], { encoding: 'utf8' })
+    result[`${name}-${label}-gaps`] = JSON.parse(ink.stdout)
+  }
+  await page.bringToFront()
+  const marks = await measureControlContrast(page, [
+    ...Array.from({ length: 7 }, (_, i) => ({ label: `ACP mark ${i}`, selector: `[data-provider-marks] > div:nth-child(${i + 1}) [role="img"]`, property: 'color' })),
+    { label: 'Unknown issue mark', selector: '[data-wait-row="issue:acme/app#1"] svg', property: 'color' },
+  ])
+  result[`${name}-integrated-marks`] = marks
+  if (palette === 'light') assert.deepEqual(marks.filter(mark => mark.ratio < 3), [], 'Integrated provider and issue marks meet 3:1')
+  for (const width of [1440, 390]) {
+    await page.setViewport({ width, height: 1000, deviceScaleFactor: 1 })
+    const rows = await page.$$eval('[data-issue-watches] [data-wait-row]', els => els.map(el => {
+      const row = el.getBoundingClientRect()
+      return { height: row.height, width: row.width, scrollWidth: el.scrollWidth, children: [...el.children].map(child => {
+        const rect = child.getBoundingClientRect()
+        return { top: rect.top - row.top, left: rect.left - row.left, width: rect.width, height: rect.height }
+      }) }
+    }))
+    result[`${name}-issue-rows-${width}`] = rows
+    await shot(`integrated-renderers-${width}`)
+    // The trailing chevron deliberately overhangs its box by 4px to align its ink. Check the
+    // single-line contract and document overflow, not that intentional box-level overhang.
+    assert.ok(rows.every(row => row.height < 32 && row.children.every(child => child.top >= 0 && child.top + child.height <= row.height)), 'Issue watches retain their real single-line subgrid layout')
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, 'Integrated controls do not overflow the viewport')
+    await contrast(`integrated-renderers-${width}`)
+    result[`${name}-acp-model-${width}-ink`] = await measureAppearanceInk(page, '[aria-label="Model for OpenCode"]')
+    await crop('[aria-label="Model for OpenCode"]', `acp-model-${width}`)
+    await crop('[data-issue-watches]', `issue-watches-${width}`)
+    await page.click('[aria-label="Model for OpenCode"]')
+    await page.waitForSelector('[role="menuitemradio"]')
+    await contrast(`acp-model-menu-${width}`)
+    await shot(`acp-model-menu-${width}`)
+    await page.evaluate(() => [...document.querySelectorAll('[role="menuitemradio"]')].find(el => el.textContent === 'Model B').click())
+    await page.waitForFunction(() => document.querySelector('[aria-label="Model for OpenCode"]')?.textContent === 'Model B')
+  }
+  check(`${name} ACP provider marks, model dropdown and issue watch states`)
   } finally {
     await page.goto(url, { waitUntil: "networkidle2" })
     gallery.closeAllConnections()

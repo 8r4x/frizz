@@ -1223,3 +1223,34 @@ test("the batched registry reads answer exactly what the per-thread reads answer
   assert.equal(done.get("beta"), undefined, "so is a thread with no completion")
   s.close()
 })
+
+// ---- pr_watch.kind (2026-09-14) -----------------------------------------------------------------------
+test("pr_watch.kind: an issue watcher stores its kind, an older caller means pull, and a pre-column file is migrated", () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-storage-kind-"))
+  const path = join(dir, "ui.db")
+  try {
+    // A LIVE FILE FROM BEFORE THE COLUMN: the table as CREATE TABLE IF NOT EXISTS wrote it then, with a
+    // row in it. Opening it through createStorage must add the column and read the row as a PR.
+    const db = new Database(path)
+    db.exec(`CREATE TABLE pr_watch (
+      id TEXT PRIMARY KEY, project_id TEXT NOT NULL, thread_slug TEXT NOT NULL, owner TEXT NOT NULL, repo TEXT NOT NULL,
+      number INTEGER NOT NULL, state TEXT NOT NULL CHECK (state IN ('armed', 'dropped', 'settled')),
+      created_at INTEGER NOT NULL, settled_at INTEGER, cursor TEXT, expires_at INTEGER)`)
+    db.prepare("INSERT INTO pr_watch (id, project_id, thread_slug, owner, repo, number, state, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, 'armed', 1, 9e12)")
+      .run("prw_old", "p", "t", "acme", "app", 391)
+    db.close()
+    const s = createStorage(path, "p")
+    try {
+      s.armPrWatch({ id: "isw_1", slug: "t", kind: "issue", owner: "acme", repo: "app", number: 7, createdAtMs: 2, expiresAtMs: 9e12 })
+      s.armPrWatch({ id: "prw_new", slug: "t", owner: "acme", repo: "app", number: 8, createdAtMs: 3, expiresAtMs: 9e12 })
+      assert.deepEqual(
+        s.listPrWatches("t", { armedOnly: true }).map((w) => [w.id, w.kind, w.number]),
+        [["prw_old", "pull", 391], ["isw_1", "issue", 7], ["prw_new", "pull", 8]],
+      )
+    } finally {
+      s.close()
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

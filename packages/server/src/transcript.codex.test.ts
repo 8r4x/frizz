@@ -401,7 +401,8 @@ test("real collaboration shapes show targets/summaries, never encrypted messages
   // Model+effort ride the header's `subagentType` tag now (the codex analogue of Claude's
   // `[frizz:opus-high]`), so the dispatch cell reads at a glance instead of only inside the payload.
   assert.equal(spawned.subagentType, "gpt-5.6-sol/high")
-  assert.match(spawned.input ?? "", /fork_context/)
+  assert.equal(spawned.input, undefined)
+  assert.equal(spawned.prompt, undefined)
   // This spawn was REJECTED, so no child exists: the card must not offer a drill-in that can only ever
   // resolve to "unavailable". (The tailer's tracker discards the same dispatch on the same signal.)
   assert.equal(spawned.agentId, undefined)
@@ -409,6 +410,19 @@ test("real collaboration shapes show targets/summaries, never encrypted messages
   assert.equal(waited.detail, "up to 20s")
   assert.equal(waited.output, "Timed out without an update")
   assert.doesNotMatch(JSON.stringify([sent, agents, spawned, waited]), /gAAAA|encrypted payload/)
+})
+
+test("Codex dispatches expose only the initial instruction, not fork settings", () => {
+  for (const message of ["Inspect the resolver.\n\nReport the failing case.", "", "   ", undefined]) {
+    const raw = rollout([
+      { type: "response_item", payload: { type: "function_call", call_id: "spawn", name: "spawn_agent", arguments: JSON.stringify({ task_name: "reviewer", fork_turns: "none", agent_type: "default", service_tier: "priority", message }) } },
+      { type: "response_item", payload: { type: "function_call_output", call_id: "spawn", output: JSON.stringify({ agent_id: "child", agent_name: "/root/reviewer" }) } },
+    ])
+    const call = parseCodexTranscript(raw)[0].tools[0]
+    assert.equal(call.prompt, message?.trim() ? message : undefined)
+    assert.equal(call.input, undefined)
+    assert.equal(call.agentId, "spawn")
+  }
 })
 
 // ---- a codex child REPORTING BACK (the completion notification that used to vanish) ----

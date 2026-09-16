@@ -9,6 +9,7 @@
   --color-border: var(--frizz-border);
   --color-border-strong: var(--frizz-border-strong);
   --color-fg: var(--frizz-fg);
+  --color-provisional: var(--frizz-provisional);
   --color-muted: var(--frizz-muted);
   --color-faint: var(--frizz-faint);
   --color-accent: var(--frizz-accent);
@@ -102,6 +103,7 @@
   --frizz-border: #26282d;
   --frizz-border-strong: #33363c;
   --frizz-fg: #e6e7e9;
+  --frizz-provisional: color-mix(in oklab, var(--frizz-fg) 50%, transparent);
   --frizz-muted: #8b8f96;
   --frizz-faint: #5f646d;
   --frizz-accent: #e8b923;
@@ -260,6 +262,7 @@
   --frizz-border: #d0d7de;
   --frizz-border-strong: #afb8c1;
   --frizz-fg: #1f2328;
+  --frizz-provisional: #626b75;
   --frizz-muted: #57606a;
   --frizz-faint: #626b75;
   --frizz-accent: #9a6700;
@@ -419,6 +422,7 @@
     --frizz-border: #d0d7de;
     --frizz-border-strong: #afb8c1;
     --frizz-fg: #1f2328;
+    --frizz-provisional: #626b75;
     --frizz-muted: #57606a;
     --frizz-faint: #626b75;
     --frizz-accent: #9a6700;

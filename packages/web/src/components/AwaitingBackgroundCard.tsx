@@ -26,8 +26,8 @@
 // and the parent genuinely resumes; measured 15/15 times on a live worker thread, with idle windows as
 // short as 0.13s. This card is what makes that alternation legible.)
 import { Fragment, useEffect, useState, type ReactNode } from "react"
-import { Bot, ChevronRight, CircleAlert, CircleCheck, CircleDashed, CircleX, Clock, GitMerge, GitPullRequestClosed, Hourglass, TerminalSquare } from "lucide-react"
-import type { AwaitingHint, GithubWatchStatus, ThreadView, ThreadWatchView } from "@frizz/shared"
+import { Bot, ChevronRight, CircleAlert, CircleCheck, CircleDashed, CircleDot, CircleSlash, CircleX, Clock, GitMerge, GitPullRequestClosed, Hourglass, TerminalSquare } from "lucide-react"
+import type { AwaitingHint, GithubIssueStatus, GithubWatchStatus, ThreadView, ThreadWatchView } from "@frizz/shared"
 import { awaitingFenceTitle, isDirectSubAgent } from "@frizz/shared"
 import { githubRefUrl } from "../lib/githubRef.ts"
 import { noteGithubRefs } from "../lib/githubHovercards.ts"
@@ -497,7 +497,34 @@ export function WaitRow({ mark, name, status, onOpen, onPrewarm, href, ghRef, ti
   )
 }
 
+/** GITHUB'S OWN ISSUE MARKS, in its own colours: the green open dot, the purple "completed" check, the
+ *  grey "not planned" slash — the three states its issue list draws. Unpolled reads as the same dashed
+ *  circle a PR row uses, for the same reason: "frizz has not looked yet" is not a GitHub state. */
+function IssueGlyph({ status }: { status: GithubIssueStatus | undefined }) {
+  if (!status) return <CircleDashed size={12} className={`${ON_CAP} text-muted-60`} />
+  if (status.state === "closed") {
+    return status.stateReason === "not_planned" || status.stateReason === "duplicate"
+      ? <CircleSlash size={12} className={`${ON_CAP} text-muted`} />
+      : <CircleCheck size={12} className={ON_CAP} style={{ color: PRIMER.fgDone }} />
+  }
+  return <CircleDot size={12} className={ON_CAP} style={{ color: PRIMER.fgSuccess }} />
+}
+
+/** The issue row's right-hand side: open with its conversation size, or closed and why. */
+export function issueStatusLine(status: GithubIssueStatus | undefined): string {
+  if (!status) return "Checking…"
+  if (status.state === "closed") {
+    const reason = status.stateReason === "not_planned" ? "not planned" : status.stateReason === "duplicate" ? "duplicate" : null
+    return reason ? `Closed as ${reason}` : "Closed"
+  }
+  return `Open · ${status.comments} comment${status.comments === 1 ? "" : "s"}`
+}
+
 export function GithubWatchRow({ watch }: { watch: ThreadWatchView }) {
+  // AN ISSUE ROW is the same four tracks with GitHub's issue marks in the first and no CI in the third:
+  // its subject has no checks, and a "No checks" reading off it would be a PR fact stated about a thing
+  // that has none.
+  if (watch.subject === "issue") return <GithubIssueWatchRow watch={watch} />
   const status = watch.github
   const url = githubRefUrl(watch.target)
   // Queue the hovercard fetch at render time, the same contract prose keeps (useGithubHovercardRefs):
@@ -540,6 +567,26 @@ export function GithubWatchRow({ watch }: { watch: ThreadWatchView }) {
           )}
         </>
       }
+    />
+  )
+}
+
+function GithubIssueWatchRow({ watch }: { watch: ThreadWatchView }) {
+  const status = watch.issue
+  const url = githubRefUrl(watch.target, "issue")
+  useEffect(() => {
+    if (url) noteGithubRefs([watch.target])
+  }, [url, watch.target])
+  return (
+    <WaitRow
+      testKind="github"
+      testId={`issue:${watch.target}`}
+      mark={<IssueGlyph status={status} />}
+      name={status?.title ? `${watch.target} ${status.title}` : watch.target}
+      href={url ?? undefined}
+      ghRef={url ? watch.target : undefined}
+      title={url ? `Open ${watch.target} on GitHub` : watch.target}
+      status={issueStatusLine(status)}
     />
   )
 }
@@ -729,23 +776,25 @@ function awaitingWaitItems(thread: Pick<ThreadView, "id" | "subAgents" | "bgShel
   const cutoff = Date.parse(opts.notAfter ?? "")
   // Unknown start → kept: a row with no instant is never dropped on the strength of a guess.
   const startedByRest = (iso: string | undefined) => !Number.isFinite(cutoff) || !iso || !(Date.parse(iso) > cutoff)
-  const prs = (thread.watches ?? []).filter((w) => w.kind === "github" && w.state === "armed" && startedByRest(w.createdAt))
+  const github = (thread.watches ?? []).filter((w) => w.kind === "github" && w.state === "armed" && startedByRest(w.createdAt))
+  const prs = github.filter((w) => w.subject !== "issue")
+  const issues = github.filter((w) => w.subject === "issue")
   const declared = declaredShellWatches(thread).filter((w) => startedByRest(resolveShell(thread, w.target)?.startedAt ?? w.createdAt))
   const shells = [...declared, ...hintedShellWatches(thread, opts.hints ?? [], declared)]
   const agents = liveAgents(thread).filter((a) => startedByRest(a.startedAt))
   const timers = armedTimerWatches(thread).filter((w) => startedByRest(w.createdAt))
-  return { prs, shells, agents, timers }
+  return { prs, issues, shells, agents, timers }
 }
 
 /** Would the wait table draw at least one row for this thread? The gate for drawing a card at a rest
  *  the thread has been bumped past: a card with a heading and no rows says less than nothing. */
 export function hasAwaitingWaitRows(thread: Pick<ThreadView, "id" | "subAgents" | "bgShells" | "watches">, opts: AwaitingWaitOptions = {}): boolean {
   const items = awaitingWaitItems(thread, opts)
-  return items.prs.length + items.shells.length + items.agents.length + items.timers.length > 0
+  return items.prs.length + items.issues.length + items.shells.length + items.agents.length + items.timers.length > 0
 }
 
 function awaitingWaitGroups(thread: Pick<ThreadView, "id" | "subAgents" | "bgShells" | "watches">, now: number, opts: AwaitingWaitOptions = {}): Array<{ head: string; rows: ReactNode[] }> {
-  const { prs, shells, agents, timers } = awaitingWaitItems(thread, opts)
+  const { prs, issues, shells, agents, timers } = awaitingWaitItems(thread, opts)
   // GROUPED BY KIND (maintainer 2026-08-15: "Definitely group them by kind"), and the order is the one
   // the ops strip already settled, for the same reason: a sub-agent and a shell are running RIGHT NOW,
   // a watched PR is waiting on somebody else, and a timer is waiting on nothing but the clock. Read
@@ -754,6 +803,9 @@ function awaitingWaitGroups(thread: Pick<ThreadView, "id" | "subAgents" | "bgShe
     { head: "Sub-agents", rows: agents.map((a) => <AgentRow key={a.id ?? a.label} agent={a} slug={thread.id} now={now} />) },
     { head: "Background shells", rows: shells.map((w) => <ShellWatchRow key={w.id} watch={w} thread={thread} slug={thread.id} now={now} />) },
     { head: "Pull requests", rows: prs.map((w) => <GithubWatchRow key={w.id} watch={w} />) },
+    // Its own group, under GitHub's own noun — an issue beside a PR under "Pull requests" would be the
+    // one row on the card whose heading lied about it.
+    { head: "Issues", rows: issues.map((w) => <GithubWatchRow key={w.id} watch={w} />) },
     { head: "Timers", rows: timers.map((w) => <TimerRow key={w.id} watch={w} now={now} />) },
   ].filter((g) => g.rows.length > 0)
 }

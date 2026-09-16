@@ -9,6 +9,7 @@ import Database from "../sqlite.ts"
 import { createInteractionStore, InteractionStoreError } from "../interaction-store.ts"
 import { createStorage, type SessionRow } from "../storage.ts"
 import { directChildHost } from "./codex-app-server-host.ts"
+import { CodexExecutionHealth } from "./codex-execution-health.ts"
 import {
   CODEX_APP_SERVER_PROTOCOL_REVISION,
   CODEX_APP_SERVER_SUPPORTED_VERSION,
@@ -49,6 +50,7 @@ class FakeAppServerProcess extends EventEmitter implements CodexAppServerProcess
   readonly version: string
   afterInitializeResponse?: () => void
   afterThreadStartResponse?: () => void
+  serviceExitCode = 0
   // What `thread/resume` reports about the thread's LIVE state: `{type:"active"}` while a turn is
   // still running inside this app-server, `{type:"idle"}` once it has ended. Left undefined by
   // default so the existing tests keep exercising the pre-status behavior of an older server.
@@ -131,6 +133,10 @@ class FakeAppServerProcess extends EventEmitter implements CodexAppServerProcess
 
   private answerClientRequest(message: Message): void {
     const id = message.id as number
+    if (message.method === "command/exec") {
+      this.send({ id, result: { exitCode: this.serviceExitCode, stdout: this.serviceExitCode === 0 ? "system/com.apple.configd = {" : "", stderr: "" } })
+      return
+    }
     if (message.method === "initialize") {
       this.send({
         id,
@@ -292,6 +298,7 @@ function harness(
       now: () => now,
       id: () => `client-message-${++clientId}`,
       requestTimeoutMs: 1_000,
+      executionHealth: new CodexExecutionHealth("darwin", async () => true),
       diagnostic: (event) => diagnostics.push(event),
       codexAuthAccountId: codexAuthAccountId ?? (() => undefined),
       ...(authReplacementWaitMs === undefined ? {} : { authReplacementWaitMs }),
@@ -317,6 +324,59 @@ function harness(
     },
   }
 }
+
+test("an unhealthy reachable backend cannot admit a new conversation", async () => {
+  const h = harness(CODEX_APP_SERVER_SUPPORTED_VERSION, (process) => { process.serviceExitCode = 141 })
+  try {
+    await assert.rejects(h.bridge.startDisposableSession({
+      threadSlug: "unhealthy", sessionId: "unhealthy-session", cwd: h.dir,
+    }), /Codex cannot access macOS system services/)
+    assert.equal(h.processes.length, 1)
+    assert.equal(h.processes[0]!.killed, false)
+    assert.equal(h.processes[0]!.clientRequests.some((r) => r.method === "thread/start"), false)
+    assert.ok(h.diagnostics.some((event) => (event as { event: string }).event === "execution-health-failed"))
+    // initialize and the transport remain usable, but neither clears the health failure.
+    await assert.rejects(h.bridge.startDisposableSession({
+      threadSlug: "another", sessionId: "another-session", cwd: h.dir,
+    }), /Codex cannot access macOS system services/)
+    assert.equal(h.processes.length, 1)
+  } finally { h.close() }
+})
+
+test("losing macOS services blocks starts and steers without killing active turns or disabling interrupt", async () => {
+  const h = harness()
+  try {
+    const binding = await h.bridge.startDisposableSession({ threadSlug: "active", sessionId: "active-session", cwd: h.dir, ephemeral: false })
+    const input = { threadSlug: binding.threadSlug, sessionId: binding.sessionId, text: "work" }
+    const { turnId } = await h.bridge.startTurn(input)
+    const process = h.processes[0]!
+    process.serviceExitCode = 141
+    await assert.rejects(h.bridge.steerTurn(input), /Codex cannot access macOS system services/)
+    assert.equal(h.bridge.binding(binding.threadSlug, binding.sessionId)?.currentTurnId, turnId)
+    assert.equal(process.killed, false)
+    assert.equal(process.clientRequests.filter((r) => r.method === "turn/steer").length, 0)
+    await h.bridge.interruptTurn(binding.threadSlug, binding.sessionId)
+    await assert.rejects(h.bridge.startTurn(input), /Codex cannot access macOS system services/)
+    assert.equal(process.clientRequests.filter((r) => r.method === "turn/start").length, 1)
+    assert.equal(h.bridge.binding(binding.threadSlug, binding.sessionId)?.codexThreadId, binding.codexThreadId)
+    process.serviceExitCode = 0
+    await h.bridge.startTurn(input)
+    assert.equal(h.processes.length, 1, "a transient probe failure does not churn the backend")
+  } finally { h.close() }
+})
+
+test("an auth change cannot replace a backend that failed its execution health check", async () => {
+  let account = "original"
+  const h = harness(CODEX_APP_SERVER_SUPPORTED_VERSION, undefined, () => account)
+  try {
+    await h.bridge.startDisposableSession({ threadSlug: "auth-health", sessionId: "auth-health-session", cwd: h.dir })
+    account = "new-account"
+    h.processes[0]!.serviceExitCode = 141
+    await assert.rejects(h.bridge.startTurn({ threadSlug: "auth-health", sessionId: "auth-health-session", text: "work" }), /macOS system services/)
+    assert.equal(h.processes.length, 1)
+    assert.equal(h.processes[0]!.killed, false)
+  } finally { h.close() }
+})
 
 test("a listener record from before account tracking is replaced once, then upgraded in place", async () => {
   const h = harness(
@@ -2220,7 +2280,7 @@ test("bridge persistence refuses malformed or future authority schemas before sp
 /** A bridge harness whose host is scripted attachment-by-attachment: it decides `reattached`, the
  *  `generation`, and how many lines the daemon had to drop while nobody was attached. Those three
  *  fields are the entire input to the bridge's "did my turns survive?" decision. */
-function scriptedHostHarness(script: () => { generation: string; reattached: boolean; droppedWhileDetached: number }) {
+function scriptedHostHarness(script: () => { generation: string; reattached: boolean; droppedWhileDetached: number; serviceExitCode?: number }) {
   const dir = mkdtempSync(join(tmpdir(), "frizz-codex-attachment-"))
   const dbPath = join(dir, "ui.db")
   const db = new Database(dbPath)
@@ -2245,12 +2305,14 @@ function scriptedHostHarness(script: () => { generation: string; reattached: boo
         // is the same call whose reconciliation the status has to steer.
         process_.resumeThreadStatus = nextResumeThreadStatus
         processes.push(process_)
-        const { generation, reattached, droppedWhileDetached } = script()
+        const { generation, reattached, droppedWhileDetached, serviceExitCode } = script()
+        process_.serviceExitCode = serviceExitCode ?? 0
         return { process: process_, generation, reattached, daemonPid: 4242, droppedWhileDetached, authAccountId: options.authAccountId }
       },
       now: () => now,
       id: () => `client-message-${++clientId}`,
       requestTimeoutMs: 1_000,
+      executionHealth: new CodexExecutionHealth("darwin", async () => true),
       diagnostic: (event) => diagnostics.push(event),
       codexAuthAccountId: () => undefined,
     })
@@ -2274,6 +2336,27 @@ function scriptedHostHarness(script: () => { generation: string; reattached: boo
     },
   }
 }
+
+test("reattachment can observe unhealthy active work but cannot admit or replay model work", async () => {
+  let plan = { generation: "same", reattached: false, droppedWhileDetached: 0, serviceExitCode: 0 }
+  const h = scriptedHostHarness(() => plan)
+  try {
+    const first = h.newBridge()
+    const binding = await first.startDisposableSession({ threadSlug: "stale-rejoin", sessionId: "stale-rejoin-session", cwd: h.dir, ephemeral: false })
+    const input = { threadSlug: binding.threadSlug, sessionId: binding.sessionId, text: "work" }
+    const { turnId } = await first.startTurn(input)
+    first.close()
+    plan = { ...plan, reattached: true, droppedWhileDetached: 1, serviceExitCode: 141 }
+    h.resumeThreadStatus({ type: "active" })
+    const restarted = h.newBridge()
+    await restarted.warmUp()
+    assert.equal(restarted.binding(binding.threadSlug, binding.sessionId)?.currentTurnId, turnId)
+    await assert.rejects(restarted.followUp(input), /macOS system services/)
+    await assert.rejects(restarted.startDisposableSession({ threadSlug: "new", sessionId: "new-session", cwd: h.dir }), /macOS system services/)
+    assert.equal(h.processes[1]!.killed, false)
+    assert.equal(h.processes[1]!.clientRequests.some((r) => ["turn/start", "turn/steer", "thread/start"].includes(String(r.method))), false)
+  } finally { h.close() }
+})
 
 // The clean rejoin: same app-server, nothing lost. The turn is still RUNNING inside that process, so
 // touching it would be the bug — `thread/resume` against a live turn disturbs it and clearing

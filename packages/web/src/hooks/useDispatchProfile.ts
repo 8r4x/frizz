@@ -1,6 +1,6 @@
 import { useMemo } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import type { CodexModel, SetDispatchPreferenceInput } from "@frizz/shared"
+import type { AcpAgent, CodexModel, SetDispatchPreferenceInput } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { showToast } from "../store.ts"
 import {
@@ -18,6 +18,9 @@ export function useDispatchProfile(): {
   // before then can classify a saved Codex model as Claude merely because the catalogue is cold.
   resolved: ResolvedDispatchPreferences | undefined
   codexList: readonly CodexModel[]
+  // The ACP agents the server knows, `available` for the ones on its PATH. Empty on a server too old
+  // to answer, which is why neither readiness nor `loadError` waits on this query.
+  acpList: readonly AcpAgent[]
   loadError: boolean
   saveProfile: (update: SetDispatchPreferenceInput) => void
 } {
@@ -27,6 +30,8 @@ export function useDispatchProfile(): {
   // hand-maintained list).
   const codexModels = useQuery({ queryKey: ["codexModels"], queryFn: () => rpc.codexModels() })
   const codexList = codexModels.data ?? []
+  const acpAgents = useQuery({ queryKey: ["acpAgents"], queryFn: () => rpc.acpAgents() })
+  const acpList = acpAgents.data ?? []
 
   const preference = useMutation({
     mutationFn: (update: SetDispatchPreferenceInput) => rpc.dispatchPreferenceSet(update),
@@ -43,15 +48,19 @@ export function useDispatchProfile(): {
     },
   })
 
-  const controlsReady = !!preferences.data && !!codexModels.data
+  // The ACP catalogue counts once it has SETTLED either way: a saved ACP profile must not read as
+  // unavailable merely because the list is cold, and an older server that lacks the RPC must not block
+  // the composer forever.
+  const controlsReady = !!preferences.data && !!codexModels.data && (acpAgents.isSuccess || acpAgents.isError)
   const resolved = useMemo(
-    () => controlsReady ? resolveDispatchPreferences(preferences.data!, codexList) : undefined,
-    [controlsReady, preferences.data, codexList],
+    () => controlsReady ? resolveDispatchPreferences(preferences.data!, codexList, acpList) : undefined,
+    [controlsReady, preferences.data, codexList, acpList],
   )
 
   return {
     resolved,
     codexList,
+    acpList,
     loadError: preferences.isError || codexModels.isError,
     saveProfile: preference.mutate,
   }

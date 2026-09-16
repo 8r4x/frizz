@@ -18,7 +18,7 @@ import { normalizeObservedThreadModel } from "./backend/thread-profiles.ts"
 import type { Tailer, SessionTelemetry, FenceView } from "./tailer.ts"
 import type { InteractionChange } from "./interaction-store.ts"
 import { frizzDirExists } from "./frizz.ts"
-import { githubStatusKey, parsePrRef, readAwaitingPark, readGithubStatusBook, GITHUB_STATUS_SETTING, type GithubStatusBook } from "./awaiting.ts"
+import { githubStatusKey, parseIssueRef, parsePrRef, readAwaitingPark, readGithubIssueStatusBook, readGithubStatusBook, GITHUB_ISSUE_STATUS_SETTING, GITHUB_STATUS_SETTING, type GithubIssueStatusBook, type GithubStatusBook } from "./awaiting.ts"
 import { findByPath } from "./project-registry.ts"
 import { parseDeliveryLedger } from "./delivery-ledger.ts"
 import { effectivePermissionMode, fallbackTitle, resolveLegacyThreadFile } from "./dispatch.ts"
@@ -659,9 +659,11 @@ function hasLiveOwnWork(tele: SessionTelemetry | undefined, registeredPrWatches:
 function hasParkedPrWatch(tele: SessionTelemetry | undefined, registered: ReadonlySet<string>): boolean {
   // Registration-first, same as hasParkedTimerWatch: an armed PR watch with no fence is the wait itself.
   if (tele?.lastFence?.kind !== "awaiting") return registered.size > 0
+  // `registered` holds BOTH kinds' refs (see the board's armedPrWatches): an `issues:` entry is the same
+  // declared-and-registered check with the issue ref grammar.
   return tele.lastFence.hints.some((hint) => {
-    if (hint.kind !== "pr") return false
-    const ref = parsePrRef(hint.value)
+    if (hint.kind !== "pr" && hint.kind !== "issue") return false
+    const ref = hint.kind === "pr" ? parsePrRef(hint.value) : parseIssueRef(hint.value)
     return ref !== undefined && registered.has(githubStatusKey(ref))
   })
 }
@@ -718,11 +720,11 @@ export function fenceWatchViews(
   tele: SessionTelemetry | undefined,
   fenceAt: string | undefined,
   github: GithubStatusBook = {},
-  /** This thread's REGISTERED PR watchers — `{ target, createdAt }` per armed row. These get a row
-   *  whether or not the fence mentions them: a registration is live work the thread has out, and the
-   *  strip's job is to list what will actually wake it. The fence's `prs:` entry is a separate
+  /** This thread's REGISTERED PR and ISSUE watchers — `{ target, kind, createdAt }` per armed row. These
+   *  get a row whether or not the fence mentions them: a registration is live work the thread has out,
+   *  and the strip's job is to list what will actually wake it. The fence's `prs:` entry is a separate
    *  thing — it states a WAIT, and it is checked against this set elsewhere (heldByRunningChecks). */
-  registered: readonly { target: string; createdAt: string }[] = [],
+  registered: readonly { target: string; kind?: "pull" | "issue"; createdAt: string }[] = [],
   /** This thread's ARMED TIMERS — the `thread_timer` rows a `timers:` fence entry is checked against.
    *  Rows for the same reason the PR registrations above get them, fence or no fence: an armed timer
    *  WILL fire and wake the thread, so it is live work the strip must list. */
@@ -736,6 +738,9 @@ export function fenceWatchViews(
    *  draws this card, and a second row named by its raw `toolu_…` id is what put two sub-agents under a
    *  "Background shells" heading on 2026-08-26. */
   armedWatches: readonly RegisteredWatch[] = [],
+  /** The ISSUE readings, from their own book — the twin of `github` for the rows whose subject is an
+   *  issue. Defaulted empty so every caller and test that predates issues reads unchanged. */
+  issueBook: GithubIssueStatusBook = {},
 ): ThreadView["watches"] {
   const seen = new Set<string>()
   const out: ThreadView["watches"] = []
@@ -754,17 +759,23 @@ export function fenceWatchViews(
     })
   }
   for (const w of registered) {
-    if (seen.has(`github:${w.target}`)) continue
-    seen.add(`github:${w.target}`)
+    const subject = w.kind === "issue" ? "issue" as const : "pull" as const
+    // The dedupe key carries the subject, as the poll's own key does: a PR and an issue registered under
+    // one number are two rows, because they are two registrations that wake on different things.
+    const dedupe = `github:${subject}:${w.target}`
+    if (seen.has(dedupe)) continue
+    seen.add(dedupe)
     out.push({
-      id: `github:${slug}:${w.target}`,
+      id: `github:${slug}:${subject === "issue" ? "issue:" : ""}${w.target}`,
       kind: "github" as const,
       target: w.target,
       state: "armed" as const,
       createdAt: w.createdAt,
+      subject,
       // Absent until the poller's first successful read. The card says "checking…" then, rather than
       // inventing a verdict — an unpolled PR and a PR with no CI are different facts.
-      ...(github[w.target] ? { github: github[w.target] } : {}),
+      ...(subject === "pull" && github[w.target] ? { github: github[w.target] } : {}),
+      ...(subject === "issue" && issueBook[w.target] ? { issue: issueBook[w.target] } : {}),
     })
   }
   for (const w of armedWatches) {
@@ -1363,6 +1374,8 @@ function sessionThreadView(
   // card renders, so both read the same book — a card stating check state the board could not see is
   // exactly the drift that once produced two cards disagreeing about one wait.
   github: GithubStatusBook = {},
+  // The watched-ISSUE readings, the same way — its own book because the entries have their own shape.
+  issueBook: GithubIssueStatusBook = {},
 ): ThreadView {
   // A REGISTERED completion is presented to everything below as the ```done fence it replaces — same
   // shape, same three predicates, same card — so the two cannot render as two different endings while
@@ -1380,8 +1393,13 @@ function sessionThreadView(
   // checked against. Looked up per thread, but READ once for the whole project (ThreadRegistries).
   const armedPrWatches = (registries.prWatches.get(row.slug) ?? []).map((w) => ({
     target: `${w.owner}/${w.repo}#${w.number}`,
+    kind: w.kind,
     createdAt: new Date(w.created_at).toISOString(),
   }))
+  // BOTH KINDS, by ref. Every reader of this set asks "is there a registration behind this declared
+  // wait" (hasParkedPrWatch) or "is CI running on every declared PR" (heldByRunningChecks, which reads
+  // `prs:` hints only and looks each up in the PR book — an issue ref is never in that book, and never a
+  // `prs:` hint, so it cannot hold a thread or release one).
   const registeredPrWatches = new Set(armedPrWatches.map((w) => w.target))
   // This thread's ARMED TIMERS — what a `timers:` declaration is checked against, and rows on the
   // resting card's table beside the PRs and shells (maintainer 2026-08-24). Same per-thread lookup,
@@ -1542,7 +1560,7 @@ function sessionThreadView(
     // become the github rows, `watch:` lines the shell rows — so this strip lists exactly what will
     // actually wake the thread, and the two cannot drift into claiming different things. There is no
     // registry behind either any more (`thread_watch`, retired 2026-08-14).
-    watches: fenceWatchViews(row.slug, tele, tele?.lastAssistantAt, github, armedPrWatches, armedTimers, armedWatches),
+    watches: fenceWatchViews(row.slug, tele, tele?.lastAssistantAt, github, armedPrWatches, armedTimers, armedWatches, issueBook),
     pendingAsk: tele?.pendingAsk ? { questions: tele.pendingAsk.questions } : undefined,
     pendingQuestion: tele?.pendingQuestion ?? false,
     questions,
@@ -1583,7 +1601,7 @@ function sessionThreadView(
     // from today's dispatch preference: unknown/migrated rows remain unmarked, while rows whose
     // database default was explicitly normalized to "claude" get the same per-thread identity as
     // Codex rows.
-    backend: row.backend === "claude" || row.backend === "codex" ? row.backend : undefined,
+    backend: row.backend === "claude" || row.backend === "codex" || row.backend === "acp" ? row.backend : undefined,
     // Only a persisted, validated per-session value is exposed. A migrated row stays visibly unknown;
     // never label it with today's global defaults (which may not match its running process).
     permissionMode,
@@ -1810,6 +1828,7 @@ export function createBoard(
     // ONE READ PER BUILD, not per thread: the watched-PR book is keyed by ref and shared by every thread
     // watching that PR, and it is parsed on the way in.
     const github = readGithubStatusBook(storage.getSetting(GITHUB_STATUS_SETTING))
+    const issueBook = readGithubIssueStatusBook(storage.getSetting(GITHUB_ISSUE_STATUS_SETTING))
     // The same rule, applied to the five per-thread registries: five statements for the whole project
     // instead of five per row. On the maintainer's 558-thread board that is 2,794 statements per
     // rebuild down to 9, all of it on the event loop — see ThreadRegistries.
@@ -1854,6 +1873,7 @@ export function createBoard(
         claudeBrokerDaemonAlive,
         registries,
         github,
+        issueBook,
       ))
     }
     for (const key of pendingInteractionCache.keys()) {

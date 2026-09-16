@@ -66,7 +66,7 @@ import { FOREGROUND_MARK_AFTER_MS, foregroundToolIsRunning, hasRunningToolIndica
 import { formatRuntimeElapsed, formatToolDuration } from "../lib/durationLabels.ts"
 import { githubRefUrl } from "../lib/githubRef.ts"
 import { useNowMs } from "../lib/liveClock.ts"
-import { CHILD_OPEN_TITLE, CHILD_QUIET_SHELL_TITLE, CHILD_RESTED_DOT_CLASS, CHILD_RESTED_TITLE, CHILD_STALE_DOT_CLASS, CHILD_STALE_TITLE, checksCounterLabel, childOpSubtree, mergeBackgroundShells, shellLinesLabel, visibleChildOps, type TranscriptShellRecord } from "../lib/childOps.ts"
+import { CHILD_OPEN_TITLE, CHILD_QUIET_SHELL_TITLE, CHILD_RESTED_DOT_CLASS, CHILD_RESTED_TITLE, CHILD_STALE_DOT_CLASS, CHILD_STALE_TITLE, checksCounterLabel, childOpSubtree, issueCounterLabel, mergeBackgroundShells, shellLinesLabel, visibleChildOps, type TranscriptShellRecord } from "../lib/childOps.ts"
 import { childOpDismisser } from "../lib/dismissChildOp.ts"
 import { agentCompletionCall, subAgentCompletionOutcome } from "../lib/subAgentCompletion.ts"
 import { agentReading } from "../lib/agentReading.ts"
@@ -88,7 +88,7 @@ import { settledAskView } from "../lib/interactionQuestion.ts"
 import { FRAMED_IMAGE, ImageFrame } from "./ImageFrame.tsx"
 // The resting card, shared with the queue (TodosView passes it the event-Snooze; these two surfaces
 // deliberately pass no action — see the module header).
-import { AwaitingBackgroundCard, AwaitingWaitTable, hasAwaitingWaitRows, showsRestingCard, watchStatusLine } from "./AwaitingBackgroundCard.tsx"
+import { AwaitingBackgroundCard, AwaitingWaitTable, hasAwaitingWaitRows, issueStatusLine, showsRestingCard, watchStatusLine } from "./AwaitingBackgroundCard.tsx"
 import { lastRest } from "../lib/restAnchor.ts"
 import { SnoozeCard, showsSnoozeCard } from "./SnoozeCard.tsx"
 // Re-exported from their new homes so existing importers (TodosView, the fixtures) keep one
@@ -2112,7 +2112,7 @@ export function ToolCardRouter({ t, startedAt }: { t: CollapsedTool; startedAt?:
   // A dispatch renders as an AgentBlock on EITHER signal: a prompt (Claude) or just the correlation id
   // (codex — it encrypts the dispatch message, so there is no prompt to show, but the child is still
   // tracked and drillable). Gating on the prompt alone left every codex sub-agent as a mute generic card.
-  if (t.prompt || t.agentId) return <AgentBlock detail={t.detail} prompt={t.prompt} input={t.input} subagentType={t.subagentType} agentId={t.agentId} agentStatus={t.agentStatus} agentElapsedMs={t.agentElapsedMs} status={t.status} durationMs={t.durationMs} output={t.output} />
+  if (t.prompt || t.agentId) return <AgentBlock detail={t.detail} prompt={t.prompt} subagentType={t.subagentType} agentId={t.agentId} agentStatus={t.agentStatus} agentElapsedMs={t.agentElapsedMs} status={t.status} durationMs={t.durationMs} />
   if (t.sendTo !== undefined || t.sendBody !== undefined) return <SendMessageBlock to={t.sendTo} summary={t.sendSummary} body={t.sendBody ?? ""} type={t.sendType} dispatchId={t.sendDispatchId} targetLabel={t.sendTargetLabel} status={t.status} durationMs={t.durationMs} at={startedAt} />
   if (t.sentImages || t.sentFiles) return <SentFilesCard images={t.sentImages ?? []} files={t.sentFiles ?? []} caption={t.caption} status={t.status} durationMs={t.durationMs} />
   // The built-in to-do list, ahead of the generic input/output card (a codex plan's `explanation` rides
@@ -2667,33 +2667,28 @@ const AGENT_MAX_LINES = 16
 export function AgentBlock({
   detail,
   prompt,
-  input,
   subagentType,
   agentId,
   agentStatus,
   agentElapsedMs,
   status,
   durationMs,
-  output,
 }: {
   detail?: string
-  // The dispatch prompt — absent for a CODEX dispatch, whose message the provider encrypts. The card
-  // then falls back to the call's own input (fork/agent-type details); the header, the live state, and
-  // the drill-in all work identically either way.
+  // Only the initial instruction belongs in this disclosure, never fork settings or the spawn ACK.
+  // Codex may encrypt it; an unavailable prompt must not be replaced by unrelated tool metadata.
   prompt?: string
-  input?: string
   subagentType?: string
   agentId?: string
   agentStatus?: "completed" | "failed" | "killed"
   agentElapsedMs?: number
   status?: ToolStatus
   durationMs?: number
-  output?: string
 }) {
   const [open, setOpen] = useState(false)
   const [expanded, setExpanded] = useState(false)
   const bodyId = useId()
-  const body = prompt ?? input
+  const body = prompt || "Initial prompt unavailable."
   const lineCount = useMemo(() => (body ? body.split("\n").length : 0), [body])
   const long = lineCount > AGENT_MAX_LINES
   // Thread surface OR sub-agent drawer (a nested dispatch inside a child's own transcript still drills
@@ -2857,12 +2852,6 @@ export function AgentBlock({
               >
                 {expanded ? "Collapse" : `Show all ${lineCount} lines`}
               </button>
-            )}
-            {output && (
-              <>
-                <div className="frizz-bash-output-label petite-caps">output</div>
-                <pre className="frizz-bash-body frizz-bash-output-body">{output}</pre>
-              </>
             )}
           </>
         )}
@@ -3886,7 +3875,9 @@ export function ProviderFaultCard({
 // when the window comes back, and that frizz will pick the thread up itself — and keeps a manual
 // continue as the secondary, for the operator who has capacity elsewhere and doesn't want to wait.
 export function LimitPauseCard({ slug, sessionId, pause }: { slug: string; sessionId: string | undefined; pause: NonNullable<ThreadViewData["limitPause"]> }) {
-  const label = PROVIDER_LABEL[pause.backend]
+  // Only Claude and Codex report a limit window Frizz can read; an ACP agent's limits stay inside its
+  // own CLI, so a pause attributed to one is labelled generically rather than crashing on the lookup.
+  const label = pause.backend === "acp" ? "The agent" : PROVIDER_LABEL[pause.backend]
   const which = pause.window === "weekly" ? "weekly limit" : pause.window === "session" ? "session limit" : "usage limit"
   const [continuing, setContinuing] = useState(false)
   const queryClient = useQueryClient()
@@ -4122,10 +4113,14 @@ export function BackgroundOpsStrip({
           // screen while the thread WORKS, and the card that rendered the full reading is only drawn at
           // rest. A watcher row used to say a ref and an age, which is the one pair that cannot answer
           // "is anything wrong with it". Absent until the first poll answers, never a fabricated 0.
-          counter={checksCounterLabel(w.github)}
+          // An ISSUE has no checks to count, so its counter is its conversation size — the one number
+          // that says whether anybody has answered — and "closed" once it is.
+          counter={w.subject === "issue" ? issueCounterLabel(w.issue) : checksCounterLabel(w.github)}
           counterTone={w.github?.checks === "failing" ? "danger" : undefined}
-          counterTitle={w.github ? `${w.target} — ${watchStatusLine(w.github)}` : undefined}
-          onOpen={() => window.open(githubRefUrl(w.target) ?? `https://github.com/${w.target.replace("#", "/pull/")}`, "_blank", "noreferrer,noopener")}
+          counterTitle={w.subject === "issue"
+            ? (w.issue ? `${w.target} — ${issueStatusLine(w.issue)}` : undefined)
+            : (w.github ? `${w.target} — ${watchStatusLine(w.github)}` : undefined)}
+          onOpen={() => window.open(githubRefUrl(w.target, w.subject === "issue" ? "issue" : "pull") ?? `https://github.com/${w.target.replace("#", w.subject === "issue" ? "/issues/" : "/pull/")}`, "_blank", "noreferrer,noopener")}
         />
       ))}
       <ThreadLinks links={links} />

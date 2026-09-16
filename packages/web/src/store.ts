@@ -12,6 +12,7 @@ import { setGithubRepo } from "./lib/githubAutolink.ts"
 import { resetGithubCards } from "./lib/githubHovercards.ts"
 import { setLocalPathBase } from "./lib/localPathBase.ts"
 import { basename } from "./lib/paths.ts"
+import { prefersReducedMotion, SHEET_CLOSE_MS } from "./lib/sheet.ts"
 import type { RestartAttempt } from "./api/restart.ts"
 
 // Where a scroll-to-card lands a card's outer border below the viewport top (px). Exported because the
@@ -178,11 +179,9 @@ export const store = proxy({
   // drawer — the whole point of /full is seeing the transcript, and a sheet over it defeated that.
   // The queue page keeps the drawer: its main column is the queue, not the thread being read.
   splitFileViewer: false,
-  // The file the split viewer is showing (canonical-ish path as clicked; the panel re-resolves via
-  // rpc.localMarkdown). One panel, not a stack: a link followed inside the viewer replaces the file,
-  // exactly like a single editor pane. `openedAt` bumps on re-open so the panel can react to a
-  // re-click of the same path.
-  filePanel: null as { path: string; openedAt: number } | null,
+  // Keep each reader mounted under the next so following a link preserves its scroll and view mode.
+  // Instance ids (not paths) also let A → B → A unwind through both visits independently.
+  filePanels: [] as { id: number; path: string; closing?: boolean }[],
   // SELECTED-CONTEXT items staged for a thread's next message (⌘I over a selection in the file
   // viewer). Rendered as chips above the thread's composer — every surface showing that composer shows
   // them — and serialized into the outgoing text on send. Session-scoped on purpose: unlike the typed
@@ -422,11 +421,10 @@ function flashQueueCard(slug: string, root: HTMLElement): void {
 // Open a `.md` file that lives on disk in Frizz's OWN reader, rather than handing the path to the
 // desktop opener. Every link to one routes here (lib/local-file-links.ts): agent prose citing a repo
 // doc, an inline-code path that resolved to one, an attached `.md`. `path` is the absolute POSIX path
-// the server will re-gate; the basename is the header title. Deduped on path.
+// the server will re-gate; the basename is the header title. Queue drawers are deduped on path.
 export function pushMarkdownDrawer(path: string): void {
   // On /full the reader is a SPLIT PANEL beside the thread, not a sheet over it — route every
-  // markdown open there while that page is mounted (links in the transcript AND links inside the
-  // panel itself, which replace the shown file rather than stacking).
+  // markdown open there while that page is mounted, stacking links from the transcript AND reader.
   if (store.splitFileViewer) {
     openFilePanel(path)
     return
@@ -438,11 +436,18 @@ export function pushMarkdownDrawer(path: string): void {
 let filePanelSeq = 0
 
 export function openFilePanel(path: string): void {
-  store.filePanel = { path, openedAt: ++filePanelSeq }
+  store.filePanels.push({ path, id: ++filePanelSeq })
 }
 
 export function closeFilePanel(): void {
-  store.filePanel = null
+  const top = store.filePanels.at(-1)
+  // A closing layer still owns the top until its slide finishes, like the drawer stack.
+  if (!top || top.closing) return
+  top.closing = true
+  const id = top.id
+  window.setTimeout(() => {
+    store.filePanels = store.filePanels.filter((panel) => panel.id !== id)
+  }, prefersReducedMotion() ? 0 : SHEET_CLOSE_MS)
 }
 
 // ── selected-context items (⌘I in the file viewer) ───────────────────────────────────────────────
@@ -558,7 +563,7 @@ export function resetProjectState() {
   store.view = "todos"
   store.connection = "connecting"
   store.drawers = []
-  store.filePanel = null
+  store.filePanels = []
   store.composerContext = {}
   store.routeThreadSlug = null
   store.socketBoardFallback = null

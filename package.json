@@ -1,6 +1,6 @@
 {
   "name": "frizz",
-  "version": "0.13.0",
+  "version": "0.13.1",
   "private": false,
   "description": "A local web UI for running many coding agents at once",
   "keywords": [
@@ -67,7 +67,7 @@
   },
   "frizzServer": {
     "package": "frizz-server",
-    "version": "0.13.0",
+    "version": "0.13.8",
     "protocol": 1,
     "dataEpoch": 1
   }
