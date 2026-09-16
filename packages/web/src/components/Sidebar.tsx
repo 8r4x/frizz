@@ -635,7 +635,7 @@ export const ThreadRow = memo(function ThreadRow({
           <span className="flex min-w-0 items-baseline gap-3">
             <span className={`min-w-0 flex-1 break-words text-[13px] leading-[19px] ${dimLabel ? "text-fg/50" : dim ? "text-fg/75" : "text-fg/90"}`}>
               <TitleWithTrailers title={displayTitle(t)}>
-                {!legacy && <ProviderMark backend={t.backend} className="ml-1" />}
+                {!legacy && <ProviderMark backend={t.backend} model={t.model} className="ml-1" />}
                 {/* MEASURED 2026-08-19, the first time this tag ever rendered (it was written for a
                     foreign row and no foreign row reached the rail until the External band). Readings
                     on the real rail at dsf 4, `scripts/ink-gaps.mjs` + the visual-review cap-band probe:

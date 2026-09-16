@@ -29,6 +29,11 @@ export const ACP_AGENT_CATALOGUE: readonly AcpAgentSpec[] = [
   { id: "qwen", label: "Qwen Code", command: "qwen", args: ["--acp"] },
   { id: "goose", label: "goose", command: "goose", args: ["acp"] },
   { id: "kimi", label: "Kimi CLI", command: "kimi", args: ["acp"] },
+  // `grok agent stdio` is ACP over stdio (registry: `npx @xai-official/grok agent stdio`); verified
+  // live 2026-09-16 against grok 1.0.13 — it mounted the probe MCP server and called its tool.
+  { id: "grok", label: "Grok Build", command: "grok", args: ["agent", "stdio"] },
+  // pi has no native ACP mode; `pi-acp` is its registry wrapper and takes no arguments.
+  { id: "pi", label: "pi", command: "pi-acp", args: [] },
 ]
 
 /** What the operator writes under `settings.acpAgents`: the spec with `args` optional. */

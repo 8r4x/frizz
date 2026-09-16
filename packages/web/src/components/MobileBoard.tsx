@@ -330,7 +330,7 @@ function MobileThreadRow({
           <span className="flex min-w-0 items-baseline gap-3">
             <span className="min-w-0 flex-1 text-[15px] font-medium leading-[21px] tracking-[-0.01em] text-fg">
               {displayTitle(t)}
-              <ProviderMark backend={t.backend} className="ml-1.5" />
+              <ProviderMark backend={t.backend} model={t.model} className="ml-1.5" />
             </span>
             {age ? (
               <span className="shrink-0 text-[11.5px] leading-[21px] tabular-nums text-muted/60">{age}</span>
