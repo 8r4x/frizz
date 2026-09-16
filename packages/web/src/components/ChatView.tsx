@@ -2110,7 +2110,7 @@ export function ToolCardRouter({ t, startedAt }: { t: CollapsedTool; startedAt?:
   // A dispatch renders as an AgentBlock on EITHER signal: a prompt (Claude) or just the correlation id
   // (codex — it encrypts the dispatch message, so there is no prompt to show, but the child is still
   // tracked and drillable). Gating on the prompt alone left every codex sub-agent as a mute generic card.
-  if (t.prompt || t.agentId) return <AgentBlock detail={t.detail} prompt={t.prompt} input={t.input} subagentType={t.subagentType} agentId={t.agentId} agentStatus={t.agentStatus} agentElapsedMs={t.agentElapsedMs} status={t.status} durationMs={t.durationMs} output={t.output} />
+  if (t.prompt || t.agentId) return <AgentBlock detail={t.detail} prompt={t.prompt} subagentType={t.subagentType} agentId={t.agentId} agentStatus={t.agentStatus} agentElapsedMs={t.agentElapsedMs} status={t.status} durationMs={t.durationMs} />
   if (t.sendTo !== undefined || t.sendBody !== undefined) return <SendMessageBlock to={t.sendTo} summary={t.sendSummary} body={t.sendBody ?? ""} type={t.sendType} dispatchId={t.sendDispatchId} targetLabel={t.sendTargetLabel} status={t.status} durationMs={t.durationMs} at={startedAt} />
   if (t.sentImages || t.sentFiles) return <SentFilesCard images={t.sentImages ?? []} files={t.sentFiles ?? []} caption={t.caption} status={t.status} durationMs={t.durationMs} />
   // The built-in to-do list, ahead of the generic input/output card (a codex plan's `explanation` rides
@@ -2665,33 +2665,28 @@ const AGENT_MAX_LINES = 16
 export function AgentBlock({
   detail,
   prompt,
-  input,
   subagentType,
   agentId,
   agentStatus,
   agentElapsedMs,
   status,
   durationMs,
-  output,
 }: {
   detail?: string
-  // The dispatch prompt — absent for a CODEX dispatch, whose message the provider encrypts. The card
-  // then falls back to the call's own input (fork/agent-type details); the header, the live state, and
-  // the drill-in all work identically either way.
+  // Only the initial instruction belongs in this disclosure, never fork settings or the spawn ACK.
+  // Codex may encrypt it; an unavailable prompt must not be replaced by unrelated tool metadata.
   prompt?: string
-  input?: string
   subagentType?: string
   agentId?: string
   agentStatus?: "completed" | "failed" | "killed"
   agentElapsedMs?: number
   status?: ToolStatus
   durationMs?: number
-  output?: string
 }) {
   const [open, setOpen] = useState(false)
   const [expanded, setExpanded] = useState(false)
   const bodyId = useId()
-  const body = prompt ?? input
+  const body = prompt || "Initial prompt unavailable."
   const lineCount = useMemo(() => (body ? body.split("\n").length : 0), [body])
   const long = lineCount > AGENT_MAX_LINES
   // Thread surface OR sub-agent drawer (a nested dispatch inside a child's own transcript still drills
@@ -2855,12 +2850,6 @@ export function AgentBlock({
               >
                 {expanded ? "Collapse" : `Show all ${lineCount} lines`}
               </button>
-            )}
-            {output && (
-              <>
-                <div className="frizz-bash-output-label petite-caps">output</div>
-                <pre className="frizz-bash-body frizz-bash-output-body">{output}</pre>
-              </>
             )}
           </>
         )}

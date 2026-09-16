@@ -2936,15 +2936,16 @@ function codexDirectToolCall(name: string, obj: Record<string, unknown>, callId?
     case "spawn_agent":
       // The dispatch call_id is the SAME key the tailer tracks this child under (it is
       // sub_agent_activity's `event_id`), so handing it over as `agentId` makes the card a drill-in
-      // AgentBlock — click through to the child's own transcript. Codex encrypts the dispatch
-      // `message`, so unlike a Claude Agent block there is NO prompt to expand; the model+effort cell
-      // rides `subagentType` and the tool input keeps the fork/service details.
+      // AgentBlock — click through to the child's own transcript. Preserve a plaintext initial
+      // instruction when available; encrypted prompts stay unavailable, not a fork-settings fallback.
       return {
         name: "Spawn agent",
         detail: strField(obj.task_name) ?? "sub-agent",
         subagentType: codexAgentCell(obj),
         agentId: callId,
-        input: compactFields(obj, ["agent_type", "fork_context", "fork_turns", "service_tier"]),
+        prompt: typeof obj.message === "string" && obj.message.trim() && strField(obj.message) !== ENCRYPTED_PAYLOAD
+          ? capAgentPrompt(obj.message)
+          : undefined,
       }
     case "send_message":
       return codexPeerMessageCall("Send message", target, obj)
@@ -3120,15 +3121,6 @@ function codexAgentCell(obj: Record<string, unknown>): string | undefined {
   const model = strField(obj.model)
   const effort = strField(obj.reasoning_effort)
   return model && effort ? `${model}/${effort}` : (model ?? effort)
-}
-
-function compactFields(obj: Record<string, unknown>, keys: string[]): string | undefined {
-  const projected: Record<string, unknown> = {}
-  for (const key of keys) {
-    const value = obj[key]
-    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") projected[key] = value
-  }
-  return Object.keys(projected).length ? renderToolInput(projected) : undefined
 }
 
 // The house duration grammar (`packages/web/src/lib/durationLabels.ts`), including its hour rung: a
