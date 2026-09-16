@@ -1,5 +1,11 @@
 # PR #37 review: Windows file links
 
+## Final disposition
+
+**Fixed and merged.** The revised [PR #37](https://github.com/colinhacks/frizz/pull/37) merged on 2026-09-16 as `99988231c029e96b930c7e4cbedbc17c3c9cd358` and landed on local `main` through `c03d9296`. Both review findings are resolved.
+
+The [repository CI check](https://github.com/colinhacks/frizz/actions/runs/35162066758/job/105014851441) passed for revised head `24e45093d75d134fc4fa254f1f93ce3d95b90879`. The [Pullfrog review run](https://github.com/colinhacks/frizz/actions/runs/35162070796) failed after a lockfile-configuration error and repeated provider usage-limit errors; it produced no review findings. The authorized merge used the normal merge path without a protection override. The disposable Windows VM was deleted, and the owned browser and fixture server were closed. No release was published.
+
 ## Revision and native Windows verification
 
 The maintainer requested direct fixes to the existing PR on 2026-09-16. Commit `9d1ca082` addresses both findings below: Windows containment compares directory identities rather than folded names, and only the server normalizes a URL pathname's leading slash before a Windows drive. The browser preserves raw POSIX paths. The shared normalization helper is used by both file and image resolvers.
@@ -7,6 +13,7 @@ The maintainer requested direct fixes to the existing PR on 2026-09-16. Commit `
 Verified after merging upstream `main` into the PR branch:
 
 - Typecheck passed; the full local suite reported **4,635 passed, 89 skipped, zero failures**.
+- After landing on local `main`, typecheck and the focused classifier/file/image/HTTP suite passed again: **45 passed, four Windows-only tests skipped** on macOS.
 - The browser fixture passed with a real headless Chrome and its existing stubbed backend responses.
 - On a disposable **Windows Server 2022** VM with **Node 24.15.0**, all **17 native filesystem/opener-command tests passed with zero skips**. This includes mixed-case aliases, case-distinct NTFS siblings, escaping symlinks, trusted junctions, outside hard links, URL-shaped Markdown paths, and image reads.
 - The original PR's containment implementation failed the same native case-distinct-sibling test with `Missing expected exception`; the revised implementation passed. The earlier source-level finding is now reproduced on the real filesystem.
@@ -14,6 +21,8 @@ Verified after merging upstream `main` into the PR branch:
 The native run used `FRIZZ_REQUIRE_CASE_SENSITIVE_FS=1` so unavailable NTFS case-sensitivity support could not silently skip its regression. Evidence is retained in `.frizz/threads/34b7874a-d89b-42ba-a69f-73c7c7c0b4a4/windows-tests.log`; the full macOS output is in `full-tests.log`. The desktop applications themselves were not launched: opener tests capture the command or exercise copy mode. These changes do not alter desktop process launching.
 
 ## Original review of `5cf9f39a`
+
+The remainder records the original review before revision. Its status, recommendations, and evidence limits describe that earlier head, not the merged change.
 
 **Recommendation: request changes.** This fixes a real bug and should not be declined, but the path-rewriting and containment changes should not land as written.
 
