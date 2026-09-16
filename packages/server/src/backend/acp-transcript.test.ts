@@ -98,3 +98,26 @@ test("acp-transcript: the writer creates the file under <stateDir>/acp on constr
   assert.equal(lines.length, 2)
   assert.equal(JSON.parse(lines[1]!).text, "Create hello.txt and cat it.")
 })
+
+test("acp-transcript: a tool-result carrying the target the call lacked names the file, not the tool", () => {
+  // opencode's `tool_call` frame has neither rawInput nor locations; the completing tool_call_update
+  // has both. Before this the drawer read "edited 1 file: write".
+  const raw = [
+    JSON.stringify({ kind: "user-message", at: T(0), text: "write it", synthetic: false }),
+    JSON.stringify({ kind: "turn-start", at: T(0) }),
+    JSON.stringify({ kind: "tool-call", at: T(1), id: "call_w", name: "write", input: {}, acp: { kind: "edit", title: "write", locations: [] } }),
+    JSON.stringify({ kind: "tool-result", at: T(2), id: "call_w", text: "Wrote file successfully.", acp: { kind: "completed", locations: ["/repo/second.txt"], input: { filePath: "/repo/second.txt", content: "second" } } }),
+    JSON.stringify({ kind: "turn-end", at: T(3), finalText: "done", successful: true }),
+  ].join("\n") + "\n"
+  const msgs = projectAcpTranscript(raw, "x")
+  const call = msgs.find((m) => m.role === "assistant" && m.tools.length)!.tools[0]!
+  assert.equal(call.name, "write")
+  assert.equal(call.status, "completed")
+  assert.equal(call.detail, "/repo/second.txt", "the path arrived with the result and replaced the tool's own name")
+  // A call that already knew its target keeps it: a bash command is not overwritten by a location.
+  const raw2 = [
+    JSON.stringify({ kind: "tool-call", at: T(1), id: "call_b", name: "bash", input: { command: "cat x" }, acp: { kind: "execute", title: "bash", locations: [] } }),
+    JSON.stringify({ kind: "tool-result", at: T(2), id: "call_b", text: "hi", acp: { kind: "completed", locations: ["/repo"] } }),
+  ].join("\n") + "\n"
+  assert.equal(projectAcpTranscript(raw2, "x")[0]!.tools[0]!.detail, "cat x")
+})

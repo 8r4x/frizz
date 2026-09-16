@@ -35,7 +35,7 @@ export interface AcpNote { kind: "acp-note"; at: string; text: string }
 export type AcpRecord =
   | AcpSessionHeader
   | AcpNote
-  | (NormalizedEvent & { messageId?: string; acp?: { kind?: string; title?: string; locations?: string[] } })
+  | (NormalizedEvent & { messageId?: string; acp?: { kind?: string; title?: string; locations?: string[]; input?: unknown } })
 
 const EVENT_KINDS: ReadonlySet<string> = new Set([
   "turn-start", "turn-end", "provider-error", "assistant-text", "user-message", "tool-call", "tool-result",
@@ -104,19 +104,39 @@ const TOOL_TEXT_MAX = 12_000
 
 function clip(text: string, max: number): string { return text.length > max ? `${text.slice(0, max - 1)}…` : text }
 
-function toolCallFor(ev: Extract<NormalizedEvent, { kind: "tool-call" }>, acp: { kind?: string; title?: string; locations?: string[] } | undefined): TranscriptToolCall {
-  const input = ev.input && typeof ev.input === "object" ? ev.input as Record<string, unknown> : undefined
+type AcpToolMeta = { kind?: string; title?: string; locations?: string[]; input?: unknown }
+
+/** The command or path a tool call is ABOUT, from its input first and its ACP locations second. */
+function toolTarget(rawInput: unknown, acp: AcpToolMeta | undefined): { command?: string; path?: string; input?: Record<string, unknown> } {
+  const input = rawInput && typeof rawInput === "object" ? rawInput as Record<string, unknown> : undefined
   const command = typeof input?.command === "string" ? input.command : undefined
   const path = typeof input?.filePath === "string" ? input.filePath
     : typeof input?.file_path === "string" ? input.file_path
     : typeof input?.path === "string" ? input.path
     : acp?.locations?.[0]
+  return { command, path, input }
+}
+
+function toolCallFor(ev: Extract<NormalizedEvent, { kind: "tool-call" }>, acp: AcpToolMeta | undefined): TranscriptToolCall {
+  const { command, path, input } = toolTarget(ev.input, acp)
   const detail = command ?? path ?? acp?.title ?? ""
   const call: TranscriptToolCall = { name: ev.name, status: "pending" }
   if (detail) call.detail = clip(detail, 500)
   if (command) call.command = command
   else if (input && Object.keys(input).length) call.input = clip(JSON.stringify(input, null, 2), TOOL_TEXT_MAX)
   return call
+}
+
+/** A result that learned the target the call did not know (opencode reports `locations`/`rawInput`
+ *  only on the completing update) upgrades the call's detail from the tool's title to its target. */
+function upgradeToolTarget(call: TranscriptToolCall, acp: AcpToolMeta | undefined): void {
+  if (!acp || call.command || (call.detail && call.detail !== call.name)) return
+  const { command, path, input } = toolTarget(acp.input, acp)
+  const detail = command ?? path
+  if (!detail) return
+  call.detail = clip(detail, 500)
+  if (command) call.command = command
+  else if (input && Object.keys(input).length && !call.input) call.input = clip(JSON.stringify(input, null, 2), TOOL_TEXT_MAX)
 }
 
 /** The drawer's messages from the raw file. `identityPrefix` seeds `sourceId`s the client keys on. */
@@ -192,7 +212,7 @@ export function projectAcpTranscript(raw: string, identityPrefix = "acp"): Trans
       case "tool-call": {
         const msg = openAssistant(i, rec.at)
         currentMessageId = undefined
-        const call = toolCallFor(rec, (rec as { acp?: { kind?: string; title?: string; locations?: string[] } }).acp)
+        const call = toolCallFor(rec, (rec as { acp?: AcpToolMeta }).acp)
         openTools.set(rec.id, call)
         appendTool(msg, call)
         break
@@ -203,6 +223,7 @@ export function projectAcpTranscript(raw: string, identityPrefix = "acp"): Trans
         openTools.delete(rec.id)
         const failed = (rec as { acp?: { status?: string } }).acp?.status === "failed" || (rec as { acp?: { kind?: string } }).acp?.kind === "failed"
         call.status = failed ? "failed" : "completed"
+        upgradeToolTarget(call, (rec as { acp?: AcpToolMeta }).acp)
         if (rec.text) call.output = clip(rec.text, TOOL_TEXT_MAX)
         break
       }

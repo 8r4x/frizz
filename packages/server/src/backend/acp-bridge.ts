@@ -589,7 +589,11 @@ export class AcpBridge {
     const meta = live.tools.get(tc.toolCallId)
     if (meta?.status === "completed" || meta?.status === "failed") return // already recorded
     if (meta) meta.status = tc.status
-    live.writer.append({ kind: "tool-result", at: this.now(), id: tc.toolCallId, text: clip(toolResultText(tc), 20_000), acp: { ...(tc.status ? { kind: tc.status } : {}) } })
+    // opencode's `tool_call` carries neither `rawInput` nor `locations`; both arrive on the completing
+    // `tool_call_update` (live 2026-09-15). The result record carries them so the drawer's "edited N
+    // files" can name the file instead of the tool.
+    const input = tc.rawInput && typeof tc.rawInput === "object" ? tc.rawInput as Record<string, unknown> : undefined
+    live.writer.append({ kind: "tool-result", at: this.now(), id: tc.toolCallId, text: clip(toolResultText(tc), 20_000), acp: { ...(tc.status ? { kind: tc.status } : {}), ...(meta?.locations?.length ? { locations: meta.locations } : {}), ...(input && Object.keys(input).length ? { input } : {}) } })
   }
 
   // ---- the agent asking us ------------------------------------------------------------------------
