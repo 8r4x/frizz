@@ -9,7 +9,7 @@ import type { AskQuestion, AwaitingHint, BgShellView, PendingAsk, RegisteredQues
 import { store, threadBySlug, pushDrawer, pushSubAgentDrawer, pushBackgroundShellDrawer, showToast } from "../store.ts"
 import { useBackgroundShellLines, useBoard, useProjectDir, useTranscript, type ChatMessage, type TranscriptData } from "../hooks.ts"
 import { rpc } from "../api/rpc.ts"
-import { displayTitle, lastActiveLabelAt } from "../groups.ts"
+import { lastActiveLabelAt } from "../groups.ts"
 import { stripFrontmatter } from "../lib/markdown.ts"
 import { useMarkdownHtml, useInlineMarkdownHtml } from "../lib/useMarkdown.ts"
 import { splitComposerValue, splitProseAttachments } from "../lib/imagePaths.ts"
@@ -52,12 +52,11 @@ import { noteGithubRefs } from "../lib/githubHovercards.ts"
 import { ICON_LABEL_NUDGE } from "../lib/iconAlign.ts"
 import { prefs } from "../lib/prefs.ts"
 import { canAdoptThread } from "../lib/adoption.ts"
-import { THREAD_TITLE_MAX_LENGTH, manualThreadTitleSeed, threadTitleToCommit } from "../lib/threadTitle.ts"
 import { THREAD_HEADER_CLASS, THREAD_HEADER_CONTROLS_CLASS, THREAD_HEADER_TITLE_CLASS } from "../lib/threadHeaderLayout.ts"
 import { ThreadActionBar } from "./ThreadActionBar.tsx"
 import { HeaderActions } from "./HeaderActions.tsx"
 import { ThreadLifecycleFooter, StateButton } from "./ThreadLifecycleFooter.tsx"
-import { AiRenameButton } from "./AiRenameButton.tsx"
+import { ThreadTitle } from "./ThreadTitle.tsx"
 import { threadLifecycleAvailability } from "../lib/threadLifecycle.ts"
 import { ToolDisclosureHeader } from "./ToolDisclosureHeader.ts"
 import { subAgentProfileCell } from "../lib/subAgentProfile.ts"
@@ -65,7 +64,7 @@ import { FOREGROUND_MARK_AFTER_MS, foregroundToolIsRunning, hasRunningToolIndica
 import { formatRuntimeElapsed, formatToolDuration } from "../lib/durationLabels.ts"
 import { githubRefUrl } from "../lib/githubRef.ts"
 import { useNowMs } from "../lib/liveClock.ts"
-import { CHILD_OPEN_TITLE, CHILD_QUIET_SHELL_TITLE, CHILD_RESTED_DOT_CLASS, CHILD_RESTED_TITLE, CHILD_STALE_DOT_CLASS, CHILD_STALE_TITLE, checksCounterLabel, childOpSubtree, mergeBackgroundShells, shellLinesLabel, visibleChildOps, type TranscriptShellRecord } from "../lib/childOps.ts"
+import { CHILD_OPEN_TITLE, CHILD_QUIET_SHELL_TITLE, CHILD_RESTED_DOT_CLASS, CHILD_RESTED_TITLE, CHILD_STALE_DOT_CLASS, CHILD_STALE_TITLE, checksCounterLabel, childOpSubtree, issueCounterLabel, mergeBackgroundShells, shellLinesLabel, visibleChildOps, type TranscriptShellRecord } from "../lib/childOps.ts"
 import { childOpDismisser } from "../lib/dismissChildOp.ts"
 import { agentCompletionCall, subAgentCompletionOutcome } from "../lib/subAgentCompletion.ts"
 import { agentReading } from "../lib/agentReading.ts"
@@ -87,7 +86,7 @@ import { settledAskView } from "../lib/interactionQuestion.ts"
 import { FRAMED_IMAGE, ImageFrame } from "./ImageFrame.tsx"
 // The resting card, shared with the queue (TodosView passes it the event-Snooze; these two surfaces
 // deliberately pass no action — see the module header).
-import { AwaitingBackgroundCard, AwaitingWaitTable, hasAwaitingWaitRows, showsRestingCard, watchStatusLine } from "./AwaitingBackgroundCard.tsx"
+import { AwaitingBackgroundCard, AwaitingWaitTable, hasAwaitingWaitRows, issueStatusLine, showsRestingCard, watchStatusLine } from "./AwaitingBackgroundCard.tsx"
 import { lastRest } from "../lib/restAnchor.ts"
 import { SnoozeCard, showsSnoozeCard } from "./SnoozeCard.tsx"
 // Re-exported from their new homes so existing importers (TodosView, the fixtures) keep one
@@ -303,8 +302,10 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
   const shadowedByMessage = useMemo(() => registeredStandingAt(messages, thread?.questions ?? []), [messages, thread?.questions])
   // Where the worker PLACED its registered questions — the message whose empty ```question qst_… marker
   // names each one (lib/questionShadow). A placed card renders in that slot and is subtracted from its
-  // anchor group; every other question renders at its anchor as before.
-  const placement = useMemo(() => placeQuestions(messages, thread?.questions ?? []), [messages, thread?.questions])
+  // anchor group; every other question renders at its anchor as before. At rest only a marker in the
+  // CURRENT rest places: a stale one from the rest that asked the question would otherwise strand the
+  // card up there while the handoff below it drew a bare Send button.
+  const placement = useMemo(() => placeQuestions(messages, thread?.questions ?? [], { atRest: !running }), [messages, running, thread?.questions])
   // A thread dispatched after the free-form fence was retired never gets a fence controller: a
   // ```question with a body is prose there, drawn read-only, and the registered card is the only
   // answerable thing (shared QUESTION_FENCE_RETIRED_AT). A legacy thread keeps the whole fence path.
@@ -1509,24 +1510,6 @@ export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue
   const board = useBoard()
   const thread = threadBySlug(board, slug)
   const markComplete = useMutation({ mutationFn: () => rpc.markComplete({ slug }) })
-  const renameTitle = useMutation({ mutationFn: (title: string) => rpc.renameThread({ slug, title }) })
-  const [editingTitle, setEditingTitle] = useState(false)
-  const [titleDraft, setTitleDraft] = useState("")
-  const titleInputRef = useRef<HTMLInputElement>(null)
-  useEffect(() => {
-    if (!editingTitle) return
-    const frame = requestAnimationFrame(() => {
-      titleInputRef.current?.focus()
-      titleInputRef.current?.select()
-    })
-    return () => cancelAnimationFrame(frame)
-  }, [editingTitle])
-  // A drawer can switch slugs without remounting this header. Never carry a half-entered title into
-  // another thread; changing selection has the same semantics as cancelling with Escape.
-  useEffect(() => {
-    setEditingTitle(false)
-    setTitleDraft("")
-  }, [slug])
   // The "Frizz document" header affordance opens .frizz/<slug>.md (threadBody). Many session threads have
   // no such file — a session thread's working files are its own business — so it would dead-end on
   // "No thread file found". Gate it on the doc actually having body content (same stripFrontmatter the
@@ -1536,34 +1519,6 @@ export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue
   const hasDoc = stripFrontmatter(docQ.data?.markdown ?? "").trim().length > 0
   if (!thread) return null
   const showTerminalCommand = thread.kind === "session" && thread.foreign !== true
-  // Manual rename is registry metadata for either backend. Claude additionally owns a native AI
-  // rename; Codex has no equivalent and must never be shown a fake slash-command affordance.
-  const isForeign = thread.foreign === true
-  const canRename = thread.kind === "session" && !isForeign
-  const shownTitle = displayTitle(thread)
-  function cancelRename(): void {
-    setEditingTitle(false)
-    setTitleDraft("")
-  }
-  function commitRename(): void {
-    const title = threadTitleToCommit(titleDraft, shownTitle)
-    setEditingTitle(false)
-    if (!title) {
-      setTitleDraft("")
-      return
-    }
-    renameTitle.mutate(title, {
-      onSuccess: () => {
-        setTitleDraft("")
-        showToast("Thread renamed")
-      },
-      onError: (error) => {
-        setTitleDraft(title)
-        setEditingTitle(true)
-        showToast(error instanceof Error ? error.message : "Could not rename thread")
-      },
-    })
-  }
   return (
     <header
       data-thread-header
@@ -1576,49 +1531,9 @@ export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue
             the closing half of the fullscreen door, in the door's own slot in the action strip below
             (HeaderActions `collapse`). */}
         <div className="min-w-0 leading-tight">
-          {/* Keep the title's display wrapper content-sized. Long names still truncate inside the
-              remaining header width, but short names do not claim the whole row as a click target. */}
-          <div className="group/thread-title flex min-w-0 items-center gap-2">
-            {editingTitle ? (
-              <input
-                ref={titleInputRef}
-                aria-label="Thread title"
-                value={titleDraft}
-                maxLength={THREAD_TITLE_MAX_LENGTH}
-                onChange={(event) => setTitleDraft(event.target.value)}
-                onBlur={commitRename}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault()
-                    commitRename()
-                  } else if (event.key === "Escape") {
-                    event.preventDefault()
-                    cancelRename()
-                  }
-                }}
-                className="min-w-0 flex-1 rounded-md border border-border bg-elevated px-1.5 py-1 font-semibold text-[15px] text-fg outline-none focus:border-accent"
-              />
-            ) : canRename ? (
-              <button
-                type="button"
-                title="Edit title"
-                aria-label={`Edit thread title: ${shownTitle}`}
-                disabled={renameTitle.isPending}
-                onClick={() => {
-                  setTitleDraft(manualThreadTitleSeed(shownTitle, thread.id))
-                  setEditingTitle(true)
-                }}
-                className="min-w-0 max-w-full shrink truncate rounded px-0.5 -mx-0.5 font-semibold text-[15px] text-left outline-none transition-colors hover:bg-panel-2 focus-visible:ring-1 focus-visible:ring-fg/60 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                {shownTitle}
-              </button>
-            ) : (
-              <div className="min-w-0 max-w-full shrink truncate px-0.5 -mx-0.5 font-semibold text-[15px]" title={shownTitle}>
-                {shownTitle}
-              </div>
-            )}
-            <AiRenameButton thread={thread} hidden={editingTitle} />
-          </div>
+          {/* The name and both rename verbs — click to type, hover for the Claude refresh — are the
+              shared ThreadTitle, the same element the queue card's header renders. */}
+          <ThreadTitle thread={thread} />
           <LastActive at={lastActiveLabelAt(thread)} fallbackAt={thread.spawnedAt} className="mt-0.5 block truncate text-[11px] leading-tight text-muted/75" />
         </div>
       </div>
@@ -2143,7 +2058,8 @@ function MinimalToolActivity({ tools, at }: { tools: CollapsedTool[]; at?: strin
 
 // Default-minimal tool rendering. Ordinary calls become one gerund disclosure regardless of provider
 // batching. Dedicated block tools split the run and remain visible: sub-agent and send cards, and — as
-// of 2026-08-01 — every background/detached lifecycle (see lib/toolActivity.isToolActivityException).
+// of 2026-08-01 — every LIVE background/detached lifecycle; a finished one folds back in as of
+// 2026-09-13 (see lib/toolActivity.isToolActivityException).
 function ToolCalls({ tools, at }: { tools: CollapsedTool[]; dense?: boolean; at?: string }) {
   const runs: { exceptional: boolean; tools: CollapsedTool[] }[] = []
   for (const tool of tools) {
@@ -2194,7 +2110,7 @@ export function ToolCardRouter({ t, startedAt }: { t: CollapsedTool; startedAt?:
   // A dispatch renders as an AgentBlock on EITHER signal: a prompt (Claude) or just the correlation id
   // (codex — it encrypts the dispatch message, so there is no prompt to show, but the child is still
   // tracked and drillable). Gating on the prompt alone left every codex sub-agent as a mute generic card.
-  if (t.prompt || t.agentId) return <AgentBlock detail={t.detail} prompt={t.prompt} input={t.input} subagentType={t.subagentType} agentId={t.agentId} agentStatus={t.agentStatus} agentElapsedMs={t.agentElapsedMs} status={t.status} durationMs={t.durationMs} output={t.output} />
+  if (t.prompt || t.agentId) return <AgentBlock detail={t.detail} prompt={t.prompt} subagentType={t.subagentType} agentId={t.agentId} agentStatus={t.agentStatus} agentElapsedMs={t.agentElapsedMs} status={t.status} durationMs={t.durationMs} />
   if (t.sendTo !== undefined || t.sendBody !== undefined) return <SendMessageBlock to={t.sendTo} summary={t.sendSummary} body={t.sendBody ?? ""} type={t.sendType} dispatchId={t.sendDispatchId} targetLabel={t.sendTargetLabel} status={t.status} durationMs={t.durationMs} at={startedAt} />
   if (t.sentImages || t.sentFiles) return <SentFilesCard images={t.sentImages ?? []} files={t.sentFiles ?? []} caption={t.caption} status={t.status} durationMs={t.durationMs} />
   // The built-in to-do list, ahead of the generic input/output card (a codex plan's `explanation` rides
@@ -2749,33 +2665,28 @@ const AGENT_MAX_LINES = 16
 export function AgentBlock({
   detail,
   prompt,
-  input,
   subagentType,
   agentId,
   agentStatus,
   agentElapsedMs,
   status,
   durationMs,
-  output,
 }: {
   detail?: string
-  // The dispatch prompt — absent for a CODEX dispatch, whose message the provider encrypts. The card
-  // then falls back to the call's own input (fork/agent-type details); the header, the live state, and
-  // the drill-in all work identically either way.
+  // Only the initial instruction belongs in this disclosure, never fork settings or the spawn ACK.
+  // Codex may encrypt it; an unavailable prompt must not be replaced by unrelated tool metadata.
   prompt?: string
-  input?: string
   subagentType?: string
   agentId?: string
   agentStatus?: "completed" | "failed" | "killed"
   agentElapsedMs?: number
   status?: ToolStatus
   durationMs?: number
-  output?: string
 }) {
   const [open, setOpen] = useState(false)
   const [expanded, setExpanded] = useState(false)
   const bodyId = useId()
-  const body = prompt ?? input
+  const body = prompt || "Initial prompt unavailable."
   const lineCount = useMemo(() => (body ? body.split("\n").length : 0), [body])
   const long = lineCount > AGENT_MAX_LINES
   // Thread surface OR sub-agent drawer (a nested dispatch inside a child's own transcript still drills
@@ -2939,12 +2850,6 @@ export function AgentBlock({
               >
                 {expanded ? "Collapse" : `Show all ${lineCount} lines`}
               </button>
-            )}
-            {output && (
-              <>
-                <div className="frizz-bash-output-label petite-caps">output</div>
-                <pre className="frizz-bash-body frizz-bash-output-body">{output}</pre>
-              </>
             )}
           </>
         )}
@@ -3924,7 +3829,9 @@ export function ProviderFaultCard({
 // when the window comes back, and that frizz will pick the thread up itself — and keeps a manual
 // continue as the secondary, for the operator who has capacity elsewhere and doesn't want to wait.
 export function LimitPauseCard({ slug, sessionId, pause }: { slug: string; sessionId: string | undefined; pause: NonNullable<ThreadViewData["limitPause"]> }) {
-  const label = PROVIDER_LABEL[pause.backend]
+  // Only Claude and Codex report a limit window Frizz can read; an ACP agent's limits stay inside its
+  // own CLI, so a pause attributed to one is labelled generically rather than crashing on the lookup.
+  const label = pause.backend === "acp" ? "The agent" : PROVIDER_LABEL[pause.backend]
   const which = pause.window === "weekly" ? "weekly limit" : pause.window === "session" ? "session limit" : "usage limit"
   const [continuing, setContinuing] = useState(false)
   const queryClient = useQueryClient()
@@ -4160,10 +4067,14 @@ export function BackgroundOpsStrip({
           // screen while the thread WORKS, and the card that rendered the full reading is only drawn at
           // rest. A watcher row used to say a ref and an age, which is the one pair that cannot answer
           // "is anything wrong with it". Absent until the first poll answers, never a fabricated 0.
-          counter={checksCounterLabel(w.github)}
+          // An ISSUE has no checks to count, so its counter is its conversation size — the one number
+          // that says whether anybody has answered — and "closed" once it is.
+          counter={w.subject === "issue" ? issueCounterLabel(w.issue) : checksCounterLabel(w.github)}
           counterTone={w.github?.checks === "failing" ? "danger" : undefined}
-          counterTitle={w.github ? `${w.target} — ${watchStatusLine(w.github)}` : undefined}
-          onOpen={() => window.open(githubRefUrl(w.target) ?? `https://github.com/${w.target.replace("#", "/pull/")}`, "_blank", "noreferrer,noopener")}
+          counterTitle={w.subject === "issue"
+            ? (w.issue ? `${w.target} — ${issueStatusLine(w.issue)}` : undefined)
+            : (w.github ? `${w.target} — ${watchStatusLine(w.github)}` : undefined)}
+          onOpen={() => window.open(githubRefUrl(w.target, w.subject === "issue" ? "issue" : "pull") ?? `https://github.com/${w.target.replace("#", w.subject === "issue" ? "/issues/" : "/pull/")}`, "_blank", "noreferrer,noopener")}
         />
       ))}
       <ThreadLinks links={links} />

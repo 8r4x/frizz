@@ -1,7 +1,9 @@
-import type {
-  CodexModel,
-  DispatchProfileSnapshot,
-  GithubBatchInput,
+import {
+  acpAgentIdFromModel,
+  type AcpAgent,
+  type CodexModel,
+  type DispatchProfileSnapshot,
+  type GithubBatchInput,
 } from "@frizz/shared"
 import { CLAUDE_MODELS, claudeEfforts } from "./options.ts"
 
@@ -14,7 +16,16 @@ import { CLAUDE_MODELS, claudeEfforts } from "./options.ts"
 export function dispatchProfileError(
   profile: DispatchProfileSnapshot,
   codexModels: readonly CodexModel[],
+  acpAgents: readonly AcpAgent[] = [],
 ): string | undefined {
+  if (profile.backend === "acp") {
+    // `acp:<agent>@<model>`: the agent must be installed; the model inside it is the agent's to honour.
+    const agent = acpAgents.find((candidate) => candidate.id === acpAgentIdFromModel(profile.model))
+    if (!agent) return `ACP agent ${profile.model} is not in the catalogue`
+    if (!agent.available) return `${agent.label} is not installed on this machine`
+    return undefined
+  }
+  if (!profile.effort) return `Reasoning level is required for ${profile.model}`
   if (profile.backend === "claude") {
     if (!CLAUDE_MODELS.some((option) => option.value === profile.model)) {
       return `Claude model ${profile.model} is no longer available`

@@ -53,7 +53,9 @@ export function threadPermissionBlockedReason(thread: ThreadPermissionState): st
   // running turn was the Claude gate leaking onto a runtime that never needed it, and the operator was
   // right that it made no sense. The server still fails closed on its own: an unreachable bridge falls
   // back to persist-only and answers "saved for the next resume".
-  if (thread.backend === "codex") return null
+  // An ACP thread has no permission axis at all (the agent's own CLI decides what it may do), so the
+  // control never shows for it — the server refuses the RPC outright; never fence what cannot change.
+  if (thread.backend === "codex" || thread.backend === "acp") return null
   const unresolvedOps = [...(thread.subAgents ?? []), ...(thread.bgShells ?? [])].filter((op) => op.state === "running" || op.state === "stale").length
   if (unresolvedOps > 0) return `Wait for ${unresolvedOps} unresolved background operation${unresolvedOps === 1 ? "" : "s"}`
   if (thread.runtime === "running" || thread.runtime === "spawning") return "Wait for the current turn to finish"

@@ -1,8 +1,12 @@
-import type {
-  Backend,
-  CodexModel,
-  DispatchPreferences,
-  SetDispatchPreferenceInput,
+import {
+  acpAgentIdFromModel,
+  acpModelIdFromModel,
+  acpModelSlug,
+  type AcpAgent,
+  type Backend,
+  type CodexModel,
+  type DispatchPreferences,
+  type SetDispatchPreferenceInput,
 } from "@frizz/shared"
 import type { SelectGroup, SelectOption } from "../components/ui/Select.tsx"
 import type { ProfileGridGroup } from "./profileGrid.ts"
@@ -16,9 +20,17 @@ import {
 
 export interface ResolvedDispatchPreferences {
   backend: Backend
+  // The slug dispatch sends: a Claude alias, a Codex slug, or `acp:<agent>[@<model>]`.
   model: string
+  // The model the profile GRID is keyed on. An ACP row is one row per AGENT (`acp:<agent>`), and the
+  // agent's model lives in the dropdown beside the pill — so the grid must never see the `@<model>`
+  // tail, or a saved model would read as "unknown profile" the moment one was chosen.
+  pickerModel: string
   effort: string
   codexModel?: CodexModel
+  // ACP only: the agent id and the model chosen inside it (undefined = the agent's own default).
+  acpAgentId?: string
+  acpModelId?: string
   modelAvailable: boolean
   effortAvailable: boolean
   effortOptions: SelectOption[]
@@ -47,7 +59,17 @@ export function applyDispatchPreferenceUpdate(
   }
 }
 
-export function dispatchProfileGroups(codexModels: readonly CodexModel[]): ProfileGridGroup[] {
+export function dispatchProfileGroups(codexModels: readonly CodexModel[], acpAgents: readonly AcpAgent[] = []): ProfileGridGroup[] {
+  // Only the agents actually on the server's PATH get a row: the catalogue lists eight, and a grid of
+  // "not installed" rows would bury the two the operator has. A SAVED agent that has since gone
+  // missing surfaces through resolveDispatchPreferences's `modelAvailable`, not through a row here.
+  const acpOptions = acpAgents.filter((agent) => agent.available).map((agent) => ({
+    model: acpModelSlug(agent.id),
+    label: agent.label,
+    // No effort axis: an ACP agent runs on its own CLI's model and effort (ProfileGridSelector draws
+    // one "Default" cell for an option with no efforts).
+    efforts: [],
+  }))
   return [
     {
       id: "claude",
@@ -71,36 +93,59 @@ export function dispatchProfileGroups(codexModels: readonly CodexModel[]): Profi
         efforts: model.efforts,
       })),
     },
+    ...(acpOptions.length ? [{ id: "acp", label: "ACP agents", options: acpOptions }] : []),
   ]
 }
 
 export function resolveDispatchPreferences(
   preferences: DispatchPreferences,
   codexModels: readonly CodexModel[],
+  acpAgents: readonly AcpAgent[] = [],
 ): ResolvedDispatchPreferences {
   const backend = preferences.backend
-  const profile = preferences[backend]
-  const model = profile.model ?? (backend === "claude" ? "opus" : codexModels[0]?.slug ?? "")
+  // `acp` is optional on the record (older rows predate it), so an ACP backend with no saved profile
+  // reads as an empty one and falls through to the first installed agent below.
+  const profile = preferences[backend] ?? {}
+  const firstAcpAgent = acpAgents.find((agent) => agent.available)
+  const model = profile.model ?? (
+    backend === "claude" ? "opus"
+      : backend === "codex" ? codexModels[0]?.slug ?? ""
+        : firstAcpAgent ? acpModelSlug(firstAcpAgent.id) : ""
+  )
   const codexModel = backend === "codex"
     ? codexModels.find((candidate) => candidate.slug === model)
     : undefined
+  const acpAgentId = backend === "acp" ? acpAgentIdFromModel(model) : undefined
+  const acpModelId = backend === "acp" ? acpModelIdFromModel(model) : undefined
+  const pickerModel = backend === "acp" && acpAgentId ? acpModelSlug(acpAgentId) : model
+  // An ACP profile is available when its AGENT is installed: the model inside it is the agent's to
+  // honour or refuse (the bridge notes a refusal in the transcript), never a reason to block dispatch.
   const modelAvailable = backend === "claude"
     ? CLAUDE_MODELS.some((candidate) => candidate.value === model)
-    : codexModels.some((candidate) => candidate.slug === model)
+    : backend === "codex"
+      ? codexModels.some((candidate) => candidate.slug === model)
+      : acpAgents.some((candidate) => candidate.available && candidate.id === acpAgentId)
   const defaultEffort = backend === "claude" ? "high" : codexModel?.defaultEffort ?? ""
-  const effort = profile.effort ?? defaultEffort
+  // An ACP agent has no effort axis in Frizz — it runs on its own CLI's model and effort — so its
+  // effort is "" and always "available": there is nothing to be unavailable.
+  const effort = backend === "acp" ? "" : profile.effort ?? defaultEffort
   const baseEfforts = backend === "claude"
     ? claudeEffortOptions(model, { withDefault: false })
-    : codexEffortOptions(codexModel, { withDefault: false })
-  const effortAvailable = baseEfforts.some((option) => option.value === effort)
+    : backend === "codex"
+      ? codexEffortOptions(codexModel, { withDefault: false })
+      : []
+  const effortAvailable = backend === "acp" || baseEfforts.some((option) => option.value === effort)
   const effortOptions = effort && !effortAvailable
     ? [{ value: effort, label: `${effort} (unavailable)`, title: "Saved reasoning level is not available for this model" }, ...baseEfforts]
     : baseEfforts
   return {
     backend,
     model,
+    pickerModel,
     effort,
     codexModel,
+    ...(acpAgentId ? { acpAgentId } : {}),
+    ...(acpModelId ? { acpModelId } : {}),
     modelAvailable,
     effortAvailable,
     effortOptions,
@@ -115,7 +160,7 @@ export function dispatchModelGroups(
   const groups = modelGroups(codexModels, { withDefault: false })
   if (!selectedModel || groups.some((group) => group.options.some((option) => option.value === selectedModel))) return groups
   const unavailable: SelectGroup = {
-    label: backend === "codex" ? "Saved Codex model" : "Saved Claude model",
+    label: backend === "codex" ? "Saved Codex model" : backend === "acp" ? "Saved ACP agent" : "Saved Claude model",
     options: [{ value: selectedModel, label: `${selectedModel} (unavailable)`, title: "This saved model is no longer in the runtime catalogue" }],
   }
   return [unavailable, ...groups]

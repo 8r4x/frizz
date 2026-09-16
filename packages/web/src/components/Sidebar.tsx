@@ -635,7 +635,7 @@ export const ThreadRow = memo(function ThreadRow({
           <span className="flex min-w-0 items-baseline gap-3">
             <span className={`min-w-0 flex-1 break-words text-[13px] leading-[19px] ${dimLabel ? "text-fg/50" : dim ? "text-fg/75" : "text-fg/90"}`}>
               <TitleWithTrailers title={displayTitle(t)}>
-                {!legacy && <ProviderMark backend={t.backend} className="ml-1" />}
+                {!legacy && <ProviderMark backend={t.backend} model={t.model} className="ml-1" />}
                 {/* MEASURED 2026-08-19, the first time this tag ever rendered (it was written for a
                     foreign row and no foreign row reached the rail until the External band). Readings
                     on the real rail at dsf 4, `scripts/ink-gaps.mjs` + the visual-review cap-band probe:
@@ -1267,7 +1267,7 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
     // NO HINT KIND PARKS ON ITS OWN. `human:` and `timer: <instant>` each drew the Snoozed mark from the
     // worker's assertion alone; both are deleted (2026-08-15) and the server now decides Snoozed from a
     // checked declaration. What is left to draw is the SHAPE of the wait.
-    const hk = t.lastFence.hints.find((h) => h.kind === "pr" || h.kind === "shell" || h.kind === "agent" || h.kind === "timer")?.kind
+    const hk = t.lastFence.hints.find((h) => h.kind === "pr" || h.kind === "issue" || h.kind === "shell" || h.kind === "agent" || h.kind === "timer")?.kind
     // The tooltip's WORDS come from the fence itself (popover → awaitingWaitClause), which names the
     // things it parked on; the arms below only pick the GLYPH that matches the leading kind. They used
     // to say the shape in prose too — "Waiting on its own background work" — which restated vaguely

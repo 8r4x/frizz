@@ -45,6 +45,7 @@ window.fetch = async (input, init) => {
     return rpcResult(settings)
   }
   if (url.pathname === "/_frizz/rpc/codexModels") return rpcResult([])
+  if (url.pathname === "/_frizz/rpc/acpAgents") return rpcResult([])
   if (url.pathname === "/_frizz/rpc/githubPromptDefaults") {
     return rpcResult({
       prompt: "Triage this GitHub issue/PR and make recommendations. Classify it, be dubious, and say what you actually checked.",

@@ -23,6 +23,7 @@ import {
 import type { SessionDirectory } from "./access-codes.ts"
 import { RestartSupervisorProxy, type RestartResult } from "./restart-supervisor.ts"
 import { log as frizzLog } from "./logging.ts"
+import { BOOT_HARD_TIMEOUT_MS, BOOT_STALL_TIMEOUT_MS, readBootProgress } from "./boot-progress.ts"
 
 export const DEV_RESTART_DEBOUNCE_MS = 180
 export const DEV_CRASH_STABLE_MS = 5000
@@ -31,8 +32,8 @@ export const DEV_CRASH_RETRY_MAX_MS = 10_000
 // A server's public shutdown deadline is diagnostic, not proof that its ownership fence is safe to
 // abandon. Leave enough room for the child to finish that late drain before escalating to a signal.
 const CHILD_STOP_TIMEOUT_MS = 15_000
-/** A stable update must either report ready promptly or return the old selection to service. */
-export const STABLE_UPDATE_READY_TIMEOUT_MS = 30_000
+/** A candidate's advancing boot progress renews this stall window, just like an ordinary launch. */
+export const STABLE_UPDATE_READY_TIMEOUT_MS = BOOT_STALL_TIMEOUT_MS
 /** Reject a ready-then-immediately-dead candidate before making its artifact durable. */
 export const STABLE_UPDATE_STABILIZE_MS = 1_000
 // POSIX only: how long a child that ignored the IPC ask gets to answer SIGTERM before SIGKILL. A
@@ -150,8 +151,10 @@ export interface DevSupervisorOptions {
   updateMode?: "durableReexec" | "child"
   /** Commit the prepared child selection only after that child is ready and remains alive briefly. */
   commitUpdate?: () => Promise<void> | void
-  /** Bounded candidate-ready wait for `updateMode: "child"`; injectable for real-child fixtures. */
+  /** Candidate boot stall window for `updateMode: "child"`; injectable for real-child fixtures. */
   updateReadyTimeoutMs?: number
+  /** Hard ceiling even if candidate boot progress keeps advancing. */
+  updateHardTimeoutMs?: number
   /** Required healthy interval before committing a child update; injectable for real-child fixtures. */
   updateStabilizeMs?: number
   /** Cheap CACHED "is a newer artifact actually available" read; see RestartSupervisorProxy. */
@@ -529,6 +532,7 @@ class Supervisor implements DevSupervisor {
   private readonly updateMode: "durableReexec" | "child"
   private readonly commitUpdate?: () => Promise<void> | void
   private readonly updateReadyTimeoutMs: number
+  private readonly updateHardTimeoutMs: number
   private readonly updateStabilizeMs: number
   private readonly rollbackUpdate?: () => Promise<void> | void
   private readonly durableReexec?: () => Promise<void> | void
@@ -591,6 +595,7 @@ class Supervisor implements DevSupervisor {
     this.updateMode = opts.updateMode ?? "durableReexec"
     this.commitUpdate = opts.commitUpdate
     this.updateReadyTimeoutMs = Math.max(1, opts.updateReadyTimeoutMs ?? STABLE_UPDATE_READY_TIMEOUT_MS)
+    this.updateHardTimeoutMs = Math.max(1, opts.updateHardTimeoutMs ?? BOOT_HARD_TIMEOUT_MS)
     this.updateStabilizeMs = Math.max(0, opts.updateStabilizeMs ?? STABLE_UPDATE_STABILIZE_MS)
     this.rollbackUpdate = opts.rollbackUpdate
     this.durableReexec = opts.durableReexec
@@ -882,6 +887,7 @@ class Supervisor implements DevSupervisor {
       const ready = await this.spawnChild({
         updateCandidate: true,
         readinessTimeoutMs: this.updateReadyTimeoutMs,
+        hardTimeoutMs: this.updateHardTimeoutMs,
       })
       const candidate = this.child
       if (!ready || !candidate) {
@@ -1030,7 +1036,7 @@ class Supervisor implements DevSupervisor {
     this.writeStatus("restarting", "immutable artifact promoted; re-executing durable supervisor", null)
   }
 
-  private async spawnChild(options: { updateCandidate?: boolean; readinessTimeoutMs?: number } = {}): Promise<boolean> {
+  private async spawnChild(options: { updateCandidate?: boolean; readinessTimeoutMs?: number; hardTimeoutMs?: number } = {}): Promise<boolean> {
     const privatePort = await allocatePrivateDevPort(this.port)
     let launch: { entry: string; environment: NodeJS.ProcessEnv } | undefined
     try {
@@ -1083,16 +1089,40 @@ class Supervisor implements DevSupervisor {
         settled(ready)
       }
       if (options.readinessTimeoutMs !== undefined) {
-        readinessTimer = setTimeout(() => {
+        // Updating can provision a new provider pin (hundreds of MB) before the server is ready.
+        // A flat 30s cutoff killed healthy downloads. Only this candidate's advancing counter buys
+        // more time; a stale/foreign progress file must never keep a stuck candidate alive.
+        const stallMs = options.readinessTimeoutMs
+        const hardMs = options.hardTimeoutMs ?? BOOT_HARD_TIMEOUT_MS
+        const hardDeadline = Date.now() + hardMs
+        let stallDeadline = Date.now() + stallMs
+        let lastStep = -1
+        let lastPhase: string | undefined
+        const checkProgress = () => {
           if (spawnSettled) return
-          const message = `update candidate did not become ready within ${options.readinessTimeoutMs}ms`
+          const now = Date.now()
+          const progress = readBootProgress(this.launchTarget.stateDir)
+          if (progress && progress.pid === child.pid && progress.step > lastStep) {
+            lastStep = progress.step
+            lastPhase = progress.phase
+            stallDeadline = now + stallMs
+          }
+          if (now < stallDeadline && now < hardDeadline) {
+            readinessTimer = setTimeout(checkProgress, Math.min(250, stallDeadline - now, hardDeadline - now))
+            readinessTimer.unref()
+            return
+          }
+          const reason = now >= hardDeadline
+            ? `update candidate did not become ready within ${hardMs}ms`
+            : `update candidate made no boot progress for ${stallMs}ms`
+          const message = lastPhase ? `${reason}; last boot step: ${lastPhase}` : reason
           this.lastRestartFailure = message
           this.errorLine(`[frizz] ${message}`)
           this.writeStatus("failed", message, null)
           try { child.kill("SIGTERM") } catch { /* exit handler owns cleanup */ }
           settleSpawn(false)
-        }, options.readinessTimeoutMs)
-        readinessTimer.unref()
+        }
+        checkProgress()
       }
 
       child.on("message", (message) => {

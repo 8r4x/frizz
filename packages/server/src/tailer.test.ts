@@ -14,6 +14,7 @@ import { claudeBrokerRecordPath } from "./backend/claude-broker-host.ts"
 import type { AgentBackend, NormalizedEvent } from "./backend/types.ts"
 import { createClaudeBackend } from "./backend/claude.ts"
 import { createCodexBackend } from "./backend/codex.ts"
+import { acpTranscriptPath, createAcpBackend } from "./backend/acp-transcript.ts"
 import { mkdirSync } from "node:fs"
 import { frizzTempDir } from "./frizz-paths.ts"
 
@@ -4226,4 +4227,88 @@ test("tailer: the real shell probe is async — the verdict lands on the NEXT ti
   } finally {
     closeSync(held)
   }
+})
+
+// ---- ACP rows ----
+//
+// An ACP transcript is FRIZZ-written (acp-transcript.ts) and keyed by the frizz session id, while the
+// row's `agent_session_id` carries the AGENT's own session (kept for session/load on resume). The
+// tailer has to bind the frizz id, never the agent's: bound the other way it tailed a file that did not
+// exist and the thread spun `running` forever (live 2026-09-15 on a disposable stack — turn-end on
+// disk, board still "running" a minute later, `tail_state` empty).
+function acpTailer(h: Harness, stateDir: string) {
+  const acpBackend = createAcpBackend({ stateDir })
+  const claudeBackend = createClaudeBackend({ logDir: h.logDir })
+  const backendFor = (kind?: string): AgentBackend => (kind === "acp" ? acpBackend : claudeBackend)
+  return createTailer({
+    project: { cwdSlug: "x" } as Project,
+    storage: h.storage,
+    bus: h.bus,
+    onChange: () => h.changes.n++,
+    now: () => h.clock.ms,
+    paneDead: () => h.dead.v,
+    sessionLogDir: h.logDir,
+    backendFor,
+  })
+}
+
+// Records exactly as the bridge wrote them for a real `opencode acp` turn (2026-09-15).
+const ACP_SESSION = JSON.stringify({ kind: "acp-session", at: "2026-09-16T05:53:16.696Z", agent: { id: "opencode", name: "OpenCode", version: "1.18.29" }, acpSessionId: "ses_agent", cwd: "/x", model: "opencode/big-pickle" })
+const ACP_USER = JSON.stringify({ kind: "user-message", at: "2026-09-16T05:53:16.696Z", text: "call the tool then say DONE", synthetic: false })
+const ACP_TURN_START = JSON.stringify({ kind: "turn-start", at: "2026-09-16T05:53:16.696Z" })
+const ACP_TOOL_CALL = JSON.stringify({ kind: "tool-call", at: "2026-09-16T05:53:23.871Z", id: "call_1", name: "frizz_activity", input: {}, acp: { kind: "other", title: "frizz_activity", locations: [] } })
+const ACP_TOOL_RESULT = JSON.stringify({ kind: "tool-result", at: "2026-09-16T05:53:23.932Z", id: "call_1", text: "Nothing is running on this thread.", acp: { kind: "completed" } })
+const ACP_FINAL = JSON.stringify({ kind: "assistant-text", at: "2026-09-16T05:53:26.679Z", text: "DONE", final: false, messageId: "msg_1" })
+const ACP_TURN_END = JSON.stringify({ kind: "turn-end", at: "2026-09-16T05:53:26.679Z", finalText: "DONE", successful: true })
+
+function pinAcpRow(h: Harness) {
+  h.storage.upsertSession(row({ session_id: "frizz-uuid", spawned_at: "2026-09-16T05:53:16.000Z" }))
+  h.storage.setBackend("t", "acp")
+  h.storage.setAgentSession("t", "ses_agent") // the AGENT's id — must NOT become the transcript stem
+}
+
+test("tailer: an ACP row binds the frizz-written transcript by session id and settles idle through the tick", () => {
+  const h = harness()
+  const stateDir = tmp("frizz-acp-state-")
+  pinAcpRow(h)
+  const path = acpTranscriptPath(stateDir, "frizz-uuid")
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, [ACP_SESSION, ACP_USER, ACP_TURN_START, ACP_TOOL_CALL, ACP_TOOL_RESULT].map((l) => l + "\n").join(""))
+  const t = acpTailer(h, stateDir)
+
+  h.clock.ms = Date.parse("2026-09-16T05:53:24.000Z")
+  t.tick() // prime mid-turn
+  assert.equal(t.get("t")?.turn, "in-flight", "an open ACP turn (turn-start, no turn-end) is in-flight")
+  assert.equal(h.events.length, 0, "priming never notifies")
+
+  appendFileSync(path, ACP_FINAL + "\n" + ACP_TURN_END + "\n")
+  h.clock.ms = Date.parse("2026-09-16T05:53:30.000Z")
+  t.tick()
+  const tele = t.get("t")
+  assert.equal(tele?.turn, "idle", "turn-end brackets the turn closed")
+  assert.equal(tele?.lastAssistant, "DONE", "the bracket's finalText is the preview")
+  assert.equal(tele?.lastAssistantAt, "2026-09-16T05:53:26.679Z")
+  const notifies = h.events.filter((e) => e.type === "notify")
+  assert.equal(notifies.length, 1, "in-flight → idle fires exactly one turn-done notify")
+  assert.equal(notifies[0].type === "notify" && notifies[0].kind, "turn-done")
+})
+
+test("tailer: an ACP row past the discovery grace with no transcript yet is NOT put through Claude discovery", () => {
+  const h = harness()
+  const stateDir = tmp("frizz-acp-state-")
+  pinAcpRow(h)
+  // Nothing written yet, and the clock is well past DISCOVERY_GRACE_MS. The claude sweep would scan the
+  // log dir for `frizz-uuid`, miss, and flag noTranscript — which would card the thread as a boot failure.
+  const t = acpTailer(h, stateDir)
+  h.clock.ms = Date.parse("2026-09-16T06:53:16.000Z")
+  t.tick()
+  assert.notEqual(t.get("t")?.noTranscript, true, "a deterministic frizz-written file is never 'undiscoverable'")
+  // The file appears later → the next tick binds and folds it with no rebind ceremony.
+  const path = acpTranscriptPath(stateDir, "frizz-uuid")
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, [ACP_SESSION, ACP_USER, ACP_TURN_START, ACP_FINAL, ACP_TURN_END].map((l) => l + "\n").join(""))
+  h.clock.ms = Date.parse("2026-09-16T06:53:17.000Z")
+  t.tick()
+  assert.equal(t.get("t")?.turn, "idle")
+  assert.equal(t.get("t")?.lastAssistant, "DONE")
 })

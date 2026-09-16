@@ -125,6 +125,14 @@ export function checksCounterLabel(status: {
   return undefined // a PR with no CI at all — nothing to count, and "0" would imply otherwise
 }
 
+/** The issue twin of `checksCounterLabel`: "closed" once it is, else the comment count — the glance that
+ *  answers "has anyone replied yet", which is what an issue watcher is nearly always waiting on. */
+export function issueCounterLabel(status: { state: string; comments: number } | undefined): string | undefined {
+  if (!status) return undefined
+  if (status.state !== "open") return status.state
+  return status.comments > 0 ? `${status.comments} comment${status.comments === 1 ? "" : "s"}` : undefined
+}
+
 // 947 → "947", 13476 → "13.5k", 132000 → "132k", 2400000 → "2.4M". A raw six-digit token count next to
 // a truncated label is noise; the magnitude is the whole reading. The decimal survives up to three
 // significant figures and is dropped past them, where it would only be adding width.

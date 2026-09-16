@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { createGithubReviewFetcher, parseGithubPrSnapshot } from "./github-review.ts"
+import { createGithubReviewFetcher, parseGithubIssueActivities, parseGithubIssueSnapshot, parseGithubPrSnapshot } from "./github-review.ts"
 
 const ref = (number: number) => ({ owner: "nubjs", repo: "nub", number })
 
@@ -320,4 +320,69 @@ test("the batched query asks for the status half too, so no PR needs a second tr
   }
   assert.equal(result.status, "ok")
   assert.equal(result.status === "ok" && result.pr?.state, "OPEN", "the snapshot rides back with the activity")
+})
+
+// ---- ISSUES RIDE THE SAME BATCH (2026-09-14) ----------------------------------------------------------
+
+test("parseGithubIssueSnapshot: state, reason, title, labels, assignees and the comment count — nothing fabricated", () => {
+  const snap = parseGithubIssueSnapshot({
+    state: "CLOSED", stateReason: "NOT_PLANNED", title: "Crash on start",
+    comments: { totalCount: 14, nodes: [] },
+    labels: { nodes: [{ name: "bug" }, { name: 7 }, null] },
+    assignees: { nodes: [{ login: "alice" }, {}] },
+  })
+  assert.deepEqual(snap, { state: "CLOSED", stateReason: "NOT_PLANNED", title: "Crash on start", labels: ["bug"], assignees: ["alice"], comments: 14 })
+  assert.equal(parseGithubIssueSnapshot({ title: "no state" }), undefined, "no string state is indeterminate, never open")
+  assert.equal(parseGithubIssueSnapshot({ state: "OPEN" })?.comments, 0)
+})
+
+test("parseGithubIssueActivities: an issue's comments come out in the PR activity shape, source-prefixed", () => {
+  const acts = parseGithubIssueActivities({ data: { repository: { issue: { comments: { nodes: [
+    { id: "IC_1", url: "https://github.com/acme/app/issues/7#issuecomment-1", createdAt: "2026-09-14T00:00:00Z", body: "repro attached", author: { login: "bob", __typename: "User" } },
+    { id: "IC_2", author: null },
+  ] } } } } })
+  assert.deepEqual(acts, [{ id: "comment:IC_1", actor: "bob", actorType: "User", at: "2026-09-14T00:00:00Z", kind: "comment", url: "https://github.com/acme/app/issues/7#issuecomment-1", body: "repro attached" }])
+  assert.deepEqual(parseGithubIssueActivities({ data: { repository: { pullRequest: {} } } }), [], "a PR payload is not an issue")
+})
+
+test("createGithubReviewFetcher: a PR and an issue in one tick share ONE request and answer under their own kinds", async () => {
+  const requests: any[] = []
+  const fetcher = createGithubReviewFetcher({
+    getToken: async () => "token",
+    request: async (_input, init) => {
+      requests.push(JSON.parse(String(init?.body)))
+      return new Response(JSON.stringify({
+        data: {
+          ref0: { pullRequest: { state: "OPEN", mergedAt: null, reviews: { nodes: [] }, comments: { nodes: [] }, commits: { nodes: [] } } },
+          ref1: { issue: { state: "OPEN", title: "Crash on start", comments: { totalCount: 1, nodes: [{ id: "IC_1", createdAt: "2026-09-14T00:00:00Z", author: { login: "bob", __typename: "User" } }] }, labels: { nodes: [{ name: "bug" }] }, assignees: { nodes: [] } } },
+          rateLimit: { cost: 2, remaining: 4_000, resetAt: "2026-09-14T01:00:00Z", limit: 5_000 },
+        },
+      }), { status: 200, headers: { "content-type": "application/json" } })
+    },
+    now: () => Date.parse("2026-09-14T00:00:00Z"),
+  })
+  const [pr, issue] = await Promise.all([
+    fetcher({ owner: "acme", repo: "app", number: 391 }),
+    fetcher({ owner: "acme", repo: "app", number: 7, kind: "issue" }),
+  ])
+  assert.equal(requests.length, 1, "one batched request for both kinds")
+  assert.match(requests[0].query, /ref0: repository[^]*pullRequest\(number: \$number0\)/)
+  assert.match(requests[0].query, /ref1: repository[^]*issue\(number: \$number1\)/)
+  assert.equal(pr.status, "ok")
+  assert.equal(pr.status === "ok" && pr.pr?.state, "OPEN")
+  assert.equal(issue.status, "ok")
+  assert.deepEqual(issue.status === "ok" && issue.issue, { state: "OPEN", title: "Crash on start", labels: ["bug"], assignees: [], comments: 1 })
+  assert.equal(issue.status === "ok" && issue.activity[0]?.actor, "bob")
+  assert.equal(issue.status === "ok" && issue.pr, undefined, "an issue result carries no PR half")
+})
+
+test("createGithubReviewFetcher: an issue GitHub cannot return is an error naming the issue, never a silent ok", async () => {
+  const fetcher = createGithubReviewFetcher({
+    getToken: async () => "token",
+    request: async () => new Response(JSON.stringify({ data: { ref0: { issue: null }, rateLimit: { cost: 1, remaining: 4_000, resetAt: "2026-09-14T01:00:00Z", limit: 5_000 } }, errors: [{ message: "Could not resolve to an Issue with the number of 9." }] }), { status: 200 }),
+    now: () => 0,
+  })
+  const result = await fetcher({ owner: "acme", repo: "app", number: 9, kind: "issue" })
+  assert.equal(result.status, "error")
+  assert.match(result.status === "error" ? result.failure.message : "", /Could not resolve to an Issue/)
 })

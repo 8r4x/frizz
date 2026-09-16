@@ -1,0 +1,752 @@
+import { INTERACTION_PROTOCOL_VERSION, InteractionRequest, type InteractionRequest as InteractionRequestType } from "@frizz/shared"
+import type { InteractionSessionScope, InteractionStore } from "../interaction-store.ts"
+import { redactCredentialSyntax } from "../credential-redaction.ts"
+import { log } from "../logging.ts"
+import { acpAgentSpecs, resolveAcpAgent, type AcpAgentInput, type AcpAgentSpec, type ResolvedAcpAgent } from "./acp-agents.ts"
+import { AcpConnection, AcpRemoteError, AcpRequestError, spawnAcpChild, type AcpSpawn } from "./acp-rpc.ts"
+import { AcpTranscriptWriter, acpTranscriptPath, type AcpRecord } from "./acp-transcript.ts"
+import {
+  ACP_ERROR_AUTH_REQUIRED, ACP_ERROR_INTERNAL, ACP_ERROR_METHOD_NOT_FOUND, ACP_PROTOCOL_VERSION,
+  AcpInitializeResult, AcpLoadSessionResult, AcpNewSessionResult, AcpPromptResult, AcpRequestPermissionParams, AcpSessionNotification, AcpSetConfigOptionResult, type AcpConfigOption,
+  contentText, parseSessionUpdate,
+  type AcpInitializeResult as AcpInitializeResultType, type AcpMcpServerStdio, type AcpRequestPermissionResult, type AcpToolCallUpdate,
+} from "./acp-types.ts"
+import { FRIZZ_MCP, frizzMcpEnv, type FrizzMcp } from "./types.ts"
+import { inheritWorkerEnvironment } from "./worker-env.ts"
+import type { AcpAgentModels } from "@frizz/shared"
+
+// The ACP backend's bridge: one live agent child per thread, driven over acp-rpc.ts, writing the
+// thread's transcript through acp-transcript.ts. It is the third of three transports and deliberately
+// the shallowest (plans/acp-backend.md): no daemon, no sub-agents, no quota, no steer.
+//
+// What it owns per session:
+//   - the child (spawn → initialize → session/new or session/load with the frizz MCP server mounted);
+//   - the turn: `session/prompt` is long-lived and its response IS the end of the turn, so exactly one
+//     is in flight at a time and a follow-up that arrives mid-turn QUEUES and goes out the moment the
+//     current one returns (ACP has no steer; plan decision 8);
+//   - the transcript: every `session/update` becomes a NormalizedEvent record the tailer folds and the
+//     drawer projects, with text buffered and flushed as whole blocks rather than per token;
+//   - permission cards: `session/request_permission` → an InteractionRequest, answered when the operator
+//     resolves it and CANCELLED (fail closed) when the turn ends, the session is released or nobody can
+//     answer — the Claude bridge's contract, because a card nothing terminalizes never leaves the queue.
+//
+// A Frizz restart closes stdin and the agent exits with it (the protocol's teardown). The next input
+// re-opens the session: `session/load` when the agent advertised `loadSession`, else a fresh session
+// with a transcript note saying so. A running turn does not survive that — the stated difference from
+// the broker and the app-server, accepted for a generic fallback.
+
+export interface AcpBridgeOptions {
+  projectId: string
+  stateDir: string
+  /** The frizz MCP descriptor; absent ⇒ the worker simply lacks the frizz tools. */
+  frizzMcp?: FrizzMcp
+  interactions?: InteractionStore
+  /** The operator's environment; filtered through inheritWorkerEnvironment before the child sees it. */
+  env?: NodeJS.ProcessEnv
+  /** The operator's own agent entries (settings.acpAgents), re-read on every spawn. */
+  customAgents?: () => readonly AcpAgentInput[] | undefined
+  spawn?: AcpSpawn
+  onDiagnostic?: (d: { threadSlug: string; kind: string; message: string }) => void
+  /** Called whenever a turn starts or ends, so the board can refresh without polling. */
+  onStatusChange?: () => void
+  now?: () => Date
+  initializeTimeoutMs?: number
+  /** How long streamed text sits before it is flushed as a transcript record. */
+  flushMs?: number
+}
+
+export interface AcpSpawnDispatchInput {
+  threadSlug: string
+  sessionId: string
+  cwd: string
+  agentId: string
+  /** One of the agent's advertised model ids (`acp:<agent>@<model>`), or nothing for the agent's own default. */
+  modelId?: string | null
+  /** The full first prompt: worker contract, orientation, then the task. */
+  prompt: string
+  /** What the human actually wrote — the transcript records this, not the contract. */
+  userText: string
+}
+
+export interface AcpSessionInfo {
+  acpSessionId: string
+  agent: { id: string; name?: string; version?: string }
+  model?: string
+}
+
+export interface AcpFollowUpInput {
+  threadSlug: string
+  sessionId: string
+  cwd: string
+  agentId: string
+  modelId?: string | null
+  /** The ACP session id pinned on the row, for a resume after a restart. */
+  acpSessionId?: string | null
+  text: string
+  deliveryId?: string
+}
+
+export interface AcpFollowUpResult extends AcpSessionInfo {
+  state: "delivered" | "queued"
+  /** How the session was reached: already live, re-opened via session/load, or started fresh. */
+  resumed: "live" | "loaded" | "fresh"
+}
+
+export interface AcpTurnLiveness {
+  sessionLive: boolean
+  turnActive: boolean
+  queued: number
+}
+
+type PermissionDecisionId = "grant-turn" | "grant-session" | "deny" | "accept" | "acceptForSession" | "decline"
+
+interface PendingPermission {
+  resolve: (result: AcpRequestPermissionResult) => void
+  /** Canonical card decision id → the agent's own optionId, echoed verbatim on the answer. */
+  optionByDecision: Map<string, string>
+  scope: InteractionSessionScope
+}
+
+interface QueuedFollowUp { text: string; deliveryId?: string }
+
+interface Turn {
+  startedAt: string
+  deliveryId?: string
+  /** Streamed text not yet written to the transcript. */
+  text: string
+  messageId?: string
+  /** Everything the CURRENT agent message has said, flushed or not — the turn's final text. */
+  messageText: string
+  thought: string
+  flushTimer?: NodeJS.Timeout
+  cancelRequested: boolean
+  done: Promise<void>
+  finish: () => void
+}
+
+interface ToolMeta { kind?: string; title?: string; locations?: string[]; written: boolean; status?: string }
+
+interface LiveSession {
+  slug: string
+  sessionId: string
+  cwd: string
+  agent: ResolvedAcpAgent
+  conn: AcpConnection
+  init: AcpInitializeResultType
+  acpSessionId: string
+  model?: string
+  /** The config option id the agent files its model under (`model` for every agent seen so far). */
+  modelOptionId?: string
+  writer: AcpTranscriptWriter
+  /** True while `session/load` replays history — those updates are already in the file. */
+  loading: boolean
+  turn?: Turn
+  queue: QueuedFollowUp[]
+  pendingPerms: Map<string, PendingPermission>
+  tools: Map<string, ToolMeta>
+  exited: boolean
+}
+
+const AUTH_HINT = "The agent needs a login first. "
+const ACP_MODEL_CACHE_MS = 10 * 60_000
+
+function clip(text: string, max: number): string { return text.length > max ? `${text.slice(0, max - 1)}…` : text }
+
+function frizzMcpServer(mcp: FrizzMcp | undefined, slug: string): AcpMcpServerStdio[] {
+  if (!mcp) return []
+  return [{
+    name: FRIZZ_MCP.name,
+    command: process.execPath,
+    args: [mcp.scriptPath],
+    env: Object.entries(frizzMcpEnv({ ...mcp, slug })).map(([name, value]) => ({ name, value })),
+  }]
+}
+
+/** The text a tool call's result carries, from `content` blocks first and `rawOutput` second. */
+function toolResultText(tc: AcpToolCallUpdate): string {
+  const parts: string[] = []
+  for (const c of tc.content ?? []) {
+    if (c.type === "content") { const t = contentText((c as { content: Parameters<typeof contentText>[0] }).content); if (t) parts.push(t) }
+    else if (c.type === "diff") parts.push(`--- ${(c as { path: string }).path}\n${(c as { newText: string }).newText}`)
+  }
+  if (parts.length) return parts.join("\n")
+  const raw = tc.rawOutput as { output?: unknown } | undefined
+  if (raw && typeof raw === "object" && typeof raw.output === "string") return raw.output
+  if (typeof tc.rawOutput === "string") return tc.rawOutput
+  return ""
+}
+
+/** An ACP permission request as a Frizz card. The card's decision ids are the CANONICAL ones the web
+ *  renders buttons for (typedInteractions.ts `specFor`); the agent's own optionIds are kept beside the
+ *  pending entry and echoed back verbatim on the answer. */
+export function buildAcpPermissionInteraction(
+  params: AcpRequestPermissionParams,
+  owner: { projectId: string; threadSlug: string; sessionId: string; cwd: string },
+  agent: { id: string; label: string },
+): { request: InteractionRequestType; optionByDecision: Map<string, string> } | null {
+  const tc = params.toolCall
+  const input = tc.rawInput && typeof tc.rawInput === "object" ? tc.rawInput as Record<string, unknown> : undefined
+  const command = typeof input?.command === "string" ? input.command : ""
+  const isCommand = tc.kind === "execute" && command !== ""
+  const isFile = (tc.kind === "edit" || tc.kind === "delete" || tc.kind === "move") && (tc.locations?.[0]?.path || typeof input?.filePath === "string" || typeof input?.path === "string")
+  const payloadKind = isCommand ? "command-approval" : isFile ? "file-approval" : "permission-approval"
+
+  const optionByDecision = new Map<string, string>()
+  const allowedDecisions: InteractionRequestType["allowedDecisions"] = []
+  const add = (id: PermissionDecisionId, semantic: "approve" | "deny", label: string, optionId: string, description?: string) => {
+    if (optionByDecision.has(id)) return
+    optionByDecision.set(id, optionId)
+    allowedDecisions.push({ id, semantic, label: clip(label, 150), ...(description ? { description: clip(description, 500) } : {}) })
+  }
+  for (const opt of params.options) {
+    const label = opt.name ?? opt.kind ?? opt.optionId
+    const once = payloadKind === "permission-approval" ? "grant-turn" : "accept"
+    const always = payloadKind === "permission-approval" ? "grant-session" : "acceptForSession"
+    const deny = payloadKind === "permission-approval" ? "deny" : "decline"
+    if (opt.kind === "allow_once") add(once, "approve", label, opt.optionId, "Allow this once.")
+    else if (opt.kind === "allow_always") add(always, "approve", label, opt.optionId, "Allow for the rest of this session.")
+    else if (opt.kind === "reject_once" || opt.kind === "reject_always") add(deny, "deny", label, opt.optionId, "Block this tool call.")
+  }
+  if (!allowedDecisions.some((d) => d.semantic === "deny")) return null // nothing safe to press
+  const title = clip(tc.title ?? (isCommand ? "Run a command?" : "Approve a tool call?"), 150)
+  const previewLines = [command || "", ...Object.entries(input ?? {}).filter(([k, v]) => k !== "command" && v !== "" && v !== null).map(([k, v]) => `${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`)].filter(Boolean)
+  const preview = clip(redactCredentialSyntax(previewLines.join("\n\n")), 6_000)
+  const pathLabel = clip(tc.locations?.[0]?.path ?? (typeof input?.filePath === "string" ? input.filePath : typeof input?.path === "string" ? input.path : ""), 1_000)
+  const base = {
+    protocolVersion: INTERACTION_PROTOCOL_VERSION,
+    contentFormat: "plain-text" as const,
+    provider: { kind: "acp" as const, name: agent.label },
+    source: { kind: "tool" as const, id: clip(tc.toolCallId, 500), label: clip(tc.title ?? tc.kind ?? "tool", 150) },
+    owner: { projectId: owner.projectId, threadSlug: owner.threadSlug, sessionId: owner.sessionId, turnId: clip(tc.toolCallId, 500), itemId: clip(tc.toolCallId, 500), sessionEpoch: 0, capabilityRevision: 0 },
+    providerRequestId: clip(tc.toolCallId, 500),
+    allowedDecisions,
+    expiresAt: null,
+  }
+  const payload = payloadKind === "command-approval"
+    ? { kind: "command-approval" as const, title, command: { summary: clip(command.replace(/\s+/g, " "), 150), preview, redacted: true as const, workingDirectoryLabel: clip(owner.cwd, 1_000) } }
+    : payloadKind === "file-approval"
+      ? { kind: "file-approval" as const, title, operation: (tc.kind === "delete" ? "delete" : tc.kind === "move" ? "move" : "write") as "delete" | "move" | "write", pathLabel: pathLabel || "(unknown path)", ...(preview ? { diffPreview: preview } : {}) }
+      : { kind: "permission-approval" as const, title, permission: clip(tc.kind ?? "tool", 250), ...(preview ? { preview } : {}), workingDirectoryLabel: clip(owner.cwd, 1_000) }
+  const parsed = InteractionRequest.safeParse({ ...base, payload })
+  return parsed.success ? { request: parsed.data, optionByDecision } : null
+}
+
+export class AcpBridge {
+  private readonly sessions = new Map<string, LiveSession>()
+  private readonly unsubscribe: (() => void) | undefined
+  private closed = false
+
+  constructor(private readonly options: AcpBridgeOptions) {
+    // A resolved (or cancelled/expired) card answers the agent. The store is the durable holder; this
+    // map only knows which live request each card is attached to.
+    this.unsubscribe = options.interactions?.subscribe((change) => {
+      for (const live of this.sessions.values()) {
+        const pending = live.pendingPerms.get(change.interactionId)
+        if (!pending || change.lifecycle === "pending") continue
+        live.pendingPerms.delete(change.interactionId)
+        const record = options.interactions!.get(pending.scope, change.interactionId)
+        const decisionId = change.lifecycle === "resolved" ? record?.resolution?.decisionId : undefined
+        const optionId = decisionId ? pending.optionByDecision.get(decisionId) : undefined
+        pending.resolve(optionId ? { outcome: { outcome: "selected", optionId } } : { outcome: { outcome: "cancelled" } })
+      }
+    })
+  }
+
+  private now(): string { return (this.options.now?.() ?? new Date()).toISOString() }
+
+  private diagnostic(slug: string, kind: string, message: string): void {
+    this.options.onDiagnostic?.({ threadSlug: slug, kind, message })
+    if (kind !== "stderr") log.debug("acp", `[${slug}] ${kind}: ${message}`)
+  }
+
+  /** The agents this bridge can launch, with the operator's own entries merged in. */
+  agents(): AcpAgentSpec[] { return acpAgentSpecs(this.options.customAgents?.()) }
+
+  private resolveAgent(agentId: string): ResolvedAcpAgent {
+    const agent = resolveAcpAgent(agentId, this.options.customAgents?.(), this.options.env ?? process.env)
+    if (!agent) throw new Error(`Unknown ACP agent "${agentId}". Add it under settings.acpAgents or pick one of: ${this.agents().map((a) => a.id).join(", ")}.`)
+    if (!agent.bin) throw new Error(`The ACP agent "${agent.label}" is not installed: \`${agent.command}\` is not on PATH. Install it, or point settings.acpAgents at its executable.`)
+    return agent
+  }
+
+  // ---- session lifecycle ----------------------------------------------------------------------
+
+  /** Spawn the agent, initialize, and open (or load) a session. Throws an actionable error on any
+   *  failure and leaves nothing behind. */
+  private async open(input: { threadSlug: string; sessionId: string; cwd: string; agentId: string; modelId?: string | null; acpSessionId?: string | null }): Promise<{ live: LiveSession; resumed: "loaded" | "fresh" }> {
+    const { threadSlug: slug, sessionId, cwd } = input
+    const agent = this.resolveAgent(input.agentId)
+    const env = inheritWorkerEnvironment(this.options.env ?? process.env)
+    const spawn = this.options.spawn ?? spawnAcpChild
+    const proc = spawn({ command: agent.bin!, args: agent.args, cwd, env })
+    const writer = new AcpTranscriptWriter(acpTranscriptPath(this.options.stateDir, sessionId))
+    let live: LiveSession | undefined
+    const conn = new AcpConnection(proc, {
+      onRequest: (method, params) => live ? this.handleRequest(live, method, params) : Promise.reject(new AcpRequestError(ACP_ERROR_INTERNAL, "session not ready")),
+      onNotification: (method, params) => { if (live && method === "session/update") this.handleNotification(live, params) },
+      onDiagnostic: (d) => this.diagnostic(slug, d.kind, d.message),
+      requestTimeoutMs: this.options.initializeTimeoutMs ?? 60_000,
+    })
+    const fail = async (err: unknown): Promise<never> => {
+      await conn.close(500)
+      const stderr = conn.recentStderr.slice(-3).join(" | ")
+      const e = err instanceof Error ? err : new Error(String(err))
+      throw new Error(`${e.message}${stderr ? ` (agent stderr: ${clip(stderr, 400)})` : ""}`)
+    }
+    let init: AcpInitializeResultType
+    try {
+      init = AcpInitializeResult.parse(await conn.request("initialize", {
+        protocolVersion: ACP_PROTOCOL_VERSION,
+        clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
+        clientInfo: { name: "frizz", version: "0" },
+      }))
+    } catch (err) { return fail(err instanceof Error ? new Error(`${agent.label} did not complete the ACP handshake: ${err.message}`) : err) }
+    const mcpServers = frizzMcpServer(this.options.frizzMcp, slug)
+    live = { slug, sessionId, cwd, agent, conn, init, acpSessionId: "", writer, loading: false, queue: [], pendingPerms: new Map(), tools: new Map(), exited: false }
+    void conn.exited.then(() => { if (live) this.onExit(live) })
+
+    const authError = (err: AcpRemoteError): Error => {
+      const hint = (init.authMethods ?? []).map((m) => m.description ?? m.name ?? m.id).filter(Boolean).join("; ")
+      return new Error(`${AUTH_HINT}${agent.label} refused to open a session: ${err.error.message}.${hint ? ` ${hint}.` : ""}`)
+    }
+    let resumed: "loaded" | "fresh" = "fresh"
+    if (input.acpSessionId && init.agentCapabilities?.loadSession) {
+      live.loading = true
+      try {
+        const loaded = AcpLoadSessionResult.parse(await conn.request("session/load", { sessionId: input.acpSessionId, cwd, mcpServers }))
+        live.acpSessionId = input.acpSessionId
+        this.adoptModel(live, loaded.configOptions)
+        resumed = "loaded"
+      } catch (err) {
+        if (err instanceof AcpRemoteError && err.error.code === ACP_ERROR_AUTH_REQUIRED) return fail(authError(err))
+        this.diagnostic(slug, "protocol", `session/load ${input.acpSessionId} failed (${(err as Error).message}); starting a fresh session`)
+      } finally { live.loading = false }
+    }
+    if (!live.acpSessionId) {
+      try {
+        const created = AcpNewSessionResult.parse(await conn.request("session/new", { cwd, mcpServers }))
+        live.acpSessionId = created.sessionId
+        this.adoptModel(live, created.configOptions)
+      } catch (err) {
+        if (err instanceof AcpRemoteError && err.error.code === ACP_ERROR_AUTH_REQUIRED) return fail(authError(err))
+        return fail(err instanceof Error ? new Error(`${agent.label} could not open a session: ${err.message}`) : err)
+      }
+    }
+    // The thread's chosen model, applied before the header so the header records what is in effect.
+    const modelProblem = await this.applyModel(live, input.modelId)
+    if (resumed === "fresh") {
+      writer.append({ kind: "acp-session", at: this.now(), agent: { id: agent.id, ...(init.agentInfo?.name ? { name: init.agentInfo.name } : {}), ...(init.agentInfo?.version ? { version: init.agentInfo.version } : {}) }, acpSessionId: live.acpSessionId, cwd, ...(live.model ? { model: live.model } : {}) })
+      if (input.acpSessionId) writer.append({ kind: "acp-note", at: this.now(), text: `Resumed with a fresh ${agent.label} session: the previous one (${input.acpSessionId}) could not be loaded, so the agent no longer has the earlier conversation.` })
+    }
+    if (modelProblem) writer.append({ kind: "acp-note", at: this.now(), text: modelProblem })
+    this.sessions.set(sessionId, live)
+    return { live, resumed }
+  }
+
+  /** The agent's model option (`category: "model"`, else the one literally named `model`). */
+  private modelOption(configOptions: AcpNewSessionResult["configOptions"]): AcpConfigOption | undefined {
+    return configOptions?.find((o) => o.category === "model") ?? configOptions?.find((o) => o.id === "model")
+  }
+
+  private adoptModel(live: LiveSession, configOptions: AcpNewSessionResult["configOptions"]): void {
+    const option = this.modelOption(configOptions)
+    if (!option) return
+    live.modelOptionId = option.id
+    if (typeof option.currentValue === "string") live.model = option.currentValue
+  }
+
+  /** Ask the agent for the thread's model when it is not already the one in effect. Returns the note
+   *  to write when the agent refused — the thread runs on, on the agent's own model, and says so. */
+  private async applyModel(live: LiveSession, modelId: string | null | undefined): Promise<string | undefined> {
+    if (!modelId || modelId === live.model) return undefined
+    try {
+      const res = AcpSetConfigOptionResult.parse(await live.conn.request("session/set_config_option", { sessionId: live.acpSessionId, configId: live.modelOptionId ?? "model", value: modelId }))
+      this.adoptModel(live, res.configOptions)
+      if (live.model !== modelId && res.configOptions?.length) return `${live.agent.label} did not switch to ${modelId}; the session runs on ${live.model ?? "its own default model"}.`
+      if (!res.configOptions?.length) live.model = modelId
+      return undefined
+    } catch (err) {
+      const message = err instanceof AcpRemoteError ? err.error.message : (err as Error).message
+      this.diagnostic(live.slug, "protocol", `session/set_config_option ${modelId} failed: ${message}`)
+      return `${live.agent.label} could not switch to ${modelId} (${clip(message, 200)}); the session runs on ${live.model ?? "its own default model"}.`
+    }
+  }
+
+  // ---- the model catalogue an agent advertises -----------------------------------------------------
+
+  private readonly modelProbes = new Map<string, Promise<AcpAgentModels>>()
+  private readonly modelCache = new Map<string, AcpAgentModels>()
+
+  /** The models an agent offers, read by opening a throwaway session (there is no other way to ask:
+   *  ACP advertises models only in a session's config options). Cached per agent for ten minutes; a
+   *  probe that cannot open a session (not installed, not logged in) yields an empty list with the
+   *  reason, never a throw, so the composer degrades to the agent's own default. */
+  agentModels(agentId: string, cwd: string, opts: { refresh?: boolean } = {}): Promise<AcpAgentModels> {
+    const cached = this.modelCache.get(agentId)
+    if (cached && !opts.refresh && Date.now() - Date.parse(cached.probedAt) < ACP_MODEL_CACHE_MS) return Promise.resolve(cached)
+    const inflight = this.modelProbes.get(agentId)
+    if (inflight) return inflight
+    const probe = this.probeModels(agentId, cwd).then((result) => {
+      if (!result.error) this.modelCache.set(agentId, result)
+      return result
+    }).finally(() => this.modelProbes.delete(agentId))
+    this.modelProbes.set(agentId, probe)
+    return probe
+  }
+
+  private async probeModels(agentId: string, cwd: string): Promise<AcpAgentModels> {
+    const probedAt = this.now()
+    const empty = (error: string): AcpAgentModels => ({ agentId, models: [], error, probedAt })
+    let agent: ResolvedAcpAgent
+    try { agent = this.resolveAgent(agentId) } catch (err) { return empty((err as Error).message) }
+    const env = inheritWorkerEnvironment(this.options.env ?? process.env)
+    const spawn = this.options.spawn ?? spawnAcpChild
+    let proc: ReturnType<typeof spawnAcpChild>
+    try { proc = spawn({ command: agent.bin!, args: agent.args, cwd, env }) } catch (err) { return empty(`${agent.label} could not start: ${(err as Error).message}`) }
+    const conn = new AcpConnection(proc, {
+      onRequest: () => Promise.reject(new AcpRequestError(ACP_ERROR_METHOD_NOT_FOUND, "probe session takes no requests")),
+      onNotification: () => {},
+      onDiagnostic: (d) => this.diagnostic(`probe:${agentId}`, d.kind, d.message),
+      requestTimeoutMs: this.options.initializeTimeoutMs ?? 60_000,
+    })
+    try {
+      const init = AcpInitializeResult.parse(await conn.request("initialize", {
+        protocolVersion: ACP_PROTOCOL_VERSION,
+        clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
+        clientInfo: { name: "frizz", version: "0" },
+      }))
+      const created = AcpNewSessionResult.parse(await conn.request("session/new", { cwd, mcpServers: [] }))
+      const option = this.modelOption(created.configOptions)
+      const current = typeof option?.currentValue === "string" ? option.currentValue : undefined
+      void init
+      return {
+        agentId,
+        models: (option?.options ?? []).map((o) => ({ id: o.value, name: o.name ?? o.value })),
+        ...(current ? { current } : {}),
+        probedAt,
+      }
+    } catch (err) {
+      const message = err instanceof AcpRemoteError && err.error.code === ACP_ERROR_AUTH_REQUIRED
+        ? `${AUTH_HINT}${agent.label} refused to open a session: ${err.error.message}`
+        : `${agent.label}: ${(err as Error).message}`
+      return empty(clip(message, 400))
+    } finally {
+      await conn.close(500)
+    }
+  }
+
+  private onExit(live: LiveSession): void {
+    if (live.exited) return
+    live.exited = true
+    this.retirePermissions(live, "provider-cancelled")
+    if (live.turn) {
+      // The child died under a turn: the prompt request already rejected (AcpConnectionClosed) and the
+      // turn's own handler writes the error; nothing more to do here.
+    }
+    if (this.sessions.get(live.sessionId) === live) this.sessions.delete(live.sessionId)
+    this.options.onStatusChange?.()
+  }
+
+  // ---- public API --------------------------------------------------------------------------------
+
+  async spawnDispatch(input: AcpSpawnDispatchInput): Promise<AcpSessionInfo> {
+    if (this.closed) throw new Error("ACP bridge is closed")
+    const { live } = await this.open(input)
+    void this.runTurn(live, input.prompt, input.userText, undefined)
+    return this.info(live)
+  }
+
+  /** Deliver a follow-up: to the live session, to a re-opened one (load or fresh), or into the queue
+   *  when a turn is running. Returns the (possibly new) ACP session id so the caller can re-pin it. */
+  async followUp(input: AcpFollowUpInput): Promise<AcpFollowUpResult> {
+    if (this.closed) throw new Error("ACP bridge is closed")
+    let live = this.sessions.get(input.sessionId)
+    let resumed: AcpFollowUpResult["resumed"] = "live"
+    if (!live || live.exited || live.conn.closed) {
+      const opened = await this.open(input)
+      live = opened.live
+      resumed = opened.resumed
+    }
+    if (live.turn) {
+      live.queue.push({ text: input.text, ...(input.deliveryId ? { deliveryId: input.deliveryId } : {}) })
+      return { ...this.info(live), state: "queued", resumed }
+    }
+    void this.runTurn(live, input.text, input.text, input.deliveryId)
+    return { ...this.info(live), state: "delivered", resumed }
+  }
+
+  /** `session/cancel`, then wait (bounded) for the prompt to return. `interrupted: false` when no turn
+   *  was running. The queue is NOT discarded — a follow-up typed during the turn still goes out. */
+  async interruptTurn(threadSlug: string, sessionId: string): Promise<{ interrupted: boolean }> {
+    const live = this.sessions.get(sessionId)
+    if (!live || live.slug !== threadSlug || !live.turn) return { interrupted: false }
+    live.turn.cancelRequested = true
+    live.conn.notify("session/cancel", { sessionId: live.acpSessionId })
+    const settled = await Promise.race([live.turn.done.then(() => true), new Promise<boolean>((r) => setTimeout(() => r(false), 15_000).unref?.())])
+    if (!settled) { await live.conn.close(1_000); return { interrupted: true } }
+    return { interrupted: true }
+  }
+
+  releaseSession(threadSlug: string, sessionId: string, reason: "session-replaced" | "session-deleted" | "shutdown"): void {
+    const live = this.sessions.get(sessionId)
+    if (!live || live.slug !== threadSlug) return
+    this.sessions.delete(sessionId)
+    live.queue.length = 0
+    this.retirePermissions(live, "provider-cancelled")
+    if (live.turn) live.conn.notify("session/cancel", { sessionId: live.acpSessionId })
+    void live.conn.close(reason === "shutdown" ? 1_000 : 3_000)
+  }
+
+  /** Switch a LIVE session's model (`session/set_config_option`); `applied: false` when the session is
+   *  not open, in which case the caller's stored slug reaches the agent on the next open. A refusal is
+   *  written to the transcript as a note, exactly as on open, and still counts as applied: the agent
+   *  answered, and the note says what it runs on. */
+  async setModel(threadSlug: string, sessionId: string, modelId: string | null | undefined): Promise<{ applied: boolean; model?: string }> {
+    const live = this.sessions.get(sessionId)
+    if (!live || live.slug !== threadSlug || live.exited || live.conn.closed) return { applied: false }
+    const problem = await this.applyModel(live, modelId)
+    if (problem) live.writer.append({ kind: "acp-note", at: this.now(), text: problem })
+    return { applied: true, ...(live.model ? { model: live.model } : {}) }
+  }
+
+  turnLiveness(threadSlug: string, sessionId: string): AcpTurnLiveness | undefined {
+    const live = this.sessions.get(sessionId)
+    if (!live || live.slug !== threadSlug) return undefined
+    return { sessionLive: !live.exited && !live.conn.closed, turnActive: live.turn !== undefined, queued: live.queue.length }
+  }
+
+  session(threadSlug: string, sessionId: string): AcpSessionInfo | undefined {
+    const live = this.sessions.get(sessionId)
+    return live && live.slug === threadSlug ? this.info(live) : undefined
+  }
+
+  ownsInteraction(scope: InteractionSessionScope, interactionId: string): boolean {
+    const live = this.sessions.get(scope.sessionId)
+    return live !== undefined && live.slug === scope.threadSlug && live.pendingPerms.has(interactionId)
+  }
+
+  async shutdown(): Promise<void> {
+    this.closed = true
+    this.unsubscribe?.()
+    const all = [...this.sessions.values()]
+    this.sessions.clear()
+    await Promise.all(all.map(async (live) => {
+      this.retirePermissions(live, "provider-cancelled")
+      await live.conn.close(1_000)
+    }))
+  }
+
+  private info(live: LiveSession): AcpSessionInfo {
+    return {
+      acpSessionId: live.acpSessionId,
+      agent: { id: live.agent.id, ...(live.init.agentInfo?.name ? { name: live.init.agentInfo.name } : {}), ...(live.init.agentInfo?.version ? { version: live.init.agentInfo.version } : {}) },
+      ...(live.model ? { model: live.model } : {}),
+    }
+  }
+
+  // ---- the turn ---------------------------------------------------------------------------------
+
+  private async runTurn(live: LiveSession, sendText: string, recordText: string, deliveryId: string | undefined): Promise<void> {
+    let finish!: () => void
+    const done = new Promise<void>((r) => { finish = r })
+    const turn: Turn = { startedAt: this.now(), ...(deliveryId ? { deliveryId } : {}), text: "", messageText: "", thought: "", cancelRequested: false, done, finish }
+    live.turn = turn
+    live.writer.append({ kind: "user-message", at: turn.startedAt, text: recordText, synthetic: false })
+    live.writer.append({ kind: "turn-start", at: turn.startedAt })
+    this.options.onStatusChange?.()
+    try {
+      const raw = await live.conn.requestOpenEnded("session/prompt", { sessionId: live.acpSessionId, prompt: [{ type: "text", text: sendText }] })
+      const result = AcpPromptResult.parse(raw)
+      this.flushThought(live)
+      const finalText = this.flushText(live, true)
+      // A cancelled turn is not a success: the tailer clears provider faults on a successful bracket,
+      // and an operator's stop must not read as the agent having finished cleanly.
+      live.writer.append({ kind: "turn-end", at: this.now(), ...(finalText !== undefined ? { finalText } : {}), successful: result.stopReason !== "refusal" && result.stopReason !== "cancelled" })
+      if (result.stopReason === "cancelled") live.writer.append({ kind: "acp-note", at: this.now(), text: "Turn cancelled." })
+    } catch (err) {
+      this.flushThought(live)
+      const finalText = this.flushText(live, true)
+      const at = this.now()
+      // Some agents (Gemini) answer a cancel with -32603 "aborted" instead of stopReason cancelled.
+      const abortedByUs = turn.cancelRequested && err instanceof AcpRemoteError && err.error.code === ACP_ERROR_INTERNAL
+      if (abortedByUs) {
+        live.writer.append({ kind: "turn-end", at, ...(finalText !== undefined ? { finalText } : {}), successful: false })
+        live.writer.append({ kind: "acp-note", at, text: "Turn cancelled." })
+      } else {
+        const message = err instanceof AcpRemoteError
+          ? (err.error.code === ACP_ERROR_AUTH_REQUIRED ? `${AUTH_HINT}${err.error.message}` : err.error.message)
+          : (err as Error).message
+        live.writer.append({ kind: "provider-error", at, error: { message: clip(message, 2_000), ...(err instanceof AcpRemoteError ? { code: String(err.error.code) } : {}) } })
+        live.writer.append({ kind: "turn-end", at, ...(finalText !== undefined ? { finalText } : {}), successful: false })
+      }
+    } finally {
+      this.retirePermissions(live, "turn-ended")
+      if (live.turn === turn) live.turn = undefined
+      turn.finish()
+      this.options.onStatusChange?.()
+      const next = live.queue.shift()
+      if (next && !live.exited && !live.conn.closed) void this.runTurn(live, next.text, next.text, next.deliveryId)
+    }
+  }
+
+  /** Write the buffered text as one record. Returns, for a FINAL flush, the whole text of the agent's
+   *  last message (every partial flush included) — what the turn-end carries as `finalText`, so the
+   *  fold's preview and fence parsing see the complete message, never the last chunk. */
+  private flushText(live: LiveSession, final: boolean): string | undefined {
+    const turn = live.turn
+    if (!turn) return undefined
+    if (turn.flushTimer) { clearTimeout(turn.flushTimer); turn.flushTimer = undefined }
+    if (turn.text) {
+      const text = turn.text
+      turn.text = ""
+      live.writer.append({ kind: "assistant-text", at: this.now(), text, final, ...(turn.messageId ? { messageId: turn.messageId } : {}) })
+    }
+    return final && turn.messageText ? turn.messageText : undefined
+  }
+
+  private flushThought(live: LiveSession): void {
+    const turn = live.turn
+    if (!turn?.thought.trim()) { if (turn) turn.thought = ""; return }
+    live.writer.append({ kind: "reasoning", at: this.now(), text: turn.thought })
+    turn.thought = ""
+  }
+
+  private scheduleFlush(live: LiveSession): void {
+    const turn = live.turn
+    if (!turn || turn.flushTimer) return
+    turn.flushTimer = setTimeout(() => { turn.flushTimer = undefined; this.flushText(live, false) }, this.options.flushMs ?? 1_000)
+    turn.flushTimer.unref?.()
+  }
+
+  private handleNotification(live: LiveSession, params: unknown): void {
+    if (live.loading) return
+    const parsed = AcpSessionNotification.safeParse(params)
+    if (!parsed.success) { this.diagnostic(live.slug, "protocol", "malformed session/update"); return }
+    const update = parseSessionUpdate(parsed.data.update)
+    const turn = live.turn
+    switch (update.sessionUpdate) {
+      case "agent_thought_chunk": {
+        if (!turn) return
+        const t = contentText(update.content)
+        if (t) turn.thought += t
+        return
+      }
+      case "agent_message_chunk": {
+        if (!turn) return
+        this.flushThought(live)
+        const t = contentText(update.content)
+        if (!t) return
+        if (update.messageId && turn.messageId && update.messageId !== turn.messageId) { this.flushText(live, false); turn.messageText = "" }
+        if (update.messageId) turn.messageId = update.messageId
+        turn.text += t
+        turn.messageText += t
+        this.scheduleFlush(live)
+        return
+      }
+      case "tool_call": {
+        this.flushThought(live)
+        this.flushText(live, false)
+        if (turn) turn.messageText = "" // text before a tool call is commentary, not the answer
+        const meta: ToolMeta = { ...(update.kind ? { kind: update.kind } : {}), ...(update.title ? { title: update.title } : {}), locations: (update.locations ?? []).map((l) => l.path), written: true }
+        live.tools.set(update.toolCallId, meta)
+        live.writer.append({ kind: "tool-call", at: this.now(), id: update.toolCallId, name: update.title ?? update.kind ?? "tool", input: update.rawInput ?? {}, acp: { ...(meta.kind ? { kind: meta.kind } : {}), ...(meta.title ? { title: meta.title } : {}), locations: meta.locations ?? [] } })
+        if (update.status === "completed" || update.status === "failed") this.recordToolResult(live, update)
+        return
+      }
+      case "tool_call_update": {
+        let meta = live.tools.get(update.toolCallId)
+        if (!meta) {
+          // An update-first agent (or v2): the first sighting creates the call.
+          meta = { written: false }
+          live.tools.set(update.toolCallId, meta)
+        }
+        if (update.kind) meta.kind = update.kind
+        if (update.title) meta.title = update.title
+        if (update.locations?.length) meta.locations = update.locations.map((l) => l.path)
+        if (!meta.written) {
+          this.flushThought(live)
+          this.flushText(live, false)
+          meta.written = true
+          live.writer.append({ kind: "tool-call", at: this.now(), id: update.toolCallId, name: meta.title ?? meta.kind ?? "tool", input: update.rawInput ?? {}, acp: { ...(meta.kind ? { kind: meta.kind } : {}), ...(meta.title ? { title: meta.title } : {}), locations: meta.locations ?? [] } })
+        }
+        if (update.status === "completed" || update.status === "failed") this.recordToolResult(live, update)
+        return
+      }
+      case "usage_update":
+        // Keep the file in reading order: the text this usage reading follows goes first.
+        this.flushText(live, false)
+        // opencode reports `used: 0` on a cancelled turn (live 2026-09-15); a zero reading is not a
+        // measurement and would drop the context dial to empty, so only a positive one is recorded.
+        if (update.used > 0) live.writer.append({ kind: "context-usage", at: this.now(), tokens: update.used, window: update.size })
+        return
+      case "session_info_update":
+        if (update.title) live.writer.append({ kind: "title", title: clip(update.title, 200) })
+        return
+      case "config_option_update":
+        this.adoptModel(live, update.configOptions)
+        return
+      case "plan":
+      case "user_message_chunk":
+      case "compaction_update":
+        return
+      case "unknown":
+        this.diagnostic(live.slug, "update", `unhandled session/update ${String((update.raw as { sessionUpdate?: unknown })?.sessionUpdate)}`)
+        return
+    }
+  }
+
+  private recordToolResult(live: LiveSession, tc: AcpToolCallUpdate): void {
+    const meta = live.tools.get(tc.toolCallId)
+    if (meta?.status === "completed" || meta?.status === "failed") return // already recorded
+    if (meta) meta.status = tc.status
+    // opencode's `tool_call` carries neither `rawInput` nor `locations`; both arrive on the completing
+    // `tool_call_update` (live 2026-09-15). The result record carries them so the drawer's "edited N
+    // files" can name the file instead of the tool.
+    const input = tc.rawInput && typeof tc.rawInput === "object" ? tc.rawInput as Record<string, unknown> : undefined
+    live.writer.append({ kind: "tool-result", at: this.now(), id: tc.toolCallId, text: clip(toolResultText(tc), 20_000), acp: { ...(tc.status ? { kind: tc.status } : {}), ...(meta?.locations?.length ? { locations: meta.locations } : {}), ...(input && Object.keys(input).length ? { input } : {}) } })
+  }
+
+  // ---- the agent asking us ------------------------------------------------------------------------
+
+  private async handleRequest(live: LiveSession, method: string, params: unknown): Promise<unknown> {
+    if (method === "session/request_permission") return this.handlePermission(live, params)
+    // fs/* and terminal/* were not advertised in clientCapabilities; an agent that calls them anyway
+    // gets the spec's answer and does its own I/O.
+    throw new AcpRequestError(ACP_ERROR_METHOD_NOT_FOUND, `frizz does not implement ${method}`)
+  }
+
+  private handlePermission(live: LiveSession, params: unknown): Promise<AcpRequestPermissionResult> {
+    const parsed = AcpRequestPermissionParams.safeParse(params)
+    const cancelled: AcpRequestPermissionResult = { outcome: { outcome: "cancelled" } }
+    if (!parsed.success) return Promise.resolve(cancelled)
+    const store = this.options.interactions
+    const reject = parsed.data.options.find((o) => o.kind === "reject_once") ?? parsed.data.options.find((o) => o.kind === "reject_always")
+    const failClosed: AcpRequestPermissionResult = reject ? { outcome: { outcome: "selected", optionId: reject.optionId } } : cancelled
+    if (!store) { this.diagnostic(live.slug, "permission", "no interaction store; denying the request"); return Promise.resolve(failClosed) }
+    const built = buildAcpPermissionInteraction(parsed.data, { projectId: this.options.projectId, threadSlug: live.slug, sessionId: live.sessionId, cwd: live.cwd }, { id: live.agent.id, label: live.agent.label })
+    if (!built) { this.diagnostic(live.slug, "permission", "request could not be represented as a card; denying"); return Promise.resolve(failClosed) }
+    const scope: InteractionSessionScope = { projectId: this.options.projectId, threadSlug: live.slug, sessionId: live.sessionId }
+    let id: string
+    try { id = store.create(built.request).interaction.id } catch (err) {
+      this.diagnostic(live.slug, "permission", `could not record the approval: ${(err as Error).message}`)
+      return Promise.resolve(failClosed)
+    }
+    return new Promise<AcpRequestPermissionResult>((resolve) => {
+      live.pendingPerms.set(id, { resolve, optionByDecision: built.optionByDecision, scope })
+      this.options.onStatusChange?.()
+    })
+  }
+
+  /** Cancel every open card for a session that can no longer answer one, answering the agent
+   *  `cancelled` for each. Hygiene, so it never throws. */
+  private retirePermissions(live: LiveSession, reason: "turn-ended" | "provider-cancelled"): void {
+    if (!live.pendingPerms.size) return
+    const store = this.options.interactions
+    let swept: Array<{ id: string }> = []
+    try { swept = store?.cancelForSession(live.slug, live.sessionId, reason) ?? [] } catch { /* hygiene */ }
+    for (const record of swept) live.pendingPerms.get(record.id)?.resolve({ outcome: { outcome: "cancelled" } })
+    for (const [id, pending] of live.pendingPerms) { pending.resolve({ outcome: { outcome: "cancelled" } }); live.pendingPerms.delete(id) }
+  }
+}
+
+export function createAcpBridge(options: AcpBridgeOptions): AcpBridge { return new AcpBridge(options) }

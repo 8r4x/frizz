@@ -102,8 +102,9 @@ export type RuntimeState = z.infer<typeof RuntimeState>
 
 // Which agent CLI a dispatch/thread runs on (Codex-support epic, Phase 3). Mirrors BackendKind in
 // server/backend/types.ts (the wire can't import it — it lives behind the server boundary). A model
-// selection drives this: a Claude model ⇒ "claude", an OpenAI/GPT model ⇒ "codex".
-export const Backend = z.enum(["claude", "codex"])
+// selection drives this: a Claude model ⇒ "claude", an OpenAI/GPT model ⇒ "codex", an `acp:<agent>`
+// slug ⇒ "acp" (any Agent Client Protocol agent; plans/acp-backend.md).
+export const Backend = z.enum(["claude", "codex", "acp"])
 export type Backend = z.infer<typeof Backend>
 
 // One selectable Codex model, derived server-side from the AUTHORITATIVE ~/.codex/models_cache.json
@@ -126,6 +127,53 @@ export const CodexModel = z.object({
   maxContextWindow: z.number().int().positive().optional(),
 })
 export type CodexModel = z.infer<typeof CodexModel>
+
+// An Agent Client Protocol agent Frizz can launch (server/backend/acp-agents.ts). `available` means
+// its executable was found on the server's PATH; the composer lists only those, as `acp:<id>` models.
+export const AcpAgent = z.object({
+  id: z.string(),
+  label: z.string(),
+  command: z.string(),
+  available: z.boolean(),
+})
+export type AcpAgent = z.infer<typeof AcpAgent>
+
+/** The model slug the composer uses for an ACP agent, and its inverses. Model already drives backend in
+ *  the web (`backendForModel`), so an agent IS a model there — a slug with this prefix means `acp`.
+ *
+ *  `acp:<agent>` runs the agent on whatever model its own CLI is configured for; `acp:<agent>@<model>`
+ *  asks for one of the models the agent advertises (`session/set_config_option` on the ACP wire). The
+ *  separator is `@` because agent model ids carry `/` and `:` themselves (`openai/gpt-5.5`). */
+export const ACP_MODEL_PREFIX = "acp:"
+export function acpModelSlug(agentId: string, modelId?: string | null): string {
+  return `${ACP_MODEL_PREFIX}${agentId}${modelId ? `@${modelId}` : ""}`
+}
+function acpSlugParts(model: string | null | undefined): { agent: string; model?: string } | undefined {
+  if (typeof model !== "string" || !model.startsWith(ACP_MODEL_PREFIX)) return undefined
+  const rest = model.slice(ACP_MODEL_PREFIX.length)
+  const at = rest.indexOf("@")
+  const agent = at === -1 ? rest : rest.slice(0, at)
+  const id = at === -1 ? "" : rest.slice(at + 1)
+  return agent ? { agent, ...(id ? { model: id } : {}) } : undefined
+}
+export function acpAgentIdFromModel(model: string | null | undefined): string | undefined { return acpSlugParts(model)?.agent }
+export function acpModelIdFromModel(model: string | null | undefined): string | undefined { return acpSlugParts(model)?.model }
+
+/** One model an ACP agent advertises, and the probe result the composer's model picker reads. */
+export const AcpAgentModel = z.object({ id: z.string(), name: z.string() })
+export type AcpAgentModel = z.infer<typeof AcpAgentModel>
+export const AcpAgentModels = z.object({
+  agentId: z.string(),
+  models: z.array(AcpAgentModel),
+  /** The model the agent opens a session on when Frizz asks for none. */
+  current: z.string().optional(),
+  /** Why the list is empty, when the probe could not open a session (not installed, not logged in…). */
+  error: z.string().optional(),
+  probedAt: z.string(),
+})
+export type AcpAgentModels = z.infer<typeof AcpAgentModels>
+export const AcpAgentModelsInput = z.object({ agentId: z.string().min(1).max(100), refresh: z.boolean().optional() }).strict()
+export type AcpAgentModelsInput = z.infer<typeof AcpAgentModelsInput>
 
 // A provider-scoped launch profile. The server is the catalogue authority for existing threads:
 // callers receive only models that belong to the row's exact backend and each model carries its
@@ -471,7 +519,7 @@ export function parseAskUserQuestionAnswers(result: unknown, questions: readonly
 //   prose bodies       narrowed to `reason:` so the fence is machine-checkable — then given back in full
 //                      below the `---` delimiter, where prose cannot be mistaken for structure.
 export const AwaitingHint = z.object({
-  kind: z.enum(["shell", "agent", "timer", "pr", "for", "title"]),
+  kind: z.enum(["shell", "agent", "timer", "pr", "issue", "for", "title"]),
   value: z.string(),
 })
 export type AwaitingHint = z.infer<typeof AwaitingHint>
@@ -553,7 +601,7 @@ const AWAITING_KEY_RE = /^([a-z][a-z-]*):\s*(\S.*)?$/i
 /** The keys the frontmatter recognises as STRUCTURE: four PLURAL sequences of things frizz can look up,
  *  the scalar `for:`, and `title:` — which is recognised here so it never falls to the body, but is read
  *  verbatim rather than as YAML (see splitAwaitingFrontmatter). Anything else falls through to the body. */
-const AWAITING_YAML_KEYS = new Set(["shells", "agents", "timers", "prs", "for", "title"])
+const AWAITING_YAML_KEYS = new Set(["shells", "agents", "timers", "prs", "issues", "for", "title"])
 
 /** Which singular hint kind each plural sequence key produces. The WIRE SHAPE is unchanged by the
  *  2026-08-24 cutover — every consumer still reads a flat `{kind, value}` list with SINGULAR kinds — so
@@ -563,6 +611,10 @@ const AWAITING_SEQUENCE_KEYS: { [key: string]: AwaitingItemKind | undefined } = 
   agents: "agent",
   timers: "timer",
   prs: "pr",
+  // `issues:` (2026-09-14) names a GitHub ISSUE registered with `mcp__frizz__watch_issue`. Its own key
+  // rather than a second spelling under `prs:`, because the two are different registrations: an issue
+  // has no CI and no merge, and the correction for an unregistered one names a different tool.
+  issues: "issue",
 }
 
 /** Defensive caps, shared so the sidebar gloss and the in-chat card can never render a divergent row. */
@@ -714,7 +766,7 @@ export function awaitingFenceTitle(hints: readonly AwaitingHint[] | undefined): 
   return title
 }
 
-export const AWAITING_ITEM_KINDS = ["shell", "agent", "timer", "pr"] as const
+export const AWAITING_ITEM_KINDS = ["shell", "agent", "timer", "pr", "issue"] as const
 export type AwaitingItemKind = (typeof AWAITING_ITEM_KINDS)[number]
 export function isAwaitingItemKind(kind: string): kind is AwaitingItemKind {
   return (AWAITING_ITEM_KINDS as readonly string[]).includes(kind)
@@ -1125,6 +1177,10 @@ export const PR_WATCH_ARMED_TRAILER = "(Registered PR watcher — STILL ARMED. I
   + " mattering.)"
 export const SHELL_DONE_TRAILER = "(Frizz sends this because it finished after you came to rest, where your runtime's own completion"
   + " notification does not reach you. Read its output if you still need it.)"
+export const ISSUE_WATCH_SPENT_TRAILER = "(This watcher is spent — there is nothing further to report on a closed issue.)"
+export const ISSUE_WATCH_ARMED_TRAILER = "(Registered issue watcher — STILL ARMED. It reports again on the next comment, label or"
+  + " assignee change, and once more when the issue closes. Drop it with `mcp__frizz__watch_issue` when"
+  + " it stops mattering.)"
 
 /** What frizz delivers when a REGISTERED PR WATCHER has something to report.
  *
@@ -1199,6 +1255,40 @@ export function prWatchWakeMessage(input: {
     lines.push(input.review)
   }
   lines.push("", PR_WATCH_ARMED_TRAILER)
+  return lines.join("\n")
+}
+
+/** What frizz delivers when a REGISTERED ISSUE WATCHER has something to report — the issue twin of
+ *  `prWatchWakeMessage`, with the CI limb gone because an issue has none.
+ *
+ *  THE LINES KEEP THE PR SHAPES ON PURPOSE. `⏰ owner/repo#N was CLOSED.` and `🔔 owner/repo#N: …` are
+ *  exactly what `parsePrWatchWake` and `parsePrWatchStateWake` already read, so a browser tab built before
+ *  issues existed draws the same hairline divider for an issue wake as for a PR one instead of falling
+ *  through to the raw-text card. The close line carries the REASON as a clause after the divider-bearing
+ *  sentence, where a parser that does not know it simply ignores it. */
+export function issueWatchWakeMessage(input: {
+  target: string
+  closed?: { reason?: string }
+  /** What changed about the issue itself — a label moving, someone assigned. One line for all of them,
+   *  joined with semicolons, for the reason `prWatchWakeMessage.changes` is. */
+  changes?: string[]
+  review?: string
+}): string {
+  const lines: string[] = []
+  if (input.closed) {
+    // The reason on its OWN line, below the divider-bearing sentence: `PR_WATCH_FINISHED` is anchored at
+    // the period, so a clause appended to the close line would cost the chat its divider.
+    lines.push(`\u23f0 ${input.target} was CLOSED.`, "")
+    if (input.closed.reason) lines.push(`GitHub's reason: ${input.closed.reason}.`, "")
+    lines.push(ISSUE_WATCH_SPENT_TRAILER)
+    return lines.join("\n")
+  }
+  if (input.changes?.length) lines.push(`🔔 ${input.target}: ${input.changes.join("; ")}.`)
+  if (input.review) {
+    if (lines.length) lines.push("")
+    lines.push(input.review)
+  }
+  lines.push("", ISSUE_WATCH_ARMED_TRAILER)
   return lines.join("\n")
 }
 
@@ -1298,6 +1388,8 @@ export interface SignoffLiveOps {
   timers?: { id?: string; label: string }[]
   /** Registered pull requests, by ref (`owner/repo#N`) — what a `pr:` line names. */
   prs?: { id?: string; label: string }[]
+  /** Registered GitHub issues, by ref (`owner/repo#N`) — what an `issues:` entry names. */
+  issues?: { id?: string; label: string }[]
 }
 
 // THE NUDGE PRINTS THE IDS, and that is not a convenience — it is what makes the fence writable at all.
@@ -1322,6 +1414,7 @@ export function liveOpsLines(ops?: SignoffLiveOps): string[] {
   section("Sub-agents still running (they re-invoke you on their own, so parking on one is optional):", "agent", ops?.subAgents ?? [])
   section("Timers you have armed:", "timer", ops?.timers ?? [])
   section("Pull requests you registered:", "pr", ops?.prs ?? [])
+  section("Issues you registered:", "issue", ops?.issues ?? [])
   return lines
 }
 
@@ -1570,10 +1663,14 @@ export function parkFinishedWakeMessage(status: readonly string[], several: bool
 }
 
 /** Scheduler SOURCE 11: a registered PR watcher whose own `for:` ran out. */
-export function prWatchExpiredWakeMessage(ref: string): string {
+export function prWatchExpiredWakeMessage(ref: string, kind: "pull" | "issue" = "pull"): string {
+  // The head keeps its exact wording for either subject — `PR_WATCH_EXPIRED_HEAD` reads it — and only
+  // the noun and the tool it points back at change.
+  const noun = kind === "issue" ? "issue" : "PR"
+  const tool = kind === "issue" ? "mcp__frizz__watch_issue" : "mcp__frizz__watch_pr"
   return (
-    `⏰ Your watcher on ${ref} has expired and is no longer armed — nothing on that PR will wake ` +
-    `you now.\n\nIf you still care about it, register it again with \`mcp__frizz__watch_pr\` and a ` +
+    `⏰ Your watcher on ${ref} has expired and is no longer armed — nothing on that ${noun} will wake ` +
+    `you now.\n\nIf you still care about it, register it again with \`${tool}\` and a ` +
     `fresh \`for:\`. If you do not, and it was the only thing you were waiting on, end in a proper ` +
     `terminal state instead of parking on it again.`
   )
@@ -1699,6 +1796,27 @@ export const GithubWatchStatus = z.object({
 }).strict()
 export type GithubWatchStatus = z.infer<typeof GithubWatchStatus>
 
+/** How a watched ISSUE stands right now — the issue twin of `GithubWatchStatus`, and deliberately a
+ *  different shape rather than that one with its CI fields zeroed: an issue has no checks and no merge,
+ *  and a row that said "no checks" about an issue would be reading a PR fact off a thing that has none.
+ *  It decides no queue rule: an issue watcher is a visible queue handoff exactly as a PR watcher without
+ *  running CI is, so this is a readout for the card and the worker's `list`, nothing more. */
+export const GithubIssueStatus = z.object({
+  /** OPEN | CLOSED, lowercased. A closed issue ends the wait outright. */
+  state: z.enum(["open", "closed"]),
+  /** GitHub's own reason for a close — `completed`, `not_planned`, `duplicate` — lowercased, when it
+   *  gave one. Absent while open. */
+  stateReason: z.string().optional(),
+  /** The issue's title, as of the last poll — the one fact a human needs to place a bare `owner/repo#N`
+   *  on the card. Capped, because a title is a headline and the card is not the place to read one. */
+  title: z.string().max(200).optional(),
+  /** The conversation's size, so the card can say "14 comments" the way GitHub's list does. */
+  comments: z.number().int().nonnegative(),
+  /** When frizz last heard from GitHub, for the same reason `GithubWatchStatus.polledAt` carries it. */
+  polledAt: z.string(),
+}).strict()
+export type GithubIssueStatus = z.infer<typeof GithubIssueStatus>
+
 /** One wait the thread has out, as the board states it.
  *
  *  A `shell` row is DERIVED FROM THE FENCE — a `shells:` entry checked against live telemetry — and has
@@ -1715,6 +1833,15 @@ export const ThreadWatchView = z.object({
   createdAt: z.string(),
   /** `github` rows only, and absent until the first successful poll. */
   github: GithubWatchStatus.optional(),
+  /** `github` rows only: WHAT the row watches. A pull request and an issue share the kind — they are one
+   *  registry, one ref grammar (`owner/repo#N`) and one place on every surface that lists waits — and
+   *  differ in what the poll can read off them, which is what this field lets a card branch on.
+   *  Optional, and absent means a pull request — a row from a server that predates issues reads as the
+   *  PR it always was, and the non-github kinds never carry it. */
+  subject: z.enum(["pull", "issue"]).optional(),
+  /** `github` rows watching an ISSUE only, and absent until the first successful poll — the twin of the
+   *  `github` half above, for the rows whose subject has no checks to report. */
+  issue: GithubIssueStatus.optional(),
   /** `timer` rows only: the armed timer's own registration, which is everything the row renders — the
    *  worker's prompt is the row's NAME (a `tmr_…` id names nothing to a human) and the fire instant is
    *  its status. Unlike `github` there is no polled half to be absent: a timer that exists is fully
@@ -1752,10 +1879,15 @@ export const PrWatchView = z.object({
   id: z.string(),
   /** `owner/repo#N`, normalized — the same string the board's row and the status book are keyed by. */
   target: z.string(),
+  /** A pull request or an issue. Both live in one registry (`pr_watch`) and answer to one drop verb;
+   *  `watch_pr` and `watch_issue` each list only their own. Defaulted for a row an older server sends. */
+  kind: z.enum(["pull", "issue"]).default("pull"),
   state: z.enum(["armed", "dropped", "settled"]),
   createdAt: z.string(),
   /** The PR's checks/mergeability as the poller last saw it. Absent until the first successful poll. */
   github: GithubWatchStatus.optional(),
+  /** An ISSUE's state as the poller last saw it — `kind: "issue"` rows only, absent until polled. */
+  issue: GithubIssueStatus.optional(),
 }).strict()
 export type PrWatchView = z.infer<typeof PrWatchView>
 
@@ -1783,6 +1915,12 @@ export const AddOwnPrWatchInput = z.object({
    *  still BOUNDS the poll; the point of the field is that a worker chooses, and one that cannot choose
    *  is better bounded than broken. */
   for: z.string().trim().min(1).max(16).optional(),
+  /** What `target` names. `issue` (from `mcp__frizz__watch_issue`, 2026-09-14) registers a watcher on a
+   *  GitHub issue — same registry, same poll cadence, same drop verb, but a different probe (`gh issue
+   *  view`), a different GraphQL fragment and a report with no CI in it. ABSENT MEANS A PULL REQUEST,
+   *  for the same reason `for` is optional on the wire: every `watch_pr` binary dispatched before this
+   *  field existed sends nothing here and must go on meaning what it always did. */
+  kind: z.enum(["pull", "issue"]).optional(),
 }).strict()
 export type AddOwnPrWatchInput = z.infer<typeof AddOwnPrWatchInput>
 
@@ -2712,7 +2850,11 @@ export const AuthSnapshot = z.object({
   codex: ProviderAuth,
   emails: AccountEmails,
 })
-export const AccountLogoutInput = z.object({ backend: z.enum(["claude", "codex"]) }).strict()
+// The backends that HAVE an account Frizz can read and act on. An ACP agent's credentials belong to the
+// agent's own CLI (plans/acp-backend.md, decision 5): Frizz never reads, refreshes or revokes them.
+export const AccountBackend = z.enum(["claude", "codex"])
+export type AccountBackend = z.infer<typeof AccountBackend>
+export const AccountLogoutInput = z.object({ backend: AccountBackend }).strict()
 export type AccountLogoutInput = z.infer<typeof AccountLogoutInput>
 // Result of the typed provider logout action. "blocked" = refused because the provider had live
 // turns (account state is process-global; changing it mid-request produces ambiguous failures);
@@ -2728,7 +2870,7 @@ export type AccountLogoutResult = z.infer<typeof AccountLogoutResult>
 // Slice B login utility: start/inspect/cancel the restricted `claude auth login` terminal. The
 // attempt id is slug-shaped so it can ride the hardened /term/<slug> transport; it is server-issued
 // and opaque — the client never constructs one.
-export const AccountLoginStartInput = z.object({ backend: z.enum(["claude", "codex"]) }).strict()
+export const AccountLoginStartInput = z.object({ backend: AccountBackend }).strict()
 export type AccountLoginStartInput = z.infer<typeof AccountLoginStartInput>
 export const AccountLoginStartResult = z.object({ attemptId: ThreadSlug })
 export type AccountLoginStartResult = z.infer<typeof AccountLoginStartResult>
@@ -2819,6 +2961,15 @@ export const Settings = z.object({
   // it (codex compacts at 90% of the resolved window). Unset ⇒ nothing is sent and the model's stock
   // window applies. Optional so an old blob parses; defaultSettings leaves it unset.
   codexContextWindow: z.number().int().positive().optional(),
+  // The operator's OWN Agent Client Protocol agents, merged over the built-in catalogue by id
+  // (server/backend/acp-agents.ts). `command` is an executable name on PATH or an absolute path;
+  // `args` is what puts it into ACP mode (`["acp"]`, `["--acp"]`). Optional so an old blob parses.
+  acpAgents: z.array(z.object({
+    id: z.string().trim().min(1).max(64).regex(/^[a-z0-9][a-z0-9._-]*$/i),
+    label: z.string().trim().min(1).max(80),
+    command: z.string().trim().min(1).max(1_024),
+    args: z.array(z.string().max(1_024)).max(32).optional(),
+  })).max(32).optional(),
   // The GitHub batch-dispatch prompt template (the picker's per-item worker prompt). Optional: when
   // unset OR blank the server falls back to its exported DEFAULT_GITHUB_PROMPT. Substitution tokens
   // the server fills: {repo} {n} {title} {url} {labels} {body}. The leading `THREAD: <slug>` tag is
@@ -2856,21 +3007,27 @@ export const DispatchPreferences = z.object({
   backend: Backend,
   claude: DispatchProviderPreferences,
   codex: DispatchProviderPreferences,
+  // Optional because every record written before the ACP backend existed lacks it, and a required
+  // key would fail those records' parse and silently reset the operator's saved profile.
+  acp: DispatchProviderPreferences.optional(),
 })
 export type DispatchPreferences = z.infer<typeof DispatchPreferences>
 
 // One complete launch profile. GitHub batch dispatch carries this whole tuple — read from the
 // durable new-thread preference its own footer selector writes — instead of consulting Settings
 // again: backend owns the model, and effort is part of the same atomic profile cell.
-export const DispatchProfileSnapshot = z.object({
+const DispatchProfileSnapshotShape = z.object({
   backend: Backend,
   model: z.string().trim().min(1).max(200),
-  effort: Settings.shape.effort.unwrap(),
+  // Required for Claude and Codex (the refinement below); absent for an ACP agent, which runs with
+  // whatever model and effort its own CLI is configured for — Frizz has no effort axis to offer there.
+  effort: Settings.shape.effort,
   // IGNORED: dispatch permission is decided server-side (workerDispatchPermission) from the
   // non-interactive floor plus the operator's Settings choice, never per dispatch. Optional so old
   // clients that still send it parse.
   permissionMode: PermissionMode.optional(),
 }).strict()
+export const DispatchProfileSnapshot = DispatchProfileSnapshotShape.superRefine(requireEffortOutsideAcp)
 export type DispatchProfileSnapshot = z.infer<typeof DispatchProfileSnapshot>
 
 // Atomic updates avoid read/modify/write races between the sidebar form and the anywhere composer.
@@ -2883,12 +3040,20 @@ export const SetDispatchPreferenceInput = z.discriminatedUnion("field", [
     field: z.literal("profile"),
     backend: Backend,
     model: z.string().trim().min(1).max(200),
-    effort: Settings.shape.effort.unwrap(),
+    // Optional ONLY for an ACP profile (see DispatchProfileSnapshot); a Claude/Codex profile without
+    // an effort is refused below rather than silently stored as "default".
+    effort: Settings.shape.effort,
   }),
   z.object({ field: z.literal("model"), backend: Backend, value: z.string().trim().min(1).max(200) }),
   z.object({ field: z.literal("effort"), backend: Backend, value: Settings.shape.effort.unwrap() }),
-])
+]).superRefine((update, ctx) => { if (update.field === "profile") requireEffortOutsideAcp(update, ctx) })
 export type SetDispatchPreferenceInput = z.infer<typeof SetDispatchPreferenceInput>
+
+function requireEffortOutsideAcp(profile: { backend: Backend; effort?: string }, ctx: z.RefinementCtx): void {
+  if (profile.backend !== "acp" && profile.effort === undefined) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["effort"], message: `effort is required for a ${profile.backend} profile` })
+  }
+}
 
 // ---- RPC inputs ----
 
@@ -3160,7 +3325,7 @@ export type OwnThreadTimersResult = z.infer<typeof OwnThreadTimersResult>
 // compaction, a long turn, a wake it did not expect) cannot write a correct fence at all. This is how it
 // gets them back, and it is the same list the sign-off nudge prints, so the two can never disagree.
 export const ThreadActivityItem = z.object({
-  kind: z.enum(["shell", "agent", "timer", "pr"]),
+  kind: z.enum(["shell", "agent", "timer", "pr", "issue"]),
   /** The string a `<kind>:` fence line must carry. For a shell that is the runtime task id the worker
    *  was shown; for a PR, `owner/repo#N`; for a timer, its `tmr_…` row id. */
   id: z.string(),
@@ -3356,7 +3521,9 @@ export type ThreadSkillsResult = z.infer<typeof ThreadSkillsResult>
 export const SetThreadProfileInput = z.object({
   slug: ThreadSlug,
   model: z.string().trim().min(1).max(200),
-  effort: z.string().trim().min(1).max(100),
+  // Absent ONLY for an ACP thread, whose model slug (`acp:<agent>@<model>`) carries no effort axis; the
+  // router refuses a Claude/Codex profile without one rather than storing "".
+  effort: z.string().trim().min(1).max(100).optional(),
 }).strict()
 export type SetThreadProfileInput = z.infer<typeof SetThreadProfileInput>
 export const SetThreadProfileResult = z.object({
@@ -3465,7 +3632,7 @@ export function stripWakeTimeHeader(text: string): string {
 // worker's own arbitrary prose, and that parenthetical is the only anchor saying which timer this was —
 // so stripping it upstream would cost the divider it is there to draw. It comes off in the parser
 // instead, which is the same outcome by the other route.
-const WAKE_TRAILERS = [PR_WATCH_ARMED_TRAILER, PR_WATCH_SPENT_TRAILER, SHELL_DONE_TRAILER]
+const WAKE_TRAILERS = [PR_WATCH_ARMED_TRAILER, PR_WATCH_SPENT_TRAILER, ISSUE_WATCH_ARMED_TRAILER, ISSUE_WATCH_SPENT_TRAILER, SHELL_DONE_TRAILER]
 
 /** Display projection: a frizz wake without the agent-facing trailer frizz appended for the worker.
  *
@@ -4057,9 +4224,9 @@ export type GithubListResult = z.infer<typeof GithubListResult>
 // current, small wire payload). Deliberately UNCAPPED: the picker pages through the whole repo and a
 // human may well want every issue on a page (or several pages' worth) investigated at once. The
 // server dispatches them SEQUENTIALLY, so a large batch is a long request, never a spawn burst.
-export const GithubBatchInput = DispatchProfileSnapshot.extend({
+export const GithubBatchInput = DispatchProfileSnapshotShape.extend({
   items: z.array(z.object({ kind: z.enum(["issue", "pr"]), number: z.number().int().positive() })).min(1),
-}).strict()
+}).strict().superRefine(requireEffortOutsideAcp)
 export type GithubBatchInput = z.infer<typeof GithubBatchInput>
 
 export const GithubBatchResult = z.object({

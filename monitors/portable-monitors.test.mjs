@@ -55,6 +55,6 @@ test("worker guidance prefers declared tooling and makes no Luna child mandatory
   // What the Claude contract still says about waiting, so condensing it again cannot silently empty
   // the section: which mechanism to reach for, who owns a wait you REST on, and no faked waits.
   assert.match(claudePrompt, /The mechanism is decided by whether you will REST while it runs/)
-  assert.match(claudePrompt, /dispatch a SUB-AGENT to own the wait/)
+  assert.match(claudePrompt, /dispatch a sub-agent to own the wait/)
   assert.match(claudePrompt, /Never fake a wait with `echo waiting`/)
 })

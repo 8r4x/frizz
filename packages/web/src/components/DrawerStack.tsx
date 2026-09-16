@@ -61,8 +61,8 @@ export function DrawerStack() {
         if (!closeDrawerAnimated(top.id)) store.drawers.pop()
       }
       // The /full page's split file viewer sits UNDER any drawer (it is part of the page, not an
-      // overlay), so it unwinds last. A no-op on the queue page, where filePanel is never set.
-      else if (store.filePanel) closeFilePanel()
+      // overlay), so it unwinds last. A no-op on the queue page, where filePanels is empty.
+      else if (store.filePanels.length > 0) closeFilePanel()
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)

@@ -18,6 +18,9 @@ import { basename, dirname, join } from "node:path"
 // which degrades the launcher to its historical flat deadline.
 
 export const BOOT_PROGRESS_NAME = "boot.progress"
+export const BOOT_STALL_TIMEOUT_MS = 30_000
+/** Progress buys patience, but even a continuously reporting boot must eventually finish. */
+export const BOOT_HARD_TIMEOUT_MS = 10 * 60_000
 
 export interface BootProgress {
   /** The publishing process, so a launcher can tell a live boot from a leftover file. */

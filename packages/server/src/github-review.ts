@@ -25,7 +25,14 @@ export interface GithubReviewRef {
   owner: string
   repo: string
   number: number
+  /** What the number names (2026-09-14). Absent means a pull request — every caller and every injected
+   *  test fetcher that predates issues sends none. An `issue` ref rides the SAME batched query as the
+   *  PRs beside it (one request, however many of each), asks for `issue(number:)` instead of
+   *  `pullRequest(number:)`, and answers with `issue` rather than `pr` on its result. */
+  kind?: "pull" | "issue"
 }
+
+const ASSIGNEE_CAP = 20
 
 export interface GithubReviewActivity {
   id: string
@@ -84,11 +91,28 @@ export interface GithubPrSnapshot {
   reviewRequests: string[]
 }
 
+/** THE ISSUE ITSELF, from the same query — the issue twin of `GithubPrSnapshot`, and everything the
+ *  issue watcher can report on: whether it closed (and why), what it is called, and the labels and
+ *  assignees whose movement is the issue's own state changing. No checks, no merge — an issue has none,
+ *  and a snapshot that carried empty ones would tempt a reader to project a PR verdict off an issue. */
+export interface GithubIssueSnapshot {
+  state: string
+  stateReason?: string
+  title?: string
+  labels: string[]
+  assignees: string[]
+  /** GitHub's own comment count, for the card — the activity list below is capped at the last 50. */
+  comments: number
+}
+
 export type GithubReviewFetchResult =
   // `pr` is absent only when the caller injected a fetcher that does not produce one (every test seam
   // that predates 2026-09-04 does). The poll falls back to its own `gh` fetch in exactly that case, so an
   // older injected fetcher keeps working rather than reporting a PR with no status at all.
-  | { status: "ok"; activity: GithubReviewActivity[]; pr?: GithubPrSnapshot }
+  //
+  // `issue` is present on an `issue` ref's result and nothing else; there is no `gh` fallback for it,
+  // because the issue watcher was born with the batched query and has no older path to fall back to.
+  | { status: "ok"; activity: GithubReviewActivity[]; pr?: GithubPrSnapshot; issue?: GithubIssueSnapshot }
   | { status: "deferred" }
   | { status: "error"; failure: GithubReviewFailure }
 
@@ -112,8 +136,10 @@ interface RateLimitShape {
   limit?: unknown
 }
 
+// The kind is IN the key: a PR and an issue never share a number in one repo, but the two are different
+// queries with different results, and a caller that registered #7 both ways must get each answer.
 function refKey(ref: GithubReviewRef): string {
-  return `${ref.owner}/${ref.repo}#${ref.number}`
+  return `${ref.kind === "issue" ? "issue:" : ""}${ref.owner}/${ref.repo}#${ref.number}`
 }
 
 function conciseError(error: unknown): string {
@@ -239,6 +265,34 @@ export function parseGithubPrSnapshot(pr: unknown): GithubPrSnapshot | undefined
   }
 }
 
+/** The comments on an ISSUE, in the `GithubReviewActivity` shape the watcher's cursor and steer already
+ *  speak — an issue comment and a PR conversation comment are the same GraphQL node, and giving them one
+ *  shape means the noise filter, the `seen` cursor and the wake steer need no second grammar. */
+export function parseGithubIssueActivities(raw: unknown): GithubReviewActivity[] {
+  const issue = (raw as any)?.data?.repository?.issue
+  if (!issue || typeof issue !== "object") return []
+  // Same normalizer as the PR path, pointed at the issue's comments: wrap them as a PR with no reviews
+  // so the one `add` loop above does the field-by-field tolerance, rather than a second copy of it.
+  return parseGithubReviewActivities({ data: { repository: { pullRequest: { comments: (issue as any).comments } } } })
+}
+
+/** Pure shape normalizer for the issue, held to `parseGithubPrSnapshot`'s standard: a missing field
+ *  degrades one reading, never the whole snapshot; no string `state` means indeterminate, not "open". */
+export function parseGithubIssueSnapshot(issue: unknown): GithubIssueSnapshot | undefined {
+  if (!issue || typeof issue !== "object") return undefined
+  const i = issue as Record<string, any>
+  if (typeof i.state !== "string" || !i.state) return undefined
+  const comments = Number(i.comments?.totalCount)
+  return {
+    state: i.state,
+    ...(typeof i.stateReason === "string" && i.stateReason ? { stateReason: i.stateReason } : {}),
+    ...(typeof i.title === "string" && i.title ? { title: i.title.slice(0, 200) } : {}),
+    labels: strings(i.labels?.nodes, (n) => n.name),
+    assignees: strings(i.assignees?.nodes, (n) => n.login),
+    comments: Number.isFinite(comments) && comments >= 0 ? comments : 0,
+  }
+}
+
 // Every new review and comment wakes the watcher, whoever filed it. Most PR review today arrives from
 // an app — Pullfrog, Copilot, CodeRabbit, Greptile — and the ones that post their findings as a
 // CONVERSATION COMMENT rather than a formal review were exactly what an actor-type filter swallowed.
@@ -259,6 +313,22 @@ function buildQuery(refs: GithubReviewRef[]): { query: string; variables: Record
     variables[`owner${index}`] = ref.owner
     variables[`repo${index}`] = ref.repo
     variables[`number${index}`] = ref.number
+    if (ref.kind === "issue") {
+      // The issue fragment: state and why, the title for the card, the last 50 comments in the same
+      // node shape as a PR's conversation, and the two lists whose movement is the issue's own state.
+      // Priced like the PR fragment — every connection hangs off one issue — so a mixed batch of 20
+      // still costs 20 points.
+      fields.push(`
+      ref${index}: repository(owner: $owner${index}, name: $repo${index}) {
+        issue(number: $number${index}) {
+          state stateReason title
+          comments(last: 50) { totalCount nodes { id url createdAt body author { login __typename } } }
+          labels(first: ${LABEL_CAP}) { nodes { name } }
+          assignees(first: ${ASSIGNEE_CAP}) { nodes { login } }
+        }
+      }`)
+      return
+    }
     fields.push(`
       ref${index}: repository(owner: $owner${index}, name: $repo${index}) {
         pullRequest(number: $number${index}) {
@@ -466,6 +536,28 @@ export function createGithubReviewFetcher(deps: GithubReviewFetcherDeps = {}): G
     }
     refs.forEach((ref, index) => {
       const repository = (body as any)?.data?.[`ref${index}`]
+      if (ref.kind === "issue") {
+        const issue = repository?.issue
+        if (!issue || typeof issue !== "object") {
+          results.set(refKey(ref), {
+            status: "error",
+            failure: {
+              kind: graphRateLimited ? "rate-limit" : genericGraphError ? "graphql" : "shape",
+              message: graphRateLimited
+                ? `GitHub API rate limit exhausted${graphResetAt ? `; resets at ${graphResetAt}` : ""}`
+                : genericGraphError
+                  ? `GitHub GraphQL error: ${genericGraphError}`
+                : `GitHub returned no accessible issue for ${refKey(ref)}`,
+              ...(graphRateLimited && graphResetAt ? { retryAt: graphResetAt } : {}),
+            },
+          })
+          return
+        }
+        const activity = parseGithubIssueActivities({ data: { repository: { issue } } })
+        const snapshot = parseGithubIssueSnapshot(issue)
+        results.set(refKey(ref), { status: "ok", activity, ...(snapshot ? { issue: snapshot } : {}) })
+        return
+      }
       const pr = repository?.pullRequest
       if (!pr || typeof pr !== "object") {
         results.set(refKey(ref), {

@@ -2,11 +2,11 @@ import { createRoot } from "react-dom/client"
 import { ProviderMark } from "./components/ProviderMark.tsx"
 import "./styles.css"
 
-function SidebarTitle({ backend, children }: { backend: "claude" | "codex"; children: string }) {
+function SidebarTitle({ backend, model, children }: { backend: "claude" | "codex" | "acp"; model?: string; children: string }) {
   return (
     <div className="break-words text-[13px] leading-[19px] text-fg/90">
       {children}
-      <ProviderMark backend={backend} className="ml-1" />
+      <ProviderMark backend={backend} model={model} className="ml-1" />
     </div>
   )
 }
@@ -20,6 +20,13 @@ function Fixture() {
           <div className="space-y-2 rounded-md bg-panel-2 p-3">
             <SidebarTitle backend="claude">Investigate source maps and preserve the first useful human title</SidebarTitle>
             <SidebarTitle backend="codex">Implement the durable title protocol for new Codex sessions</SidebarTitle>
+            <SidebarTitle backend="acp" model="acp:opencode">Port the fixture runner to OpenCode</SidebarTitle>
+            <SidebarTitle backend="acp" model="acp:cursor">Port the fixture runner to Cursor</SidebarTitle>
+            <SidebarTitle backend="acp" model="acp:gemini">Port the fixture runner to Gemini</SidebarTitle>
+            <SidebarTitle backend="acp" model="acp:copilot">Port the fixture runner to Copilot</SidebarTitle>
+            <SidebarTitle backend="acp" model="acp:qwen">Port the fixture runner to Qwen</SidebarTitle>
+            <SidebarTitle backend="acp" model="acp:kimi">Port the fixture runner to Kimi</SidebarTitle>
+            <SidebarTitle backend="acp" model="acp:grok">Port the fixture runner to Grok</SidebarTitle>
           </div>
         </div>
         <div>

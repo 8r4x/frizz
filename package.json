@@ -1,6 +1,6 @@
 {
   "name": "frizz",
-  "version": "0.13.0",
+  "version": "0.13.1",
   "private": false,
   "description": "A local web UI for running many coding agents at once",
   "keywords": [
@@ -35,7 +35,7 @@
     "frizz-dev:check": "nub scripts/install-global-cli.mjs --check",
     "frizz-dev:uninstall": "nub scripts/install-global-cli.mjs --uninstall",
     "install:global": "nub scripts/install-global-cli.mjs",
-    "typecheck": "tsc -b packages/shared packages/rpc packages/server packages/registrar packages/relay . packages/web",
+    "typecheck": "tsc -b packages/shared packages/rpc packages/claude-agent-sdk-runtime packages/server packages/registrar packages/relay . packages/web",
     "test": "nub scripts/run-tests.mjs",
     "test:e2e": "nub scripts/e2e-web.mjs",
     "prepack": "node ./scripts/prepare-package.mjs --server && node ./scripts/build-package.mjs --server && node ./scripts/build-package.mjs --shell && node ./scripts/publish-manifest.mjs --strip",
@@ -67,7 +67,7 @@
   },
   "frizzServer": {
     "package": "frizz-server",
-    "version": "0.13.0",
+    "version": "0.13.8",
     "protocol": 1,
     "dataEpoch": 1
   }

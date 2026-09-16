@@ -31,7 +31,7 @@ import {
   normalizeBindHost,
   normalizePublicOrigin,
 } from "@frizz/server/local-origin";
-import { readBootProgress } from "@frizz/server/boot-progress";
+import { BOOT_HARD_TIMEOUT_MS, BOOT_STALL_TIMEOUT_MS, readBootProgress } from "@frizz/server/boot-progress";
 import { frizzPaths, projectStateDir } from "@frizz/server/frizz-paths";
 import { claimIdentityPath } from "./identity.ts";
 import {
@@ -132,13 +132,13 @@ export interface ExpectedFrizzHealth {
 }
 
 export const PORT_SCAN_COUNT = 100;
-export const LAUNCH_TIMEOUT_MS = 30_000;
+export const LAUNCH_TIMEOUT_MS = BOOT_STALL_TIMEOUT_MS;
 /**
  * Hard ceiling on a progress-tracked wait. Only reached by a boot that keeps reporting progress but
  * never becomes healthy — a pathological board, or a bug. Without it a wedged-but-chatty child would
  * hold the launcher forever.
  */
-export const LAUNCH_HARD_TIMEOUT_MS = 10 * 60_000;
+export const LAUNCH_HARD_TIMEOUT_MS = BOOT_HARD_TIMEOUT_MS;
 /** A first immutable artifact build can legitimately outlast the ordinary server-ready timeout. */
 export const FIRST_ARTIFACT_LAUNCH_LOCK_TIMEOUT_MS = 120_000;
 

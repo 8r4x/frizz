@@ -1,4 +1,4 @@
-import { AWAITING_FOR_MAX_MS, GithubWatchStatus, isAwaitingItemKind, parseAwaitingDurationRaw, PR_WATCH_FOR_MAX_MS, type AwaitingHint, type AwaitingItemKind } from "@frizz/shared"
+import { AWAITING_FOR_MAX_MS, GithubIssueStatus, GithubWatchStatus, isAwaitingItemKind, parseAwaitingDurationRaw, PR_WATCH_FOR_MAX_MS, type AwaitingHint, type AwaitingItemKind } from "@frizz/shared"
 
 // The PR-reference vocabulary shared by the PR-watching scheduler and the board. It lives here rather
 // than in scheduler.ts so a reader can resolve a ref without pulling in the whole waker; scheduler.ts
@@ -18,6 +18,21 @@ const PR_REF_RE = /(?:https?:\/\/github\.com\/)?([A-Za-z0-9][\w.-]*)\/([A-Za-z0-
 
 export function parsePrRef(value: string): PrRef | undefined {
   const m = value.trim().match(PR_REF_RE)
+  if (!m) return undefined
+  const number = Number.parseInt(m[3], 10)
+  if (!Number.isFinite(number) || number <= 0) return undefined
+  return { owner: m[1], repo: m[2].replace(/\.git$/, ""), number }
+}
+
+// The ISSUE twin: `owner/repo#123` or a GitHub issue URL (`/issues/N`). Same owner/repo/number shape
+// as a PR ref — GitHub numbers issues and pull requests from one sequence, so the ref alone cannot say
+// which it is; only the URL's path segment can, and a `/pull/` URL is refused here exactly as an
+// `/issues/` URL is refused by PR_REF_RE. The bare `#N` form is accepted by both, and the registration
+// probe (`gh issue view` vs `gh pr view`) is what settles it.
+const ISSUE_REF_RE = /(?:https?:\/\/github\.com\/)?([A-Za-z0-9][\w.-]*)\/([A-Za-z0-9][\w.-]*?)(?:\/issues\/|#)(\d+)/
+
+export function parseIssueRef(value: string): PrRef | undefined {
+  const m = value.trim().match(ISSUE_REF_RE)
   if (!m) return undefined
   const number = Number.parseInt(m[3], 10)
   if (!Number.isFinite(number) || number <= 0) return undefined
@@ -71,12 +86,16 @@ export interface LiveActivity {
   agents: ReadonlySet<string>
   /** Armed timer ids on this thread. */
   timers: ReadonlySet<string>
-  /** Registered PR watcher ids on this thread. */
+  /** Registered PR watcher refs on this thread, normalized (`owner/repo#N`). */
   prs: ReadonlySet<string>
+  /** Registered ISSUE watcher refs on this thread, normalized the same way. Optional only so a caller
+   *  written before issues existed still type-checks; absent reads as "none registered", which makes
+   *  an `issues:` entry unaccounted — the safe direction. */
+  issues?: ReadonlySet<string>
 }
 
 const LIVE_SET: Record<AwaitingItemKind, keyof LiveActivity> = {
-  shell: "shells", agent: "agents", timer: "timers", pr: "prs",
+  shell: "shells", agent: "agents", timer: "timers", pr: "prs", issue: "issues",
 }
 
 /** The items this fence names that frizz CANNOT account for — dead, unknown, or another thread's.
@@ -86,7 +105,7 @@ const LIVE_SET: Record<AwaitingItemKind, keyof LiveActivity> = {
  *  parked. Three separate stalls in one day came from the old grammar having no equivalent (see the
  *  AwaitingHint doc block in @frizz/shared). */
 export function unaccountedItems(items: readonly AwaitingItem[], live: LiveActivity): AwaitingItem[] {
-  return items.filter((i) => !live[LIVE_SET[i.kind]].has(liveKey(i)))
+  return items.filter((i) => !live[LIVE_SET[i.kind]]?.has(liveKey(i)))
 }
 
 /** The value to test against the live set. A PR is the one kind whose registry key is NORMALIZED
@@ -96,9 +115,15 @@ export function unaccountedItems(items: readonly AwaitingItem[], live: LiveActiv
  *  re-fenced the same spelling, and went round again. Every other kind's id is minted by frizz and
  *  matches byte-for-byte or not at all. */
 function liveKey(i: AwaitingItem): string {
-  if (i.kind !== "pr") return i.value
-  const ref = parsePrRef(i.value)
-  return ref ? githubStatusKey(ref) : i.value
+  if (i.kind === "pr") {
+    const ref = parsePrRef(i.value)
+    return ref ? githubStatusKey(ref) : i.value
+  }
+  if (i.kind === "issue") {
+    const ref = parseIssueRef(i.value)
+    return ref ? githubStatusKey(ref) : i.value
+  }
+  return i.value
 }
 
 /** Is this a park frizz will honour — at least one item, every item live, and a usable `for:`?
@@ -120,7 +145,8 @@ export function parkIsHonoured(park: AwaitingPark, live: LiveActivity): boolean 
  *  PR nobody had touched. Mixed ⇒ the low ceiling, because the shell in the list is still a shell. */
 export function parkForMaxMs(park: AwaitingPark): number {
   if (park.items.length === 0) return AWAITING_FOR_MAX_MS
-  return park.items.every((i) => i.kind === "pr") ? PR_WATCH_FOR_MAX_MS : AWAITING_FOR_MAX_MS
+  // An issue earns the PR's ceiling for the PR's reason: it sits on its maintainers' clock too.
+  return park.items.every((i) => i.kind === "pr" || i.kind === "issue") ? PR_WATCH_FOR_MAX_MS : AWAITING_FOR_MAX_MS
 }
 
 /** When a park that landed at `fenceAtMs` runs out. Capped by `parkForMaxMs`, so this cannot return an
@@ -158,4 +184,23 @@ export function readGithubStatusBook(raw: unknown): GithubStatusBook {
  *  the card, the queue rule and the poller all name one PR one way. */
 export function githubStatusKey(ref: PrRef): string {
   return `${ref.owner}/${ref.repo}#${ref.number}`
+}
+
+// ---- THE WATCHED-ISSUE STATUS BOOK ----------------------------------------------------------------
+// The issue twin of the PR book above: its own setting, because the two entries have different shapes
+// and `readGithubStatusBook` validates every entry against the PR one — an issue reading in that book
+// would be dropped as malformed. Keyed by the same `owner/repo#N`; a PR and an issue never share a
+// number in one repo, and even if a worker registered #7 both ways, each book only ever holds its own.
+export const GITHUB_ISSUE_STATUS_SETTING = "waker.github.issue.status.v1"
+
+export type GithubIssueStatusBook = Record<string, GithubIssueStatus>
+
+export function readGithubIssueStatusBook(raw: unknown): GithubIssueStatusBook {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {}
+  const out: GithubIssueStatusBook = {}
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    const parsed = GithubIssueStatus.safeParse(value)
+    if (parsed.success) out[key] = parsed.data
+  }
+  return out
 }

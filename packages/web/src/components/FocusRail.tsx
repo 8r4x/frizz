@@ -131,7 +131,9 @@ export function FocusRail({ thread }: { thread: ThreadView }) {
   const files = transcript.data?.editedFiles ?? []
   const agents = liveAgents(thread)
   const shells = (thread.bgShells ?? []).filter((s) => s.state === "running")
-  const prs = (thread.watches ?? []).filter((w) => w.kind === "github" && w.state === "armed")
+  const github = (thread.watches ?? []).filter((w) => w.kind === "github" && w.state === "armed")
+  const prs = github.filter((w) => w.subject !== "issue")
+  const issues = github.filter((w) => w.subject === "issue")
   const timers = (thread.watches ?? []).filter((w) => w.kind === "timer" && w.state === "armed")
   const { railFilesCollapsed } = useSnapshot(prefs)
   // The card's order — most-alive first — then the files, which are not a wait at all. The files are
@@ -142,6 +144,7 @@ export function FocusRail({ thread }: { thread: ThreadView }) {
     { head: "Sub-agents", rows: agents.map((a) => <AgentRow key={a.id ?? a.label} agent={a} slug={thread.id} now={now} />) },
     { head: "Background shells", rows: shells.map((s) => <BgShellRow key={s.id ?? s.label} shell={s} slug={thread.id} now={now} />) },
     { head: "Pull requests", rows: prs.map((w) => <GithubWatchRow key={w.id} watch={w} />) },
+    { head: "Issues", rows: issues.map((w) => <GithubWatchRow key={w.id} watch={w} />) },
     { head: "Timers", rows: timers.map((w) => <TimerRow key={w.id} watch={w} now={now} />) },
     {
       head: "Edited files",

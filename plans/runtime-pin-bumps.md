@@ -67,6 +67,7 @@ Main answers "has this landed?". [`release`](../.github/workflows/release.yml) a
 2. **Look at what ships with you.** `git log release..HEAD` is the exact set. Anything there you have not verified either gets verified now or gets left behind by pointing `release` at an earlier commit — that choice is the whole reason the branch exists.
 3. **Verify the commit you are about to publish, not "the tree".** `nub run test` and `nub run typecheck` against that sha. Typecheck is the workflow's own gate, deliberately not the full suite, because the suite drives real provider CLIs and has never run on a CI box.
 4. **Push main, then fast-forward and push `release`.** `git push origin main`, then `git branch -f release <sha> && git push origin release`. The push to `release` is what publishes.
+5. **Watch the run, then wait for the registry.** `npm publish` is asynchronous: the run goes green the moment npm accepts the tarball, and the version resolves minutes later (6m 40s for 0.13.5 on 2026-09-14). Poll `npm view frizz-server version` until it names the new version; a 404 in that window is the queue, not a failed publish.
 
 The workflow publishes `frizz-server` before `frizz`, checking each version independently in npm. Tags and GitHub releases belong to the shell; a server-only release does not retag it. Retries reconcile missing shell metadata against npm's recorded `gitHead`. The trigger deliberately has no path filter: a fast-forward can carry the version bump in the middle of its range.
 

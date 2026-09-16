@@ -28,6 +28,7 @@ import {
 } from "./transcript.ts"
 import { createStorage, type SessionRow } from "./storage.ts"
 import { createCodexBackend } from "./backend/codex.ts"
+import { acpTranscriptPath, createAcpBackend } from "./backend/acp-transcript.ts"
 import type { Project } from "./project.ts"
 
 // Build a minimal assistant JSONL record carrying one tool_use block.
@@ -2851,4 +2852,39 @@ test("a completion re-delivered inside the SAME turn still draws only one wake",
   const second = taskNotification("bash-2", "completed", "2026-07-01T00:00:05.500Z")
   const msgs = parseTranscript([launch, first, second].join("\n"))
   assert.equal(msgs.filter((m) => m.boundary === "wake").length, 1, "one event, one divider")
+})
+
+test("readThreadTranscript + the paged reader: an ACP row renders the frizz-written transcript through the acp projector", () => {
+  // Both readers bind an ACP row to `<stateDir>/acp/<frizz session id>.jsonl` — NOT to the agent's own
+  // session id in `agent_session_id`, and NOT through the Claude fold (which yields a silent empty page
+  // for these records). Live 2026-09-15: the push reader had the acp branch, the paged reader did not,
+  // so the drawer opened on "No conversation yet." over a transcript with a completed turn in it.
+  const h = txHarness()
+  const stateDir = mkdtempSync(join(tmpdir(), "frizz-tx-acp-"))
+  try {
+    h.store.upsertSession(txRow({ session_id: "frizz-uuid" }))
+    h.store.setBackend("t", "acp")
+    h.store.setAgentSession("t", "ses_agent")
+    const path = acpTranscriptPath(stateDir, "frizz-uuid")
+    mkdirSync(join(stateDir, "acp"), { recursive: true })
+    writeFileSync(path, [
+      JSON.stringify({ kind: "acp-session", at: "2026-09-16T05:53:16.696Z", agent: { id: "opencode", name: "OpenCode", version: "1.18.29" }, acpSessionId: "ses_agent", cwd: "/x", model: "opencode/big-pickle" }),
+      JSON.stringify({ kind: "user-message", at: "2026-09-16T05:53:16.696Z", text: "call the tool then say DONE", synthetic: false }),
+      JSON.stringify({ kind: "turn-start", at: "2026-09-16T05:53:16.696Z" }),
+      JSON.stringify({ kind: "tool-call", at: "2026-09-16T05:53:23.871Z", id: "call_1", name: "frizz_activity", input: {}, acp: { kind: "other", title: "frizz_activity", locations: [] } }),
+      JSON.stringify({ kind: "tool-result", at: "2026-09-16T05:53:23.932Z", id: "call_1", text: "Nothing is running on this thread.", acp: { kind: "completed" } }),
+      JSON.stringify({ kind: "assistant-text", at: "2026-09-16T05:53:26.679Z", text: "DONE", final: false, messageId: "msg_1" }),
+      JSON.stringify({ kind: "turn-end", at: "2026-09-16T05:53:26.679Z", finalText: "DONE", successful: true }),
+    ].map((l) => l + "\n").join(""))
+    const acpBackend = createAcpBackend({ stateDir })
+    const backendFor = (kind?: string) => kind === "acp" ? acpBackend : createCodexBackend({ codexHome: stateDir })
+    const msgs = readThreadTranscript(h.project, h.store, "t", backendFor)
+    assert.deepEqual(msgs.map((m) => [m.role, m.text]), [["user", "call the tool then say DONE"], ["assistant", "DONE"]])
+    assert.deepEqual(msgs[1].tools.map((tool) => [tool.name, tool.status]), [["frizz_activity", "completed"]])
+    const paged = readLatestThreadTranscriptPage(h.project, h.store, "t", backendFor)
+    assert.deepEqual(paged.messages.map((m) => m.sourceId), msgs.map((m) => m.sourceId), "the push and the page render the same messages")
+  } finally {
+    h.cleanup()
+    rmSync(stateDir, { recursive: true, force: true })
+  }
 })

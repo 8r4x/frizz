@@ -169,3 +169,34 @@ test("a marker in a HUMAN turn places nothing", () => {
   const messages = MESSAGES.map((m, i) => ({ ...m, text: i === 2 ? MARKER(QUESTION.id) : "prose" }))
   assert.equal(placeQuestions(messages, [QUESTION]).placed.size, 0)
 })
+
+// ---- THE STALE MARKER (2026-09-13) ----
+// The worker asked, wrote its marker into THAT handoff, the human replied past the question without
+// answering, and the worker worked on and rested again — with the question still open and no marker in
+// the new handoff. The card stayed at the old rest, thousands of pixels up, and the tail drew the
+// group's bare disabled "Send answers" with nothing above it: "How did this thread pause without a
+// sign-off?". At rest the placement is scoped to the CURRENT rest, so the card falls back to the tail.
+
+const STALE = [
+  { role: "user", at: at(0), text: "Do the thing." },
+  { role: "assistant", at: at(5), text: MARKER(QUESTION.id) }, // the asking rest, marker written
+  { role: "user", at: at(20), text: "Here's my answer to the OTHER question." },
+  { role: "assistant", at: at(25), text: "Done. The first question is still open." },
+]
+
+test("a marker from an older rest stops placing once the thread rests again — the card returns to the tail", () => {
+  const { placed, placedIds } = placeQuestions(STALE, [QUESTION], { atRest: true })
+  assert.equal(placed.size, 0, "the stale marker no longer owns the card")
+  assert.equal(placedIds.size, 0, "so the anchor path draws it, and at rest that is the tail")
+})
+
+test("the same stale marker still places while the thread is MID-FLIGHT — the ask belongs to its own rest", () => {
+  const { placed } = placeQuestions(STALE, [QUESTION])
+  assert.deepEqual([...placed.keys()], [1])
+})
+
+test("a marker the worker re-wrote into the NEW handoff places there at rest", () => {
+  const rewritten = STALE.map((m, i) => (i === 3 ? { ...m, text: MARKER(QUESTION.id) } : m))
+  const { placed } = placeQuestions(rewritten, [QUESTION], { atRest: true })
+  assert.deepEqual([...placed.keys()], [3])
+})

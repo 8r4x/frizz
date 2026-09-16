@@ -777,6 +777,80 @@ test("child-only Update & Restart commits one stable child without replacing its
   }
 })
 
+test("child updates wait for advancing candidate boot progress, but bound stalls and endless progress", { timeout: 20_000 }, async () => {
+  for (const mode of ["slow", "stalled", "foreign", "endless"] as const) {
+    const workspace = mkdtempSync(join(tmpdir(), `frizz-update-progress-${mode}-`))
+    const stateDir = join(workspace, ".state")
+    mkdirSync(stateDir)
+    const childEntry = join(workspace, "child.mjs")
+    const progressUrl = pathToFileURL(join(import.meta.dirname, "boot-progress.ts")).href
+    writeFileSync(childEntry, `
+      import { readFileSync, writeFileSync } from "node:fs"
+      import { createBootProgressPublisher, bootProgressPath } from ${JSON.stringify(progressUrl)}
+      import { registerProjectLaunchDelegate, projectLaunchOwnerTokenFromEnvironment, projectLaunchTargetFromEnvironment } from ${JSON.stringify(projectLaunchUrl)}
+      const target = projectLaunchTargetFromEnvironment(process.env)
+      const delegate = registerProjectLaunchDelegate(target, projectLaunchOwnerTokenFromEnvironment(process.env))
+      const progress = createBootProgressPublisher(target.stateDir, 0)
+      const ready = () => {
+        progress.done()
+        process.send?.({ type: "frizz-ready", pid: delegate.pid, processStart: delegate.processStart, port: Number(process.env.FRIZZ_DEV_PORT), bootId: String(process.pid) })
+      }
+      const stop = () => { progress.done(); delegate.release(); process.exit(0) }
+      process.once("SIGTERM", stop); process.once("disconnect", stop)
+      setInterval(() => {}, 1000)
+      if (process.env.FRIZZ_STABLE_ARTIFACT === "old") ready()
+      else {
+        const publish = () => {
+          progress("runtimes: downloading")
+          if (${JSON.stringify(mode)} === "foreign") {
+            const file = bootProgressPath(target.stateDir)
+            const value = JSON.parse(readFileSync(file, "utf8"))
+            writeFileSync(file, JSON.stringify({ ...value, pid: process.ppid }))
+          }
+        }
+        publish()
+        if (${JSON.stringify(mode)} !== "stalled") setInterval(publish, 50)
+        if (${JSON.stringify(mode)} === "slow") setTimeout(ready, 1800)
+      }
+    `)
+    const target = { projectId: randomUUID(), projectDir: workspace, stateDir }
+    const owner = acquireProjectLaunchOwner(target, "supervisor")
+    const port = await freeSupervisorPort()
+    let selected = "old"
+    let commits = 0
+    let rollbacks = 0
+    let supervisor: DevSupervisor | undefined
+    try {
+      supervisor = await startDevSupervisor({
+        port, cwd: workspace, stateDir, launchTarget: target, launchOwnerToken: owner.token, watch: false,
+        childLaunchProvider: () => ({ entry: childEntry, environment: { FRIZZ_STABLE_ARTIFACT: selected } }),
+        updateMode: "child", updateReadyTimeoutMs: 600, updateHardTimeoutMs: 3000, updateStabilizeMs: 20,
+        updateRestart: async () => { selected = "new"; return { state: "ready" } },
+        commitUpdate: () => { commits++ },
+        rollbackUpdate: () => { rollbacks++; selected = "old" },
+        log: () => {}, error: () => {},
+      })
+      await supervisor.firstBoot
+      const origin = `http://127.0.0.1:${port}`
+      assert.equal((await fetch(`${origin}/_frizz/control/update-restart`, { method: "POST", headers: { origin } })).status, 202)
+      const result = await eventually(async () => {
+        const status = await (await fetch(`${origin}/_frizz/control/status`, { headers: { origin } })).json() as { state: string; artifactDigest?: string; message?: string }
+        return (mode === "slow" ? status.state === "ready" && status.artifactDigest === "new" : status.state === "failed") ? status : undefined
+      }, `${mode} candidate verdict`)
+      assert.equal(commits, mode === "slow" ? 1 : 0, mode)
+      assert.equal(rollbacks, mode === "slow" ? 0 : 1, mode)
+      assert.equal(result.artifactDigest, mode === "slow" ? "new" : "old", mode)
+      if (mode === "endless") assert.match(result.message!, /did not become ready within 3000ms; last boot step: runtimes: downloading/)
+      if (mode === "stalled") assert.match(result.message!, /no boot progress for 600ms; last boot step: runtimes: downloading/)
+      if (mode === "foreign") assert.equal(result.message, "update candidate made no boot progress for 600ms")
+    } finally {
+      await supervisor?.close()
+      owner.release()
+      rmSync(workspace, { recursive: true, force: true })
+    }
+  }
+})
+
 test("child-only update rolls back failed candidates and a close race without retrying them", { timeout: 30_000 }, async () => {
   for (const failure of ["hang", "crash", "commit", "rollback", "close"] as const) {
     const workspace = mkdtempSync(join(tmpdir(), `frizz-child-update-${failure}-`))

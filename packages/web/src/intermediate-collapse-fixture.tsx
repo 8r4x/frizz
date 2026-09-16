@@ -236,8 +236,9 @@ const questionthentool: TranscriptMessage[] = [
 // state, not disposable chatter, and a detached process is the one class of call still going after the
 // batch that started it (maintainer 2026-08-01: "It's important that those show up in the chat"). This
 // run launches three from three SEPARATE assistant records with ordinary tool work in between — the
-// exact shape the maintainer hit — so it pins BOTH halves: three real cards rather than a batched
-// `Ran N tool calls` band, and only the two LIVE ones marked, the finished one flush at its label.
+// exact shape the maintainer hit. On the queue card all three fold (2026-08-12, below); in the thread
+// view the two LIVE ones keep their marked cards while the finished one folds into the run like any
+// other settled call (2026-09-13: "Fold it once finished").
 const bgShell = (desc: string, command: string, over: Partial<TranscriptToolCall> = {}) =>
   tool("Bash", { desc, detail: command, command, backgroundState: "background", status: "pending", ...over })
 
@@ -253,8 +254,8 @@ const bgshells: TranscriptMessage[] = [
     tool("Edit", { detail: "packages/server/src/project-launch.ts" }),
   ])),
   withId(asst("", [bgShell("Capturing a genuine cold start panel", "nub run dev --fresh")])),
-  // Already finished — the card stays (it is the reader's only handle on a process that ran and ended
-  // while they were reading something else), but it carries no mark: the reading says "done · 42 sec".
+  // Already finished — in the thread view this one is history and folds into the run (its completion
+  // wake divider is the record); the two above keep their cards because they are still going.
   withId(asst("", [bgShell("Waiting for the cold start to serve", "nub scripts/wait-for-serve.mjs 5312", { status: "completed", durationMs: 42_000 })])),
   withId(asst("Both paths verified live.", [tool("Bash", { detail: "nub --test", desc: "Running the server suite" })])),
   withId(asst("**Fixed** — a relaunch in a repo that already has a server now says so.")),

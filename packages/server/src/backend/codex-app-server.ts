@@ -38,6 +38,7 @@ import { nativeListenCodexAppServerHost } from "./codex-app-server-native.ts"
 import { readCodexAccountId } from "./auth-status.ts"
 import { codexThreadMcpConfig } from "./codex-mcp.ts"
 import { codexProviderError } from "./codex-error.ts"
+import { CodexExecutionHealth } from "./codex-execution-health.ts"
 import { codexContextWindowConfig, type FrizzMcp } from "./types.ts"
 import { log as frizzLog } from "../logging.ts"
 
@@ -539,6 +540,7 @@ export type CodexAppServerDiagnostic =
   | { event: "daemon-events-dropped"; dropped: number }
   | { event: "protocol-failure"; detail: string }
   | { event: "auth-account-refreshed" }
+  | { event: "execution-health-failed"; detail: string }
   // The app-server this bridge had been talking to is gone and a fresh one replaced it — every turn
   // that was running inside it (parents AND their sub-agents) died. `deathReason` is the dead daemon's
   // own exit breadcrumb when it left one (`app-server-exited-code-*`, `self-collected-*`, `signal-*`,
@@ -615,7 +617,7 @@ class JsonlRpcConnection {
     child.on("error", () => this.fail("error", new Error("Codex app-server process failed")))
   }
 
-  async request(method: string, params: unknown): Promise<unknown> {
+  async request(method: string, params: unknown, timeoutMs = this.timeoutMs): Promise<unknown> {
     if (this.closed) throw new Error("Codex app-server connection is closed")
     if (this.pending.size >= MAX_OUTBOUND_REQUESTS) throw new Error("Codex app-server outbound request queue is full")
     if (!Number.isSafeInteger(this.nextId)) throw new Error("Codex app-server request id space is exhausted")
@@ -624,7 +626,7 @@ class JsonlRpcConnection {
       const timer = setTimeout(() => {
         this.pending.delete(id)
         reject(new Error(`Codex app-server request timed out: ${method}`))
-      }, this.timeoutMs)
+      }, timeoutMs)
       this.pending.set(id, { resolve, reject, timer })
     })
     try {
@@ -1017,6 +1019,8 @@ export interface CodexAppServerBridgeOptions {
   codexAuthAccountId?: () => string | undefined
   /** Test seam for the account-replacement patience bound (AUTH_REPLACEMENT_WAIT_MS). */
   authReplacementWaitMs?: number
+  /** Test seam for the local macOS service check; production always probes through the app-server. */
+  executionHealth?: CodexExecutionHealth
   /**
    * Gate for the auto-resume nudge (B): a thread the human has archived or retired must not be woken
    * by a turn it never asked for. Defaults to allowing every rebind.
@@ -1844,6 +1848,8 @@ export class CodexAppServerBridge {
   private readonly host: CodexAppServerHost
   private readonly codexBin: string
   private readonly timeoutMs: number
+  private readonly executionHealth: CodexExecutionHealth
+  private executionScope = ""
   /** Identity of the app-server PROCESS behind the current connection (see CodexAppServerAttachment). */
   private daemonGeneration = ""
   /** ChatGPT account the current app-server cached when its process started. */
@@ -1894,6 +1900,7 @@ export class CodexAppServerBridge {
   private shutdownPromise: Promise<void> | null = null
 
   constructor(options: CodexAppServerBridgeOptions) {
+    this.executionHealth = options.executionHealth ?? new CodexExecutionHealth()
     this.options = options
     this.now = options.now ?? (() => new Date())
     this.makeId = options.id ?? randomUUID
@@ -2161,6 +2168,7 @@ export class CodexAppServerBridge {
     const releaseOperation = this.beginOperation()
     try {
       const connection = await this.ensureConnected()
+      await this.checkExecutionHealth(connection)
       const binding = this.bindingForScope(input.threadSlug, input.sessionId)
       if (!binding) throw new Error("Codex app-server steer requires a bridge-owned session")
       if (binding.connection_epoch !== this.connectionEpoch || binding.state !== "active") {
@@ -2387,7 +2395,8 @@ export class CodexAppServerBridge {
     if (bound === 0) return
     const releaseOperation = this.beginOperation()
     try {
-      await this.ensureConnected()
+      const connection = await this.ensureConnected()
+      await this.checkExecutionHealth(connection)
       await this.autoResumeInterruptedTurns()
     } catch {
       // A boot must never fail because codex is unavailable. The next real operation retries.
@@ -2666,6 +2675,9 @@ export class CodexAppServerBridge {
     for (let attempt = 0; ; attempt++) {
       const desiredAccountId = (this.options.codexAuthAccountId ?? readCodexAccountId)()
       const connection = await this.ensureConnected()
+      // Before auth replacement too: a failed health probe must not enter a path that kills the
+      // shared listener. Interrupt/status/resume remain available through ensureConnected().
+      await this.checkExecutionHealth(connection)
       if (!desiredAccountId || this.processAuthAccountId === desiredAccountId) return connection
       // The loop re-reads auth.json each pass, so it terminates on its own in the ordinary case. The
       // cap is for the pathological one — a replacement that keeps succeeding while the account keeps
@@ -2680,6 +2692,18 @@ export class CodexAppServerBridge {
       }
       if (!await this.awaitAuthReplacement(this.authReplacement)) return connection
     }
+  }
+
+  private async checkExecutionHealth(connection: JsonlRpcConnection): Promise<void> {
+    try {
+      await this.executionHealth.check(connection, this.executionScope)
+    } catch (error) {
+      const detail = (error as Error).message
+      this.options.diagnostic?.({ event: "execution-health-failed", detail })
+      frizzLog.error("codex", detail)
+      throw error
+    }
+    if (this.connection !== connection) throw new Error("Codex app-server changed during its execution health check")
   }
 
   /** Await an armed replacement for at most AUTH_REPLACEMENT_WAIT_MS. `false` = it is still waiting for
@@ -2766,6 +2790,7 @@ export class CodexAppServerBridge {
       authAccountId,
     })
     const child = attachment.process
+    this.executionScope = `project ${this.options.projectDir}, backend PID ${attachment.daemonPid}, generation ${attachment.generation}`
     let connection!: JsonlRpcConnection
     connection = new JsonlRpcConnection(
       child,

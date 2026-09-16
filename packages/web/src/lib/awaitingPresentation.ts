@@ -22,11 +22,13 @@ export const AWAITING_NO_PROSE = "Waiting for an external update."
 export function prWatchRefs(hints: readonly AwaitingHint[]): { ref: string; url: string | null }[] {
   const seen = new Set<string>()
   return hints.flatMap((hint) => {
-    if (hint.kind !== "pr") return []
+    // An `issues:` entry is the same chip with the issue path — the card is about it in exactly the
+    // way it is about a `prs:` entry, and the ref exists nowhere else on the card either.
+    if (hint.kind !== "pr" && hint.kind !== "issue") return []
     const ref = hint.value.trim()
-    if (!ref || seen.has(ref)) return []
-    seen.add(ref)
-    return [{ ref, url: githubRefUrl(ref) }]
+    if (!ref || seen.has(`${hint.kind}:${ref}`)) return []
+    seen.add(`${hint.kind}:${ref}`)
+    return [{ ref, url: githubRefUrl(ref, hint.kind === "issue" ? "issue" : "pull") }]
   })
 }
 
@@ -118,7 +120,7 @@ export function awaitingProseBlock(body: string | undefined): string | null {
  *  It strips ONLY a line whose key is a key: a retired kind, or one of the live YAML keys. That
  *  narrowness is the point — a handoff that opens "Note: the macOS leg is flaky" is prose, and a filter
  *  keyed on "has a colon" would eat it. */
-const FENCE_SYNTAX_KEYS = new Set<string>([...RETIRED_AWAITING_KINDS, "shells", "agents", "timers", "prs", "for", "title"])
+const FENCE_SYNTAX_KEYS = new Set<string>([...RETIRED_AWAITING_KINDS, "shells", "agents", "timers", "prs", "issues", "for", "title"])
 function stripFenceSyntax(body: string): string {
   return body
     .split("\n")
@@ -181,5 +183,7 @@ function joinList(parts: readonly string[]): string {
  *  off it, exactly as it does on the rail. */
 export function hintGloss(hints: readonly AwaitingHint[]): string | null {
   const pr = hints.find((h) => h.kind === "pr")
-  return pr ? `PR ${pr.value}` : null
+  if (pr) return `PR ${pr.value}`
+  const issue = hints.find((h) => h.kind === "issue")
+  return issue ? `Issue ${issue.value}` : null
 }

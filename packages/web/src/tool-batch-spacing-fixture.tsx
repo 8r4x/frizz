@@ -31,6 +31,10 @@ const SETTLED = PARAMS.get("state") === "settled"
 // exactly what the tail's status decides — the bottom slot reverts to the generic `Thinking…` reading
 // while history still shows no digest for the run (lib/toolActivity.liveToolActivityTail).
 const GAP = PARAMS.get("state") === "gap"
+// `?bg=finished` — the background shell's completion has landed. Its card was the reader's handle on a
+// process still running; finished, it is history and folds into the run around it (2026-09-13: "Fold it
+// once finished"), so the digest/card/digest arrangement the default pins becomes ONE digest.
+const BG_FINISHED = PARAMS.get("bg") === "finished"
 
 const thread = {
   id: SLUG,
@@ -105,13 +109,22 @@ const messages: TranscriptMessage[] = [
     role: "assistant",
     text: "",
     tools: [],
-    // A background launch DOES fracture the run into digest/card/digest, and since 2026-08-01 that is
+    // A LIVE background launch DOES fracture the run into digest/card/digest, and since 2026-08-01 that is
     // the point rather than a defect: a detached process outlives the batch that started it, so its card
     // is ejected from the activity disclosure and stays visible ("It's important that those show up in
-    // the chat" — see lib/toolActivity.isToolActivityException). The arrangement it produces is a real
-    // layout case, so this fixture pins ITS pitch too: the ejected card must join the tight 6px run
-    // rather than opening a paragraph break either side of itself.
-    parts: [toolsPart([call({ name: "Bash", command: "wait %1", desc: "Waiting for background sleep 45", backgroundState: "background" })])],
+    // the chat" — see lib/toolActivity.isToolActivityException). Only while it runs, though: a finished
+    // one folds back into the run (2026-09-13, `?bg=finished` above), so this row stays `pending` by
+    // default — a detached process that outlives even the settled turn — to keep the arrangement it
+    // pins: a real layout case, so this fixture pins ITS pitch too: the ejected card must join the
+    // tight 6px run rather than opening a paragraph break either side of itself.
+    parts: [toolsPart([call({
+      name: "Bash",
+      command: "wait %1",
+      desc: "Waiting for background sleep 45",
+      backgroundState: "background",
+      status: BG_FINISHED ? "completed" : "pending",
+      durationMs: BG_FINISHED ? 45_000 : undefined,
+    })])],
   },
 
   // Another separate message, this time a 2-call batch (boundary + intra in one message).

@@ -1,9 +1,9 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { createHash, randomUUID } from "node:crypto"
-import { PARK_CORRECTION_NAMES_LEAD, PARK_CORRECTION_QUESTION_LEAD, PARK_CORRECTION_RETIRED_LEAD, parkExpiredWakeMessage, parkFinishedWakeMessage, prWatchExpiredWakeMessage, ownWatchExpiredWakeMessage, questionAnswerMessage, questionsCancelledWakeMessage, type QuestionAnswer, type QuestionDismissal, RETIRED_AWAITING_REPLACEMENT, retiredAwaitingKindsIn, compactionPromptMessage, limitResumeSteer, limitModelSwitchSteer, formatGithubWakeSteer, GithubWakeItem, type GithubWatchStatus, prWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, liveOpsLines, wakeDeliveryToken, wakeTimeHeader, stripWakeTimeHeader, type QuotaSnapshot } from "@frizz/shared"
-import { GITHUB_STATUS_SETTING, parkExpiresAt, parkIsHonoured, readAwaitingPark, unaccountedItems, type LiveActivity } from "./awaiting.ts"
-import type { SessionRow, Storage, ThreadQuestionRow } from "./storage.ts"
+import { PARK_CORRECTION_NAMES_LEAD, PARK_CORRECTION_QUESTION_LEAD, PARK_CORRECTION_RETIRED_LEAD, parkExpiredWakeMessage, parkFinishedWakeMessage, prWatchExpiredWakeMessage, ownWatchExpiredWakeMessage, questionAnswerMessage, questionsCancelledWakeMessage, type QuestionAnswer, type QuestionDismissal, RETIRED_AWAITING_REPLACEMENT, retiredAwaitingKindsIn, compactionPromptMessage, limitResumeSteer, limitModelSwitchSteer, formatGithubWakeSteer, GithubWakeItem, type GithubWatchStatus, type GithubIssueStatus, prWatchWakeMessage, issueWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, liveOpsLines, wakeDeliveryToken, wakeTimeHeader, stripWakeTimeHeader, type QuotaSnapshot } from "@frizz/shared"
+import { GITHUB_ISSUE_STATUS_SETTING, GITHUB_STATUS_SETTING, parkExpiresAt, parkIsHonoured, readAwaitingPark, unaccountedItems, type LiveActivity } from "./awaiting.ts"
+import type { PrWatchRow, SessionRow, Storage, ThreadQuestionRow } from "./storage.ts"
 import type { Tailer } from "./tailer.ts"
 import type { SessionTelemetry } from "./tailer.ts"
 import type { LimitFault } from "./backend/types.ts"
@@ -21,6 +21,7 @@ import {
   parseGithubReviewActivities,
   type GithubReviewActivity,
   type GithubReviewFetchResult,
+  type GithubIssueSnapshot,
 } from "./github-review.ts"
 import { isNoisePrActivity } from "./pr-watch-noise.ts"
 
@@ -704,6 +705,7 @@ function liveActivityOf(
   tele: Pick<SessionTelemetry, "bgShells" | "subAgents">,
   registeredPrWatches: ReadonlySet<string>,
   armedTimerIds: ReadonlySet<string>,
+  registeredIssueWatches: ReadonlySet<string> = new Set(),
 ): LiveActivity {
   const shells = new Set<string>()
   for (const sh of tele.bgShells ?? []) {
@@ -715,7 +717,7 @@ function liveActivityOf(
     if (a.state !== "running") continue
     for (const h of [a.taskId, a.id, a.label]) if (h) agents.add(h)
   }
-  return { shells, agents, timers: armedTimerIds, prs: registeredPrWatches }
+  return { shells, agents, timers: armedTimerIds, prs: registeredPrWatches, issues: registeredIssueWatches }
 }
 
 /** The rest parked on a wait THIS TRIGGER CANNOT ADVANCE: an `awaiting` fence naming a durable wake the
@@ -763,7 +765,13 @@ function parkedOnAWaitItCannotAdvance(
 /** The PRs a thread has actually registered, by `owner/repo#N`. Read where the Goal decides whether to
  *  bump, because a declaration alone no longer means a wake is coming. */
 function registeredPrWatchesOf(storage: Storage, slug: string): ReadonlySet<string> {
-  return new Set(storage.listPrWatches(slug, { armedOnly: true }).map((w) => `${w.owner}/${w.repo}#${w.number}`))
+  return new Set(storage.listPrWatches(slug, { armedOnly: true }).filter((w) => w.kind !== "issue").map((w) => `${w.owner}/${w.repo}#${w.number}`))
+}
+
+/** The ISSUES a thread has registered (`mcp__frizz__watch_issue`), by the same `owner/repo#N` — what an
+ *  `issues:` fence entry is checked against. */
+function registeredIssueWatchesOf(storage: Storage, slug: string): ReadonlySet<string> {
+  return new Set(storage.listPrWatches(slug, { armedOnly: true }).filter((w) => w.kind === "issue").map((w) => `${w.owner}/${w.repo}#${w.number}`))
 }
 
 // A row's live ON SCHEDULE trigger, if it has one. A switched-off trigger deliberately reads as ABSENT
@@ -1084,6 +1092,31 @@ export async function probePrReadable(ref: PrRef): Promise<PrProbe> {
   }
 }
 
+/** The issue twin of `probePrReadable`: one `gh issue view`, asked at registration, so a
+ *  `watch_issue` on something the server's own `gh` cannot see is refused rather than armed.
+ *
+ *  AND A PULL REQUEST NUMBER IS REFUSED HERE TOO. `gh issue view` answers for a PR number (measured
+ *  2026-09-14 against colinhacks/zod#6382: `{"state":"CLOSED","url":".../pull/6382"}`), while the poll's
+ *  `issue(number:)` GraphQL field does not — so a PR registered as an issue would pass a bare probe and
+ *  then fail every poll in silence, the exact dead watcher the probe exists to prevent. The URL is the
+ *  tell, and the refusal names the right tool. */
+export async function probeIssueReadable(ref: PrRef): Promise<PrProbe> {
+  try {
+    const { stdout } = await execFileAsync(
+      "gh",
+      ["issue", "view", String(ref.number), "--repo", `${ref.owner}/${ref.repo}`, "--json", "state,url"],
+      { timeout: 15_000, maxBuffer: 1_000_000, env: { ...process.env, GH_PAGER: "cat", GH_PROMPT_DISABLED: "1" } },
+    )
+    const url = (JSON.parse(stdout) as { url?: unknown })?.url
+    if (typeof url === "string" && /\/pull\/\d+$/.test(url)) {
+      return { ok: false, reason: `#${ref.number} is a pull request, not an issue — register it with \`mcp__frizz__watch_pr\`` }
+    }
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, reason: conciseGhError(err) }
+  }
+}
+
 // THROWS on a failed `gh`, so the poll can SAY why — it returned undefined for everything until
 // 2026-08-25, which made a PR the server could not read (signed out, SSO, no such repo, no `gh` on the
 // PATH) indistinguishable from a PR with nothing to report: no log line, no wake, ever. `undefined` is
@@ -1193,8 +1226,8 @@ export interface Scheduler {
 /** The FENCE key a wire kind is written as. The wire kinds stayed SINGULAR through the 2026-08-24 YAML
  *  cutover; the grammar the worker writes did not, so every message that quotes a fence line back at a
  *  worker has to translate — printing `i.kind` raw teaches a spelling the parser now refuses. */
-const AWAITING_KEY_OF: Record<"shell" | "agent" | "timer" | "pr", string> = {
-  shell: "shells", agent: "agents", timer: "timers", pr: "prs",
+const AWAITING_KEY_OF: Record<"shell" | "agent" | "timer" | "pr" | "issue", string> = {
+  shell: "shells", agent: "agents", timer: "timers", pr: "prs", issue: "issues",
 }
 
 // ---- THE MID-TURN HOLD'S BOUND ------------------------------------------------------------------
@@ -1254,6 +1287,23 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     // the one longest unpolled, i.e. the PR nobody is watching any more.
     for (const stale of keys.slice(0, Math.max(0, keys.length - GITHUB_STATUS_CAP))) delete book[stale]
     deps.storage.setSetting(GITHUB_STATUS_SETTING, book)
+  }
+
+  /** The issue twin of `publishGithubStatus`, into its own book (see GITHUB_ISSUE_STATUS_SETTING). */
+  function publishGithubIssueStatus(key: string, issue: GithubIssueSnapshot, nowMs: number): void {
+    const raw = deps.storage.getSetting(GITHUB_ISSUE_STATUS_SETTING)
+    const book = raw && typeof raw === "object" && !Array.isArray(raw) ? { ...(raw as Record<string, unknown>) } : {}
+    const reading: GithubIssueStatus = {
+      state: issue.state.toUpperCase() === "CLOSED" ? "closed" : "open",
+      ...(issue.stateReason ? { stateReason: issue.stateReason.toLowerCase() } : {}),
+      ...(issue.title ? { title: issue.title } : {}),
+      comments: issue.comments,
+      polledAt: new Date(nowMs).toISOString(),
+    }
+    book[key] = reading
+    const keys = Object.keys(book)
+    for (const stale of keys.slice(0, Math.max(0, keys.length - GITHUB_STATUS_CAP))) delete book[stale]
+    deps.storage.setSetting(GITHUB_ISSUE_STATUS_SETTING, book)
   }
 
   class InjectedSchedulerCrash extends Error {
@@ -1963,7 +2013,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           // a fence, and the half it left out is not what gets it bumped.
           timers: deps.storage.listThreadTimers(row.slug, { armedOnly: true })
             .map((t) => ({ id: t.id, label: t.prompt.trim().replace(/\s+/g, " ").slice(0, 80) })),
-          prs: deps.storage.listPrWatches(row.slug, { armedOnly: true })
+          prs: deps.storage.listPrWatches(row.slug, { armedOnly: true }).filter((w) => w.kind !== "issue")
+            .map((w) => ({ id: `${w.owner}/${w.repo}#${w.number}`, label: `${w.owner}/${w.repo}#${w.number}` })),
+          issues: deps.storage.listPrWatches(row.slug, { armedOnly: true }).filter((w) => w.kind === "issue")
             .map((w) => ({ id: `${w.owner}/${w.repo}#${w.number}`, label: `${w.owner}/${w.repo}#${w.number}` })),
         }), spokeAt),
         reason: "rested without signing off",
@@ -2072,6 +2124,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         tele,
         registeredPrWatchesOf(deps.storage, row.slug),
         armedTimerIdsOf(deps.storage, row.slug),
+        registeredIssueWatchesOf(deps.storage, row.slug),
       )
       const dead = unaccountedItems(park.items, live)
       const expiresAt = parkExpiresAt(park, Date.parse(spokeAt))
@@ -2138,6 +2191,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           ? "FINISHED — its result is waiting for you"
           : i.kind === "pr"
           ? "NOT REGISTERED — register it with `mcp__frizz__watch_pr` first, then name it here"
+          : i.kind === "issue"
+          ? "NOT REGISTERED — register it with `mcp__frizz__watch_issue` first, then name it here"
           : "NOT RUNNING (nothing by that name)"
         // The PLURAL key, because that is what the worker has to write. `i.kind` is the internal wire
         // kind and stayed singular through the 2026-08-24 YAML cutover; printing it raw taught a
@@ -2164,6 +2219,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           "agents: [<runtime agent id>]  sub-agents you dispatched",
           "timers: [tmr_…]               timers from `mcp__frizz__timer`",
           "prs:    [owner/repo#123]      PRs registered with `mcp__frizz__watch_pr`",
+          "issues: [owner/repo#45]       GitHub issues registered with `mcp__frizz__watch_issue`",
           "for:    2h                    REQUIRED — a DURATION, never an instant",
           "---",
           "your handoff prose, as much as you want",
@@ -2185,6 +2241,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           "",
           "- a pull request → `mcp__frizz__watch_pr` (it wakes you on CI going green or red, and on every",
           "  later review and comment) → `prs: [owner/repo#123]`",
+          "- a GitHub issue → `mcp__frizz__watch_issue` (every later comment, a label or assignee moving,",
+          "  and the close) → `issues: [owner/repo#45]`",
           "- a wall-clock check → `mcp__frizz__timer` → `timers: [tmr_…]`",
           "- work you already launched → `shells: [<the id your runtime gave you>]` or `agents: [<id>]`",
           "",
@@ -2224,7 +2282,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         subAgents: (tele.subAgents ?? []).filter((a) => a.state === "running").map((a) => ({ id: a.taskId ?? a.id, label: a.label })),
         timers: deps.storage.listThreadTimers(row.slug, { armedOnly: true })
           .map((t) => ({ id: t.id, label: t.prompt.trim().replace(/\s+/g, " ").slice(0, 80) })),
-        prs: deps.storage.listPrWatches(row.slug, { armedOnly: true })
+        prs: deps.storage.listPrWatches(row.slug, { armedOnly: true }).filter((w) => w.kind !== "issue")
+          .map((w) => ({ id: `${w.owner}/${w.repo}#${w.number}`, label: `${w.owner}/${w.repo}#${w.number}` })),
+        issues: deps.storage.listPrWatches(row.slug, { armedOnly: true }).filter((w) => w.kind === "issue")
           .map((w) => ({ id: `${w.owner}/${w.repo}#${w.number}`, label: `${w.owner}/${w.repo}#${w.number}` })),
       })
       // NOTHING RUNNING is itself the answer, and the most common one for a nameless fence: a worker
@@ -2313,8 +2373,13 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     merge?: string
     labels?: string[]
     reviewers?: string[]
+    /** Issue watchers only: who was assigned as of the last poll, the same baseline rule as `labels`. */
+    assignees?: string[]
   }
   const prWatchPolledAt = new Map<string, number>() // refKey → last fetch, shared across threads
+  /** The poll's key for a row — the ref, prefixed for an issue (see the refs loop in evalPrWatches). */
+  const watchKey = (w: Pick<PrWatchRow, "kind" | "owner" | "repo" | "number">): string =>
+    `${w.kind === "issue" ? "issue:" : ""}${w.owner}/${w.repo}#${w.number}`
   const prStatusFallback = concurrencyGate(PR_STATUS_FALLBACK_LIMIT)
 
   function readPrWatchHeld(raw: unknown): PrWatchHeld | undefined {
@@ -2387,6 +2452,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       const held = readPrWatchHeld(parsed.held)
       const labels = readCursorList(parsed.labels)
       const reviewers = readCursorList(parsed.reviewers)
+      const assignees = readCursorList(parsed.assignees)
       return {
         seen,
         checks: typeof parsed.checks === "string" ? parsed.checks : undefined,
@@ -2395,6 +2461,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         ...(typeof parsed.merge === "string" ? { merge: parsed.merge } : {}),
         ...(labels ? { labels } : {}),
         ...(reviewers ? { reviewers } : {}),
+        ...(assignees ? { assignees } : {}),
       }
     } catch {
       return { seen: [] }
@@ -2425,7 +2492,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       const row = deps.storage.getSession(w.thread_slug)
       deps.storage.settlePrWatch(w.id, nowMs)
       const ref = `${w.owner}/${w.repo}#${w.number}`
-      log(`waker: settled ${w.thread_slug} — pr watcher ${w.id} expired (${ref})`)
+      log(`waker: settled ${w.thread_slug} — ${w.kind === "issue" ? "issue" : "pr"} watcher ${w.id} expired (${ref})`)
       if (!row || row.state === "archived" || row.archived === 1) continue
       const fenceId = prWatchExpiredFenceId(w.id)
       const deliveryId = wakeDeliveryId(row.slug, row.session_id, fenceId)
@@ -2437,8 +2504,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         fenceId,
         hintKey: fenceId,
         // In @frizz/shared beside `parsePrWatchExpiredWake`, for the reason above.
-        message: prWatchExpiredWakeMessage(ref),
-        reason: `pr watcher ${w.id} expired (${ref})`,
+        message: prWatchExpiredWakeMessage(ref, w.kind === "issue" ? "issue" : "pull"),
+        reason: `${w.kind === "issue" ? "issue" : "pr"} watcher ${w.id} expired (${ref})`,
       }, nowMs).delivery
       log(`waker: queued ${row.slug} — ${item.reason}`)
       checkpoint("after-enqueue", item)
@@ -2465,22 +2532,50 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       threadLive.set(slug, live)
       return live
     }
-    const refs = new Map<string, PrRef>()
+    const refs = new Map<string, PrRef & { kind: "pull" | "issue" }>()
     for (const w of armed) {
       if (!isThreadLive(w.thread_slug)) continue
-      const key = `${w.owner}/${w.repo}#${w.number}`
+      // An ISSUE's key carries its kind (2026-09-14), so an issue and a PR that happen to share a number
+      // in one repo — impossible on GitHub, but a worker can register #7 both ways — are two fetches
+      // with two answers, and neither reading is ever filed under the other.
+      const key = watchKey(w)
       const last = prWatchPolledAt.get(key) ?? 0
       if (nowMs - last < PR_WATCH_POLL_MS) continue
-      refs.set(key, { owner: w.owner, repo: w.repo, number: w.number })
+      refs.set(key, { owner: w.owner, repo: w.repo, number: w.number, kind: w.kind === "issue" ? "issue" : "pull" })
     }
     const status = new Map<string, GithubWatchStatus>()
     const activity = new Map<string, GithubReviewActivity[]>()
+    /** The ISSUE's own reading, for the refs that are issues. Nothing else in this poll touches them:
+     *  the CI status book, the `gh` fallback and the merge/reviewer baselines are all PR facts. */
+    const issues = new Map<string, GithubIssueSnapshot>()
     /** The PR's own state, which `GithubWatchStatus` does not carry — it is a CI projection, and these
      *  are triggers rather than a readout. `undefined` for a ref the `gh` fallback served, which does not
      *  ask for them; that is the "not known" the baseline rule turns on. */
     const meta = new Map<string, { labels?: string[]; reviewRequests?: string[] }>()
     await Promise.all([...refs].map(async ([key, ref]) => {
       prWatchPolledAt.set(key, nowMs)
+      if (ref.kind === "issue") {
+        // AN ISSUE RIDES THE SAME BATCHED REQUEST as the PRs beside it and has no `gh` fallback: it was
+        // born on the GraphQL path, so a shape surprise is logged through the same failure ledger and
+        // the next poll simply asks again.
+        try {
+          const result = normalizeReviewResult(await fetchGithubReview(ref))
+          if (result.status === "ok") {
+            activity.set(key, result.activity)
+            if (result.issue) {
+              issues.set(key, result.issue)
+              publishGithubIssueStatus(`${ref.owner}/${ref.repo}#${ref.number}`, result.issue, nowMs)
+            }
+            recordReviewSuccess(key, "issue-watch registry")
+          } else if (result.status === "error") recordReviewFailure(key, "issue-watch registry", result, nowMs)
+        } catch (err) {
+          recordReviewFailure(key, "issue-watch registry", {
+            status: "error",
+            failure: { kind: "network", message: err instanceof Error ? err.message : String(err) },
+          }, nowMs)
+        }
+        return
+      }
       // ONE REQUEST FOR BOTH HALVES (2026-09-04). The review fetch and the status fetch used to be two
       // independent trips per PR — a batched GraphQL query, plus `gh pr view` and `gh run list` as
       // subprocesses — which on this machine's 7 armed watchers meant 14 children a minute for facts that
@@ -2539,7 +2634,11 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // No thread, or a shelved one: nothing to wake. The row is left ARMED rather than settled — an
       // archived thread can be reopened, and the watch is still the worker's own outstanding intent.
       if (!row || row.state === "archived" || row.archived === 1) continue
-      const key = `${w.owner}/${w.repo}#${w.number}`
+      const key = watchKey(w)
+      if (w.kind === "issue") {
+        evalIssueWatch(row, w, issues.get(key), activity.get(key), nowMs)
+        continue
+      }
       const st = status.get(key)
       const acts = activity.get(key)
       if (!st && !acts) continue // nothing fetched for this PR this tick
@@ -2741,6 +2840,110 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       }), `pr-watch ${key}${carried.checks ? ` CI ${carried.checks.verdict}` : ""}${carried.changes?.length ? " state" : ""}${review ? " review" : ""}`, nowMs)
       deps.storage.setPrWatchCursor(w.id, JSON.stringify({ ...nextCursor, report, held: carried }))
     }
+  }
+
+  /** An ISSUE's own state moving — labels either way, for the reason `prStateChanges` gives, and a new
+   *  assignee, which on an issue is the "someone picked this up" event a worker waiting on triage wants.
+   *  An unassignment is quiet, as a withdrawn review request is. */
+  function issueStateChanges(cursor: PrWatchCursor, labels: string[] | undefined, assignees: string[] | undefined): string[] {
+    const out: string[] = []
+    if (labels && cursor.labels) {
+      const added = labels.filter((l) => !cursor.labels!.includes(l))
+      const removed = cursor.labels.filter((l) => !labels.includes(l))
+      const parts = [...added.map((l) => `+${l}`), ...removed.map((l) => `−${l}`)]
+      if (parts.length) out.push(`labels ${parts.join(", ")}`)
+    }
+    if (assignees && cursor.assignees) {
+      const added = assignees.filter((a) => !cursor.assignees!.includes(a))
+      if (added.length) out.push(`assigned to ${added.map((a) => `@${a}`).join(", ")}`)
+    }
+    return out
+  }
+
+  /** The issue half of the poll loop above — one registered ISSUE watcher, given what this tick fetched
+   *  for it. Same cursor, same report numbering, same one-undelivered-report rule and the same re-mint as
+   *  the PR path, because the row IS a `pr_watch` row; what differs is what can move (comments, labels,
+   *  assignees, the close) and what is said about it (`issueWatchWakeMessage`). Kept as its own function
+   *  rather than folded into the PR loop with `if (issue)` guards, because the PR loop's shape is its CI
+   *  verdict and an issue has none. */
+  function evalIssueWatch(
+    row: SessionRow,
+    w: PrWatchRow,
+    snap: GithubIssueSnapshot | undefined,
+    acts: GithubReviewActivity[] | undefined,
+    nowMs: number,
+  ): void {
+    if (!snap && !acts) return // nothing fetched for this issue this tick
+    const target = `${w.owner}/${w.repo}#${w.number}`
+    const cursor = readPrWatchCursor(w.cursor)
+    const waiting = undeliveredPrWatchReport(row.slug, w.id)
+    // A CLOSED ISSUE ends the watch, as a merged or closed PR does. Reported once with GitHub's reason —
+    // "not planned" is a different next step from "completed" — then settled.
+    if (snap && snap.state.toUpperCase() === "CLOSED") {
+      deps.storage.settlePrWatch(w.id, nowMs)
+      if (waiting) outbox.supersede(waiting.id, nowMs, "replaced by the watcher's closed report")
+      const reason = snap.stateReason ? snap.stateReason.toLowerCase().replace(/_/g, " ") : undefined
+      enqueuePrWatchWake(row, w.id, nextReport(cursor), issueWatchWakeMessage({
+        target, closed: reason ? { reason } : {},
+      }), `issue-watch ${target} closed`, nowMs)
+      return
+    }
+    if (waiting && !cursor.held) return
+    const seen = new Set(cursor.seen)
+    const firstPoll = w.cursor === null
+    const newestFirst = [...(acts ?? [])].sort((a, b) => {
+      const at = Date.parse(b.at ?? "") - Date.parse(a.at ?? "")
+      return Number.isFinite(at) && at !== 0 ? at : b.id.localeCompare(a.id)
+    })
+    // The registration-instant baseline and the noise filter, exactly as the PR path reads them: a
+    // worker registers an issue it has just read, so what is already there is not news.
+    const fresh = newestFirst.filter((a) => {
+      if (seen.has(a.id) || isNoisePrActivity(a)) return false
+      if (!firstPoll) return true
+      const landed = Date.parse(a.at ?? "")
+      return Number.isFinite(landed) && landed > w.created_at
+    })
+    const named = fresh.slice(0, REVIEW_STEER_CAP)
+    const freshItems: GithubWakeItem[] = [...named].reverse().map((a) => ({
+      label: activityLabel(a),
+      actor: a.actor,
+      bot: isBotGithubActor(a),
+      ...(a.at ? { at: a.at } : {}),
+      ...(a.url ? { url: a.url } : {}),
+    }))
+    const changes = firstPoll ? [] : issueStateChanges(cursor, snap?.labels, snap?.assignees)
+    const nextCursor: PrWatchCursor = {
+      seen: acts ? [...new Set([...cursor.seen, ...acts.map((a) => a.id)])].slice(-REVIEW_SEEN_CAP) : cursor.seen,
+      report: cursor.report ?? 0,
+      ...(snap?.labels ? { labels: snap.labels } : cursor.labels ? { labels: cursor.labels } : {}),
+      ...(snap?.assignees ? { assignees: snap.assignees } : cursor.assignees ? { assignees: cursor.assignees } : {}),
+    }
+    if (fresh.length === 0 && changes.length === 0) {
+      if (JSON.stringify(nextCursor) !== JSON.stringify(cursor)) {
+        deps.storage.setPrWatchCursor(w.id, JSON.stringify(nextCursor))
+      }
+      return
+    }
+    deps.storage.setSnoozedUntil(row.slug, null)
+    const held = waiting ? cursor.held : undefined
+    const items = [...(held?.items ?? []), ...freshItems]
+    const mergedChanges = [...new Set([...(held?.changes ?? []), ...changes])]
+    const carried: PrWatchHeld = {
+      items: items.slice(-REVIEW_STEER_CAP),
+      omitted: (held?.omitted ?? 0) + (fresh.length - named.length) + Math.max(0, items.length - REVIEW_STEER_CAP),
+      ...(mergedChanges.length ? { changes: mergedChanges } : {}),
+    }
+    const review = carried.items.length > 0
+      ? formatGithubWakeSteer({ ref: target, items: carried.items, omitted: carried.omitted })
+      : undefined
+    const report = nextReport(cursor)
+    if (waiting) outbox.supersede(waiting.id, nowMs, `folded into report ${report}, which says this and everything since`)
+    enqueuePrWatchWake(row, w.id, report, issueWatchWakeMessage({
+      target,
+      ...(carried.changes?.length ? { changes: carried.changes } : {}),
+      ...(review ? { review } : {}),
+    }), `issue-watch ${target}${carried.changes?.length ? " state" : ""}${review ? " comment" : ""}`, nowMs)
+    deps.storage.setPrWatchCursor(w.id, JSON.stringify({ ...nextCursor, report, held: carried }))
   }
 
   /** The next report number for a watcher — ONE derivation, used both for the delivery id and for the
