@@ -369,7 +369,7 @@ function walk(node: ParentNode, ctx: WalkContext) {
       if (target) {
         const imageUrl = localImageUrlForTarget(target)
         if (imageUrl) {
-          // The server resolves the path and admits only supported images beneath its trusted roots.
+          // The server resolves the path and admits only supported images behind its origin gate.
           // Keep the author's link label and normal Markdown link treatment; only the destination is
           // rewritten so an absolute filesystem path cannot become a bogus same-origin web URL.
           el.setAttribute("href", imageUrl)
@@ -399,8 +399,7 @@ function walk(node: ParentNode, ctx: WalkContext) {
       const target = localMarkdownTarget(el.getAttribute("src"))
       const imageUrl = target && localImageUrlForTarget(target)
       if (!imageUrl) {
-        // The only Markdown images admitted are local POSIX files through the existing, server-side
-        // allowlisted proxy. Remote/data/file-host images remain disallowed.
+        // Only local files use the server's image proxy. Remote/data/file-host images stay disallowed.
         el.remove()
         continue
       }

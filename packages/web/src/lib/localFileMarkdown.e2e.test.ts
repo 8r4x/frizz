@@ -68,12 +68,11 @@ test("Markdown local image syntax uses the gated image proxy and local files rem
         // Cursor no matter what "Local file links" said. Both slash forms arrive as the path they name.
         "/fixture/plan.md",
         "/fixture/trace.json",
-        // The Windows set. Every one of these was a button with NO `data-local-path` — markup that
-        // looks right and swallows every click (maintainer 2026-09-14: "file links do not seem to be
-        // working"). The `file:` form sheds the URL slash the drive wears, so all three name a file.
+        // Windows destinations carry a path too. The file URL's leading slash stays until the
+        // server normalizes it for its own filesystem.
         "D:/fixture/win-report.md",
         "D:\\fixture\\win-trace.json",
-        "D:/fixture/win-plan.md",
+        "/D:/fixture/win-plan.md",
       ],
       anchors: [],
       imageSrc: "/_frizz/local-image?path=%2Ffixture%2Fshot.png",
@@ -101,7 +100,7 @@ test("Markdown local image syntax uses the gated image proxy and local files rem
     // anything else to the opener. The click handler reads an extension, never a platform.
     await page.click('button[data-local-path="D:/fixture/win-report.md"]')
     await page.click('button[data-local-path="D:\\\\fixture\\\\win-trace.json"]')
-    await page.click('button[data-local-path="D:/fixture/win-plan.md"]')
+    await page.click('button[data-local-path="/D:/fixture/win-plan.md"]')
     const routed = await page.evaluate(() => ({
       opened: (window as unknown as { __localFileFixtureOpened?: string[] }).__localFileFixtureOpened ?? [],
       drawers: (window as unknown as { __localFileFixtureDrawers: () => unknown[] }).__localFileFixtureDrawers(),
@@ -113,7 +112,7 @@ test("Markdown local image syntax uses the gated image proxy and local files rem
         { kind: "markdown", path: "/fixture/.frizz/threads/6d56ea2f/HANDOFF.md" },
         { kind: "markdown", path: "/fixture/plan.md" },
         { kind: "markdown", path: "D:/fixture/win-report.md" },
-        { kind: "markdown", path: "D:/fixture/win-plan.md" },
+        { kind: "markdown", path: "/D:/fixture/win-plan.md" },
       ],
     })
 
@@ -143,7 +142,7 @@ test("Markdown local image syntax uses the gated image proxy and local files rem
       { kind: "markdown", path: "/fixture/.frizz/threads/6d56ea2f/HANDOFF.md" },
       { kind: "markdown", path: "/fixture/plan.md" },
       { kind: "markdown", path: "D:/fixture/win-report.md" },
-      { kind: "markdown", path: "D:/fixture/win-plan.md" },
+      { kind: "markdown", path: "/D:/fixture/win-plan.md" },
       { kind: "markdown", path: "/fixture/notes.md" },
     ])
     assert.equal(fromHeaders.expanded, expandedBefore)

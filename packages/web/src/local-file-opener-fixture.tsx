@@ -65,13 +65,7 @@ createRoot(document.getElementById("root")!).render(
           "",
           "The raw capture is [`trace.json`](vscode://file//fixture/trace.json).",
           "",
-          // THE WINDOWS SET. A drive path used to classify as local TEXT with no path attached, so
-          // markdown.ts built a button carrying no `data-local-path` and the interceptor ignored every
-          // click on it — on Windows, where the server's own paths are all drive paths, that was every
-          // file link in every message (2026-09-14). The image was worse: with no path it could not be
-          // proxied, so it was dropped from the prose entirely. Both separators, because a worker
-          // writes `\` and a tool reports `/`, and the `file:` form, whose URL slash before the drive
-          // belongs to neither filesystem.
+          // Both drive separators, a file URL pathname, and an inline Windows screenshot.
           "The Windows write-up is in [`win-report.md`](D:/fixture/win-report.md).",
           "",
           "The Windows capture is [`win-trace.json`](D:%5Cfixture%5Cwin-trace.json).",

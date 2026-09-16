@@ -75,10 +75,9 @@ test("a Windows drive path is a file path the server can act on; a remote host i
   assert.deepEqual(localMarkdownTarget("C:\\Users\\me\\shot.png"), { display: "C:\\Users\\me\\shot.png", filePath: "C:\\Users\\me\\shot.png" })
   assert.deepEqual(localMarkdownTarget("C:%5CUsers%5Cme%5Cshot.png"), { display: "C:\\Users\\me\\shot.png", filePath: "C:\\Users\\me\\shot.png" })
   assert.deepEqual(localMarkdownTarget("D:/Development/frizz/AGENTS.md"), { display: "D:/Development/frizz/AGENTS.md", filePath: "D:/Development/frizz/AGENTS.md" })
-  // A drive path wearing a URL's leading slash is neither POSIX nor Windows, and no server gate finds
-  // it. Shed the slash so `file:` links, editor deep links and plain paths all name the same file.
-  assert.deepEqual(localMarkdownTarget("file:///D:/Development/frizz/AGENTS.md"), { display: "D:/Development/frizz/AGENTS.md", filePath: "D:/Development/frizz/AGENTS.md" })
-  assert.deepEqual(localMarkdownTarget("/D:/Development/frizz/AGENTS.md"), { display: "D:/Development/frizz/AGENTS.md", filePath: "D:/Development/frizz/AGENTS.md" })
+  // Only the server knows whether the URL's leading slash belongs to a POSIX filename.
+  assert.deepEqual(localMarkdownTarget("file:///D:/Development/frizz/AGENTS.md"), { display: "/D:/Development/frizz/AGENTS.md", filePath: "/D:/Development/frizz/AGENTS.md" })
+  assert.deepEqual(localMarkdownTarget("/D:/Development/frizz/AGENTS.md"), { display: "/D:/Development/frizz/AGENTS.md", filePath: "/D:/Development/frizz/AGENTS.md" })
   assert.deepEqual(localMarkdownTarget("cursor://file//C:/Users/me/plan.md"), { display: "C:/Users/me/plan.md", filePath: "C:/Users/me/plan.md" })
   // A one-character URL scheme shares the drive path's prefix and must NOT become a file button. The
   // separator count is the whole difference: a path has one, a URL has two.
@@ -86,6 +85,18 @@ test("a Windows drive path is a file path the server can act on; a remote host i
   assert.equal(localMarkdownTarget("m://mail/inbox"), null)
   // A UNC share is still not a file this machine's server resolves.
   assert.deepEqual(localMarkdownTarget("file://fileserver/share/shot.png"), { display: "file://fileserver/share/shot.png" })
+})
+
+test("a POSIX directory named after a drive keeps its root in links and image URLs", () => {
+  for (const path of ["/C:/docs/plan.md", "/D:/docs/shot.png"]) {
+    for (const href of [path, `file://${path}`]) {
+      assert.deepEqual(localMarkdownTarget(href), { display: path, filePath: path })
+    }
+  }
+  assert.equal(
+    localImageUrlForTarget(localMarkdownTarget("/D:/docs/shot.png")!),
+    "/_frizz/local-image?path=%2FD%3A%2Fdocs%2Fshot.png",
+  )
 })
 
 test("normal web, relative app, anchor, and mail links remain links", () => {

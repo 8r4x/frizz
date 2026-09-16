@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events"
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { execFileSync } from "node:child_process"
+import { linkSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs"
 import { pathToFileURL } from "node:url"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -58,6 +59,45 @@ test("a Windows root and a path spelled in another case are one directory", { sk
   writeFileSync(outside, "secret")
   t.after(() => rmSync(outside, { force: true }))
   assert.throws(() => readLocalMarkdown(outside.toLowerCase(), [root]), /trusted roots/)
+})
+
+test("Windows containment rejects a case-distinct sibling and symlinks into it", { skip: process.platform !== "win32" }, async (t) => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "frizz-local-sensitive-")))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  // This needs NTFS per-directory case sensitivity (the WSL optional feature). Verification
+  // hosts set FRIZZ_REQUIRE_CASE_SENSITIVE_FS=1 so unavailable coverage cannot look like a pass.
+  try {
+    execFileSync("fsutil.exe", ["file", "setCaseSensitiveInfo", root, "enable"], { stdio: "pipe" })
+  } catch (error) {
+    if (process.env.FRIZZ_REQUIRE_CASE_SENSITIVE_FS === "1") throw error
+    t.skip("NTFS per-directory case sensitivity is unavailable")
+    return
+  }
+  const trusted = join(root, "Repo")
+  const sibling = join(root, "repo")
+  mkdirSync(trusted)
+  mkdirSync(sibling)
+  assert.notEqual(statSync(trusted, { bigint: true }).ino, statSync(sibling, { bigint: true }).ino)
+  const inside = join(trusted, "plan.md")
+  const outside = join(sibling, "secret.md")
+  writeFileSync(inside, "# Inside\n")
+  writeFileSync(outside, "# Outside\n")
+  assert.equal(readLocalMarkdown(inside, [trusted]).markdown, "# Inside\n")
+  assert.throws(() => readLocalMarkdown(outside, [trusted]), /trusted roots/)
+  assert.throws(() => readLocalTextFile(outside, [trusted]), /trusted roots/)
+  assert.throws(() => resolveWatchableLocalFile(outside, [trusted]), /trusted roots/)
+  assert.equal(resolveOpenableFile(outside, trusted, [trusted]), null)
+  await assert.rejects(openLocalFile(outside, "copy", [trusted]), /trusted roots/)
+
+  const escape = join(trusted, "escape.md")
+  symlinkSync(outside, escape)
+  assert.throws(() => resolveLocalFile(escape, [trusted]), /trusted roots/)
+  const alias = join(root, "alias")
+  symlinkSync(trusted, alias, "junction")
+  assert.equal(readLocalMarkdown(join(alias, "plan.md"), [trusted]).markdown, "# Inside\n")
+  const outsideHardlink = join(sibling, "hardlink.md")
+  linkSync(inside, outsideHardlink)
+  assert.throws(() => resolveLocalFile(outsideHardlink, [trusted]), /trusted roots/)
 })
 
 // A ChildProcess stand-in that settles the way a real spawn does: asynchronously, through a `spawn`
@@ -146,7 +186,7 @@ test("each opener preference selects its own app, and an image ignores the prefe
   writeFileSync(file, "safe")
   const argvFor = async (opener: LocalFileOpener, forceSystem = false) => {
     const calls: SpawnCall[] = []
-    await openLocalFile(file, opener, [root], { forceSystem, spawn: fakeSpawn(calls) })
+    await openLocalFile(file, opener, [root], { forceSystem, spawn: fakeSpawn(calls), env: {}, exists: () => false })
     return [calls[0]!.command, ...calls[0]!.args.slice(0, -1)]
   }
   // The reported bug was upstream of here — the transcript's file links carried a `cursor://` href the
@@ -154,6 +194,8 @@ test("each opener preference selects its own app, and an image ignores the prefe
   // setting is FOR, so a swap here would have gone unnoticed too.
   const expected = process.platform === "darwin"
     ? { system: ["open"], cursor: ["open", "-a", "Cursor"], vscode: ["open", "-a", "Visual Studio Code"], finder: ["open", "-R"] }
+    : process.platform === "win32"
+      ? { system: ["explorer.exe"], cursor: ["cmd.exe", "/d", "/s", "/c"], vscode: ["cmd.exe", "/d", "/s", "/c"], finder: ["explorer.exe"] }
     : { system: ["xdg-open"], cursor: ["cursor"], vscode: ["code"], finder: ["xdg-open"] }
   assert.deepEqual(await argvFor("system"), expected.system)
   assert.deepEqual(await argvFor("cursor"), expected.cursor)

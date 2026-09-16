@@ -1,8 +1,9 @@
 import { spawn, type SpawnOptions } from "node:child_process"
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs"
 import { homedir } from "node:os"
-import { isAbsolute, join, resolve, sep } from "node:path"
+import { dirname, isAbsolute, join, resolve, sep } from "node:path"
 import type { LocalFileOpener } from "@frizz/shared"
+import { normalizeLocalPath } from "./local-path.ts"
 
 export type LocalFileOpenResult = { action: "opened"; path: string } | { action: "copy"; path: string }
 
@@ -15,30 +16,32 @@ export interface SpawnedOpener {
 
 export type LocalFileSpawn = (command: string, args: readonly string[], options: SpawnOptions) => SpawnedOpener
 
-// Windows paths name the same file in either case, and the two spellings of one root DO occur: a tool
-// reports `d:\dev\repo\a.ts` while `project.dir` came back from git as `D:\Development\repo`, and
-// `realpathSync` preserves whatever case it was handed for the drive. A byte comparison then read that
-// as an escape attempt and refused the file. Fold case on win32 only — a POSIX path is case-sensitive
-// and must keep being compared byte for byte.
-function sameCase(path: string): string {
-  return process.platform === "win32" ? path.toLowerCase() : path
-}
-
-function isUnder(rawReal: string, root: string): boolean {
+function isUnder(real: string, root: string): boolean {
   let rootReal: string
-  try { rootReal = sameCase(realpathSync(root)) } catch { return false }
-  const real = sameCase(rawReal)
-  return real === rootReal || real.startsWith(rootReal.endsWith(sep) ? rootReal : rootReal + sep)
+  try { rootReal = realpathSync(root) } catch { return false }
+  if (process.platform !== "win32") {
+    return real === rootReal || real.startsWith(rootReal.endsWith(sep) ? rootReal : rootReal + sep)
+  }
+  // Windows realpath can retain the caller's casing. Compare directory identities instead:
+  // folding names would also admit distinct siblings in a case-sensitive NTFS directory.
+  try {
+    const trusted = statSync(rootReal, { bigint: true })
+    if (!trusted.isDirectory() || trusted.ino === 0n) return false
+    for (let ancestor = real; ;) {
+      const actual = statSync(ancestor, { bigint: true })
+      if (actual.dev === trusted.dev && actual.ino === trusted.ino) return true
+      const parent = dirname(ancestor)
+      if (parent === ancestor) return false
+      ancestor = parent
+    }
+  } catch { return false }
 }
 
 // Canonicalize before containment so a symlink below a trusted root cannot smuggle a path outside.
-// Files only. The breadth of what's openable is the CALLER's `roots`: the image proxy stays narrow
-// (artifact dirs), while the open action gates to home-and-below (see the router) so a referenced file
-// like ~/.claude/CLAUDE.md can open — still confined, never the whole filesystem.
+// Files only; readers, watchers and openers share the caller's trusted directory roots.
+// The image proxy has its own, deliberately path-unconfined resolver.
 export function resolveLocalFile(rawPath: string, roots: readonly string[]): string {
-  // A file URL's pathname keeps `/` before a Windows drive (`/D:/docs/plan.md`).
-  // Normalize here so readers, watchers and openers agree, but leave POSIX names untouched.
-  if (process.platform === "win32") rawPath = rawPath.replace(/^\/([a-zA-Z]:[\\/])/, "$1")
+  rawPath = normalizeLocalPath(rawPath)
   if (!isAbsolute(rawPath)) throw new Error("Local path must be absolute")
   let real: string
   try { real = realpathSync(rawPath) } catch { throw new Error("Local file was not found") }

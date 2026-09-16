@@ -17,10 +17,7 @@ export interface LocalMarkdownTarget {
   filePath?: string
 }
 
-// A drive letter is one character, and so is the shortest legal URL scheme, so `C:/docs/plan.md` and
-// `x://host/p` share a prefix. The lookahead is what tells them apart: a URL's separator is DOUBLE.
-// Without it a single-letter scheme was classified as a Windows path and rendered as a live file
-// button that opens nothing.
+// Keep one-letter URL schemes such as x://host/p out of the drive-path branch.
 const WINDOWS_ABSOLUTE_PATH = /^[a-zA-Z]:[\\/](?![\\/])/
 
 // Editor deep-link schemes that all share VS Code's URL grammar: `<scheme>://file/<path>[:line[:col]]`.
@@ -31,18 +28,6 @@ const WINDOWS_ABSOLUTE_PATH = /^[a-zA-Z]:[\\/](?![\\/])/
 // like a plain path link. The path may carry its own leading slash (`cursor://file//Users/…`) or lean
 // on the route's (`cursor://file/Users/…`); both forms occur in the wild and both editors accept both.
 const EDITOR_FILE_URL = /^(?:cursor|vscode|vscode-insiders|windsurf):\/\/file\/(.*)$/i
-
-// A `file:` URL's pathname keeps a slash before a Windows drive (`/C:/docs/plan.md`), and an editor
-// deep link can carry the same shape. That slash leaves the value neither a POSIX path nor a Windows
-// one, so every server gate reads it as a path that is not there. Drop it here, and on a plain
-// destination too — a tool that serializes a `file:` URL by hand writes the same `/D:/a.md` shape.
-// This is LEXICAL and cannot consult the server's platform, so it accepts one deliberate loss: a real
-// POSIX path whose first segment is literally `C:` (`/C:/dir/a.md`) is unrooted as well. A directory
-// named after a drive letter is vanishingly rare; a mangled Windows path is not.
-// Every OTHER POSIX path is left exactly as written.
-function unrootDrive(path: string): string {
-  return path.replace(/^\/+([A-Za-z]:[\\/])/, "$1")
-}
 
 function decodePath(value: string): string {
   try {
@@ -75,15 +60,9 @@ function isFrizzRoute(href: string): boolean {
  * host is retained as local text but deliberately has no `filePath`: a UNC share is not a file this
  * machine's server can resolve. Protocol-relative URLs (`//cdn.example/...`) remain web URLs.
  *
- * A WINDOWS DRIVE PATH IS A FILE PATH LIKE ANY OTHER. Until 2026-09-14 it was classified as local
- * text carrying no path, on the premise that it "cannot be proxied by a POSIX server endpoint" —
- * which quietly assumed the server is POSIX. On Windows it is not: `/local-image`, the Markdown
- * reader and `openLocalFile` all take `D:\docs\plan.md` and resolve it. That premise cost Windows
- * users every file link in every message: markdown.ts hangs `data-local-path` off this field, so a
- * link became a button carrying no path and A CLICK DID NOTHING AT ALL, while an inline screenshot
- * was dropped from the prose outright (maintainer 2026-09-14: "file links do not seem to be
- * working"). Handing the path over unconditionally is right on either server — a POSIX server
- * refuses a drive path at its own absolute-path gate, and a refusal the user can read beats silence.
+ * Both POSIX and Windows paths carry an actionable filePath. The server decides whether it can
+ * resolve the path; dropping Windows paths here creates inert buttons and removes inline images.
+ * Leave /C:/... intact: it may be a POSIX path, and only a Windows server may shed that first slash.
  */
 export function localMarkdownTarget(raw: string | null | undefined): LocalMarkdownTarget | null {
   const href = raw?.trim()
@@ -95,7 +74,7 @@ export function localMarkdownTarget(raw: string | null | undefined): LocalMarkdo
   if (WINDOWS_ABSOLUTE_PATH.test(decodedHref)) return { display: decodedHref, filePath: decodedHref }
 
   if (decodedHref.startsWith("/") && !decodedHref.startsWith("//") && !isFrizzRoute(decodedHref)) {
-    const path = unrootDrive(decodedHref)
+    const path = decodedHref
     return { display: path, filePath: path }
   }
 
@@ -118,7 +97,7 @@ export function localMarkdownTarget(raw: string | null | undefined): LocalMarkdo
     // A UNC/remote file URL is not a local file the server can safely proxy. It remains a
     // non-navigating chip, while an empty or localhost authority can use the existing gated route.
     if (url.hostname && url.hostname !== "localhost") return { display: href }
-    const path = unrootDrive(decodePath(url.pathname))
+    const path = decodePath(url.pathname)
     return { display: path, filePath: path }
   } catch {
     return { display: href }
@@ -130,7 +109,7 @@ export function localImageUrl(path: string): string {
 }
 
 // Must match the server's image-content-type allowlist. The server still decides whether a path is
-// actually eligible by resolving it and confining it to the active workspace's trusted roots.
+// actually eligible by resolving it to a regular image behind the HTTP origin gate.
 const PROXIED_IMAGE_PATH = /\.(?:png|jpe?g|gif|webp)$/i
 
 export function localImageUrlForTarget(target: LocalMarkdownTarget): string | null {
