@@ -100,6 +100,9 @@ test("acp-bridge: a follow-up during a turn queues and runs after it; one after 
     assert.equal(userIdx.length, 2, "the queued follow-up ran as its own turn after the cancel")
     assert.equal(kinds.filter((k) => k === "turn-end").length, 2)
     assert.ok(kinds.includes("acp-note"), "the cancelled turn left its note")
+    const ends = records(r, "s1").filter((x) => x.kind === "turn-end") as Array<{ successful?: boolean }>
+    assert.equal(ends[0]!.successful, false, "an operator's stop is not a successful turn")
+    assert.equal(ends[1]!.successful, true, "the queued follow-up's own turn ran to completion")
     const delivered = await r.bridge.followUp({ threadSlug: "t1", sessionId: "s1", cwd: r.stateDir, agentId: "fake", text: "third" })
     assert.equal(delivered.state, "delivered")
     await untilIdle(r, "s1")

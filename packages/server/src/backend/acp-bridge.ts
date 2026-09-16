@@ -447,7 +447,9 @@ export class AcpBridge {
       const result = AcpPromptResult.parse(raw)
       this.flushThought(live)
       const finalText = this.flushText(live, true)
-      live.writer.append({ kind: "turn-end", at: this.now(), ...(finalText !== undefined ? { finalText } : {}), successful: result.stopReason !== "refusal" })
+      // A cancelled turn is not a success: the tailer clears provider faults on a successful bracket,
+      // and an operator's stop must not read as the agent having finished cleanly.
+      live.writer.append({ kind: "turn-end", at: this.now(), ...(finalText !== undefined ? { finalText } : {}), successful: result.stopReason !== "refusal" && result.stopReason !== "cancelled" })
       if (result.stopReason === "cancelled") live.writer.append({ kind: "acp-note", at: this.now(), text: "Turn cancelled." })
     } catch (err) {
       this.flushThought(live)
@@ -456,7 +458,7 @@ export class AcpBridge {
       // Some agents (Gemini) answer a cancel with -32603 "aborted" instead of stopReason cancelled.
       const abortedByUs = turn.cancelRequested && err instanceof AcpRemoteError && err.error.code === ACP_ERROR_INTERNAL
       if (abortedByUs) {
-        live.writer.append({ kind: "turn-end", at, ...(finalText !== undefined ? { finalText } : {}), successful: true })
+        live.writer.append({ kind: "turn-end", at, ...(finalText !== undefined ? { finalText } : {}), successful: false })
         live.writer.append({ kind: "acp-note", at, text: "Turn cancelled." })
       } else {
         const message = err instanceof AcpRemoteError
@@ -561,7 +563,9 @@ export class AcpBridge {
       case "usage_update":
         // Keep the file in reading order: the text this usage reading follows goes first.
         this.flushText(live, false)
-        live.writer.append({ kind: "context-usage", at: this.now(), tokens: update.used, window: update.size })
+        // opencode reports `used: 0` on a cancelled turn (live 2026-09-15); a zero reading is not a
+        // measurement and would drop the context dial to empty, so only a positive one is recorded.
+        if (update.used > 0) live.writer.append({ kind: "context-usage", at: this.now(), tokens: update.used, window: update.size })
         return
       case "session_info_update":
         if (update.title) live.writer.append({ kind: "title", title: clip(update.title, 200) })
