@@ -67,6 +67,9 @@ export function threadProfileOptions(backend: unknown): { backend: Backend; opti
       })),
     }
   }
+  // An ACP agent's model is chosen inside the agent (its own config options); Frizz offers no profile
+  // for it yet, so the picker shows nothing rather than failing the RPC.
+  if (backend === "acp") return { backend, options: [] }
   throw new Error("This thread has an unknown backend; its runtime profile cannot be changed")
 }
 

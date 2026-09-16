@@ -1601,7 +1601,7 @@ function sessionThreadView(
     // from today's dispatch preference: unknown/migrated rows remain unmarked, while rows whose
     // database default was explicitly normalized to "claude" get the same per-thread identity as
     // Codex rows.
-    backend: row.backend === "claude" || row.backend === "codex" ? row.backend : undefined,
+    backend: row.backend === "claude" || row.backend === "codex" || row.backend === "acp" ? row.backend : undefined,
     // Only a persisted, validated per-session value is exposed. A migrated row stays visibly unknown;
     // never label it with today's global defaults (which may not match its running process).
     permissionMode,

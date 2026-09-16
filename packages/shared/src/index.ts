@@ -102,8 +102,9 @@ export type RuntimeState = z.infer<typeof RuntimeState>
 
 // Which agent CLI a dispatch/thread runs on (Codex-support epic, Phase 3). Mirrors BackendKind in
 // server/backend/types.ts (the wire can't import it — it lives behind the server boundary). A model
-// selection drives this: a Claude model ⇒ "claude", an OpenAI/GPT model ⇒ "codex".
-export const Backend = z.enum(["claude", "codex"])
+// selection drives this: a Claude model ⇒ "claude", an OpenAI/GPT model ⇒ "codex", an `acp:<agent>`
+// slug ⇒ "acp" (any Agent Client Protocol agent; plans/acp-backend.md).
+export const Backend = z.enum(["claude", "codex", "acp"])
 export type Backend = z.infer<typeof Backend>
 
 // One selectable Codex model, derived server-side from the AUTHORITATIVE ~/.codex/models_cache.json
@@ -126,6 +127,24 @@ export const CodexModel = z.object({
   maxContextWindow: z.number().int().positive().optional(),
 })
 export type CodexModel = z.infer<typeof CodexModel>
+
+// An Agent Client Protocol agent Frizz can launch (server/backend/acp-agents.ts). `available` means
+// its executable was found on the server's PATH; the composer lists only those, as `acp:<id>` models.
+export const AcpAgent = z.object({
+  id: z.string(),
+  label: z.string(),
+  command: z.string(),
+  available: z.boolean(),
+})
+export type AcpAgent = z.infer<typeof AcpAgent>
+
+/** The model slug the composer uses for an ACP agent, and its inverse. Model already drives backend in
+ *  the web (`backendForModel`), so an agent IS a model there — a slug with this prefix means `acp`. */
+export const ACP_MODEL_PREFIX = "acp:"
+export function acpModelSlug(agentId: string): string { return `${ACP_MODEL_PREFIX}${agentId}` }
+export function acpAgentIdFromModel(model: string | null | undefined): string | undefined {
+  return typeof model === "string" && model.startsWith(ACP_MODEL_PREFIX) ? model.slice(ACP_MODEL_PREFIX.length) || undefined : undefined
+}
 
 // A provider-scoped launch profile. The server is the catalogue authority for existing threads:
 // callers receive only models that belong to the row's exact backend and each model carries its
@@ -2802,7 +2821,11 @@ export const AuthSnapshot = z.object({
   codex: ProviderAuth,
   emails: AccountEmails,
 })
-export const AccountLogoutInput = z.object({ backend: z.enum(["claude", "codex"]) }).strict()
+// The backends that HAVE an account Frizz can read and act on. An ACP agent's credentials belong to the
+// agent's own CLI (plans/acp-backend.md, decision 5): Frizz never reads, refreshes or revokes them.
+export const AccountBackend = z.enum(["claude", "codex"])
+export type AccountBackend = z.infer<typeof AccountBackend>
+export const AccountLogoutInput = z.object({ backend: AccountBackend }).strict()
 export type AccountLogoutInput = z.infer<typeof AccountLogoutInput>
 // Result of the typed provider logout action. "blocked" = refused because the provider had live
 // turns (account state is process-global; changing it mid-request produces ambiguous failures);
@@ -2818,7 +2841,7 @@ export type AccountLogoutResult = z.infer<typeof AccountLogoutResult>
 // Slice B login utility: start/inspect/cancel the restricted `claude auth login` terminal. The
 // attempt id is slug-shaped so it can ride the hardened /term/<slug> transport; it is server-issued
 // and opaque — the client never constructs one.
-export const AccountLoginStartInput = z.object({ backend: z.enum(["claude", "codex"]) }).strict()
+export const AccountLoginStartInput = z.object({ backend: AccountBackend }).strict()
 export type AccountLoginStartInput = z.infer<typeof AccountLoginStartInput>
 export const AccountLoginStartResult = z.object({ attemptId: ThreadSlug })
 export type AccountLoginStartResult = z.infer<typeof AccountLoginStartResult>
@@ -2909,6 +2932,15 @@ export const Settings = z.object({
   // it (codex compacts at 90% of the resolved window). Unset ⇒ nothing is sent and the model's stock
   // window applies. Optional so an old blob parses; defaultSettings leaves it unset.
   codexContextWindow: z.number().int().positive().optional(),
+  // The operator's OWN Agent Client Protocol agents, merged over the built-in catalogue by id
+  // (server/backend/acp-agents.ts). `command` is an executable name on PATH or an absolute path;
+  // `args` is what puts it into ACP mode (`["acp"]`, `["--acp"]`). Optional so an old blob parses.
+  acpAgents: z.array(z.object({
+    id: z.string().trim().min(1).max(64).regex(/^[a-z0-9][a-z0-9._-]*$/i),
+    label: z.string().trim().min(1).max(80),
+    command: z.string().trim().min(1).max(1_024),
+    args: z.array(z.string().max(1_024)).max(32).optional(),
+  })).max(32).optional(),
   // The GitHub batch-dispatch prompt template (the picker's per-item worker prompt). Optional: when
   // unset OR blank the server falls back to its exported DEFAULT_GITHUB_PROMPT. Substitution tokens
   // the server fills: {repo} {n} {title} {url} {labels} {body}. The leading `THREAD: <slug>` tag is
@@ -2946,21 +2978,27 @@ export const DispatchPreferences = z.object({
   backend: Backend,
   claude: DispatchProviderPreferences,
   codex: DispatchProviderPreferences,
+  // Optional because every record written before the ACP backend existed lacks it, and a required
+  // key would fail those records' parse and silently reset the operator's saved profile.
+  acp: DispatchProviderPreferences.optional(),
 })
 export type DispatchPreferences = z.infer<typeof DispatchPreferences>
 
 // One complete launch profile. GitHub batch dispatch carries this whole tuple — read from the
 // durable new-thread preference its own footer selector writes — instead of consulting Settings
 // again: backend owns the model, and effort is part of the same atomic profile cell.
-export const DispatchProfileSnapshot = z.object({
+const DispatchProfileSnapshotShape = z.object({
   backend: Backend,
   model: z.string().trim().min(1).max(200),
-  effort: Settings.shape.effort.unwrap(),
+  // Required for Claude and Codex (the refinement below); absent for an ACP agent, which runs with
+  // whatever model and effort its own CLI is configured for — Frizz has no effort axis to offer there.
+  effort: Settings.shape.effort,
   // IGNORED: dispatch permission is decided server-side (workerDispatchPermission) from the
   // non-interactive floor plus the operator's Settings choice, never per dispatch. Optional so old
   // clients that still send it parse.
   permissionMode: PermissionMode.optional(),
 }).strict()
+export const DispatchProfileSnapshot = DispatchProfileSnapshotShape.superRefine(requireEffortOutsideAcp)
 export type DispatchProfileSnapshot = z.infer<typeof DispatchProfileSnapshot>
 
 // Atomic updates avoid read/modify/write races between the sidebar form and the anywhere composer.
@@ -2973,12 +3011,20 @@ export const SetDispatchPreferenceInput = z.discriminatedUnion("field", [
     field: z.literal("profile"),
     backend: Backend,
     model: z.string().trim().min(1).max(200),
-    effort: Settings.shape.effort.unwrap(),
+    // Optional ONLY for an ACP profile (see DispatchProfileSnapshot); a Claude/Codex profile without
+    // an effort is refused below rather than silently stored as "default".
+    effort: Settings.shape.effort,
   }),
   z.object({ field: z.literal("model"), backend: Backend, value: z.string().trim().min(1).max(200) }),
   z.object({ field: z.literal("effort"), backend: Backend, value: Settings.shape.effort.unwrap() }),
-])
+]).superRefine((update, ctx) => { if (update.field === "profile") requireEffortOutsideAcp(update, ctx) })
 export type SetDispatchPreferenceInput = z.infer<typeof SetDispatchPreferenceInput>
+
+function requireEffortOutsideAcp(profile: { backend: Backend; effort?: string }, ctx: z.RefinementCtx): void {
+  if (profile.backend !== "acp" && profile.effort === undefined) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["effort"], message: `effort is required for a ${profile.backend} profile` })
+  }
+}
 
 // ---- RPC inputs ----
 
@@ -4147,9 +4193,9 @@ export type GithubListResult = z.infer<typeof GithubListResult>
 // current, small wire payload). Deliberately UNCAPPED: the picker pages through the whole repo and a
 // human may well want every issue on a page (or several pages' worth) investigated at once. The
 // server dispatches them SEQUENTIALLY, so a large batch is a long request, never a spawn burst.
-export const GithubBatchInput = DispatchProfileSnapshot.extend({
+export const GithubBatchInput = DispatchProfileSnapshotShape.extend({
   items: z.array(z.object({ kind: z.enum(["issue", "pr"]), number: z.number().int().positive() })).min(1),
-}).strict()
+}).strict().superRefine(requireEffortOutsideAcp)
 export type GithubBatchInput = z.infer<typeof GithubBatchInput>
 
 export const GithubBatchResult = z.object({

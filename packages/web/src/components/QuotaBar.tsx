@@ -1,7 +1,7 @@
 import { useRef, useState } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { Loader2 } from "lucide-react"
-import type { Backend, ProviderAuth, ProviderQuota, QuotaWindow } from "@frizz/shared"
+import type { AccountBackend, ProviderAuth, ProviderQuota, QuotaWindow } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { ProviderMark } from "./ProviderMark.tsx"
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/Popover.tsx"
@@ -77,7 +77,7 @@ const QUOTA_READING = "text-[9px]"
 // `!` on both because ProviderMark composes its own `text-muted/65` and `size-*` ahead of this
 // className, and Tailwind resolves a same-property collision by CSS SOURCE order, not class order —
 // without it these silently lose to the defaults.
-const PROVIDER_MARK_AS_ICON: Record<Backend, string> = {
+const PROVIDER_MARK_AS_ICON: Record<AccountBackend, string> = {
   claude: "text-fg/75! size-[14px]! translate-y-0!",
   codex: "text-fg/75! size-[12.75px]! translate-y-0!",
 }
@@ -142,7 +142,7 @@ export function QuotaChips() {
     refetchOnWindowFocus: true,
   })
 
-  const recheck = (backend: Backend) => {
+  const recheck = (backend: AccountBackend) => {
     if (recheckInFlight.current) return
     setRechecking(true)
     const request = Promise.all([
@@ -188,7 +188,7 @@ function QuotaChip({
   fetching,
   onRecheck,
 }: {
-  backend: Backend
+  backend: AccountBackend
   quota: ProviderQuota | undefined
   auth: ProviderAuth | undefined
   email: string | undefined

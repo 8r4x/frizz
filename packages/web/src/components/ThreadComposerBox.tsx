@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState, type ReactElement, type ReactNode } from "react"
 import { useSnapshot } from "valtio"
-import type { Backend, ThreadSkill } from "@frizz/shared"
+import type { AccountBackend, ThreadSkill } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
-import { restoreContextItems, store, takeContextItems } from "../store.ts"
+import { restoreContextItems, showToast, store, takeContextItems } from "../store.ts"
 import { buildMessageWithContext, hasToken } from "../lib/composerContext.ts"
 import { splitComposerValue } from "../lib/imagePaths.ts"
 import { useThreadComposerControls } from "../hooks/useThreadComposerControls.tsx"
@@ -85,9 +85,9 @@ export function ThreadComposerBox({
   const [message, setMessage, clearMessage] = useDraft(key)
   const controls = useThreadComposerControls(slug)
   const followUp = useEagerFollowUp(slug)
-  const [signInFor, setSignInFor] = useState<Backend | null>(null)
+  const [signInFor, setSignInFor] = useState<AccountBackend | null>(null)
   const slashSuggest = useMemo(() => () => fetchThreadSkills(slug), [slug])
-  const [logoutFor, setLogoutFor] = useState<Backend | null>(null)
+  const [logoutFor, setLogoutFor] = useState<AccountBackend | null>(null)
 
   // The ⌘I roster and its tokens. DELETING A TOKEN IS THE REMOVAL GESTURE: whenever the draft or
   // the roster changes, any staged item whose `@` token no longer appears in the prose is dropped —
@@ -105,10 +105,11 @@ export function ThreadComposerBox({
 
   // INTERRUPT AND SEND is offered only when there is something to interrupt AND a runtime that can be
   // preempted. `runtime === "running"` is exactly "process alive, turn in flight"; codex is excluded
-  // because its app-server bridge owns the steer/turn decision itself and frizz does not reach past it.
+  // because its app-server bridge owns the steer/turn decision itself and frizz does not reach past it,
+  // and an ACP agent because ACP has no steer — a follow-up queues behind the running turn.
   // A `submitOverride` surface (the queue card's staged answers) is excluded too — that controller
   // sends a whole answer set, and preemption is not part of its contract.
-  const canInterrupt = !submitOverride && thread?.runtime === "running" && thread.backend !== "codex"
+  const canInterrupt = !submitOverride && thread?.runtime === "running" && thread.backend !== "codex" && thread.backend !== "acp"
 
   function send(interrupt = false) {
     const text = message.trim()
@@ -119,7 +120,11 @@ export function ThreadComposerBox({
     const alias = parseAccountAlias(text)
     if (alias) {
       clearMessage()
-      const backend: Backend = thread?.backend === "codex" ? "codex" : "claude"
+      if (thread?.backend === "acp") {
+        showToast("An ACP agent signs in through its own CLI — Frizz holds no account for it")
+        return
+      }
+      const backend: AccountBackend = thread?.backend === "codex" ? "codex" : "claude"
       if (alias === "login") setSignInFor(backend)
       else setLogoutFor(backend)
       return

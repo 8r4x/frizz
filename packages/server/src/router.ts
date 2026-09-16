@@ -122,8 +122,10 @@ import {
   humanGapNote,
   SetOwnThreadTitleInput,
   SetOwnThreadTitleResult,
+  AcpAgent,
 } from "@frizz/shared"
 import { type AppContext } from "./context.ts"
+import { listAcpAgents } from "./backend/acp-agents.ts"
 import { sessionTitleLocked } from "./storage.ts"
 import { mayHaveLiveBackgroundWork, needsFreshProcessForLimit } from "./backend/usage-limit.ts"
 import { appServerTurnStalled, resolveLiveWatchTarget, resolveRecurringPrompt } from "./board.ts"
@@ -180,6 +182,10 @@ const SlugInput = z.object({ slug: ThreadSlug }).strict()
 // replaced with Settings defaults. Permission is NOT part of the tuple: dispatch stamps it server-side
 // (workerDispatchPermission — the non-interactive floor, raised to bypass only when Settings asks).
 export function validateGithubDispatchProfile(input: z.infer<typeof GithubBatchInput>): void {
+  // An ACP profile carries no effort, and its "model" is an `acp:<agent>` slug the dispatcher resolves
+  // itself (refusing an agent that is not on PATH) — there is no model/effort catalogue to check.
+  if (input.backend === "acp") return
+  if (input.effort === undefined) throw new Error(`Unsupported ${input.backend} model/effort pair: ${input.model} / (no effort)`)
   validateThreadProfile(input.backend, input.model, input.effort)
 }
 
@@ -258,6 +264,13 @@ export interface CodexTurnTerminator {
   interruptTurn(threadSlug: string, sessionId: string): Promise<{ interrupted: boolean }>
 }
 
+// The ACP bridge's slice of the same contract: a turn is live only while its `session/prompt` is in
+// flight, and interruptTurn resolves once that prompt has returned (or the child was killed).
+export interface AcpTurnTerminator {
+  turnLiveness(threadSlug: string, sessionId: string): { turnActive: boolean } | undefined
+  interruptTurn(threadSlug: string, sessionId: string): Promise<{ interrupted: boolean }>
+}
+
 // Which rows the bridge owns. A LEGACY Codex row — dispatched pre-cutover, `codex_runtime` NULL,
 // migrated only when a follow-up first touches it (see followUp) — was never an app-server thread, so it
 // keeps the registered-runtime terminator, which finds nothing to stop because that row's pre-cutover
@@ -307,7 +320,14 @@ export async function stopThreadRuntime(
   runtime: RegisteredRuntimeTerminator = cachedLivenessTerminator,
   codex?: CodexTurnTerminator,
   claudeBroker?: ClaudeBrokerTerminator,
+  acp?: AcpTurnTerminator,
 ): Promise<"absent" | "stopped"> {
+  if (row.backend === "acp") {
+    // The bridge answers both questions: is a turn running, and stop it (session/cancel, then wait for
+    // the prompt to return). A resting ACP thread costs nothing here.
+    if (!acp?.turnLiveness(row.slug, row.session_id)?.turnActive) return "absent"
+    return (await acp.interruptTurn(row.slug, row.session_id)).interrupted ? "stopped" : "absent"
+  }
   if (isAppServerCodexRow(row)) {
     if (!appServerCodexTurnLive(codex, row)) return "absent"
     if (!codex) throw new Error("The Codex app-server is unavailable; nothing was stopped")
@@ -374,9 +394,10 @@ export async function stopRuntimeBySlug(
   runtime: RegisteredRuntimeTerminator = cachedLivenessTerminator,
   codex?: CodexTurnTerminator,
   claudeBroker?: ClaudeBrokerTerminator,
+  acp?: AcpTurnTerminator,
 ): Promise<{ outcome: "absent" | "stopped"; row?: SessionRow }> {
   const row = storage.getSession(slug)
-  if (row) return { outcome: await stopThreadRuntime(storage, row, runtime, codex, claudeBroker), row }
+  if (row) return { outcome: await stopThreadRuntime(storage, row, runtime, codex, claudeBroker, acp), row }
   if (storage.getAdoptionClaim(slug)) throw new Error("An adoption attempt is in progress; nothing was stopped")
   // A rowless thread name has no durable owner identity. Even a DB lock cannot make a detached worker
   // crash-safe after this process dies, so never issue a reusable-name kill without a row.
@@ -485,6 +506,7 @@ export async function completeRegisteredThread(
   telemetry?: SessionTelemetry,
   codex?: CodexTurnTerminator,
   claudeBroker?: ClaudeBrokerTerminator,
+  acp?: AcpTurnTerminator,
 ): Promise<{ needsConfirmation: boolean; hold?: CompletionHold }> {
   const binding = adoptionRuntimeBinding(storage, row)
   if (binding.kind === "conflict") {
@@ -502,10 +524,13 @@ export async function completeRegisteredThread(
   // confirmation, no termination) and orphan the daemon, the exact codex bug this branch mirrors.
   // A pre-cutover row has no transport left, so it can never be live; every current row is one of the
   // two headless kinds above.
+  // An ACP row is live while its prompt is in flight — the bridge's own reading, same as codex.
   const live = brokerClaude
     ? (claudeBroker?.isDaemonAlive(row.session_id) ?? false)
     : appServerCodex
     ? appServerCodexTurnLive(codex, row)
+    : row.backend === "acp"
+    ? (acp?.turnLiveness(row.slug, row.session_id)?.turnActive ?? false)
     : false
 
   // A live runtime is asked about when it is still working; a dead one when it never finished. The
@@ -517,7 +542,7 @@ export async function completeRegisteredThread(
     // row exactly as it was — an archived row whose worker is still running is the failure this whole
     // change exists to remove, and for codex it is unrecoverable from the UI (the daemon outlives us
     // and an archived thread has no card left to act on).
-    await stopThreadRuntime(storage, row, runtime, codex, claudeBroker)
+    await stopThreadRuntime(storage, row, runtime, codex, claudeBroker, acp)
     // For a standalone registered session this is the postcondition that turns an idempotent kill into
     // a safe completion operation. An adopted binding is already verified by stopRegisteredRuntime, an
     // app-server codex turn by interruptTurn's own proof that the turn retired, and a broker Claude
@@ -542,6 +567,7 @@ export async function stopAndForgetRegisteredRuntime(
   runtime: RegisteredRuntimeTerminator = cachedLivenessTerminator,
   codex?: CodexTurnTerminator,
   claudeBroker?: ClaudeBrokerTerminator,
+  acp?: AcpTurnTerminator,
 ): Promise<SessionRow> {
   const binding = adoptionRuntimeBinding(storage, row)
   if (binding.kind === "conflict") {
@@ -552,7 +578,7 @@ export async function stopAndForgetRegisteredRuntime(
     runtimeGeneration: row.runtime_generation ?? 0,
     adoptionAttemptToken: binding.kind === "bound" ? binding.claim.attempt_token : null,
   }
-  await stopThreadRuntime(storage, row, runtime, codex, claudeBroker)
+  await stopThreadRuntime(storage, row, runtime, codex, claudeBroker, acp)
   const forgotten = storage.forgetSessionIfCurrent(row.slug, expected)
   if (!forgotten) {
     throw new Error("This thread resumed or was replaced while it was being dismissed; the new worker was preserved")
@@ -1746,6 +1772,26 @@ export function createRouter(ctx: AppContext) {
         // stale-draft class. The bridge owns the steer-vs-start decision atomically and dedups on
         // deliveryId. A LEGACY Codex row (dispatched before the cutover) is migrated on its first
         // follow-up by adopting its rollout; from then on it is an ordinary app-server thread.
+        // An ACP follow-up goes to the bridge, which delivers it now, queues it behind a running turn
+        // (ACP has no steer), or re-opens the session first when the child is gone (a restart). The
+        // ledger entry is `delivered` or `enqueued` accordingly; a fresh ACP session id is re-pinned.
+        if (row?.backend === "acp") {
+          const bridge = ctx.acpBridge
+          if (!bridge) throw new Error("The ACP bridge is unavailable; cannot deliver this follow-up")
+          const result = await bridge.followUp({
+            threadSlug: input.slug, sessionId: row.session_id, cwd: ctx.project.dir,
+            agentId: row.acp_agent ?? "", acpSessionId: row.agent_session_id,
+            text: messageForWorker, ...(input.deliveryId ? { deliveryId: input.deliveryId } : {}),
+          })
+          if (result.acpSessionId !== row.agent_session_id) ctx.storage.setAgentSession(input.slug, result.acpSessionId)
+          if (row.exited === 1) ctx.storage.setExitedIfCurrent(input.slug, row.session_id, row.runtime_generation ?? 0, false)
+          if (input.deliveryId) {
+            appendDelivery(ctx.storage, input.slug, { id: input.deliveryId, text: input.message, state: result.state === "queued" ? "enqueued" : "delivered" })
+            ctx.transcriptChange.emit([input.slug])
+          }
+          ctx.board.refresh()
+          return
+        }
         if (row?.backend === "codex") {
           const bridge = ctx.codexAppServer
           if (!bridge) throw new Error("Codex app-server is unavailable; cannot deliver this follow-up")
@@ -2087,6 +2133,7 @@ export function createRouter(ctx: AppContext) {
         // Codex TUI as a Claude composer. That controller is gone (see the Claude branch below), but the
         // BACKEND test stays: followUp branches the same way and migrates such a row on contact.
         const permRow = ctx.storage.getSession(input.slug)
+        if (permRow?.backend === "acp") throw new Error("An ACP agent enforces its own permissions; Frizz has no mode to set on it")
         if (permRow?.backend === "codex") {
           // Persist FIRST and unconditionally: the registry is the operator's stated intent, it is what
           // every later cold resume now carries (resumeSandboxOverride), and it must survive even if the
@@ -2171,7 +2218,9 @@ export function createRouter(ctx: AppContext) {
         const row = ctx.storage.getSession(input.slug)
         if (!row) throw new Error(`thread ${input.slug} has no session to ask for skills`)
         let skills: ThreadSkill[]
-        if (row.backend === "codex") {
+        if (row.backend === "acp") {
+          skills = [] // an ACP agent's skills are its own; the protocol lists commands, not skills
+        } else if (row.backend === "codex") {
           if (!isAppServerCodexRow(row) || !ctx.codexAppServer) {
             throw new Error("This Codex thread has no app-server session to ask for skills")
           }
@@ -2197,6 +2246,7 @@ export function createRouter(ctx: AppContext) {
         // controller that used to follow was Claude-only, so a legacy (unmigrated) codex row must not
         // reach its reattach.
         const profRow = ctx.storage.getSession(input.slug)
+        if (profRow?.backend === "acp") throw new Error("An ACP agent chooses its own model; Frizz offers no profile for it yet")
         if (profRow?.backend === "codex") {
           ctx.storage.setProfile(input.slug, input.model, input.effort)
           ctx.board.refresh()
@@ -2277,7 +2327,7 @@ export function createRouter(ctx: AppContext) {
       handler: async ({ input }) => {
         const row = currentOwnedSession(input.slug, input.sessionId)
         const result = await completeRegisteredThread(
-          ctx.storage, row, input.terminateLive, cachedLivenessTerminator, ctx.tailer.get(input.slug), ctx.codexAppServer, ctx.claudeBroker,
+          ctx.storage, row, input.terminateLive, cachedLivenessTerminator, ctx.tailer.get(input.slug), ctx.codexAppServer, ctx.claudeBroker, ctx.acpBridge,
         )
         if (!result.needsConfirmation) ctx.board.refresh()
         return result
@@ -3007,7 +3057,7 @@ export function createRouter(ctx: AppContext) {
         if (t && t.runtime !== "exited") {
           throw new Error("only a stalled or exited session can be dismissed — archive a live one instead")
         }
-        await stopAndForgetRegisteredRuntime(ctx.storage, row, cachedLivenessTerminator, ctx.codexAppServer, ctx.claudeBroker)
+        await stopAndForgetRegisteredRuntime(ctx.storage, row, cachedLivenessTerminator, ctx.codexAppServer, ctx.claudeBroker, ctx.acpBridge)
         ctx.tailer.forget(input.slug)
         ctx.board.refresh() // storage-only change — the removed row fans out as a delete delta on SSE
       },
@@ -3144,7 +3194,7 @@ export function createRouter(ctx: AppContext) {
       handler: async ({ input }) => {
         assertLegacyMutationAllowed(input.slug)
         if (input.status === "dismissed") {
-          const stopped = await stopRuntimeBySlug(ctx.storage, input.slug, cachedLivenessTerminator, ctx.codexAppServer, ctx.claudeBroker)
+          const stopped = await stopRuntimeBySlug(ctx.storage, input.slug, cachedLivenessTerminator, ctx.codexAppServer, ctx.claudeBroker, ctx.acpBridge)
           if (stopped.row && !ctx.storage.setExitedIfCurrent(
             stopped.row.slug,
             stopped.row.session_id,
@@ -3265,7 +3315,7 @@ export function createRouter(ctx: AppContext) {
         // with turn/interrupt rather than a kill aimed at a registered runtime it never had. A stop that
         // could not be delivered throws out of here BEFORE setExitedIfCurrent, so the row is never
         // marked exited on the strength of a termination that did not happen.
-        const stopped = await stopRuntimeBySlug(ctx.storage, input.slug, cachedLivenessTerminator, ctx.codexAppServer, ctx.claudeBroker)
+        const stopped = await stopRuntimeBySlug(ctx.storage, input.slug, cachedLivenessTerminator, ctx.codexAppServer, ctx.claudeBroker, ctx.acpBridge)
         if (stopped.row && !ctx.storage.setExitedIfCurrent(
           stopped.row.slug,
           stopped.row.session_id,
@@ -3284,6 +3334,13 @@ export function createRouter(ctx: AppContext) {
     codexModels: query({
       output: z.array(CodexModel),
       handler: async () => readCodexModels(),
+    }),
+
+    // The ACP agents Frizz knows how to launch, with `available` for the ones on this machine's PATH.
+    // The composer lists the available ones as `acp:<id>` models (plans/acp-backend.md, decision 9).
+    acpAgents: query({
+      output: z.array(AcpAgent),
+      handler: async () => listAcpAgents(ctx.getSettings().acpAgents).map((a) => ({ id: a.id, label: a.label, command: a.command, available: a.bin !== undefined })),
     }),
 
     // Provider subscription quota (5h + weekly rate-limit windows) for the sidebar status bar. Codex
@@ -3341,7 +3398,8 @@ export function createRouter(ctx: AppContext) {
         // The login CLI finished → the pty is spent; tear it down eagerly so the OAuth bytes don't
         // linger in its replay buffer. Cancel is idempotent.
         if (state === "exited") ctx.loginUtility.cancel(input.attemptId)
-        return { state, auth: auth[backend ?? "claude"] }
+        // The login utility only signs into Claude and Codex; an ACP agent logs in with its own CLI.
+        return { state, auth: backend === "acp" ? "unknown" : auth[backend ?? "claude"] }
       },
     }),
 

@@ -36,7 +36,7 @@ export function GithubPickerModal({ onClose }: { onClose: () => void }) {
   // below writes it, so choosing here also becomes the composer's next default (one profile, not a
   // picker-local copy that silently diverges). A Codex cache refresh can invalidate the saved pair
   // while the picker is open; the final revalidation below then fails closed rather than downgrading.
-  const { resolved, codexList, loadError, saveProfile } = useDispatchProfile()
+  const { resolved, codexList, acpList, loadError, saveProfile } = useDispatchProfile()
 
   const [kind, setKind] = useState<Kind>("issues")
   const [sort, setSort] = useState<Sort>("recent")
@@ -128,16 +128,16 @@ export function GithubPickerModal({ onClose }: { onClose: () => void }) {
   const n = selected.size
   // Stable identity: ProfileGridSelector memoizes off `groups`, and this modal re-renders on every
   // row toggle.
-  const profileGroups = useMemo(() => dispatchProfileGroups(codexList), [codexList])
+  const profileGroups = useMemo(() => dispatchProfileGroups(codexList, acpList), [codexList, acpList])
   const profile: DispatchProfileSnapshot | undefined = resolved
-    ? { backend: resolved.backend, model: resolved.model, effort: resolved.effort as DispatchProfileSnapshot["effort"] }
+    ? { backend: resolved.backend, model: resolved.model, effort: (resolved.effort || undefined) as DispatchProfileSnapshot["effort"] }
     : undefined
   // Two levels, deliberately: `profileError` is a real fault worth a red line under the selector (a
   // saved model/effort the catalogue no longer offers, or a catalogue that failed to load), while
   // `dispatchBlocked` also covers the merely-not-loaded-yet case — the selector's own "Profile
   // loading…" placeholder already says that, so it must not paint red.
   const profileError = profile
-    ? dispatchProfileError(profile, codexList)
+    ? dispatchProfileError(profile, codexList, acpList)
     : loadError
       ? "Could not load the model catalogue — reopen once it loads"
       : undefined

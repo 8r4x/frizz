@@ -2,6 +2,7 @@ import {
   DispatchPreferences,
   type Backend,
   type CodexModel,
+  type DispatchProviderPreferences,
   type PermissionMode,
   type SetDispatchPreferenceInput,
   type Settings,
@@ -55,7 +56,16 @@ export function defaultDispatchPreferences(
     backend,
     claude: backend === "claude" ? selected : { permissionMode: "auto" },
     codex: backend === "codex" ? selected : { permissionMode: "default" },
+    // The ACP slot exists only once the operator has chosen an agent: it has no permission axis (the
+    // agent's own CLI decides), so there is no default worth writing, and every record written before
+    // the backend existed lacks the key.
+    ...(backend === "acp" ? { acp: selected } : {}),
   }
+}
+
+/** A backend's slot: always present for the two original runtimes, empty for `acp` until chosen. */
+function profileOf(prefs: DispatchPreferences, backend: Backend): DispatchProviderPreferences {
+  return prefs[backend] ?? {}
 }
 
 // machine record → this project's stored row → the Settings-derived default. Read-time validation
@@ -88,13 +98,13 @@ export function setDispatchPreference(
       ...current,
       backend: update.backend,
       [update.backend]: {
-        ...current[update.backend],
+        ...profileOf(current, update.backend),
         model: update.model,
         effort: update.effort,
       },
     }
   } else {
-    const profile = current[update.backend]
+    const profile = profileOf(current, update.backend)
     next = {
       ...current,
       ...(update.field === "model" ? { backend: update.backend } : {}),

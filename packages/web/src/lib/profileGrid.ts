@@ -78,8 +78,14 @@ export function profileGridColumns(groups: readonly ProfileGridGroup[]): string[
   return columns
 }
 
+// An option with NO efforts (an ACP agent, which runs on its own CLI's model and effort) is one
+// selection with `effort: ""` — a single cell in the row — rather than none at all.
+export function profileGridOptionEfforts(option: ProfileGridOption): readonly string[] {
+  return option.efforts.length ? option.efforts : [""]
+}
+
 export function profileGridSelections(groups: readonly ProfileGridGroup[]): ProfileGridSelection[] {
-  return groups.flatMap((group) => group.options.flatMap((option) => option.efforts.map((effort) => ({
+  return groups.flatMap((group) => group.options.flatMap((option) => profileGridOptionEfforts(option).map((effort) => ({
     provider: group.id,
     model: option.model,
     effort,
@@ -104,10 +110,10 @@ export function profileGridSelectionKnown(
   groups: readonly ProfileGridGroup[],
   selection: Partial<ProfileGridSelection> | undefined,
 ): boolean {
-  if (!selection?.model || !selection.effort) return false
+  if (!selection?.model || selection.effort === undefined) return false
   return groups.some((group) =>
     (!selection.provider || group.id === selection.provider) &&
-    group.options.some((option) => option.model === selection.model && option.efforts.includes(selection.effort!)),
+    group.options.some((option) => option.model === selection.model && profileGridOptionEfforts(option).includes(selection.effort!)),
   )
 }
 
@@ -140,27 +146,28 @@ export function moveProfileGridSelection(
   const rowIndex = rows.findIndex((row) => row.provider === current.provider && row.option.model === current.model)
   if (rowIndex === -1) return null
   const row = rows[rowIndex]!
-  const currentEffortIndex = row.option.efforts.indexOf(current.effort)
+  const rowEfforts = profileGridOptionEfforts(row.option)
+  const currentEffortIndex = rowEfforts.indexOf(current.effort)
   if (currentEffortIndex === -1) return null
 
   if (key === "Home" || key === "End" || key === "ArrowLeft" || key === "ArrowRight") {
     const nextIndex = key === "Home"
       ? 0
       : key === "End"
-        ? row.option.efforts.length - 1
+        ? rowEfforts.length - 1
         : currentEffortIndex + (key === "ArrowLeft" ? -1 : 1)
-    const effort = row.option.efforts[nextIndex]
-    return effort ? { provider: row.provider, model: row.option.model, effort } : null
+    const effort = rowEfforts[nextIndex]
+    return effort !== undefined ? { provider: row.provider, model: row.option.model, effort } : null
   }
 
   const nextRow = rows[rowIndex + (key === "ArrowUp" ? -1 : 1)]
   if (!nextRow) return null
   const currentColumn = columnOf(current.effort)
-  const effort = nextRow.option.efforts.reduce<string | undefined>((nearest, candidate) => {
-    if (!nearest) return candidate
+  const effort = profileGridOptionEfforts(nextRow.option).reduce<string | undefined>((nearest, candidate) => {
+    if (nearest === undefined) return candidate
     return Math.abs(columnOf(candidate) - currentColumn) < Math.abs(columnOf(nearest) - currentColumn)
       ? candidate
       : nearest
   }, undefined)
-  return effort ? { provider: nextRow.provider, model: nextRow.option.model, effort } : null
+  return effort !== undefined ? { provider: nextRow.provider, model: nextRow.option.model, effort } : null
 }

@@ -1,4 +1,4 @@
-import { PermissionMode, type Backend, type CodexModel } from "@frizz/shared"
+import { ACP_MODEL_PREFIX, PermissionMode, type Backend, type CodexModel } from "@frizz/shared"
 import type { SelectOption, SelectGroup } from "../components/ui/Select.tsx"
 
 // Shared option sets for the permission / model / effort selects, used by both the New-thread
@@ -91,12 +91,14 @@ export const CODEX_MODELS_FALLBACK: CodexModel[] = [
 // models above. backendForModel unions this with whatever live list a caller passes.
 const FALLBACK_CODEX_SLUGS = new Set(CODEX_MODELS_FALLBACK.map((m) => m.slug))
 
-// The backend a model id runs on — the model→backend derivation the whole picker keys off. A slug in the
-// codex catalogue ⇒ "codex"; anything else (a Claude alias, "", or an unknown) ⇒ "claude" (the default).
+// The backend a model id runs on — the model→backend derivation the whole picker keys off. An `acp:<id>`
+// slug ⇒ "acp" (an ACP agent IS the model there); a slug in the codex catalogue ⇒ "codex"; anything
+// else (a Claude alias, "", or an unknown) ⇒ "claude" (the default).
 // `codexModels` is the live RPC list when available (so a brand-new codex slug resolves correctly the
 // instant it appears in the cache); it falls back to the compiled-in slug set while the RPC is loading.
 export function backendForModel(model: string | undefined, codexModels?: readonly CodexModel[]): Backend {
   if (!model) return "claude"
+  if (model.startsWith(ACP_MODEL_PREFIX)) return "acp"
   if (FALLBACK_CODEX_SLUGS.has(model)) return "codex"
   return codexModels?.some((m) => m.slug === model) ? "codex" : "claude"
 }

@@ -1,7 +1,7 @@
 import { useMutation, useQuery } from "@tanstack/react-query"
 import type { ReactNode } from "react"
 import { useSnapshot } from "valtio"
-import type { PermissionMode } from "@frizz/shared"
+import { acpAgentIdFromModel, type PermissionMode } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { threadFollowUpBlocked, threadComposerStatus, threadPermissionBlockedReason, threadPermissionEffectMessage } from "../lib/threadPermissions.ts"
 import { showToast, store } from "../store.ts"
@@ -55,7 +55,11 @@ export function useThreadComposerControls(slug: string): { busy: boolean; footer
 
   const model = thread.model?.trim()
   const effort = thread.effort?.trim()
-  const backend = thread.backend === "codex" ? "codex" : "claude"
+  const backend = thread.backend === "codex" ? "codex" : thread.backend === "acp" ? "acp" : "claude"
+  // An ACP thread's "model" is the agent it runs on (`acp:<id>`), and the agent cannot be swapped under
+  // a live session — so the readout names the agent from the catalogue and offers no other row. The
+  // same query the dispatch composer runs; react-query serves both from one fetch.
+  const acpAgents = useQuery({ queryKey: ["acpAgents"], queryFn: () => rpc.acpAgents(), enabled: backend === "acp" })
   // OPTIMISTIC PENDING. The profile control is backed by a runtime handoff that can take a half-second
   // or more, and the board's own pending bit only appears once the server has claimed the row — so
   // picking a model used to produce NO visible response at all until it landed, which reads as a dropped
@@ -70,10 +74,14 @@ export function useThreadComposerControls(slug: string): { busy: boolean; footer
   const profileOptions = profiles.data?.options ?? []
   const { modelSelectable } = threadProfileControlState(profileOptions, model, effort, thread.runtime === "exited")
   const catalogLoaded = profiles.data !== undefined
+  const acpAgentId = backend === "acp" ? acpAgentIdFromModel(model) : undefined
+  const acpAgentLabel = acpAgents.data?.find((agent) => agent.id === acpAgentId)?.label ?? acpAgentId
   const profileGroups = [{
     id: backend,
-    label: backend === "codex" ? "Codex" : "Claude Code",
-    options: profileOptions,
+    label: backend === "codex" ? "Codex" : backend === "acp" ? "ACP agents" : "Claude Code",
+    options: backend === "acp"
+      ? (model && acpAgentLabel ? [{ model, label: acpAgentLabel, efforts: [] }] : [])
+      : profileOptions,
   }]
   const composerStatus = threadComposerStatus(profiles.isError ? (profiles.error as Error).message : undefined)
 
@@ -120,20 +128,22 @@ export function useThreadComposerControls(slug: string): { busy: boolean; footer
       >
         <ProfileGridSelector
           groups={profileGroups}
-          value={{ provider: backend, model, effort }}
+          value={{ provider: backend, model, effort: backend === "acp" ? "" : effort }}
           pending={pendingModel || pendingEffort
             ? { provider: backend, model: pendingModel, effort: pendingEffort }
             : undefined}
           onValueChange={({ model: nextModel, effort: nextEffort }) => changeProfile({ model: nextModel, effort: nextEffort })}
           placeholder={profiles.isPending ? "Profile loading…" : "Profile unknown"}
           ariaLabel="Thread model and effort"
-          menuAriaLabel={`Choose ${backend === "codex" ? "Codex" : "Claude Code"} model and effort`}
-          title={modelSelectable
+          menuAriaLabel={backend === "acp" ? "ACP agent for this thread" : `Choose ${backend === "codex" ? "Codex" : "Claude Code"} model and effort`}
+          title={backend === "acp"
+            ? "An ACP agent runs on its own CLI's model and effort; the agent itself cannot change on a live thread"
+            : modelSelectable
             ? thread.runtime === "exited"
               ? "Saved per thread and applied when this conversation resumes"
               : "Change this idle conversation's model and reasoning effort"
             : "The current live backend profile is unavailable; controls fail closed"}
-          disabled={busy || !catalogLoaded || !modelSelectable || profiles.isError}
+          disabled={backend === "acp" || busy || !catalogLoaded || !modelSelectable || profiles.isError}
           compact
           side="top"
           className="min-w-0 max-w-[min(72%,20rem)] px-1.5 py-0.5"

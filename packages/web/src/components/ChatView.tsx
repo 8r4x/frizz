@@ -3840,7 +3840,9 @@ export function ProviderFaultCard({
 // when the window comes back, and that frizz will pick the thread up itself — and keeps a manual
 // continue as the secondary, for the operator who has capacity elsewhere and doesn't want to wait.
 export function LimitPauseCard({ slug, sessionId, pause }: { slug: string; sessionId: string | undefined; pause: NonNullable<ThreadViewData["limitPause"]> }) {
-  const label = PROVIDER_LABEL[pause.backend]
+  // Only Claude and Codex report a limit window Frizz can read; an ACP agent's limits stay inside its
+  // own CLI, so a pause attributed to one is labelled generically rather than crashing on the lookup.
+  const label = pause.backend === "acp" ? "The agent" : PROVIDER_LABEL[pause.backend]
   const which = pause.window === "weekly" ? "weekly limit" : pause.window === "session" ? "session limit" : "usage limit"
   const [continuing, setContinuing] = useState(false)
   const queryClient = useQueryClient()

@@ -30,6 +30,7 @@ window.fetch = async (input, init) => {
   const url = new URL(requestUrl, window.location.origin)
   if (url.pathname === "/_frizz/rpc/dispatchPreferencesGet") return json(preferences)
   if (url.pathname === "/_frizz/rpc/codexModels") return json(codexModels)
+  if (url.pathname === "/_frizz/rpc/acpAgents") return json([])
   if (url.pathname === "/_frizz/rpc/dispatchPreferenceSet") {
     const update = JSON.parse(String(init?.body ?? "{}")) as SetDispatchPreferenceInput
     writes.push(update)

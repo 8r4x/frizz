@@ -16,7 +16,7 @@
 // run_in_background:true, parse that json line, then drive the url with Chrome DevTools MCP or shot.mjs.
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, symlinkSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { frizzPaths } from "../packages/server/src/frizz-paths.ts"
 
 const args = process.argv.slice(2)
@@ -63,6 +63,11 @@ if (creds) {
   // promotes an artifact starts warm instead of rebuilding from cold.
   for (const name of [".claude", ".claude.json", ".codex", ".config"]) {
     try { symlinkSync(join(realHome, name), join(home, name)) } catch {}
+  }
+  // ACP agents keep their credentials under XDG data dirs (opencode: ~/.local/share/opencode/auth.json),
+  // so a real `backend: "acp"` dispatch needs those too. Linked per agent, never the whole ~/.local.
+  for (const name of [join(".local", "share", "opencode")]) {
+    try { mkdirSync(join(home, dirname(name)), { recursive: true }); symlinkSync(join(realHome, name), join(home, name)) } catch {}
   }
   try { symlinkSync(join(realHome, ".frizz", "builds"), join(home, ".frizz", "builds")) } catch {}
 }
