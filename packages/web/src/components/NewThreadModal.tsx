@@ -124,7 +124,9 @@ export function DispatchForm({
       // per-thread permission choice; the Settings "Permissions" control (under Claude) owns the default.
       model: resolved.model,
       backend: resolved.backend,
-      effort: resolved.effort as DispatchInput["effort"],
+      // An ACP profile resolves to effort "" (no effort axis); the RPC's enum takes that as ABSENT.
+      // Sending "" failed every ACP dispatch from the composer with "Invalid enum value" (2026-09-16).
+      effort: (resolved.effort || undefined) as DispatchInput["effort"],
     }
     // Auth gate: block ONLY on a positive "signed-out" for this dispatch's backend. Loading/unknown/
     // authed all fall through (fail open) so a flaky or slow read never blocks a logged-in user. An ACP
