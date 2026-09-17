@@ -4727,9 +4727,18 @@ export type SocketClientMsg = z.infer<typeof SocketClientMsg>
 //   - {t:"file-changed"} a subscribed local file changed on disk; `path` is the path the client
 //     subscribed with, so it keys straight back into the reader's query. No bytes ride this frame.
 //   - {t:"hb"}         10s heartbeat so the client's staleness watchdog works as it did over SSE
+// The page ENVELOPE a transcript push may carry beside its messages — everything the paged HTTP read
+// returns except the messages themselves and `editedFiles` (a git-backed scan over the whole projection,
+// too costly to redo on every byte-advance; the client keeps the copy its last HTTP read delivered).
+// The push and the paged read are the SAME bounded latest window (server: readLatestThreadTranscriptPage),
+// so the client reconciles both through one function (web: reconcileLatestPage) and a long thread's
+// cursor can never go stale under a push that slid the window. Optional only for a server that predates
+// it — a client then falls back to the messages-only reconcile.
+export type TranscriptPushPage = Omit<TranscriptPage, "messages" | "editedFiles">
+
 export type SocketServerMsg =
   | { t: "event"; event: ServerEvent }
-  | { t: "transcript"; slug: ThreadSlug; messages: TranscriptMessage[] }
+  | { t: "transcript"; slug: ThreadSlug; messages: TranscriptMessage[]; page?: TranscriptPushPage }
   | { t: "file-changed"; path: string }
   | { t: "payload-too-large"; channel: "board"; actualBytes: number; maxBytes: number }
   | { t: "payload-too-large"; channel: "transcript"; slug: ThreadSlug; actualBytes: number; maxBytes: number }

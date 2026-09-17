@@ -61,6 +61,16 @@ export const MAX_MESSAGES = 300
 export const LATEST_WINDOW_ASK_REACH_ITEMS = 100
 export const LATEST_WINDOW_ASK_REACH_BYTES = 512 * 1024
 
+// The latest window's BYTE ceiling, applied after the count rule and the ask reach. MAX_MESSAGES bounds
+// how many turns the window holds, not how much they weigh, and a thread whose assistant turns each
+// carry a dozen 16 KB shell outputs weighs 4.4 MB at 302 messages — past the /ws logical frame cap
+// (app-socket.ts APP_SOCKET_MAX_LOGICAL_FRAME_BYTES, 4 MB), so every push was refused and the /full
+// page froze until a reload (maintainer 2026-09-16, a codex thread on `anti`). Three quarters of the
+// cap leaves room for the frame's envelope, the pinned background cards and the earlier-instruction
+// prefix (latestTranscriptWindow). The window is cut at a message boundary from the tail, always keeps
+// the newest message, and "Load earlier messages" pages the rest exactly as it does past the count cap.
+export const LATEST_WINDOW_MAX_BYTES = 3 * 1024 * 1024
+
 // The runtime's own interrupt receipt — see isInterruptMarker (moved to @frizz/shared when the tailer
 // needed it too). Dropped from the chat here; read as "the turn is over" by the fold there.
 
@@ -2809,7 +2819,8 @@ const MAX_PINNED_BACKGROUND_OPERATIONS = 128
 // paginated history carries the canonical message and the client replaces this synthetic card when
 // that page is loaded.
 // Where the latest window BEGINS: the last MAX_MESSAGES, pulled further back when that cut would land
-// past the human's own last message.
+// past the human's own last message — and then cut from the tail at LATEST_WINDOW_MAX_BYTES, which
+// outranks both (byteBoundedStart).
 //
 // The queue card anchors itself on that message (`lastUserIdx` in TodosView) and shows everything after
 // it, so a window that does not contain it leaves the card with nothing to anchor on — it falls back to
@@ -2830,6 +2841,21 @@ const MAX_PINNED_BACKGROUND_OPERATIONS = 128
 // when the ask is further back than one earlier page's allowance the window stays exactly where it was
 // and "Load earlier messages" remains the route to it.
 export function latestWindowStart(messages: readonly TranscriptMessage[]): number {
+  return byteBoundedStart(messages, countBoundedStart(messages))
+}
+
+// The ceiling on the count-and-reach start: walk back from the newest message and stop where the
+// window would pass LATEST_WINDOW_MAX_BYTES. Never past `start`, never before the newest message.
+function byteBoundedStart(messages: readonly TranscriptMessage[], start: number): number {
+  let bytes = 0
+  for (let i = messages.length - 1; i >= start; i--) {
+    bytes += messageBytes(messages[i])
+    if (bytes > LATEST_WINDOW_MAX_BYTES) return Math.min(i + 1, messages.length - 1)
+  }
+  return start
+}
+
+function countBoundedStart(messages: readonly TranscriptMessage[]): number {
   const tail = Math.max(0, messages.length - MAX_MESSAGES)
   if (tail === 0) return 0
   let boundary = -1
@@ -4290,6 +4316,11 @@ export function readLatestThreadTranscriptPage(
   storage: Storage,
   slug: string,
   backendFor?: (kind?: string) => AgentBackend,
+  // `editedFiles: false` leaves the rail's edited-files reading out of the page. The /ws push producer
+  // asks for that: it re-reads on every byte-advance of every subscribed thread, and the reading is a
+  // scan of the whole projection plus two git spawns (repo-files.ts) — a price the RPC pays once per
+  // open, not one the push should pay per keystroke of the worker. The reader keeps its HTTP copy.
+  opts: { editedFiles?: boolean } = {},
 ): TranscriptPage {
   let source = sourceForThread(project, storage, slug, backendFor)
   if (!source) return emptyTranscriptPage()
@@ -4340,7 +4371,9 @@ export function readLatestThreadTranscriptPage(
     // ones inside this checkout belong on the rail (edited-files.ts). Then git drops whatever the
     // repository would not carry — scratch, build output — leaving the rail an account of repo work
     // (repo-files.ts).
-    editedFiles: repoCarriedEditedFiles(project.dir, editedFilesOf(projected, project.dir)),
+    ...(opts.editedFiles === false
+      ? {}
+      : { editedFiles: repoCarriedEditedFiles(project.dir, editedFilesOf(projected, project.dir)) }),
   }
 }
 

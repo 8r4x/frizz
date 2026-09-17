@@ -188,9 +188,10 @@ export function useTranscript(slug: string, opts: { poll: boolean }) {
         ),
       }
     },
-    // A typed per-subscription transport rejection (logical overflow or aggregate read budget) is
-    // deliberately NON-retrying: keep the last complete copy visible and let the banner offer explicit
-    // one-shot refresh/retry actions. Ordinary SSE fallback still polls exactly as before.
+    // A typed per-subscription transport rejection (logical overflow or aggregate read budget) never
+    // interval-polls: keep the last complete copy visible and let the banner offer explicit one-shot
+    // refresh/retry actions. An overflowed slug is still kept fresh — one paged HTTP pull per activity
+    // edge, owned centrally by api/transcript-live.ts. Ordinary SSE fallback still polls exactly as before.
     refetchInterval: opts.poll && !socket && !transportFallback ? 1500 : false,
     refetchOnWindowFocus: !transportFallback,
     // Serve a revisited thread from cache instead of re-reading it — see transcriptStaleTime above for

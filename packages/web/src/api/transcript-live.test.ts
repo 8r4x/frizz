@@ -74,7 +74,11 @@ test("a board activity edge refetches an observed slug the push channel does not
   stop()
 })
 
-test("socket-covered and typed-fallback slugs are NOT edge-refetched", async () => {
+// Socket-covered slugs and a read-budget pause are NOT edge-refetched; a slug the socket refused as
+// payload-too-large IS. Before 2026-09-16 the overflow was left manual too, which froze the /full page
+// of any thread past the frame cap until a hard reload — the paged HTTP read is bounded, so one pull per
+// activity edge is the same policy a beyond-budget slug already gets.
+test("edge refetch: not for socket-covered or read-budget slugs; yes for a payload-too-large slug", async () => {
   const qc = makeClient()
   const refetched: string[] = []
   qc.refetchQueries = ((filters: { queryKey?: unknown[] }) => {
@@ -83,19 +87,32 @@ test("socket-covered and typed-fallback slugs are NOT edge-refetched", async () 
   }) as typeof qc.refetchQueries
   initTranscriptLive(qc)
   store.socketTranscripts = true
-  store.socketTranscriptFallbacks = { paused: { kind: "read-budget", scope: "origin", retryAfterMs: 1000 } }
+  store.socketTranscriptFallbacks = {
+    paused: { kind: "read-budget", scope: "origin", retryAfterMs: 1000 },
+    oversized: { kind: "payload-too-large", actualBytes: 4_465_249, maxBytes: 4_194_304 },
+  }
   store.board = boardWith([
     { id: "covered", lastActivityAt: "2026-07-21T00:00:00.000Z" },
     { id: "paused", lastActivityAt: "2026-07-21T00:00:00.000Z" },
+    { id: "oversized", lastActivityAt: "2026-07-21T00:00:00.000Z" },
   ])
-  const stops = [observe(qc, "covered"), observe(qc, "paused")]
+  const stops = [observe(qc, "covered"), observe(qc, "paused"), observe(qc, "oversized")]
   await sleep(DRIP_WAIT)
   assert.equal(_transcriptLiveState().tracked.get("covered")?.live, true)
   store.board = boardWith([
     { id: "covered", lastActivityAt: "2026-07-21T00:00:09.000Z" },
     { id: "paused", lastActivityAt: "2026-07-21T00:00:09.000Z" },
+    { id: "oversized", lastActivityAt: "2026-07-21T00:00:09.000Z" },
   ])
   await sleep(60)
-  assert.deepEqual(refetched, []) // push channel owns "covered"; the typed pause stays manual
+  assert.deepEqual(refetched, ["oversized"]) // push owns "covered"; the read-budget pause stays manual
+  // No edge, no pull: the overflow policy is one request per real change, never a poll.
+  store.board = boardWith([
+    { id: "covered", lastActivityAt: "2026-07-21T00:00:09.000Z" },
+    { id: "paused", lastActivityAt: "2026-07-21T00:00:09.000Z" },
+    { id: "oversized", lastActivityAt: "2026-07-21T00:00:09.000Z" },
+  ])
+  await sleep(60)
+  assert.deepEqual(refetched, ["oversized"])
   stops.forEach((s) => s())
 })

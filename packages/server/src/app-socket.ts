@@ -2,14 +2,14 @@ import type { IncomingMessage } from "node:http"
 import type { Duplex } from "node:stream"
 import { createHash } from "node:crypto"
 import { WebSocketServer, type WebSocket } from "ws"
-import type { BoardSnapshot, ServerEvent, SocketServerMsg, TranscriptMessage } from "@frizz/shared"
+import type { BoardSnapshot, ServerEvent, SocketServerMsg, TranscriptMessage, TranscriptPushPage } from "@frizz/shared"
 import { SocketClientMsg, frizzRoute } from "@frizz/shared"
 import type { Bus } from "./bus.ts"
 import type { Emitter } from "./bus.ts"
 import type { Project } from "./project.ts"
 import type { Storage } from "./storage.ts"
 import type { AgentBackend } from "./backend/types.ts"
-import { projectRetiredBackgroundOps, retiredOpsFor, projectTranscriptAgentLifecycles, projectTranscriptPeerNames, readThreadTranscript, type AgentLifecycleProjection } from "./transcript.ts"
+import { projectRetiredBackgroundOps, retiredOpsFor, projectTranscriptAgentLifecycles, projectTranscriptPeerNames, readLatestThreadTranscriptPage, type AgentLifecycleProjection } from "./transcript.ts"
 import { isTrustedLocalWebSocketRequest, rejectWebSocketUpgrade } from "./local-origin.ts"
 
 // Stage-2 multiplex: a SECOND noServer WebSocket at /ws (beside the terminal WS) carrying the board
@@ -104,6 +104,14 @@ export class SubscriptionRegistry<C> {
   }
 }
 
+// What one transcript read hands the push: the bounded latest window and, from a real reader, the page
+// envelope the paged HTTP read returns beside it (see TranscriptPushPage). A bare harness omits the
+// envelope and the frame goes out messages-only, exactly as it did before the envelope existed.
+export interface TranscriptPush {
+  messages: TranscriptMessage[]
+  page?: TranscriptPushPage
+}
+
 // ── narrow deps ─────────────────────────────────────────────────────────────────────────────────────
 // app-socket depends on this SUBSET of AppContext (not the whole thing) so the protocol is testable with
 // fakes + an in-process ws client — no real board/tailer/storage needed.
@@ -113,7 +121,7 @@ export interface AppSocketDeps {
   transcriptChange: Pick<Emitter<string[]>, "on">
   boardSnapshot: () => Promise<BoardSnapshot>
   currentSeq: () => number
-  readTranscript: (slug: string) => TranscriptMessage[]
+  readTranscript: (slug: string) => TranscriptPush
   /**
    * Arm a live watch on a local file for the FILE topic: gate the path exactly as its read is gated,
    * then call `onChange` after each settled burst of changes until the returned release runs. Throws
@@ -149,9 +157,10 @@ export interface AppSocketDeps {
   scheduleSubscriptionFlush?: (flush: () => void) => (() => void) | void
 }
 
-// Build the transcript reader index.ts injects — resolves a thread slug to its rendered transcript the
+// Build the transcript reader index.ts injects — resolves a thread slug to its rendered latest window the
 // SAME way router.ts's threadTranscript does (registry row → its session's JSONL; foreign slug → the
-// session id itself; else []). Shared via readThreadTranscript so both paths render foreign threads.
+// session id itself; else []). Shared via readLatestThreadTranscriptPage so both producers render the
+// same window of the same foreign or native thread.
 export function makeTranscriptReader(
   project: Project,
   storage: Storage,
@@ -166,16 +175,36 @@ export function makeTranscriptReader(
   // "The process that owned this thread's background ops is gone." Absent (tests / a bridge-less
   // server) ⇒ never gone, so nothing is retired that the × did not retire — the pre-existing behaviour.
   ownerGone?: (slug: string) => boolean,
-): (slug: string) => TranscriptMessage[] {
+): (slug: string) => TranscriptPush {
   return (slug: string) => {
-    const messages = readThreadTranscript(project, storage, slug, backendFor)
-    const named = peerNameFor ? projectTranscriptPeerNames(messages, (taskId) => peerNameFor(slug, taskId)) : messages
+    // The SAME bounded latest window the paged RPC serves (readLatestThreadTranscriptPage), never the
+    // whole transcript. This read used to be readThreadTranscript — every message the thread had ever
+    // produced — while the client's push reconciler was already written for a window that slides
+    // (web/lib/transcriptPagination.ts reconcileLiveMessages). The whole transcript grows without bound,
+    // so a long-running thread eventually crossed APP_SOCKET_MAX_LOGICAL_FRAME_BYTES, the server
+    // answered every subscribe with payload-too-large, and the client parked the thread in a fallback
+    // that refreshed on nothing but the banner's buttons: the /full page sat frozen until a hard reload
+    // (maintainer 2026-09-16, a 19.5 MB codex rollout projecting to 4.47 MB against the 4 MB cap; the
+    // window came to 0.5 MB). `editedFiles: false` skips the git-backed scan the page otherwise runs —
+    // this producer fires on every byte-advance of every subscribed thread, and the rail keeps the copy
+    // its last HTTP read delivered.
+    const page = readLatestThreadTranscriptPage(project, storage, slug, backendFor, { editedFiles: false })
+    const named = peerNameFor ? projectTranscriptPeerNames(page.messages, (taskId) => peerNameFor(slug, taskId)) : page.messages
     const projected = lifecycleFor ? projectTranscriptAgentLifecycles(named, (id) => lifecycleFor(slug, id)) : named
     // The operator's × has to reach THIS producer too, and it is the one that matters most: the live UI
     // renders from the /ws push, so projecting only the RPC left the killed shell's card reading
     // "RUNNING · 1 MIN 34 SEC" on screen while the RPC returned "cancelled". A dead OWNER retires the
     // same cards for a stronger reason and reaches the same two producers.
-    return projectRetiredBackgroundOps(projected, retiredOpsFor(storage, slug), ownerGone?.(slug) ?? false)
+    const messages = projectRetiredBackgroundOps(projected, retiredOpsFor(storage, slug), ownerGone?.(slug) ?? false)
+    return {
+      messages,
+      page: {
+        beforeCursor: page.beforeCursor,
+        hasEarlier: page.hasEarlier,
+        reachedTurnBoundary: page.reachedTurnBoundary,
+        transcriptKey: page.transcriptKey,
+      },
+    }
   }
 }
 
@@ -611,7 +640,7 @@ export function createAppSocketServer(deps: AppSocketDeps): AppSocketServer {
     transcriptCacheBytes = 0
   }
 
-  function readTranscript(slug: string): TranscriptMessage[] | null {
+  function readTranscript(slug: string): TranscriptPush | null {
     try {
       return deps.readTranscript(slug)
     } catch {
@@ -630,9 +659,9 @@ export function createAppSocketServer(deps: AppSocketDeps): AppSocketServer {
     if (cached) return { kind: "ready", snapshot: cached }
     const reservation = reserveTranscriptRead(origin)
     if (reservation.kind === "limited") return reservation
-    const messages = readTranscript(slug)
-    if (!messages) return { kind: "unavailable" }
-    const frame = encodeMsg({ t: "transcript", slug, messages })
+    const read = readTranscript(slug)
+    if (!read) return { kind: "unavailable" }
+    const frame = encodeMsg(read.page ? { t: "transcript", slug, messages: read.messages, page: read.page } : { t: "transcript", slug, messages: read.messages })
     if (!frame) return { kind: "unavailable" }
     if (frame.bytes > maxLogicalFrameBytes) return { kind: "oversized", actualBytes: frame.bytes }
     const snapshot = { frame, sig: frameSignature(frame), weight: snapshotWeight(frame) }

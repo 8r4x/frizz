@@ -252,6 +252,52 @@ test("socket transport bounds oversized frames and only resets reconnect backoff
       messages: [{ role: "assistant", text: "small again", tools: [], parts: [] }],
     })
 
+    // A push carrying its PAGE ENVELOPE is the same bounded latest window the HTTP page read returns, and
+    // reconciles the same way: the envelope lands beside the messages (a slid window's cursor cannot go
+    // stale), `editedFiles` — which never rides a push — keeps the HTTP copy, and a page that no longer
+    // overlaps what is held (a new transcriptKey) replaces it outright.
+    const pageKey = JSON.stringify(["transcript", "large-thread"])
+    cache.set(pageKey, {
+      messages: [{ role: "assistant", text: "small again", tools: [], parts: [] }],
+      beforeCursor: "stale-cursor",
+      hasEarlier: true,
+      reachedTurnBoundary: true,
+      transcriptKey: "key-1",
+      editedFiles: [{ path: "src/a.ts", edits: 2 }],
+    })
+    transcriptSocket.message({
+      t: "transcript",
+      slug: "large-thread",
+      messages: [{ role: "assistant", text: "small again", tools: [], parts: [] }, { role: "assistant", text: "and more", tools: [], parts: [] }],
+      page: { beforeCursor: "fresh-cursor", hasEarlier: true, reachedTurnBoundary: true, transcriptKey: "key-1" },
+    })
+    assert.deepEqual(cache.get(pageKey), {
+      messages: [
+        { role: "assistant", text: "small again", tools: [], parts: [] },
+        { role: "assistant", text: "and more", tools: [], parts: [] },
+      ],
+      beforeCursor: "fresh-cursor",
+      hasEarlier: true,
+      reachedTurnBoundary: true,
+      transcriptKey: "key-1",
+      editedFiles: [{ path: "src/a.ts", edits: 2 }],
+    })
+    transcriptSocket.message({
+      t: "transcript",
+      slug: "large-thread",
+      messages: [{ role: "assistant", text: "replaced", tools: [], parts: [] }],
+      page: { beforeCursor: null, hasEarlier: false, reachedTurnBoundary: true, transcriptKey: "key-2" },
+    })
+    assert.deepEqual(cache.get(pageKey), {
+      messages: [{ role: "assistant", text: "replaced", tools: [], parts: [] }],
+      beforeCursor: null,
+      hasEarlier: false,
+      reachedTurnBoundary: true,
+      transcriptKey: "key-2",
+      editedFiles: [{ path: "src/a.ts", edits: 2 }],
+    })
+    cache.delete(pageKey)
+
     // A fresh page/module has no stale failure latch: after the payload shrinks, normal keyframe +
     // transcript traffic resumes without requiring a special server-side recovery state.
     transcriptSocket.close()

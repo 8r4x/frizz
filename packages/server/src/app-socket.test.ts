@@ -94,7 +94,7 @@ async function startHarness(overrides: Partial<AppSocketDeps> = {}): Promise<Har
     transcriptChange,
     boardSnapshot: async () => board,
     currentSeq: () => 7,
-    readTranscript: (slug) => transcripts.get(slug) ?? [],
+    readTranscript: (slug) => ({ messages: transcripts.get(slug) ?? [] }),
     ...overrides,
   })
   const server = createServer()
@@ -365,8 +365,8 @@ test("security: dependency and serialization exceptions close one app socket wit
   const h = await startHarness({
     readTranscript: (slug) => {
       if (slug === "reader-fails") throw new Error("fixture read failure")
-      if (slug === "circular") return circular as TranscriptMessage[]
-      return [msg("healthy")]
+      if (slug === "circular") return { messages: circular as TranscriptMessage[] }
+      return { messages: [msg("healthy")] }
     },
   })
   try {
@@ -396,7 +396,7 @@ test("security: duplicate subscriptions are read-once, the per-connection cap is
     maxSubscriptionsPerConnection: 2,
     readTranscript: (slug) => {
       reads++
-      return [msg(slug)]
+      return { messages: [msg(slug)] }
     },
   })
   try {
@@ -435,7 +435,7 @@ test("security: a valid-frame flood and a slow outbound consumer are shed withou
     bufferedAmount: () => simulateSlow ? 1_024 : 0,
     readTranscript: () => {
       transcriptReads++
-      return []
+      return { messages: [] }
     },
   })
   try {
@@ -463,6 +463,26 @@ test("security: a valid-frame flood and a slow outbound consumer are shed withou
     const recovery = await connectClient(h.port)
     assert.equal((await recovery.next()).t, "event")
     recovery.ws.close()
+  } finally {
+    await h.close()
+  }
+})
+
+// A reader that returns the page envelope beside its window sees it ride the frame verbatim; a bare
+// reader (every other test here) sends messages only, which is what a pre-envelope client still parses.
+test("protocol: a transcript push carries the reader's page envelope when it has one", async () => {
+  const page = { beforeCursor: "c-1", hasEarlier: true, reachedTurnBoundary: true, transcriptKey: "k-1" }
+  const h = await startHarness({
+    readTranscript: (slug) => (slug === "paged" ? { messages: [msg("tail")], page } : { messages: [msg("bare")] }),
+  })
+  try {
+    const c = await connectClient(h.port)
+    await c.next()
+    c.ws.send(JSON.stringify({ t: "sub", topic: "transcript", slug: "paged" }))
+    assert.deepEqual(await c.next(), { t: "transcript", slug: "paged", messages: [msg("tail")], page })
+    c.ws.send(JSON.stringify({ t: "sub", topic: "transcript", slug: "bare" }))
+    assert.deepEqual(await c.next(), { t: "transcript", slug: "bare", messages: [msg("bare")] })
+    c.ws.close()
   } finally {
     await h.close()
   }
@@ -583,7 +603,7 @@ test("resource control: concurrent tabs coalesce one slow transcript read and on
       while (Date.now() < until) {
         // Deliberately synchronous like the real readFileSync + parse path.
       }
-      return messages
+      return { messages }
     },
     serializeMessage: (serverMsg) => {
       if (serverMsg.t === "transcript") serializations++
@@ -642,7 +662,7 @@ test("resource control: one batch reads once even when the snapshot cache is dis
     },
     readTranscript: () => {
       reads++
-      return [msg("uncached")]
+      return { messages: [msg("uncached")] }
     },
   })
   try {
@@ -687,7 +707,7 @@ test("resource control: rapid alternating sub/unsub churn collapses to one survi
     },
     readTranscript: (slug) => {
       readSlugs.push(slug)
-      return [msg("stable")]
+      return { messages: [msg("stable")] }
     },
   })
   try {
@@ -734,7 +754,7 @@ test("resource control: per-origin and global sliding read budgets are fair, typ
     transcriptReadWindowMs: 1_000,
     readTranscript: (slug) => {
       reads++
-      return [msg(slug)]
+      return { messages: [msg(slug)] }
     },
   })
   try {
@@ -806,7 +826,7 @@ test("resource control: a sliding window does not amplify bursts across a fixed-
     transcriptReadWindowMs: 1_000,
     readTranscript: (slug) => {
       reads++
-      return [msg(slug)]
+      return { messages: [msg(slug)] }
     },
   })
   try {
@@ -844,7 +864,7 @@ test("protocol: a transcript frame exactly at the logical byte limit is delivere
   const exactBytes = Buffer.byteLength(JSON.stringify(frame), "utf8")
   const h = await startHarness({
     maxLogicalFrameBytes: exactBytes,
-    readTranscript: () => messages,
+    readTranscript: () => ({ messages }),
   })
   try {
     const c = await connectClient(h.port)
@@ -871,7 +891,7 @@ test("protocol: a one-byte-over Unicode transcript pauses only that slug and an 
     maxLogicalFrameBytes: actualBytes - 1,
     readTranscript: () => {
       reads++
-      return current
+      return { messages: current }
     },
     serializeMessage: (serverMsg) => {
       if (serverMsg.t === "transcript") transcriptSerializations++
@@ -959,7 +979,7 @@ test("resource control: duplicate invalidations coalesce and a budget-delayed re
     transcriptReadWindowMs: 25,
     readTranscript: () => {
       reads++
-      return current
+      return { messages: current }
     },
   })
   try {
@@ -1000,7 +1020,7 @@ test("resource control: snapshot cache is entry/byte bounded and last-unsubscrib
     maxTranscriptCacheBytes: oneEntryWeight * 2,
     readTranscript: (slug) => {
       reads++
-      return snapshots.get(slug) ?? []
+      return { messages: snapshots.get(slug) ?? [] }
     },
   })
   try {
@@ -1044,7 +1064,7 @@ test("resource control: shutdown cancels a budget retry and drains cache/pending
     transcriptReadWindowMs: 1_000,
     readTranscript: () => {
       reads++
-      return current
+      return { messages: current }
     },
   })
   try {

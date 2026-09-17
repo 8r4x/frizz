@@ -4,7 +4,7 @@ import { store } from "../store.ts"
 import { BoardStream } from "./board-stream.ts"
 import { connectSSE, rebindSSEProject } from "./sse.ts"
 import { mergeOptimistic, preserveMessageIdentity, type QueuedMessage } from "../lib/transcript-sync.ts"
-import { reconcileLiveMessages, type PaginatedTranscriptData } from "../lib/transcriptPagination.ts"
+import { reconcileLatestPage, reconcileLiveMessages, type PaginatedTranscriptData } from "../lib/transcriptPagination.ts"
 import { invalidateInteractionQueries } from "./interaction-cache.ts"
 import { FRIZZ_ROUTE_PREFIX } from "@frizz/shared"
 import { apiBase, projectSlug } from "../lib/base-path.ts"
@@ -260,7 +260,16 @@ function handle(msg: SocketServerMsg): boolean {
       // optimistic `queued` bubble the incoming truth doesn't yet carry (mergeOptimistic), so a just-sent
       // follow-up never vanishes in the window before the server's own copy lands (the S1 sync-audit fix).
       qc?.setQueryData<PaginatedTranscriptData | { messages: QueuedMessage[] }>(["transcript", msg.slug], (prev) => {
-        const reconciled = reconcileLiveMessages(prev as PaginatedTranscriptData | undefined, msg.messages)
+        const previous = prev as PaginatedTranscriptData | undefined
+        // A push that carries its page envelope is the SAME bounded latest window the HTTP page read
+        // returns, so it reconciles through the same function the queryFn uses — the envelope (cursor,
+        // hasEarlier, transcriptKey) stays as fresh as the messages, and a long thread whose window slid
+        // under a push cannot page "earlier" from a cursor that no longer names its head. `editedFiles`
+        // never rides a push (see TranscriptPushPage); the rail keeps its last HTTP copy. A server that
+        // predates the envelope pushes messages only, and those take the messages-only reconcile.
+        const reconciled = msg.page
+          ? reconcileLatestPage(previous, { ...msg.page, messages: msg.messages, editedFiles: previous?.editedFiles })
+          : reconcileLiveMessages(previous, msg.messages)
         return {
           ...reconciled,
           // preserveMessageIdentity: unchanged messages keep the previous render's object so the

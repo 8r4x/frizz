@@ -445,7 +445,7 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
           <div className="min-w-[180px] flex-1 leading-snug text-fg/85">
             <span className="font-medium">Live transcript updates paused.</span>{" "}
             {q.transportFallback.kind === "payload-too-large"
-              ? "The transcript is too large for push; the last complete HTTP-loaded copy remains visible."
+              ? "The transcript is too large for push; it refreshes over HTTP each time the thread moves."
               : "The live read budget was reached; the last complete copy remains visible. Retry in a moment."}
           </div>
           <button
@@ -1395,7 +1395,7 @@ function VirtualizedThreadTranscript({
                 <div className="min-w-[180px] flex-1 leading-snug text-fg/85">
                   <span className="font-medium">Live transcript updates paused.</span>{" "}
                   {transportFallback.kind === "payload-too-large"
-                    ? "The transcript is too large for push; the last complete HTTP-loaded copy remains visible."
+                    ? "The transcript is too large for push; it refreshes over HTTP each time the thread moves."
                     : "The live read budget was reached; the last complete copy remains visible. Retry in a moment."}
                 </div>
                 <button type="button" disabled={isFetching} onClick={refresh} className="shrink-0 rounded-md border border-border px-2 py-1 text-[11px] text-fg/90 transition-colors hover:bg-panel disabled:opacity-40">

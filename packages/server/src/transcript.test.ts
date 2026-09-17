@@ -16,6 +16,7 @@ import {
   latestTranscriptWindow,
   latestWindowStart,
   LATEST_WINDOW_ASK_REACH_ITEMS,
+  LATEST_WINDOW_MAX_BYTES,
   MAX_MESSAGES,
   pageProjectedTranscript,
   projectClaudeTranscript,
@@ -622,6 +623,21 @@ test("the reach is all-or-nothing: an ask further back than the allowance leaves
   assert.equal(start, messages.length - MAX_MESSAGES, "no partial extension — it buys no anchor and still ships the bytes")
   assert.equal(latestWindowStart([...windowFiller(1), ...windowFiller(MAX_MESSAGES + 50, 1)]), 51,
     "and a window with no human message anywhere above it is untouched too")
+})
+
+test("the latest window is cut from the tail at a byte ceiling, whatever the count and the ask say", () => {
+  // Each filler weighs ~1/4 of the ceiling, so six of them sit over it: the window keeps the newest
+  // three (the fourth would cross the line), even though the count cap and the ask reach would both
+  // have kept all six and the human's ask at the head.
+  const heavy = "x".repeat(Math.ceil(LATEST_WINDOW_MAX_BYTES / 4))
+  const messages = [humanAsk("the ask"), ...windowFiller(5).map((m) => ({ ...m, text: heavy }))]
+  const start = latestWindowStart(messages)
+  assert.equal(start, 3)
+  assert.equal(messages.length - start, 3)
+  assert.ok(latestTranscriptWindow(messages).reduce((n, m) => n + JSON.stringify(m).length, 0) <= LATEST_WINDOW_MAX_BYTES)
+  // The newest message survives even when it alone is over the ceiling.
+  const single = [humanAsk("the ask"), { ...windowFiller(1)[0], text: "y".repeat(LATEST_WINDOW_MAX_BYTES + 10) }]
+  assert.equal(latestWindowStart(single), 1)
 })
 
 test("a transcript inside the cap is returned whole, ask or no ask", () => {
