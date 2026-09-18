@@ -327,6 +327,10 @@ export interface Api {
   projectIconPick(input: { id: string }): Promise<DirectoryPickResult>
   projectIconSet(input: { id: string; name: string; data: string }): Promise<ProjectCard>
   projectIconClear(input: { id: string }): Promise<ProjectCard>
+  // Rename a project: the name on its card and the slug in its URL, and — only with
+  // `renameDirectory` — the folder itself, to a sibling of the same name. The dialog offers that
+  // checkbox only when the folder is already named after the project, and leaves it off.
+  projectRename(input: { id: string; name: string; renameDirectory?: boolean }): Promise<ProjectCard>
   settingsGet(): Promise<Settings>
   settingsSet(input: Settings): Promise<Settings>
   contextWindowSet(input: { backend: "claude" | "codex"; tokens: number | null }): Promise<Settings>
@@ -445,6 +449,7 @@ export const PROCEDURES = {
   projectIconPick: "mutation",
   projectIconSet: "mutation",
   projectIconClear: "mutation",
+  projectRename: "mutation",
   settingsGet: "query",
   settingsSet: "mutation",
   contextWindowSet: "mutation",

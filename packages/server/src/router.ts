@@ -166,7 +166,7 @@ import type { SessionTelemetry } from "./tailer.ts"
 import { providerResumeCommand } from "./external-terminal.ts"
 import { backgroundShellLineCount, readBackgroundShellOutput } from "./background-shell-output.ts"
 import { projectRetiredBackgroundOps, retiredOpsFor } from "./transcript.ts"
-import { clearProjectIcon, customIconPath, findById, forgetProject, ICON_SCAN_VERSION, listProjects, reorderProjects, setProjectIcon, type RegistryEntry } from "./project-registry.ts"
+import { clearProjectIcon, customIconPath, findById, forgetProject, ICON_SCAN_VERSION, listProjects, moveProjectDirectory, renameProject, reorderProjects, setProjectIcon, type RegistryEntry } from "./project-registry.ts"
 import { basename, dirname } from "node:path"
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { ProjectCard, PROJECT_ICON_EXTENSIONS, PROJECT_ICON_MAX_BASE64_CHARS, queuedThread } from "@frizz/shared"
@@ -3616,6 +3616,50 @@ export function createRouter(ctx: AppContext) {
           rmSync(customIconPath(input.id, `.${extension}`), { force: true })
         }
         const updated = clearProjectIcon(input.id)
+        if (!updated) throw new Error("No such project.")
+        return projectCard(updated, !existsSync(updated.path))
+      },
+    }),
+
+    /**
+     * Rename a project — the name Frizz shows and the URL it answers on, and, only when asked, the
+     * folder itself.
+     *
+     * The name is the registry's display override, cleared again when it matches the folder so the
+     * card keeps following a later `mv`. The slug follows the name on purpose: a rename is the one
+     * time an operator has said what this project is called, and `deriveSlug`'s never-re-derive rule
+     * exists to protect bookmarks from SILENT changes, not from this one. A taken or reserved slug is
+     * refused with the registry's own message, and nothing is written.
+     *
+     * `renameDirectory` is opt-in and the dialog only offers it when the folder is already named after
+     * the project (maintainer 2026-09-18: "without actually changing the directory name by default").
+     * It moves the folder to a sibling of the same name and re-registers the id there, then closes
+     * the tenant so the next request reopens it at the new path — a context built on the old one
+     * would spawn every worker into a directory that no longer exists. The launching project is
+     * refused for the same reason `projectRemove` refuses it: this process is standing in it.
+     */
+    projectRename: mutation({
+      input: z.object({
+        id: z.string().min(1),
+        name: z.string().trim().min(1).max(120),
+        renameDirectory: z.boolean().optional(),
+      }).strict(),
+      output: ProjectCard,
+      handler: async ({ input }) => {
+        const entry = findById(input.id)
+        if (!entry) throw new Error("No such project.")
+        const name = input.name.trim()
+        let path = entry.path
+        if (input.renameDirectory && name !== basename(entry.path)) {
+          if (ctx.launchProjectId === entry.id) {
+            throw new Error("Frizz is serving from this project, so its folder cannot be renamed. Restart Frizz from another folder first.")
+          }
+          path = moveProjectDirectory(entry.id, name).path
+          // Detached workers keep running through the rename (their cwd follows the inode); only
+          // Frizz's own view of the project has to be rebuilt, and the slug route does that lazily.
+          await ctx.teardownProject?.(entry.id, {})
+        }
+        const updated = renameProject(entry.id, { name: name === basename(path) ? null : name, slug: name })
         if (!updated) throw new Error("No such project.")
         return projectCard(updated, !existsSync(updated.path))
       },

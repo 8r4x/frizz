@@ -50,7 +50,10 @@ export interface TenantMapOptions<App = unknown> {
 }
 
 export interface TenantMap<App = unknown> {
-  /** Open a project, or return the already-open one. `undefined` means it failed and was reported. */
+  /**
+   * Open a project, or return the already-open one. `undefined` means it failed and was reported.
+   * An open project handed in at a DIFFERENT `dir` is a moved checkout: it is closed and reopened there.
+   */
   activate(project: Project): Promise<AppContext | undefined>
   /**
    * Take ownership of a context somebody else built.
@@ -85,12 +88,26 @@ export function createTenantMap<App = unknown>(options: TenantMapOptions<App>): 
 
   async function activate(project: Project): Promise<AppContext | undefined> {
     const already = open.get(project.id)
-    if (already) return already.ctx
+    // THE SAME PROJECT AT A DIFFERENT PATH IS A MOVED CHECKOUT, and the open context is wrong about
+    // where it lives. Identity is the id in the tree, so a rename or `mv` keeps every thread — but the
+    // context was built with the old `project.dir`, and every dispatch, scratch write and realpath on it
+    // fails with ENOENT against a directory that is no longer there (2026-09-18: `hypergres` renamed to
+    // `porg`, registry updated by the reopen, tenant still holding the old path, first dispatch dead
+    // on `lstat '/…/hypergres'`). Close it and open it again where the registry now says it is. The
+    // workers are detached daemons and survive exactly as they do a restart.
+    if (already && already.project.dir === project.dir) return already.ctx
     const inFlight = opening.get(project.id)
     if (inFlight) return inFlight
 
     const attempt = (async () => {
       try {
+        if (already) {
+          frizzLog.info("tenants", `project ${project.name} (${project.id}) moved from ${already.project.dir} to ${project.dir}; reopening it there`)
+          // Synchronously drops the entry from `open` before its first await, and `opening` is set the
+          // moment this function yields — so a concurrent activate joins this attempt rather than
+          // racing a second context onto the same database.
+          await deactivate(project.id)
+        }
         const ctx = await options.createContext({ ...options.contextOptions, project })
         open.set(project.id, { project, ctx, app: options.createApp?.(ctx) })
         // Inside the try on purpose: a producer that fails to start is reported through the same seam

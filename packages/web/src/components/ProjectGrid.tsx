@@ -15,7 +15,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useEffect, useState, type ReactNode } from "react"
 import { Ellipsis, ImagePlus, Loader2 } from "lucide-react"
 import { Link, useNavigate } from "react-router"
-import type { ProjectCard } from "@frizz/shared"
+import { slugify, type ProjectCard } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { relativeAge } from "../lib/activityTime.ts"
 import { projectHref } from "../lib/base-path.ts"
@@ -50,6 +50,7 @@ const CARD_ICON = 38
 function Card({ project, home }: { project: ProjectCard; home: string | undefined }) {
   const opened = relativeAge(project.lastOpenedAt)
   const [confirmingDelete, setConfirmingDelete] = useState(false)
+  const [renaming, setRenaming] = useState(false)
   return (
     // A relatively-positioned WRAPPER, not a bordered card of its own: the icon menu's trigger has to
     // sit OUTSIDE the <a> (a button nested in a link is invalid, and clicking it would navigate), so
@@ -128,7 +129,7 @@ function Card({ project, home }: { project: ProjectCard; home: string | undefine
           phone row (MOBILE_ROW) drops the side borders, so its inset is 16 and this is 7.
           It is revealed by the CARD's hover rather than its own, because a control nobody can see until
           they happen to cross nine pixels of empty box is a control nobody finds. */}
-      <ProjectMenu onDelete={() => setConfirmingDelete(true)}>
+      <ProjectMenu onRename={() => setRenaming(true)} onDelete={() => setConfirmingDelete(true)}>
         <button
           type="button"
           aria-label={`More actions for ${project.name}`}
@@ -137,6 +138,9 @@ function Card({ project, home }: { project: ProjectCard; home: string | undefine
           <Ellipsis size={15} />
         </button>
       </ProjectMenu>
+      {renaming ? (
+        <RenameProjectDialog project={project} home={home} onClose={() => setRenaming(false)} />
+      ) : null}
       {confirmingDelete ? (
         <DeleteProjectDialog project={project} home={home} onClose={() => setConfirmingDelete(false)} />
       ) : null}
@@ -145,21 +149,23 @@ function Card({ project, home }: { project: ProjectCard; home: string | undefine
 }
 
 /**
- * A project's own menu. One item today, and the place the next one goes.
+ * A project's own menu: rename, and delete.
  *
  * Deliberately NOT folded into the icon menu: that menu's trigger is an image glyph laid over the
  * project's square and labelled "change the icon", and hanging a delete off it would make the one
  * irreversible action in this page reachable from a control that says it changes a picture.
  *
- * The item does NOT name the project, even though naming it would read better: a name here is a
+ * The items do NOT name the project, even though naming it would read better: a name here is a
  * directory basename of any length, and this content has a min width and no max, so a long one would
- * stretch the menu past the card it is anchored to. The card is the subject and the confirmation names
- * it in full, so nothing is lost by leaving it out.
+ * stretch the menu past the card it is anchored to. The card is the subject and each dialog names it
+ * in full, so nothing is lost by leaving it out.
  */
 function ProjectMenu({
+  onRename,
   onDelete,
   children,
 }: {
+  onRename: () => void
   onDelete: () => void
   children: ReactNode
 }) {
@@ -173,6 +179,12 @@ function ProjectMenu({
           className="z-[220] min-w-[170px] rounded-lg border border-border bg-panel p-1 shadow-xl shadow-black/40"
         >
           <RadixDropdown.Item
+            className="cursor-default rounded px-2 py-1.5 text-[12.5px] text-fg outline-none data-[highlighted]:bg-panel-2"
+            onSelect={onRename}
+          >
+            Rename…
+          </RadixDropdown.Item>
+          <RadixDropdown.Item
             className="cursor-default rounded px-2 py-1.5 text-[12.5px] text-red-400 outline-none data-[highlighted]:bg-red-500/10 data-[highlighted]:text-red-300"
             onSelect={onDelete}
           >
@@ -181,6 +193,128 @@ function ProjectMenu({
         </RadixDropdown.Content>
       </RadixDropdown.Portal>
     </RadixDropdown.Root>
+  )
+}
+
+/** The last path segment, on either separator: the registry stores native paths and Windows uses `\\`. */
+function folderName(path: string): string {
+  return path.split(/[\\/]/u).filter(Boolean).pop() ?? path
+}
+
+/**
+ * Rename a project.
+ *
+ * ONE FIELD, AND IT RENAMES TWO THINGS: the name on the card and the slug in the URL, because a project
+ * whose card says one thing and whose address says another is what this dialog exists to fix (a
+ * checkout renamed in the terminal keeps its old slug — `deriveSlug` never re-derives, by design — so
+ * `porg` was still answering on `/project/hypergres`). The URL it will get is shown before saving.
+ *
+ * THE FOLDER IS NOT TOUCHED BY DEFAULT. The checkbox appears only when the folder is already named
+ * after the project, so the offer reads "keep these in step" and never "move your directory": a folder
+ * called something else was named deliberately, and this is not the place to second-guess it.
+ */
+function RenameProjectDialog({
+  project,
+  home,
+  onClose,
+}: {
+  project: ProjectCard
+  home: string | undefined
+  onClose: () => void
+}) {
+  const [name, setName] = useState(project.name)
+  const [renameDirectory, setRenameDirectory] = useState(false)
+  const queryClient = useQueryClient()
+  const rename = useMutation({
+    mutationFn: () => rpc.projectRename({ id: project.id, name: name.trim(), renameDirectory }),
+    onSuccess: (updated) => {
+      void queryClient.invalidateQueries({ queryKey: ["projectsList"] })
+      showToast(`Renamed ${project.name} to ${updated.name}`)
+      onClose()
+    },
+  })
+  const error = rename.error instanceof Error ? rename.error.message : rename.error ? String(rename.error) : null
+  const trimmed = name.trim()
+  const folder = folderName(project.path)
+  const parent = project.path.slice(0, project.path.length - folder.length)
+  // Offered only when the folder already tracks the name AND the new name would leave it behind.
+  const offerFolder = folder === project.name && trimmed.length > 0 && trimmed !== folder
+  const slug = slugify(trimmed)
+
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => { if (!open && !rename.isPending) onClose() }}
+      title={`Rename ${project.name}`}
+      className="w-[440px] max-w-[92vw]"
+      footer={
+        <>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={rename.isPending}
+            className="rounded-md px-3 py-1.5 text-[12px] text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg disabled:opacity-45"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            form="rename-project"
+            disabled={rename.isPending || trimmed.length === 0}
+            className="flex items-center gap-1.5 rounded-md border border-accent bg-accent px-3 py-1.5 text-[12.5px] font-medium text-bg outline-none hover:brightness-110 focus-visible:ring-1 focus-visible:ring-fg/60 disabled:opacity-50"
+          >
+            {rename.isPending && <Loader2 size={12} className="animate-spin" />}
+            {offerFolder && renameDirectory ? "Rename project and folder" : "Rename project"}
+          </button>
+        </>
+      }
+    >
+      <form
+        id="rename-project"
+        onSubmit={(event) => {
+          event.preventDefault()
+          if (!rename.isPending && trimmed.length > 0) rename.mutate()
+        }}
+        className="flex flex-col gap-3 p-4 text-[12.5px] leading-relaxed text-muted"
+      >
+        <input
+          autoFocus
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+          onFocus={(event) => event.target.select()}
+          spellCheck={false}
+          aria-label="Project name"
+          className={`w-full rounded-md border bg-bg px-2.5 py-2 text-[12.5px] text-fg outline-none placeholder:text-muted/50 focus-visible:ring-1 focus-visible:ring-fg/60 ${
+            error ? "border-red-500/60" : "border-border-strong"
+          }`}
+        />
+        <p>
+          Its address becomes{" "}
+          <span className="font-mono text-[11.5px] text-fg/80">/project/{slug}</span>
+          {slug !== project.slug ? <> — links to <span className="font-mono text-[11.5px]">/project/{project.slug}</span> stop working.</> : "."}
+        </p>
+        {offerFolder ? (
+          <label className="flex cursor-pointer items-start gap-2 rounded-md border border-border bg-bg/30 px-2.5 py-2 text-fg/85">
+            <input
+              type="checkbox"
+              checked={renameDirectory}
+              onChange={(event) => setRenameDirectory(event.target.checked)}
+              // Same cap-band correction as the delete dialog's checkbox — see the readings there.
+              className="mt-[3px] accent-[var(--color-accent)]"
+            />
+            <span className="flex flex-col gap-0.5">
+              <span>Also rename the folder</span>
+              <span className="text-[11.5px] text-muted/80">
+                {renameDirectory
+                  ? <><span className="font-mono text-[11px]">{shortPath(project.path, home)}</span> becomes <span className="font-mono text-[11px]">{shortPath(parent + trimmed, home)}</span>. Running workers keep going.</>
+                  : "Left off, the folder keeps its name and only what Frizz calls it changes."}
+              </span>
+            </span>
+          </label>
+        ) : null}
+        {error ? <p className="text-[11.5px] text-red-400">{error}</p> : null}
+      </form>
+    </Dialog>
   )
 }
 
