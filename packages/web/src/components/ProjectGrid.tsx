@@ -12,7 +12,7 @@
 import * as RadixDialog from "@radix-ui/react-dialog"
 import * as RadixDropdown from "@radix-ui/react-dropdown-menu"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { useEffect, useState, type ReactNode } from "react"
+import { useEffect, useRef, useState, type ReactNode } from "react"
 import { Ellipsis, ImagePlus, Loader2 } from "lucide-react"
 import { Link, useNavigate } from "react-router"
 import { slugify, type ProjectCard } from "@frizz/shared"
@@ -224,6 +224,7 @@ function RenameProjectDialog({
 }) {
   const [name, setName] = useState(project.name)
   const [renameDirectory, setRenameDirectory] = useState(false)
+  const inputRef = useRef<HTMLInputElement>(null)
   const queryClient = useQueryClient()
   const rename = useMutation({
     mutationFn: () => rpc.projectRename({ id: project.id, name: name.trim(), renameDirectory }),
@@ -247,6 +248,13 @@ function RenameProjectDialog({
       onOpenChange={(open) => { if (!open && !rename.isPending) onClose() }}
       title={`Rename ${project.name}`}
       className="w-[440px] max-w-[92vw]"
+      // The field, selected, so typing replaces the name — the header's Close button is what Radix
+      // would focus otherwise, and a rename dialog that opens with nothing to type into is a click short.
+      onOpenAutoFocus={(event) => {
+        event.preventDefault()
+        inputRef.current?.focus()
+        inputRef.current?.select()
+      }}
       footer={
         <>
           <button
@@ -278,10 +286,9 @@ function RenameProjectDialog({
         className="flex flex-col gap-3 p-4 text-[12.5px] leading-relaxed text-muted"
       >
         <input
-          autoFocus
+          ref={inputRef}
           value={name}
           onChange={(event) => setName(event.target.value)}
-          onFocus={(event) => event.target.select()}
           spellCheck={false}
           aria-label="Project name"
           className={`w-full rounded-md border bg-bg px-2.5 py-2 text-[12.5px] text-fg outline-none placeholder:text-muted/50 focus-visible:ring-1 focus-visible:ring-fg/60 ${
