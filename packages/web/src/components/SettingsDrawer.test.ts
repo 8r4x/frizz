@@ -122,14 +122,24 @@ test("the agent settings panel is modal, keyboard-reachable, and holds exactly t
 // arrow, and the gear beside it opens the triage prompt — the picker's settings, where they apply.
 test("the GitHub picker carries the repo link and the prompt popover in its header, and waits on settings writes", () => {
   const header = pickerSource.slice(pickerSource.indexOf("{/* Header"), pickerSource.indexOf("{/* Controls"))
-  assert.match(header, /className="ml-auto flex shrink-0 items-center gap-2"/)
+  // The row is baseline-aligned so its three glyphs can take the browser-computed cap-band
+  // correction (half the glyph's box minus half the resolved cap height); the numbers behind it are
+  // in the component's comments.
+  assert.match(header, /<h2 className="mb-4 flex items-baseline gap-2/)
+  assert.match(header, /className="ml-auto flex shrink-0 items-baseline gap-2"/)
+  assert.match(header, /<Github size=\{15\} aria-hidden="true" className="shrink-0 self-baseline translate-y-\[calc\(7\.5px_-_0\.5cap\)\]/)
+  assert.match(promptPopoverSource, /self-baseline translate-y-\[calc\(7\.5px_-_0\.5cap\)\]/)
+  assert.match(agentSource, /self-baseline|items-baseline/)
+  assert.match(agentSource, /-mr-3 inline-flex size-5 shrink-0 translate-y-\[calc\(7px_-_0\.5cap\)\]/)
   assert.match(header, /<RepoLink nameWithOwner=\{status\.data\.nameWithOwner\} \/>/)
   assert.match(header, /<GithubPromptPopover \/>/)
-  assert.doesNotMatch(header, /—/)
+  // The slug is no longer an em-dashed suffix of the title (the dash must be gone from the MARKUP;
+  // the comments above it are prose and may carry one).
+  assert.doesNotMatch(header.slice(header.indexOf("<h2")), /—/)
   const link = pickerSource.slice(pickerSource.indexOf("function RepoLink"), pickerSource.indexOf("function PagerButton"))
   assert.match(link, /href=\{`https:\/\/github\.com\/\$\{nameWithOwner\}`\}/)
   assert.match(link, /target="_blank"/)
-  assert.match(link, /<ArrowUpRight aria-hidden="true"/)
+  assert.match(link, /<ArrowUpRight aria-hidden="true" className="-ml-\[0\.29em\] size-\[1em\] shrink-0 self-baseline translate-y-\[calc\(0\.5em_-_0\.5cap\)\]"/)
   assert.match(promptPopoverSource, /<Popover modal open=\{open\} onOpenChange=\{setOpen\}>/)
   assert.match(promptPopoverSource, /<GithubPromptEditor draft=\{draft\} onChange=\{update\} rows=\{14\} \/>/)
   // A prompt edit flushed by closing the popover is still in flight when the button is pressed.
