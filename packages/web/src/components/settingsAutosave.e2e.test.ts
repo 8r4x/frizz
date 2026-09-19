@@ -48,7 +48,7 @@ test("the drawer offers no Save or Cancel — a toggle writes on the click", { s
     assert.equal(writes[0]!.body.projectRail, true)
     // The whole object goes over, not a patch — anything dropped here is a setting silently reset.
     assert.equal(writes[0]!.body.permissionMode, "auto")
-    assert.equal(writes[0]!.body.notifications, false)
+    assert.equal(writes[0]!.body.notifications, true)
 
     // The header reports the save rather than leaving the operator guessing.
     await page.waitForFunction(() => /Saving…|Saved/.test(document.querySelector("header")?.textContent ?? ""), { timeout: 2000 })

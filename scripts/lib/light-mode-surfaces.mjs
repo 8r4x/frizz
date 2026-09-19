@@ -9,8 +9,15 @@ import { measureTextContrast, measureControlContrast, measureThreadTitleInk, mea
 
 export async function checkSurfaceStates({ page, url, font, palette, out, check, result }) {
   const name = `${palette}-${font}`
-  const shot = async suffix => page.screenshot({ path: join(out, `${name}-${suffix}.png`) })
-  const contrast = async suffix => { result[`${name}-${suffix}-contrast`] = await measureTextContrast(page) }
+  const settle = async () => {
+    await page.mouse.move(0, 0)
+    await page.evaluate(async () => {
+      await new Promise(requestAnimationFrame)
+      await Promise.all(document.getAnimations().filter(a => a.effect?.getTiming().iterations !== Infinity).map(a => a.finished.catch(() => {})))
+    })
+  }
+  const shot = async suffix => { await settle(); await page.screenshot({ path: join(out, `${name}-${suffix}.png`) }) }
+  const contrast = async suffix => { await settle(); result[`${name}-${suffix}-contrast`] = await measureTextContrast(page) }
   const crop = async (selector, suffix) => {
     const viewport = page.viewport()
     await page.setViewport({ ...viewport, deviceScaleFactor: 8 })
@@ -35,6 +42,36 @@ export async function checkSurfaceStates({ page, url, font, palette, out, check,
   const running = await page.evaluate(async () => (await import("/src/store.ts")).store.board.threads.find(t => t.id === "theme-running").runtime)
   assert.equal(running, "running")
   check(`${name} real Rested, Active, Snoozed and Done bands`)
+
+  for (const width of [1440, 390]) {
+    await page.setViewport({ width, height: 1000, deviceScaleFactor: 1 })
+    await page.goto(url, { waitUntil: 'networkidle2' })
+    await page.keyboard.down('Meta')
+    await page.keyboard.press('k')
+    await page.keyboard.up('Meta')
+    await page.waitForSelector('[cmdk-root]')
+    await contrast(`commands-${width}`)
+    await shot(`commands-${width}`)
+    await page.click('[cmdk-item][data-value="new thread create home"]')
+    await page.waitForSelector('[role="dialog"] textarea')
+    await contrast(`new-thread-dialog-${width}`)
+    await shot(`new-thread-dialog-${width}`)
+    await page.keyboard.press('Escape')
+    await page.waitForSelector('[role="dialog"]', { hidden: true })
+    // Rested deep links intentionally reveal the queue card; a running thread opens the sheet.
+    await page.goto(`${url}/thread/theme-running`, { waitUntil: 'networkidle2' })
+    await page.waitForSelector('[data-thread-header]')
+    await contrast(`thread-sheet-${width}`)
+    await shot(`thread-sheet-${width}`)
+  }
+  await page.setViewport({ width: 1440, height: 1000, deviceScaleFactor: 1 })
+  await page.goto(url, { waitUntil: 'networkidle2' })
+  await page.evaluate(async () => { const { store, showToast } = await import('/src/store.ts'); store.view = 'status:archived'; showToast('Settings saved', { duration: 10000 }) })
+  await page.waitForFunction(() => document.body.textContent.includes('Settings saved'))
+  await contrast('status-list-toast')
+  await shot('status-list-toast')
+  await page.goto(url, { waitUntil: 'networkidle2' })
+  check(`${name} command palette, new-thread modal, stacked thread reader and status list`)
 
   // A fresh dispatch has no AI title yet; exercise that real row without dispatching a provider.
   const previousTitle = await page.evaluate(async () => {
@@ -176,11 +213,12 @@ export async function checkSurfaceStates({ page, url, font, palette, out, check,
   page.off("request", request)
   assert.equal(serverWrites, 0, "Appearance never writes server settings")
   assert.equal(await page.$$eval('.frizz-sheet-panel button', buttons => buttons.some(el => ['Mono', 'Sans'].includes(el.textContent.trim()))), false, 'There is no font setting')
-  for (const choice of ['Hidden', 'Always shown']) {
+  for (const choice of ['Off', 'On']) {
     const saved = page.waitForResponse(response => response.url().includes('/rpc/settingsSet') && response.ok())
-    await page.click('button[aria-label="Project sidebar"]')
-    await page.waitForSelector('[role="menuitemradio"]')
-    await page.evaluate(choice => [...document.querySelectorAll('[role="menuitemradio"]')].find(el => el.textContent.trim() === choice).click(), choice)
+    await page.evaluate(choice => {
+      const field = document.querySelector('button[aria-label="About Project sidebar"]').closest('div.flex-col')
+      ;[...field.querySelectorAll('button')].find(el => el.textContent.trim() === choice).click()
+    }, choice)
     await saved
     await page.waitForFunction(() => [...document.querySelectorAll('header span')].some(el => el.textContent === 'Saved'))
     await page.evaluate(async () => {

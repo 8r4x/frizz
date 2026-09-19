@@ -74,27 +74,6 @@ export const STRIP_INK_GAP = "gap-3"
  *  It is measured, not missed. */
 export const INK_TRIM_HOURGLASS = "-mx-1"
 
-/** `RecurringPromptControl` (the Goal control) — Tabler's `target-arrow` at 12px inside `px-0.5`.
- *
- *  THE SWAP THE PREVIOUS NOTE PREDICTED. It said a mark swap forces a re-measure only when the new
- *  glyph's ink sits differently inside the viewBox, "because the next swap will be to something that
- *  does" — and on 2026-08-13 it was. lucide's `Target` painted a full-bleed circle out to the 24-unit
- *  bound (0.5px of inset a side inside the 12px box, hence the old -2.5px). Tabler's arcs stop at r=9
- *  and its dart stops at 21, so the ink starts a full unit further in: 3.0px of dead space on the left
- *  and 2.88px on the right, measured, once `px-0.5` is counted.
- *
- *  SYMMETRIC at 3px, because the glyph is: those two readings differ by 0.12px, which is far under the
- *  floor where a correction smears a mark instead of moving it. The strip then read 12.00px and 11.87px
- *  to the hourglass on its left and the armed-watchers eye on its right, against its 12px target.
- *
- *  THAT EYE IS GONE (2026-08-14 — it duplicated the rows under the prompt box; see
- *  ThreadLifecycleFooter), so the Goal is now the LAST mark in the cluster and only its left-hand gap is
- *  still drawn. The 3px stands unchanged: it is a property of this glyph's own dead space, measured on
- *  the mark rather than fitted to a neighbour, which is exactly why losing the neighbour costs nothing.
- *
- *  RE-MEASURE, DON'T RE-GUESS, if the mark changes again: `nub scripts/ink-gaps.mjs
- *  http://localhost:<vite>/icon-rhythm-fixture.html "[data-pending-snooze],[data-recurring-prompt]"`. */
-export const INK_TRIM_GOAL = "-mx-[3px]"
 
 /** Outlined 28px composer buttons paint their full boxes. A 36px pitch therefore leaves 8px
  *  between visible edges, whether the middle GitHub action is present or not. */

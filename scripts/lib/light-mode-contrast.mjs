@@ -31,7 +31,13 @@ export async function measureTextContrast(page) {
       if (!hit || !(element.contains(hit) || hit.contains(element))) continue
       const style = getComputedStyle(element)
       let bg = [0, 0, 0, 0]
-      let fg = rgba(style.color)
+      // Clipped gradient text paints its stops, not its transparent CSS color. Check every
+      // stop; this is conservative for Frizz's monotone muted-to-fg shimmer gradient.
+      const colors = style.backgroundClip === "text" && style.backgroundImage !== "none"
+        ? style.backgroundImage.match(/(?:rgba?|color)\([^)]*\)/g)
+        : [style.color]
+      if (!colors?.length) throw new Error(`Unsupported text gradient: ${style.backgroundImage}`)
+      let foregrounds = colors.map(rgba)
       let opacity = 1
       for (let parent = element; parent; parent = parent.parentElement) {
         const css = getComputedStyle(parent)
@@ -40,15 +46,17 @@ export async function measureTextContrast(page) {
         // Group opacity applies to the painted background and foreground together.
         const backdrop = rgba(css.backgroundColor)
         bg = over(bg, backdrop)
-        fg = over(fg, backdrop)
+        foregrounds = foregrounds.map(fg => over(fg, backdrop))
         bg[3] *= Number(css.opacity)
-        fg[3] *= Number(css.opacity)
+        foregrounds.forEach(fg => { fg[3] *= Number(css.opacity) })
       }
       if (opacity === 0) continue
       bg = over(bg, [255, 255, 255, 1])
-      fg = over(fg, [255, 255, 255, 1])
-      const a = luminance(fg), b = luminance(bg)
-      const ratio = (Math.max(a, b) + .05) / (Math.min(a, b) + .05)
+      const b = luminance(bg)
+      const ratio = Math.min(...foregrounds.map(fg => {
+        const a = luminance(over(fg, [255, 255, 255, 1]))
+        return (Math.max(a, b) + .05) / (Math.min(a, b) + .05)
+      }))
       const key = `${style.color}/${bg}/${opacity}/${element.className}`
       if (seen.has(key)) continue
       seen.add(key)

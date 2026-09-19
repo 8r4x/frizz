@@ -49,6 +49,18 @@ test("the runtime and pre-paint resolver share the dedicated preference key and 
 
 const declarations = (css: string) => Object.fromEntries([...css.matchAll(/(--[\w-]+):\s*([^;]+);/g)].map(([, name, value]) => [name, value.trim()]))
 
+test("the approved light palette keeps questions neutral and actions subtly outlined", () => {
+  const css = readFileSync(new URL("../theme.css", import.meta.url), "utf8")
+  const light = declarations(css.split(':root[data-theme="light"] {')[1]!.split("}")[0]!)
+  for (const [name, value] of Object.entries({ bg: "#f7f7f7", question: "#ffffff", "question-border": "#dcdcdc", accent: "#416896", selection: "#f1f5fa", "selection-border": "#7891ad" })) {
+    assert.equal(light[`--frizz-${name}`], value)
+  }
+  const style = readFileSync(new URL("../styles.css", import.meta.url), "utf8")
+  assert.match(style, /@utility button-outline\s*\{\s*@apply inset-ring inset-ring-button-border/)
+  const picker = readFileSync(new URL("../components/GithubPickerModal.tsx", import.meta.url), "utf8")
+  assert.match(picker, /const label = githubLabelColors\(color\)/)
+})
+
 test("both palettes are complete, including OS fallback and recovery subset parity", () => {
   const css = readFileSync(new URL("../theme.css", import.meta.url), "utf8")
   const dark = declarations(css.split(':root, :root[data-theme="dark"] {')[1]!.split("}")[0]!)

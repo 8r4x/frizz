@@ -514,13 +514,13 @@ function InteractionApprovalCard({
       data-interaction-id={record.id}
       data-interaction-kind={record.payload.kind}
       data-delivery-effect={record.delivery?.effect}
-      className={`min-w-0 ${BLOCK_RADIUS} border border-accent/45 bg-accent/[0.065] shadow-sm shadow-black/15 outline-none focus-visible:ring-2 focus-visible:ring-focus-accent-60`}
+      className={`min-w-0 ${BLOCK_RADIUS} border border-question-border bg-question outline-none focus-visible:ring-2 focus-visible:ring-focus-accent-60`}
     >
       {/* No eyebrow. "PERMISSION APPROVAL · NEEDS YOU" in uppercase amber above "Approve Bash?" said
           the same thing twice in a louder font, and the delivery states it also carried (sending,
           runtime unavailable) already have their own live status line below. The title alone is the
-          heading; the amber border and the shield are what mark the card as a gate. */}
-      <div className="flex min-w-0 items-center gap-3 border-b border-accent/20 px-4 py-3">
+          heading; the shield marks this card as an approval gate. */}
+      <div className="flex min-w-0 items-center gap-3 border-b border-question-border px-4 py-3">
         <ShieldCheck aria-hidden="true" size={16} className="shrink-0 text-accent" />
         <h3 id={headingId} className="min-w-0 flex-1 break-words text-[14px] font-semibold leading-snug text-fg">
           {record.payload.title}
@@ -653,7 +653,7 @@ function InteractionApprovalCard({
 
 function decisionButtonClass(decision: CanonicalInteractionDecision): string {
   const base = "rounded-md border px-2.5 py-1.5 text-[11px] font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-focus-ink-50 disabled:opacity-40"
-  if (decision.tone === "primary") return `${base} border-accent/55 bg-accent/15 text-fg hover:bg-accent/25`
+  if (decision.tone === "primary") return `${base} border-border-strong bg-panel-2 text-fg hover:bg-inset`
   if (decision.tone === "danger") return `${base} border-danger/35 bg-danger-fill/[0.07] text-danger-faint hover:bg-danger-fill/15`
   return `${base} border-border bg-panel text-muted hover:bg-panel-2 hover:text-fg`
 }

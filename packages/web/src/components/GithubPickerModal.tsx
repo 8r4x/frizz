@@ -15,6 +15,7 @@ import { OPAQUE_PORTAL_SURFACE_ABOVE_DIALOG_Z } from "../lib/overlaySurface.ts"
 import { buildGithubBatchInput, dispatchProfileError } from "../lib/githubDispatch.ts"
 import { useGithubStatus } from "./GithubTrigger.tsx"
 import { applyRowSelection } from "../lib/rowRangeSelection.ts"
+import { githubLabelColors } from "../lib/githubLabelColors.ts"
 import { PRIMER } from "../lib/primer.ts"
 import { compactAge } from "../lib/activityTime.ts"
 
@@ -453,13 +454,13 @@ function StateIcon({ item }: { item: GithubItem }) {
 }
 
 
-// A github-style label chip: the label's own color as outline + text on a faint tint. Truncates long names.
+// External label hues share the hovercard's readable light/dark treatment.
 function LabelChip({ name, color }: { name: string; color: string }) {
-  const hex = /^[0-9a-fA-F]{6}$/.test(color) ? `#${color}` : undefined
+  const label = githubLabelColors(color)
   return (
     <span
       className="max-w-[130px] shrink-0 truncate rounded-full border px-1.5 py-px text-[9.5px] leading-[13px]"
-      style={hex ? { borderColor: `${hex}59`, color: hex, backgroundColor: `${hex}14` } : undefined}
+      style={{ borderColor: label.border, color: label.foreground, backgroundColor: label.background }}
       title={name}
     >
       {name}
