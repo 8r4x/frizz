@@ -13,7 +13,7 @@ export const OPAQUE_SURFACE_BASE =
 // prompt box" bug. Anything below is an OVERLAY and therefore already outranks the rail:
 //   z-20  fixed corner chrome · z-50 modal dialogs/drawers · z-[60] ⌘K palette · z-[70] toasts
 //   z-[110] portaled selector surfaces · z-[200] shared Dialog · z-[250] anchored popovers/tooltips
-//   z-[300] restart scrim (alone must cover the whole app)
+//   z-[260] a selector opened from INSIDE a popover · z-[300] restart scrim (alone must cover the whole app)
 // Never re-elevate a persistent layer to "win" a collision — raise the specific overlay instead.
 
 // The selector-surface contract for Select, DropdownMenu, and the profile grid: the opaque base at
@@ -28,6 +28,13 @@ export const OPAQUE_PORTAL_SURFACE_CLASS = `${OPAQUE_PORTAL_SURFACE_Z} ${OPAQUE_
 // bug. This is the raise-the-specific-overlay fix, not a re-elevation of the z-[110] tier itself:
 // it borrows the anchored-overlay level, which is defined to clear z-[200].
 export const OPAQUE_PORTAL_SURFACE_ABOVE_DIALOG_Z = "z-[250]"
+
+// The stacking level a selector takes when it is opened from INSIDE an anchored popover (the model
+// picker's agent-settings panel carries three Selects). Its portal still mounts at document.body, so
+// at the popover's own z-[250] it would resolve by source order against the panel it was opened from
+// — a coin flip that lands the menu beneath its own trigger. One step above, and still below the
+// restart scrim.
+export const OPAQUE_PORTAL_SURFACE_ABOVE_POPOVER_Z = "z-[260]"
 
 // The z-index for ANCHORED transient overlays that pop off a trigger — tooltips and popovers. They
 // must clear every surface they can be opened from: the opaque selector surface (z-[110]) and the

@@ -3736,17 +3736,6 @@ export function createRouter(ctx: AppContext) {
       handler: async ({ input }) => ctx.setSettings(input),
     }),
 
-    // Context controls live in the new-thread picker. Patch only the chosen field against the
-    // latest settings, synchronously, rather than replacing unrelated settings from a stale drawer.
-    contextWindowSet: mutation({
-      input: z.object({ backend: z.enum(["claude", "codex"]), tokens: z.number().int().positive().nullable() }),
-      output: Settings,
-      handler: async ({ input }) => ctx.setSettings({
-        ...ctx.getSettings(),
-        [input.backend === "claude" ? "autoCompactWindow" : "codexContextWindow"]: input.tokens ?? undefined,
-      }),
-    }),
-
     // Clear the stored settings blob so defaults (incl. the shipped default preamble) apply again.
     settingsReset: mutation({
       input: z.object({}),

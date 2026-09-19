@@ -36,28 +36,6 @@ import type { AppContext } from "./context.ts"
 import type { Project } from "./project.ts"
 import type { Tailer } from "./tailer.ts"
 import { providerResumeCommand, shellQuote } from "./external-terminal.ts"
-import { getSettings, setSettings } from "./settings.ts"
-
-test("contextWindowSet patches one persisted project setting and can restore the Codex default", async () => {
-  const h = harness()
-  try {
-    h.ctx.getSettings = () => getSettings(h.storage, h.dir)
-    h.ctx.setSettings = (next) => setSettings(h.storage, next, h.dir)
-    const before = h.ctx.setSettings({ ...h.ctx.getSettings(), promptCacheTtl: "5m" })
-    const proc = h.router.contextWindowSet
-    for (const input of [{ backend: "acp", tokens: 400000 }, { backend: "codex", tokens: 0 }, { backend: "codex", tokens: 1.5 }, { backend: "claude", tokens: -1 }]) {
-      assert.equal(proc.input.safeParse(input).success, false)
-    }
-    await proc.handler({ input: { backend: "claude", tokens: 350000 } })
-    await proc.handler({ input: { backend: "codex", tokens: 672000 } })
-    assert.deepEqual(h.ctx.getSettings(), { ...before, autoCompactWindow: 350000, codexContextWindow: 672000 })
-    await proc.handler({ input: { backend: "codex", tokens: null } })
-    assert.deepEqual(h.ctx.getSettings(), { ...before, autoCompactWindow: 350000, codexContextWindow: undefined })
-  } finally {
-    h.storage.close()
-    rmSync(h.dir, { recursive: true, force: true })
-  }
-})
 
 test("provider resume command is shell-safe", () => {
   assert.equal(shellQuote("frizz's socket"), "'frizz'\"'\"'s socket'")

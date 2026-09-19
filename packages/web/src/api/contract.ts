@@ -333,7 +333,6 @@ export interface Api {
   projectRename(input: { id: string; name: string; renameDirectory?: boolean }): Promise<ProjectCard>
   settingsGet(): Promise<Settings>
   settingsSet(input: Settings): Promise<Settings>
-  contextWindowSet(input: { backend: "claude" | "codex"; tokens: number | null }): Promise<Settings>
   // Takes an empty object, not nothing: the router declares `input: z.object({})` (a mutation always
   // has an input schema), and the transport posts `{}` for it.
   settingsReset(input: Record<never, never>): Promise<Settings>
@@ -452,7 +451,6 @@ export const PROCEDURES = {
   projectRename: "mutation",
   settingsGet: "query",
   settingsSet: "mutation",
-  contextWindowSet: "mutation",
   settingsReset: "mutation",
   dispatchPreferencesGet: "query",
   dispatchPreferenceSet: "mutation",

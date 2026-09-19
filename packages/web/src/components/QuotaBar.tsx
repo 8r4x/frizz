@@ -25,7 +25,7 @@ import { PROVIDER_LABEL } from "../lib/signIn.ts"
 // pinned to the project name.
 //
 // Quota is polled (rpc.quota) rather than pushed on the board: it is ACCOUNT-global, not per-thread.
-// The server keeps the reading warm on its own 1-minute heartbeat (refreshClaudeQuotaInBackground), so
+// The server keeps the reading warm on its own heartbeat (refreshClaudeQuotaInBackground), so
 // this poll just reads that warm cache — a cheap local RPC, no provider round-trip — and a 30s cadence
 // keeps the chip tracking the cache within half a minute instead of drifting minutes stale during a
 // fast burn. An UNAVAILABLE read re-polls at 15s (a blip should self-heal in seconds), and opening a

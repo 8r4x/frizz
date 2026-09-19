@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState, type ComponentType } from "react"
 import { keepPreviousData, useIsMutating, useMutation, useQuery } from "@tanstack/react-query"
-import { Check, ChevronLeft, ChevronRight, CircleCheck, CircleDot, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, Github, Inbox, Loader2, MessageSquare } from "lucide-react"
+import { ArrowUpRight, Check, ChevronLeft, ChevronRight, CircleCheck, CircleDot, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, Github, Inbox, Loader2, MessageSquare } from "lucide-react"
 import { acpModelSlug, type DispatchInput, type DispatchProfileSnapshot, type GithubBatchInput, type GithubItem } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { showToast } from "../store.ts"
 import { Overlay } from "./NewThreadModal.tsx"
 import { ProfileGridSelector } from "./ProfileGridSelector.tsx"
 import { AcpModelSelect } from "./AcpModelSelect.tsx"
+import { GithubPromptPopover } from "./GithubPromptPopover.tsx"
+import { SETTINGS_WRITE_KEY } from "../hooks/useSettingsAutosave.tsx"
 import { useDispatchProfile } from "../hooks/useDispatchProfile.ts"
 import { dispatchProfileGroups } from "../lib/dispatchPreferences.ts"
 import { OPAQUE_PORTAL_SURFACE_ABOVE_DIALOG_Z } from "../lib/overlaySurface.ts"
@@ -14,7 +16,6 @@ import { buildGithubBatchInput, dispatchProfileError } from "../lib/githubDispat
 import { useGithubStatus } from "./GithubTrigger.tsx"
 import { applyRowSelection } from "../lib/rowRangeSelection.ts"
 import { PRIMER } from "../lib/primer.ts"
-import { githubLabelColors } from "../lib/githubLabelColors.ts"
 import { compactAge } from "../lib/activityTime.ts"
 
 type Kind = "issues" | "prs"
@@ -39,7 +40,9 @@ export function GithubPickerModal({ onClose }: { onClose: () => void }) {
   // picker-local copy that silently diverges). A Codex cache refresh can invalidate the saved pair
   // while the picker is open; the final revalidation below then fails closed rather than downgrading.
   const { resolved, codexList, acpList, loadError, saveProfile } = useDispatchProfile()
-  const savingContext = useIsMutating({ mutationKey: ["contextWindowSet"] }) > 0
+  // A settings write still in flight — the triage prompt just edited in the header popover, a
+  // compaction window picked in the selector — must land before a batch that would read it.
+  const savingSettings = useIsMutating({ mutationKey: [...SETTINGS_WRITE_KEY] }) > 0
 
   const [kind, setKind] = useState<Kind>("issues")
   const [sort, setSort] = useState<Sort>("recent")
@@ -127,7 +130,6 @@ export function GithubPickerModal({ onClose }: { onClose: () => void }) {
     setAnchor(null)
   }
 
-  const nameWithOwner = status.data?.nameWithOwner ?? "this repo"
   const n = selected.size
   // Stable identity: ProfileGridSelector memoizes off `groups`, and this modal re-renders on every
   // row toggle.
@@ -145,7 +147,7 @@ export function GithubPickerModal({ onClose }: { onClose: () => void }) {
     : loadError
       ? "Could not load the model catalogue — reopen once it loads"
       : undefined
-  const dispatchBlocked = profileError ?? (savingContext ? "Saving context window…" : profile ? undefined : "Loading the model catalogue…")
+  const dispatchBlocked = profileError ?? (savingSettings ? "Saving settings…" : profile ? undefined : "Loading the model catalogue…")
 
   function startDispatch() {
     if (!profile || dispatchBlocked) {
@@ -169,12 +171,22 @@ export function GithubPickerModal({ onClose }: { onClose: () => void }) {
           }
         }}
       >
-        {/* Header */}
-        <h2 className="mb-4 flex items-center gap-2 text-[14px] font-medium">
-          <Github size={15} className="text-muted" />
-          <span>Investigate this issue and make recommendations</span>
-          <span className="text-muted-40">—</span>
-          <span className="font-mono-keep text-[12.5px] text-muted">{nameWithOwner}</span>
+        {/* Header: the title left; the repo slug RIGHT-justified as a link out to github.com, then the
+            gear that opens the triage prompt this picker dispatches with. The slug was an em-dashed
+            suffix of the title until 2026-09-19; as a link in the far corner it is the picker's one
+            way OUT to the repo, and the gear beside it is the picker's own settings, where they apply. */}
+        {/* `items-baseline`, not `items-center`: the three glyphs on this row (the GitHub mark, the
+            link's arrow, the gear) are each put on the title's CAP BAND by a browser-computed
+            translate — half the glyph's box minus half the resolved cap height — which needs a shared
+            baseline to work from. Centred boxes put the gear 0.6px high in sans and 2.0px low in mono
+            (measured 2026-09-19); on the cap band the residual is 0.0px in both. */}
+        <h2 className="mb-4 flex items-baseline gap-2 text-[14px] font-medium">
+          <Github size={15} aria-hidden="true" className="shrink-0 self-baseline translate-y-[calc(7.5px_-_0.5cap)] text-muted" />
+          <span className="min-w-0 truncate">Investigate this issue and make recommendations</span>
+          <span className="ml-auto flex shrink-0 items-baseline gap-2">
+            {status.data?.nameWithOwner && <RepoLink nameWithOwner={status.data.nameWithOwner} />}
+            <GithubPromptPopover />
+          </span>
         </h2>
 
         {/* Controls: tabs (Issues | PRs) left, sort (Recent | Reactions) right */}
@@ -286,7 +298,7 @@ export function GithubPickerModal({ onClose }: { onClose: () => void }) {
             <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
             <ProfileGridSelector
               groups={profileGroups}
-              contextWindows
+              agentSettings
               value={resolved ? { provider: resolved.backend, model: resolved.pickerModel, effort: resolved.effort } : undefined}
               onValueChange={(selection) => saveProfile({
                 field: "profile",
@@ -334,6 +346,31 @@ export function GithubPickerModal({ onClose }: { onClose: () => void }) {
         </div>
       </div>
     </Overlay>
+  )
+}
+
+// The repo slug as a link OUT to github.com, in the picker header's far corner. Mono for the slug
+// (it is an identifier); the arrow is lucide's arrow-up-right, the "opens elsewhere" mark GitHub
+// itself uses beside external links, at the slug's own `1em` so the pair reads as one link.
+//
+// The arrow's ink is centred in its box (7..17 of 24), so with the link `items-baseline` the
+// documented `0.5em - 0.5cap` translate puts it exactly on the slug's cap band in either font. It
+// paints 10 of its 24 box units — 0.29em of dead space a side — so `-ml-[0.29em]` collapses the box
+// onto its ink and the `gap-1` becomes 4px of INK between the slug's last glyph and the arrow (it
+// read 8.4px before the trim), which is what makes the arrow the slug's tail rather than a mark
+// standing next to it.
+function RepoLink({ nameWithOwner }: { nameWithOwner: string }) {
+  return (
+    <a
+      href={`https://github.com/${nameWithOwner}`}
+      target="_blank"
+      rel="noreferrer noopener"
+      title={`Open ${nameWithOwner} on GitHub`}
+      className="github-repo-link inline-flex min-w-0 items-baseline gap-1 rounded-sm font-mono-keep text-[12.5px] font-normal text-muted outline-none transition-colors hover:text-fg focus-visible:text-fg"
+    >
+      <span className="truncate">{nameWithOwner}</span>
+      <ArrowUpRight aria-hidden="true" className="-ml-[0.29em] size-[1em] shrink-0 self-baseline translate-y-[calc(0.5em_-_0.5cap)]" />
+    </a>
   )
 }
 
@@ -416,13 +453,13 @@ function StateIcon({ item }: { item: GithubItem }) {
 }
 
 
-// The shared label treatment protects contrast while retaining the API hue in the tint and border.
+// A github-style label chip: the label's own color as outline + text on a faint tint. Truncates long names.
 function LabelChip({ name, color }: { name: string; color: string }) {
-  const label = githubLabelColors(color)
+  const hex = /^[0-9a-fA-F]{6}$/.test(color) ? `#${color}` : undefined
   return (
     <span
       className="max-w-[130px] shrink-0 truncate rounded-full border px-1.5 py-px text-[9.5px] leading-[13px]"
-      style={{ color: label.foreground, backgroundColor: label.background, borderColor: label.border }}
+      style={hex ? { borderColor: `${hex}59`, color: hex, backgroundColor: `${hex}14` } : undefined}
       title={name}
     >
       {name}
@@ -453,7 +490,7 @@ function Row({ item, checked, onActivate }: { item: GithubItem; checked: boolean
           onActivate(e.shiftKey)
         }
       }}
-      className="group flex w-full cursor-pointer items-start gap-2.5 border-b border-border/40 px-3 py-2.5 text-left outline-none transition-colors last:border-b-0 hover:bg-hover"
+      className="group flex w-full cursor-pointer items-start gap-2.5 border-b border-border/40 px-3 py-2.5 text-left outline-none transition-colors last:border-b-0 hover:bg-white/[0.03]"
     >
       <span className="mt-px shrink-0">
         <Checkbox checked={checked} />
