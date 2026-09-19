@@ -74,11 +74,11 @@ test("a board activity edge refetches an observed slug the push channel does not
   stop()
 })
 
-// Socket-covered slugs and a read-budget pause are NOT edge-refetched; a slug the socket refused as
-// payload-too-large IS. Before 2026-09-16 the overflow was left manual too, which froze the /full page
-// of any thread past the frame cap until a hard reload — the paged HTTP read is bounded, so one pull per
+// Socket-covered slugs are NOT edge-refetched; a slug the socket refused — payload-too-large or read
+// budget — IS. Before 2026-09-16 both refusals were left manual, which froze the /full page of any refused
+// thread until a hard reload — the paged HTTP read is bounded and off the socket's budget, so one pull per
 // activity edge is the same policy a beyond-budget slug already gets.
-test("edge refetch: not for socket-covered or read-budget slugs; yes for a payload-too-large slug", async () => {
+test("edge refetch: not for a socket-covered slug; yes for a refused one, whichever refusal", async () => {
   const qc = makeClient()
   const refetched: string[] = []
   qc.refetchQueries = ((filters: { queryKey?: unknown[] }) => {
@@ -105,14 +105,14 @@ test("edge refetch: not for socket-covered or read-budget slugs; yes for a paylo
     { id: "oversized", lastActivityAt: "2026-07-21T00:00:09.000Z" },
   ])
   await sleep(60)
-  assert.deepEqual(refetched, ["oversized"]) // push owns "covered"; the read-budget pause stays manual
-  // No edge, no pull: the overflow policy is one request per real change, never a poll.
+  assert.deepEqual(refetched, ["paused", "oversized"]) // push owns "covered"; both refusals pull
+  // No edge, no pull: the refusal policy is one request per real change, never a poll.
   store.board = boardWith([
     { id: "covered", lastActivityAt: "2026-07-21T00:00:09.000Z" },
     { id: "paused", lastActivityAt: "2026-07-21T00:00:09.000Z" },
     { id: "oversized", lastActivityAt: "2026-07-21T00:00:09.000Z" },
   ])
   await sleep(60)
-  assert.deepEqual(refetched, ["oversized"])
+  assert.deepEqual(refetched, ["paused", "oversized"])
   stops.forEach((s) => s())
 })

@@ -160,6 +160,16 @@ export function transcriptStaleTime(board: BoardSnapshot | null, slug: string, d
   return movedAt > dataUpdatedAt ? 0 : REVISIT_STALE_MS
 }
 
+// The later of the server's last confirmation of a cache entry (`dataUpdatedAt`, as an ISO string for
+// isTranscriptStale) and the newest rendered message's own timestamp. Exported for the watchdog test.
+export function latestConfirmation(dataUpdatedAt: number | undefined, newestRendered: string | undefined): string | undefined {
+  const rendered = newestRendered ? Date.parse(newestRendered) : NaN
+  const confirmed = dataUpdatedAt && dataUpdatedAt > 0 ? dataUpdatedAt : NaN
+  if (!Number.isFinite(rendered) && !Number.isFinite(confirmed)) return newestRendered
+  const at = Math.max(Number.isFinite(rendered) ? rendered : 0, Number.isFinite(confirmed) ? confirmed : 0)
+  return new Date(at).toISOString()
+}
+
 export function useTranscript(slug: string, opts: { poll: boolean }) {
   const qc = useQueryClient()
   const snap = useSnapshot(store)
@@ -193,7 +203,8 @@ export function useTranscript(slug: string, opts: { poll: boolean }) {
     // refresh/retry actions. An overflowed slug is still kept fresh — one paged HTTP pull per activity
     // edge, owned centrally by api/transcript-live.ts. Ordinary SSE fallback still polls exactly as before.
     refetchInterval: opts.poll && !socket && !transportFallback ? 1500 : false,
-    refetchOnWindowFocus: !transportFallback,
+    // A window focus is one bounded HTTP read; under a transport pause it is the cheapest recovery there is.
+    refetchOnWindowFocus: true,
     // Serve a revisited thread from cache instead of re-reading it — see transcriptStaleTime above for
     // the activity gate that keeps that from ever showing a transcript the board says has moved on.
     // Nothing that keeps a LIVE thread live goes through here: the socket push writes the cache
@@ -207,11 +218,22 @@ export function useTranscript(slug: string, opts: { poll: boolean }) {
   // missed edge (a dropped subscription across a reconnect/HMR, a suppressed broadcast, a mount-order flip)
   // would otherwise wedge a live view FOREVER with no recovery — the class of bug behind "it needed a hard
   // reload". Every WATCHDOG_MS (cheap: one timestamp compare, no network unless stale) we check the board's
-  // lastActivityAt for this slug (delivered independently over the board-delta channel) against the newest
-  // rendered message; a lead beyond STALE_MS means the transcript is provably behind, so we force a pull
-  // refetch (always works — plain HTTP) AND re-establish the subscription (fixes a lost server-side sub for
-  // FUTURE pushes), and warn a structured breadcrumb so the underlying delivery bug stays diagnosable. Lives
-  // in the hook so every consumer (main ChatView + the drawer's) inherits the invariant.
+  // lastActivityAt for this slug (delivered independently over the board-delta channel) against the moment
+  // the SERVER last confirmed this cache entry; a lead beyond STALE_MS means the transcript is provably
+  // behind, so we force a pull refetch (always works — plain HTTP) AND re-establish the subscription (fixes
+  // a lost server-side sub for FUTURE pushes), and warn a structured breadcrumb so the underlying delivery
+  // bug stays diagnosable. Lives in the hook so every consumer (main ChatView + the drawer's) inherits it.
+  //
+  // "Confirmed" is react-query's `dataUpdatedAt` — stamped by a push and by a refetch alike — not the
+  // newest rendered message's own timestamp. Until 2026-09-18 it was the latter, and on a STREAMING thread
+  // that reads as permanently stale: the board's marker moves on every rollout record (a token count, a
+  // reasoning summary, a tool result still in flight) while the newest message that carries an `at` sits
+  // minutes back during a long tool stretch. Pushes were landing every few seconds and the watchdog still
+  // fired every 7s, twice per page (main view + rail), each firing an unsub+sub (a full server re-read)
+  // and an HTTP refetch (another) — on a 19 MB codex rollout, ~300 ms of parse each, on a server already
+  // re-parsing that file once a second for the push. The attempt cap never engaged, because "the transcript
+  // advanced" re-armed it on every push. The rendered timestamp is kept only as the floor for a cache the
+  // server has never stamped.
   useEffect(() => {
     // Armed whenever the surface has a live source to guard: the SSE interval poll, or (socket mode) the
     // centrally-managed subscription/edge-refetch — a missed push edge would otherwise freeze the view
@@ -223,8 +245,10 @@ export function useTranscript(slug: string, opts: { poll: boolean }) {
     const tick = () => {
       if (inFlight) return
       const activity = threadBySlug(store.board as BoardSnapshot | null, slug)?.lastActivityAt
-      const newest = newestRenderedAt(qc.getQueryData<TranscriptData>(["transcript", slug])?.messages)
-      if (!isTranscriptStale(activity, newest, STALE_MS)) {
+      const state = qc.getQueryState<TranscriptData>(["transcript", slug])
+      const newest = newestRenderedAt(state?.data?.messages)
+      const confirmedAt = latestConfirmation(state?.dataUpdatedAt, newest)
+      if (!isTranscriptStale(activity, confirmedAt, STALE_MS)) {
         attempts = 0 // caught up — re-arm
         return
       }

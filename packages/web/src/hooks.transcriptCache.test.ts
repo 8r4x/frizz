@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
 import type { BoardSnapshot, ThreadView } from "@frizz/shared"
-import { transcriptStaleTime } from "./hooks.ts"
+import { latestConfirmation, transcriptStaleTime } from "./hooks.ts"
 
 // The transcript query had no staleTime, so every open re-read the whole transcript — including a return
 // to the thread you just left, which painted from cache in 63ms and then spent 1998ms on a request whose
@@ -38,4 +38,18 @@ test("no marker to gate on means no cache window", () => {
 
 test("an empty cache entry is never served: dataUpdatedAt 0 predates every marker", () => {
   assert.equal(transcriptStaleTime(board([{ id: "cold", lastActivityAt: at(-3_600_000) }]), "cold", 0), 0)
+})
+
+// ---- the watchdog's notion of "confirmed" (see useTranscript) ----
+// A push or a refetch stamps dataUpdatedAt; on a streaming thread that stamp is seconds old while the
+// newest message carrying an `at` can be minutes old (a long tool stretch). The watchdog must read the
+// stamp, or it fires on every tick of a perfectly live view and re-reads the whole transcript each time.
+test("latestConfirmation: a fresh cache stamp outranks an old rendered tail; the tail is the floor without one", () => {
+  const stamp = Date.parse("2026-09-18T23:52:30.000Z")
+  assert.equal(latestConfirmation(stamp, "2026-09-18T23:50:29.000Z"), "2026-09-18T23:52:30.000Z")
+  assert.equal(latestConfirmation(stamp, undefined), "2026-09-18T23:52:30.000Z")
+  assert.equal(latestConfirmation(0, "2026-09-18T23:50:29.000Z"), "2026-09-18T23:50:29.000Z")
+  assert.equal(latestConfirmation(undefined, undefined), undefined)
+  // A rendered tail NEWER than the stamp (server clock ahead of a push landing) still wins — never behind.
+  assert.equal(latestConfirmation(stamp, "2026-09-18T23:53:00.000Z"), "2026-09-18T23:53:00.000Z")
 })

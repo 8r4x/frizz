@@ -347,9 +347,25 @@ test("socket transport bounds oversized frames and only resets reconnect backoff
       retryAfterMs: 750,
     })
     assert.equal(limitedSocket.readyState, FakeWebSocket.OPEN)
-    assert.equal(timeouts.length, 0)
+    // A budget refusal is transient by definition, so the client arms ONE retry after the server's own
+    // retry-after (plus spread) and never a reconnect. Running it re-sends exactly one subscription.
+    assert.equal(timeouts.length, 1, "one budget retry, no reconnect backoff")
+    assert.ok(timeouts[0].delay >= 750 && timeouts[0].delay < 750 + 400, `retry waits the server's retry-after: ${timeouts[0].delay}`)
+    timeouts[0].cleared = true
+    timeouts[0].run()
+    assert.equal(store.socketTranscriptFallbacks["busy-thread"], undefined)
+    assert.equal(limitedSocket.sent.length, 2, "the automatic retry sends exactly one subscription")
+    limitedSocket.message({
+      t: "resource-limited",
+      resource: "transcript-read",
+      scope: "origin",
+      slug: "busy-thread",
+      retryAfterMs: 750,
+    })
+    assert.equal(timeouts.length, 2, "a second refusal arms a second retry")
+    timeouts[1].cleared = true
     limited.retryTranscriptSocket("busy-thread")
-    assert.equal(limitedSocket.sent.length, 2)
+    assert.equal(limitedSocket.sent.length, 3, "the explicit retry sends exactly one subscription")
     limitedSocket.message({
       t: "transcript",
       slug: "busy-thread",
@@ -385,7 +401,9 @@ test("socket transport bounds oversized frames and only resets reconnect backoff
     assert.deepEqual(store.socketTranscriptFallbacks, {})
     assert.equal(store.socketTranscripts, false)
     assert.equal(timeouts.length, 0)
-    assert.equal(warnings.length, 3, "each explicit downgrade logs once without console churn")
+    // Three downgrades plus the second budget refusal above, which lands on a cleared latch and so is a
+    // new event worth one line — a refusal repeated on a still-latched slug is what must stay silent.
+    assert.equal(warnings.length, 4, "each explicit downgrade logs once without console churn")
   } finally {
     console.warn = originalWarn
     for (const [key, descriptor] of globals) {
