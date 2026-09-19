@@ -279,7 +279,7 @@ function RailLink({
             {/* The cap band, not the line box — the same fix the monogram above uses, for the same reason:
                 `items-center` centred the digits' LINE BOX and their ink rode 0.4–0.5px low in the sans
                 UI font (measured 2026-08-24). Trimming the box to baseline→cap height makes the box the
-                ink, so the browser centres it per font with nothing to re-measure when the setting flips. */}
+                ink, so the browser centres it with nothing to re-measure when the type scale moves. */}
             <span style={{ textBox: "trim-both cap alphabetic" } as CSSProperties}>{count}</span>
           </span>
         ) : null}

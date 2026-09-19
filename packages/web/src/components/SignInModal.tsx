@@ -139,7 +139,7 @@ export function SignInModal({
                 <button
                   type="button"
                   onClick={() => { abandonAttempt(); setAttempt(null) }}
-                  className="rounded-md px-3 py-1.5 text-[12.5px] text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg"
+                  className="button-outline rounded-md px-3 py-1.5 text-[12.5px] text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg"
                 >
                   Cancel sign-in
                 </button>
@@ -158,7 +158,7 @@ export function SignInModal({
                   type="button"
                   aria-label="Copy command"
                   onClick={copyCommand}
-                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted outline-none transition-colors hover:bg-panel hover:text-fg"
+                  className="button-outline flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted outline-none transition-colors hover:bg-panel hover:text-fg"
                 >
                   {copied ? <Check size={14} strokeWidth={2} className="text-success" /> : <Copy size={14} strokeWidth={1.8} />}
                 </button>
@@ -168,7 +168,7 @@ export function SignInModal({
                 <button
                   type="button"
                   onClick={onClose}
-                  className="rounded-md px-3 py-1.5 text-[12.5px] text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg"
+                  className="button-outline rounded-md px-3 py-1.5 text-[12.5px] text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg"
                 >
                   Cancel
                 </button>
@@ -185,7 +185,7 @@ export function SignInModal({
                   type="button"
                   onClick={() => start.mutate()}
                   disabled={start.isPending}
-                  className="flex items-center gap-1.5 rounded-md bg-accent-fill px-3 py-1.5 text-[12.5px] font-medium text-accent-fg outline-none transition-opacity hover:opacity-90 disabled:opacity-60"
+                  className="button-outline flex items-center gap-1.5 rounded-md bg-accent-fill px-3 py-1.5 text-[12.5px] font-medium text-accent-fg outline-none transition-opacity hover:opacity-90 disabled:opacity-60"
                 >
                   {start.isPending && <Loader2 size={13} className="animate-spin" />}
                   Sign in here
@@ -244,7 +244,7 @@ export function LogoutConfirmModal({ backend, onClose }: { backend: AccountBacke
               type="button"
               onClick={onClose}
               disabled={logout.isPending}
-              className="rounded-md px-3 py-1.5 text-[12.5px] text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg disabled:opacity-60"
+              className="button-outline rounded-md px-3 py-1.5 text-[12.5px] text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg disabled:opacity-60"
             >
               Cancel
             </button>
@@ -252,7 +252,7 @@ export function LogoutConfirmModal({ backend, onClose }: { backend: AccountBacke
               type="button"
               onClick={() => logout.mutate()}
               disabled={logout.isPending}
-              className="flex items-center gap-1.5 rounded-md bg-danger-button/90 px-3 py-1.5 text-[12.5px] font-medium text-white outline-none transition-opacity hover:opacity-90 disabled:opacity-60"
+              className="button-outline flex items-center gap-1.5 rounded-md bg-danger-button/90 px-3 py-1.5 text-[12.5px] font-medium text-white outline-none transition-opacity hover:opacity-90 disabled:opacity-60"
             >
               {logout.isPending && <Loader2 size={13} className="animate-spin" />}
               Sign out

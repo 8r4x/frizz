@@ -537,7 +537,7 @@ export function MobileBoard() {
             aria-label="Board actions"
             data-mobile-more
             onClick={() => setMoreOpen(true)}
-            className="ml-auto flex size-[44px] items-center justify-center rounded-full text-fg/85 active:bg-hover-strong"
+            className="button-outline ml-auto flex size-[44px] items-center justify-center rounded-full text-fg/85 active:bg-hover-strong"
           >
             <Ellipsis size={20} />
           </button>
@@ -584,7 +584,7 @@ export function MobileBoard() {
         onClick={() => (store.showNewThread = true)}
         // NOT the accent: a permanent yellow circle would out-shout every ask in the list under it, and
         // the accent means exactly one thing in this product. This is the app's own primary-button fill.
-        className="fixed bottom-[calc(65px+env(safe-area-inset-bottom))] right-4 z-30 flex size-[56px] items-center justify-center rounded-full bg-fg text-bg shadow-lg shadow-black/50 active:opacity-85"
+        className="button-outline fixed bottom-[calc(65px+env(safe-area-inset-bottom))] right-4 z-30 flex size-[56px] items-center justify-center rounded-full bg-fg text-bg shadow-lg shadow-black/50 active:opacity-85"
       >
         <Plus size={24} strokeWidth={2.2} />
       </button>

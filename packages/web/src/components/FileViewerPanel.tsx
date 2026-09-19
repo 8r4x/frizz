@@ -186,7 +186,7 @@ export function FileViewerPanel({ slug, path, active }: { slug: string; path: st
                 type="button"
                 onClick={() => setView(mode)}
                 aria-pressed={view === mode}
-                className={`rounded px-2 py-0.5 transition-colors ${view === mode ? "bg-panel-2 text-fg" : "text-muted hover:text-fg"}`}
+                className={`button-outline rounded px-2 py-0.5 transition-colors ${view === mode ? "bg-panel-2 text-fg" : "text-muted hover:text-fg"}`}
               >
                 {mode === "rendered" ? "Rendered" : "Source"}
               </button>

@@ -124,7 +124,7 @@ function Diffstat({ additions, deletions }: { additions: number; deletions: numb
       {/* 8px squares, 1px apart, 2px radius — github.com's own DiffSquares metrics.
           `self-baseline` puts the row's BOTTOM on the text baseline, so a box of height H needs
           `(H − cap)/2` to centre it on the cap band instead. `cap` is the resolved font's cap
-          height, so the browser recomputes it when the font setting flips — the only hand-written
+          height, so the browser recomputes it when the type scale moves — the only hand-written
           number is GitHub's own 8px, and `0.5*8px` is written out as 4px.
           The house formula `0.5em − 0.5cap` is for a ONE-EM glyph and is wrong here: at 12px it
           pushed these 8px squares 2.00px BELOW the cap band (measured 2026-08-14). */}

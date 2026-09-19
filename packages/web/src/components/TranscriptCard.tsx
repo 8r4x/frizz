@@ -203,6 +203,7 @@ export function TranscriptCard({
   aside,
   children,
   className = "",
+  surface = "inset",
   ...rest
 }: {
   tone?: CardTone
@@ -220,10 +221,11 @@ export function TranscriptCard({
   // rather than as a card missing its body.
   children?: ReactNode
   className?: string
+  surface?: "inset" | "question"
 } & Omit<ComponentPropsWithoutRef<"div">, "children" | "className">) {
   const { border, head } = CARD_TONES[tone]
   return (
-    <div {...rest} className={`min-w-0 ${BLOCK_RADIUS} border ${border} bg-panel-2 p-4 ${className}`}>
+    <div {...rest} className={`min-w-0 ${BLOCK_RADIUS} border ${surface === "question" ? "border-question-border bg-question" : `${border} bg-panel-2`} p-4 ${className}`}>
       <CardHead icon={icon} label={label} head={head} aside={aside} />
       {children != null && <CardContent>{children}</CardContent>}
     </div>

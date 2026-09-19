@@ -27,7 +27,7 @@ export const TRANSCRIPT_META_LABEL_CLASS = "text-[14px] leading-5 text-muted"
 //   CAP BAND's centre, `0.5cap` above the baseline — the string-independent reference, because a
 //   descender moves the string's own ink box by >1px. So the shift is exactly `0.5em - 0.5cap`, and
 //   `1cap` is the BROWSER's cap height for whatever font actually resolved. Nothing to re-measure when
-//   the font setting flips, the type scale changes, or a stack gains a fallback.
+//   the type scale changes or the font stack gains a fallback.
 //
 //   The negative TOP margin is what stops that from disturbing the column: a 1em box whose bottom sits
 //   on the baseline reaches higher above it than the text's own ascent does, so it grew the row and

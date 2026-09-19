@@ -20,7 +20,7 @@ const writes: SetDispatchPreferenceInput[] = []
 // The project settings the model picker's gear edits (AgentSettingsPopover). Every settingsSet the
 // panel makes is recorded, in order, so a test can prove a pick writes once and writes the whole
 // object — and `?settingsDelay=N` holds each write for N ms, which is how the dispatch gate is driven.
-let settings: Record<string, unknown> = { permissionMode: "bypassPermissions", notifications: true, font: "sans", autoCompactWindow: 500000, promptCacheTtl: "auto" }
+let settings: Record<string, unknown> = { permissionMode: "bypassPermissions", notifications: true, autoCompactWindow: 500000, promptCacheTtl: "auto" }
 const settingsWrites: Record<string, unknown>[] = []
 const settingsDelay = Number(new URL(window.location.href).searchParams.get("settingsDelay") ?? 0)
 const outcome = new URL(window.location.href).searchParams.get("outcome") === "failure" ? "failure" : "success"

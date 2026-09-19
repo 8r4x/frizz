@@ -288,7 +288,7 @@ export function StateButton({
               type="button"
               disabled={pending}
               onClick={() => setConfirmOpen(false)}
-              className="rounded-md px-3 py-1.5 text-[12px] text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg disabled:opacity-45"
+              className="button-outline rounded-md px-3 py-1.5 text-[12px] text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg disabled:opacity-45"
             >
               Cancel
             </button>
@@ -296,7 +296,7 @@ export function StateButton({
               type="button"
               disabled={pending}
               onClick={() => complete(true, false)}
-              className="flex items-center gap-1.5 rounded-md bg-fg px-3 py-1.5 text-[12px] font-medium text-bg outline-none transition-opacity hover:opacity-90 disabled:opacity-45"
+              className="button-outline flex items-center gap-1.5 rounded-md bg-fg px-3 py-1.5 text-[12px] font-medium text-bg outline-none transition-opacity hover:opacity-90 disabled:opacity-45"
             >
               {pending && <Loader2 size={12} className="animate-spin" />}
               {hold?.cutOff ? "Mark done anyway" : "End session & mark done"}

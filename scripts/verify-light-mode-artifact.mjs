@@ -103,7 +103,7 @@ try {
   assert.equal(await darkPage.evaluate(() => document.documentElement.dataset.theme), "dark")
   await darkPage.screenshot({ path: join(out, "dark-artifact-recovery.png") })
   check("Recovery honors explicit Dark against light OS")
-  for (const font of ['sans', 'mono']) for (const width of [1000, 390]) {
+  for (const font of ['sans']) for (const width of [1000, 390]) {
     await page.setViewport({ width, height: 800, deviceScaleFactor: 1 })
     await page.evaluate(font => { document.documentElement.dataset.font = font }, font)
     const text = await measureTextContrast(page)

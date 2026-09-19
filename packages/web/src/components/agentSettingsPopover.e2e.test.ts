@@ -84,7 +84,8 @@ test("the panel survives the pointer leaving it, and a pick writes the whole set
     assert.equal(sent.length, 1, "one click, one write")
     assert.equal(sent[0]!.permissionMode, "auto")
     // The whole object goes over — anything dropped here is a setting silently reset.
-    assert.equal(sent[0]!.font, "sans")
+    assert.equal(sent[0]!.notifications, true)
+    assert.equal("font" in sent[0]!, false)
     assert.equal(sent[0]!.autoCompactWindow, 500000)
     assert.ok(await page.$(PANEL), "picking a value leaves the panel open")
     assert.match(await page.$eval(PERMISSION, (el) => el.textContent ?? ""), /Auto/)

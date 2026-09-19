@@ -811,7 +811,7 @@ function RowRetryButton({ slug }: { slug: string }) {
 //     `right-1.5` on the same row, so both right edges land on the same x.
 //   VERTICAL — `self-start` pins this box to the flex line's cross-start, which is the button's `pt-1`
 //     content top; the strip's `top-1` is that same offset from the row. Neither reading depends on the
-//     font's metrics, so nothing here needs re-fitting when the font setting flips.
+//     font's metrics, so nothing here needs re-fitting when the type scale moves.
 // It replaced a hand-placed `relative top-[calc(5.5px - 0.5cap)]` that sat an 11px mark on the title's
 // CAP band (0.01px residual in both fonts) — a better vertical in isolation, but its ink centre landed
 // 4.00px RIGHT of the unpin's and 0.09px (sans) / 0.66px (mono) above it, so the glyph jumped every

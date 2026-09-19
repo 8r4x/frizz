@@ -56,17 +56,32 @@ export async function checkSurfaceStates({ page, url, font, palette, out, check,
   check(`${name} provisional sidebar title`)
 
   await page.click('[aria-label="Model and effort"]')
-  await page.waitForSelector('[aria-label="Claude Code compaction window"]')
+  await page.waitForSelector('[aria-label="Claude Code settings"]')
   await contrast('profile-grid')
-  for (const label of ['Claude Code compaction window', 'Codex context window']) {
-    await page.click(`[aria-label="${label}"]`)
-    await page.waitForSelector('[data-context-window-menu]')
+  await shot('profile-grid')
+  for (const [provider, backend, label] of [['Claude Code', 'claude', 'Claude Code compaction window'], ['Codex', 'codex', 'Codex context window']]) {
+    await page.click(`[aria-label="${provider} settings"]`)
+    await page.waitForSelector(`[data-agent-settings-menu="${backend}"]`)
+    // The draft loads asynchronously and expands the collision-positioned popover. Wait until
+    // the final Select exists and its center is hittable before measuring/clicking its coordinates.
+    await page.waitForFunction(label => {
+      const el = document.querySelector(`button[aria-label="${label}"]`)
+      if (!el) return false
+      const r = el.getBoundingClientRect()
+      return el.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2))
+    }, {}, label)
+    await contrast(`agent-settings-${backend}`)
+    await shot(`agent-settings-${backend}`)
+    await page.click(`button[aria-label="${label}"]`)
+    await page.waitForSelector('[role="menu"]:not(.profile-grid-menu) [role="menuitemradio"]')
     await contrast(`context-${label.split(' ')[0].toLowerCase()}`)
     result[`${name}-context-${label.split(' ')[0].toLowerCase()}-ink`] = await measureAppearanceInk(page, `[aria-label="${label}"]`)
     await shot(`context-${label.split(' ')[0].toLowerCase()}`)
     await crop(`[aria-label="${label}"]`, `context-${label.split(' ')[0].toLowerCase()}`)
     await page.keyboard.press('Escape')
-    await page.waitForSelector('[data-context-window-menu]', { hidden: true })
+    await page.waitForSelector('[role="menu"]:not(.profile-grid-menu)', { hidden: true })
+    await page.keyboard.press('Escape')
+    await page.waitForSelector('[data-agent-settings-menu]', { hidden: true })
   }
   await page.keyboard.press('Escape')
   check(`${name} model-grid headers and nested context controls`)
@@ -123,6 +138,14 @@ export async function checkSurfaceStates({ page, url, font, palette, out, check,
   await page.click("[data-question-option] > button")
   await page.waitForFunction(() => [...document.querySelectorAll("button")].some(el => el.textContent.trim() === "Send answers" && !el.disabled && getComputedStyle(el).opacity === "1"))
   await contrast("selected-question")
+  const outlineContract = await page.evaluate(() => {
+    const question = getComputedStyle(document.querySelector('.bg-question'))
+    const button = getComputedStyle(document.querySelector('[data-send-answers]'))
+    return { question: [question.backgroundColor, question.borderTopColor, question.borderTopWidth], buttonShadow: button.boxShadow }
+  })
+  if (palette === 'light') assert.deepEqual(outlineContract.question, ['rgb(255, 255, 255)', 'rgb(220, 220, 220)', '1px'])
+  assert.match(outlineContract.buttonShadow, /inset/, 'Answer buttons retain subtle inset outlines')
+  result[`${name}-question-outlines`] = outlineContract
   await shot("selected-question")
   await page.evaluate(() => {
     const text = document.querySelector('[data-question-option] p') ?? document.querySelector('[data-question-option] span')

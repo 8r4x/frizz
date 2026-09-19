@@ -1417,7 +1417,7 @@ function VirtualizedThreadTranscript({
                 ) : loadingEarlier ? (
                   <span className="flex items-center gap-2"><Loader2 size={12} className="animate-spin" /> Loading earlier messages…</span>
                 ) : (
-                  <button type="button" onClick={requestEarlier} className="rounded-md px-2 py-1 outline-none hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60">
+                  <button type="button" onClick={requestEarlier} className="button-outline rounded-md px-2 py-1 outline-none hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60">
                     Load earlier messages
                   </button>
                 )}
@@ -1572,7 +1572,7 @@ export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue
             aria-label="Close"
             data-dialog-initial-focus
             onClick={onClose}
-            className="ml-0.5 shrink-0 rounded-md p-1.5 text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg"
+            className="button-outline ml-0.5 shrink-0 rounded-md p-1.5 text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg"
           >
             <X size={15} />
           </button>
@@ -3129,7 +3129,7 @@ function UserBubble({ text, rawText, queued, deliveryUnconfirmed, deliveryId, so
             disabled={pushNowPending}
             title="Send now — interrupts what the worker is doing so it reads the queue immediately"
             aria-label="Send now"
-            className="absolute bottom-0 right-full mr-2 flex h-7 w-7 items-center justify-center rounded-lg text-muted opacity-0 outline-none transition-[opacity,color,background-color] group-hover:opacity-100 enabled:hover:bg-panel-2/70 enabled:hover:text-fg enabled:focus-visible:opacity-100 enabled:focus-visible:bg-panel-2/70 enabled:focus-visible:ring-1 enabled:focus-visible:ring-muted/80 enabled:focus-visible:ring-offset-1 enabled:focus-visible:ring-offset-bg enabled:active:bg-elevated"
+            className="button-outline absolute bottom-0 right-full mr-2 flex h-7 w-7 items-center justify-center rounded-lg text-muted opacity-0 outline-none transition-[opacity,color,background-color] group-hover:opacity-100 enabled:hover:bg-panel-2/70 enabled:hover:text-fg enabled:focus-visible:opacity-100 enabled:focus-visible:bg-panel-2/70 enabled:focus-visible:ring-1 enabled:focus-visible:ring-muted/80 enabled:focus-visible:ring-offset-1 enabled:focus-visible:ring-offset-bg enabled:active:bg-elevated"
           >
             {pushNowPending ? <Loader2 size={15} strokeWidth={2.2} className="animate-spin" /> : <ArrowUp size={15} strokeWidth={2.2} />}
           </button>
@@ -3447,7 +3447,7 @@ export const Message = memo(function Message({ m, answering, dense, paired, text
           type="button"
           data-mobile-answer-open
           onClick={() => setAnswerSheetOpen(true)}
-          className="flex h-[40px] items-center justify-center rounded-[12px] bg-accent-fill px-4 text-[15px] font-semibold text-on-accent active:brightness-90"
+          className="button-outline flex h-[40px] items-center justify-center rounded-[12px] bg-accent-fill px-4 text-[15px] font-semibold text-on-accent active:brightness-90"
         >
           {askBlocks.length > 1 ? `Answer ${askBlocks.length} questions` : "Answer"}
         </button>
@@ -3464,7 +3464,7 @@ export const Message = memo(function Message({ m, answering, dense, paired, text
           disabled={!answering.anyAnswered || answering.sending}
           onClick={answering.onSubmit}
           onMouseDown={(e) => e.preventDefault()}
-          className="rounded-md bg-fg px-3 py-1.5 text-[12px] font-medium text-bg outline-none transition-all hover:opacity-90 active:scale-95 disabled:opacity-30 disabled:hover:opacity-30"
+          className="button-outline rounded-md bg-fg px-3 py-1.5 text-[12px] font-medium text-bg outline-none transition-all hover:opacity-90 active:scale-95 disabled:opacity-30 disabled:hover:opacity-30"
         >
           Send answers
         </button>

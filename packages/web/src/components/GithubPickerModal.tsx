@@ -335,7 +335,7 @@ export function GithubPickerModal({ onClose }: { onClose: () => void }) {
               disabled={n === 0 || dispatch.isPending || !!dispatchBlocked}
               onClick={startDispatch}
               onMouseDown={(e) => e.preventDefault()}
-              className="flex items-center gap-2 rounded-md bg-fg px-3.5 py-1.5 text-[12.5px] font-medium text-bg outline-none transition-all hover:opacity-90 active:scale-95 disabled:opacity-30 disabled:hover:opacity-30"
+              className="button-outline flex items-center gap-2 rounded-md bg-fg px-3.5 py-1.5 text-[12.5px] font-medium text-bg outline-none transition-all hover:opacity-90 active:scale-95 disabled:opacity-30 disabled:hover:opacity-30"
             >
               {dispatch.isPending && <Loader2 size={13} className="animate-spin" />}
               {/* The count is on the button because the batch is now unbounded and can span pages —
@@ -421,7 +421,7 @@ function Segmented<T extends string>({
           key={o.value}
           onClick={() => onChange(o.value)}
           onMouseDown={(e) => e.preventDefault()}
-          className={`rounded-md px-3 py-1 text-[12px] font-medium outline-none transition-colors ${
+          className={`button-outline rounded-md px-3 py-1 text-[12px] font-medium outline-none transition-colors ${
             value === o.value ? "bg-elevated text-fg shadow-sm shadow-black/20" : "text-muted hover:text-fg"
           }`}
         >

@@ -111,7 +111,7 @@ export function BackgroundShellSheet({
                   <div className="mb-2 flex items-center justify-between gap-3">
                     <h2 className="petite-caps text-[10px] text-muted-65">Command</h2>
                     {command && (
-                      <button type="button" onClick={copyCommand} className="flex items-center gap-1 rounded px-1.5 py-1 text-[10.5px] text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60">
+                      <button type="button" onClick={copyCommand} className="button-outline flex items-center gap-1 rounded px-1.5 py-1 text-[10.5px] text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60">
                         <Copy aria-hidden size={11} /> Copy
                       </button>
                     )}

@@ -241,7 +241,7 @@ function mergeClause(status: GithubWatchStatus): string | null {
 }
 
 // `1cap` is the RESOLVED font's cap height, so this puts a symmetric 1em glyph's ink on the cap band in
-// either font at any size — nothing to re-measure when the font setting flips or the type scale moves.
+// system-ui at any size — nothing to re-measure when the type scale moves.
 // It needs a shared baseline to align against, hence `items-baseline` on every row.
 //
 // NO INK TRIM ON THE MARK, and that is a MEASURED result rather than an omission. The usual

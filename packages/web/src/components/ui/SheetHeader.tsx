@@ -45,7 +45,7 @@ export function SheetHeader({
         aria-label="Close"
         onClick={onClose}
         {...(initialFocus ? { "data-dialog-initial-focus": "" } : {})}
-        className="rounded-md p-1.5 text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg"
+        className="button-outline rounded-md p-1.5 text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg"
       >
         <X size={15} />
       </button>

@@ -171,7 +171,7 @@ function OnOffToggle({ value, onChange }: { value: boolean; onChange: (v: boolea
         <button
           key={o.label}
           onClick={() => onChange(o.v)}
-          className={`rounded px-3 py-1 text-[12px] transition-colors ${
+          className={`button-outline rounded px-3 py-1 text-[12px] transition-colors ${
             value === o.v ? "bg-fg text-bg" : "text-muted hover:text-fg"
           }`}
         >
@@ -199,7 +199,7 @@ function DensityToggle() {
         <button
           key={o.label}
           onClick={() => (prefs.compactDiffs = o.v)}
-          className={`rounded px-3 py-1 text-[12px] transition-colors ${
+          className={`button-outline rounded px-3 py-1 text-[12px] transition-colors ${
             compactDiffs === o.v ? "bg-fg text-bg" : "text-muted hover:text-fg"
           }`}
         >
@@ -224,7 +224,7 @@ function QueueOrderControl() {
         <button
           key={o.v}
           onClick={() => (prefs.queueOrder = o.v)}
-          className={`rounded px-3 py-1 text-[12px] transition-colors ${
+          className={`button-outline rounded px-3 py-1 text-[12px] transition-colors ${
             queueOrder === o.v ? "bg-fg text-bg" : "text-muted hover:text-fg"
           }`}
         >

@@ -113,7 +113,7 @@ function Card({ project, home }: { project: ProjectCard; home: string | undefine
           type="button"
           aria-label={`Change the icon for ${project.name}`}
           style={{ width: CARD_ICON, height: CARD_ICON }}
-          className="absolute left-[17px] top-1/2 flex -translate-y-1/2 items-center justify-center rounded-[30%] bg-black/75 text-on-overlay opacity-0 outline-none transition-opacity hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-focus-ink-60 data-[state=open]:opacity-100 max-[700px]:left-4 max-[700px]:top-[calc(50%-0.5px)]"
+          className="button-outline absolute left-[17px] top-1/2 flex -translate-y-1/2 items-center justify-center rounded-[30%] bg-black/75 text-on-overlay opacity-0 outline-none transition-opacity hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-focus-ink-60 data-[state=open]:opacity-100 max-[700px]:left-4 max-[700px]:top-[calc(50%-0.5px)]"
         >
           <ImagePlus size={16} strokeWidth={1.75} />
         </button>
@@ -133,7 +133,7 @@ function Card({ project, home }: { project: ProjectCard; home: string | undefine
         <button
           type="button"
           aria-label={`More actions for ${project.name}`}
-          className="absolute right-[8px] top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-muted opacity-0 outline-none transition-opacity hover:bg-panel-2 hover:text-fg focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-focus-ink-60 group-hover/card:opacity-100 data-[state=open]:opacity-100 max-[700px]:right-[7px] max-[700px]:opacity-100"
+          className="button-outline absolute right-[8px] top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-muted opacity-0 outline-none transition-opacity hover:bg-panel-2 hover:text-fg focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-focus-ink-60 group-hover/card:opacity-100 data-[state=open]:opacity-100 max-[700px]:right-[7px] max-[700px]:opacity-100"
         >
           <Ellipsis size={15} />
         </button>
@@ -261,7 +261,7 @@ function RenameProjectDialog({
             type="button"
             onClick={onClose}
             disabled={rename.isPending}
-            className="rounded-md px-3 py-1.5 text-[12px] text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg disabled:opacity-45"
+            className="button-outline rounded-md px-3 py-1.5 text-[12px] text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg disabled:opacity-45"
           >
             Cancel
           </button>
@@ -372,7 +372,7 @@ function DeleteProjectDialog({
             type="button"
             onClick={onClose}
             disabled={remove.isPending}
-            className="rounded-md px-3 py-1.5 text-[12px] text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg disabled:opacity-45"
+            className="button-outline rounded-md px-3 py-1.5 text-[12px] text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg disabled:opacity-45"
           >
             Cancel
           </button>
@@ -380,7 +380,7 @@ function DeleteProjectDialog({
             type="button"
             onClick={() => remove.mutate()}
             disabled={remove.isPending}
-            className="flex items-center gap-1.5 rounded-md bg-danger-button/90 px-3 py-1.5 text-[12.5px] font-medium text-white outline-none transition-opacity hover:opacity-90 disabled:opacity-60"
+            className="button-outline flex items-center gap-1.5 rounded-md bg-danger-button/90 px-3 py-1.5 text-[12.5px] font-medium text-white outline-none transition-opacity hover:opacity-90 disabled:opacity-60"
           >
             {remove.isPending && <Loader2 size={12} className="animate-spin" />}
             {deleteData ? "Delete project and threads" : "Delete project"}

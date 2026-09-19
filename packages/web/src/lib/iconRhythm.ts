@@ -96,33 +96,13 @@ export const INK_TRIM_HOURGLASS = "-mx-1"
  *  http://localhost:<vite>/icon-rhythm-fixture.html "[data-pending-snooze],[data-recurring-prompt]"`. */
 export const INK_TRIM_GOAL = "-mx-[3px]"
 
-/** THE COMPOSER RAIL is the same rule solved for absolute offsets instead of a flex gap, so it cannot
- *  use `STRIP_INK_GAP`. Its three buttons are 28px squares pinned from the box's right edge, and the
- *  send button is a FILLED square — its ink IS its box, while the paperclip paints 13px of its 28 and
- *  the GitHub mark 12.75. On the old even 36px pitch that drew 22.25px of ink between the paperclip
- *  and the GitHub mark against 15.75px between the GitHub mark and send ("the attachment icon and the
- *  GitHub icon feel further apart than the GitHub icon and the up arrow" — same maintainer, same day).
- *
- *  Offsets are therefore derived from ink, right to left, at a 14.75px gap — the distance the rail
- *  already kept beside the send button, so the one mark the eye is anchored on does not move. All
- *  measured from the box's right edge:
- *
- *      send             right-2        box [8, 36]    ink [8, 36]      → 14.75px to the rail action
- *      rail action      right-[43px]   box [43, 71]   ink [50.75, 63.5] → 14.25px to the paperclip
- *      paperclip        right-[71px]   box [71, 99]   ink [77.75, 90.75]
- *      paperclip alone  right-[44px]   box [44, 72]   ink [50.75, 63.75] → 14.75px to send
- *
- *  THE PAPERCLIP NEEDS ITS OWN OFFSET FOR THE SAME SLOT, which is the whole doctrine in one detail: it
- *  takes the rail-action position when no rail action is rendered, and it paints 1px less dead space on
- *  that side than the GitHub mark does, so parking it at the GitHub mark's offset drew 13.75px instead
- *  of 14.75. Same slot, same box, different glyph, different number — there is no shared "one 28px
- *  button every 36px" pitch that can be right for both. */
+/** Outlined 28px composer buttons paint their full boxes. A 36px pitch therefore leaves 8px
+ *  between visible edges, whether the middle GitHub action is present or not. */
 export const RAIL_SEND_OFFSET = "right-2"
-export const RAIL_ACTION_OFFSET = "right-[43px]"
-export const RAIL_PAPERCLIP_OFFSET = "right-[71px]"
+export const RAIL_ACTION_OFFSET = "right-[44px]"
+export const RAIL_PAPERCLIP_OFFSET = "right-[80px]"
 export const RAIL_PAPERCLIP_PLAIN_OFFSET = "right-[44px]"
 
-/** What the prose, chip and footer rows must reserve so text keeps its 8px clearance off the leftmost
- *  rail button: the paperclip's box edge (99px with a rail action, 72px without) plus 8. */
-export const RAIL_RESERVE_WITH_ACTION = "pr-[6.6875rem]"
+/** Reserve the leftmost button's edge (108px with GitHub, 72px without), plus 8px for prose. */
+export const RAIL_RESERVE_WITH_ACTION = "pr-[7.25rem]"
 export const RAIL_RESERVE_PLAIN = "pr-20"

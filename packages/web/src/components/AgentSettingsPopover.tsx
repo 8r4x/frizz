@@ -64,7 +64,7 @@ export function AgentSettingsPopover({ backend, open, onOpenChange }: {
             //    the row its SVG's bottom edge as a baseline, so the glyph's centre landed 7px above
             //    the label's baseline — ~3px above the label's cap band, by a different amount per font. The
             //    translate moves it down by exactly the difference between half the 14px glyph and
-            //    half the resolved cap height, so it tracks the font setting with nothing to re-fit
+            //    half the resolved cap height, so it tracks the type scale with nothing to re-fit
             //    (measured after: 0.0px in both fonts).
             //  - HORIZONTAL. The gear paints 11.7 of its 14px, so the square carries ~4px of dead
             //    space a side; `-mr-3` pulls the box out so the glyph's INK ends 12.7px from the menu's

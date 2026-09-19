@@ -273,7 +273,7 @@ function InteractionQuestionCard({
             disabled={!values || mutation.isPending}
             onClick={submit}
             onMouseDown={(e) => e.preventDefault()}
-            className="rounded-md bg-fg px-3 py-1.5 text-[12px] font-medium text-bg outline-none transition-all hover:opacity-90 active:scale-95 disabled:opacity-30 disabled:hover:opacity-30"
+            className="button-outline rounded-md bg-fg px-3 py-1.5 text-[12px] font-medium text-bg outline-none transition-all hover:opacity-90 active:scale-95 disabled:opacity-30 disabled:hover:opacity-30"
           >
             Send answers
           </button>

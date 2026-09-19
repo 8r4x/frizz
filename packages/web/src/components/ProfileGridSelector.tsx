@@ -178,9 +178,10 @@ export function ProfileGridSelector({
           title={title}
           data-profile-known={known ? "true" : "false"}
           data-profile-pending={pendingLabel ? "true" : undefined}
-          className={`profile-grid-trigger group inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-md border border-border/50 bg-transparent px-2 py-1 text-left text-muted outline-none data-[state=open]:border-border data-[state=open]:bg-panel-2 ${triggerInteraction} ${className} ${typography}`}
+          className={`profile-grid-trigger group inline-flex min-w-0 max-w-full items-center gap-[3px] rounded-md border border-border/50 bg-transparent px-2 py-1 text-left text-muted outline-none data-[state=open]:border-border data-[state=open]:bg-panel-2 ${triggerInteraction} ${className} ${typography}`}
         >
-          <span className={`profile-grid-value relative -top-px min-w-0 flex-1 truncate text-left ${typography}`}>
+          {/* Sans cap-band residual is 0.23px without a text nudge; 3px box gap paints 6.69px of ink. */}
+          <span className={`profile-grid-value min-w-0 flex-1 truncate text-left ${typography}`}>
             {profileGridDisplayLabel(groups, value, placeholder)}
           </span>
           {pendingLabel && <Loader2 aria-hidden="true" size={compact ? 10 : 11} className="shrink-0 animate-spin text-muted-65" />}

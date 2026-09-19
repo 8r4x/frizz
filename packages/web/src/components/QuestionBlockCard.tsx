@@ -130,7 +130,7 @@ export function QuestionBlockCard({
   // and stay narrow — force-merge, deletion, history rewrite, prod rollback — so these should almost
   // never appear; what changed is how loudly one of them shouts.
   return (
-    <TranscriptCard tone={isDanger ? "risk" : "neutral"} icon={KindIcon} label={kindLabel} aside={aside}>
+    <TranscriptCard tone={isDanger ? "risk" : "neutral"} surface="question" icon={KindIcon} label={kindLabel} aside={aside}>
       {/* FULL-strength, against the card's stepped-down description colour: this card's body is not a
           description of the title, it IS the ask, and the question must never read dimmer than the
           word "Question" above it. The colour rides a WRAPPER because `.card-md .md-body` inherits
@@ -274,7 +274,7 @@ export function QuestionBlockCard({
               // draft and the box goes quiet, exactly like an unselected chip). Focus always shows the
               // accent border — the selection moves here the moment the box is entered.
               className={`col-span-full w-full resize-none overflow-hidden rounded-md border px-3 py-1.5 text-[12px] leading-snug text-fg/90 outline-none placeholder:text-muted-80 transition-colors ${
-                freetext.trim() && (isMulti || chosen === null) ? "border-accent bg-accent/10" : "border-border bg-transparent hover:bg-panel-2 focus:border-accent"
+                freetext.trim() && (isMulti || chosen === null) ? "border-selection-border bg-selection" : "border-border bg-transparent hover:bg-panel-2 focus:border-accent"
               }`}
             />
           )}
@@ -400,7 +400,7 @@ function Chip({
       }}
       className={`relative flex items-start gap-2 rounded-md border px-3 py-1.5 text-[12px] leading-snug transition-colors ${
         selected
-          ? "border-accent bg-accent/10 text-fg"
+          ? "border-selection-border bg-selection text-fg"
           : settledPick
             // pl-[11px]: the 2px left rule is 1px thicker than the siblings' 1px border, so the text
             // starts 1px right of theirs on the shared px-3 — measured 14px vs 13px inset. 11+2 = 12+1.

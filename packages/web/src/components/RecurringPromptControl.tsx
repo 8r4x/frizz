@@ -6,7 +6,6 @@ import {
 } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { formatAgo } from "../lib/durationLabels.ts"
-import { INK_TRIM_GOAL } from "../lib/iconRhythm.ts"
 import { showToast } from "../store.ts"
 import { shouldSubmitStagedEnter } from "../lib/composerKeyboard.ts"
 import { Popover, PopoverAnchor, PopoverContent } from "./ui/Popover.tsx"
@@ -142,7 +141,7 @@ export function RecurringPromptControl({ thread }: { thread: ThreadView }) {
           // what is armed, exactly as hovering it would.
           onFocus={() => setMode((m) => (m === "closed" ? "preview" : m))}
           onBlur={closePreview}
-          className={`flex items-center rounded-md px-0.5 py-0.5 outline-none ${INK_TRIM_GOAL}`}
+          className="button-outline flex items-center rounded-md p-1 outline-none"
         >
           {/* A TARGET WITH AN ARROW IN IT (see GoalMark for the geometry and why it is drawn rather
               than imported), and the ONLY surface that says this exists (the rail deliberately carries

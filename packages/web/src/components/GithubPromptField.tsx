@@ -120,18 +120,8 @@ export function GithubPromptField({
   const customized = value != null
   return (
     <div className="flex flex-col gap-2">
-      {/* Label left; "Reset to default" and "Tokens" right, in that order — "Tokens" holds the far
-          corner whether or not Reset is showing, so it never shifts when the field becomes customized.
-          The MIDDOT is doing real work, not decoration. Both actions are 11px text runs whose boxes sit
-          tight to their ink (0.5-0.8px dead a side), so a flex gap here IS the ink gap — but the number
-          that decides whether they read as two controls or one phrase is the gap measured in WORD
-          SPACES, and this app ships two fonts with very different ones. At gap-3 (12px): sans spaces
-          3.15px ⇒ 3.81×, mono spaces 6.03px ⇒ 1.99×. Two word-spaces is the ambiguity zone, so the same
-          CSS that read as two controls in sans read as a phrase in mono, and no single gap fixes both.
-          A delimiter does, in any font, for one glyph of ink. It renders only when both are present.
-          Measured after: gap-2 sits the dot symmetrically — 10.60/10.56px of ink either side in mono,
-          9.44/9.68px in sans — at 124/118 mean contrast against the actions' ~307, so it separates
-          them without joining the conversation. */}
+      {/* Actions stay at the far edge; the middot separates Reset from Tokens without moving either.
+          System-ui measurements: 9.44/9.68px of ink on either side of the dot. */}
       <div className="flex items-center justify-between gap-2">
         <LabelWithHelp label={label} help={help} />
         <div className="flex shrink-0 items-center gap-2">

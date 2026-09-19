@@ -126,7 +126,7 @@ export function MobileAnswerSheet({
             <button
               onClick={() => (last ? submit() : setStep((s) => s + 1))}
               disabled={last ? !answering.anyAnswered || answering.sending : false}
-              className="flex h-[50px] flex-1 items-center justify-center rounded-[14px] bg-accent-fill px-5 text-[17px] font-semibold text-on-accent transition-[filter,opacity] active:brightness-90 disabled:opacity-40"
+              className="button-outline flex h-[50px] flex-1 items-center justify-center rounded-[14px] bg-accent-fill px-5 text-[17px] font-semibold text-on-accent transition-[filter,opacity] active:brightness-90 disabled:opacity-40"
             >
               {last ? (answering.sending ? "Sending…" : "Send answers") : "Continue"}
             </button>

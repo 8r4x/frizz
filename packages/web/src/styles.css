@@ -1,7 +1,12 @@
 @import "tailwindcss";
 @import "./theme.css";
 
-/* Dense orchestration surface. Yellow accent = "awaiting you"; system sans-serif, 13px base. */
+/* Inset edges leave hit areas and layout unchanged, and compose with Tailwind focus rings. */
+@utility button-outline {
+  @apply inset-ring inset-ring-button-border;
+}
+
+/* Dense orchestration surface; system sans-serif, 13px base. */
 @theme {
   /* WHERE /full BECOMES TWO COLUMNS — the `split:` variant, used only by StandaloneThreadPage.
      Below it the page is ONE thread column at the drawer's own width; at and above it the 50/50 rule
@@ -367,8 +372,7 @@ body {
 /* THE RAIL'S TEXT MARKS — the "?" and the "!" — centred by the BROWSER rather than by a fitted constant.
    A "?" or a "!" paints exactly its cap band: ink runs from the cap height down to the alphabetic
    baseline, with nothing above or below. `text-box: trim-both cap alphabetic` makes the span's LAYOUT box
-   that band, so the flex row's `items-center` centres the ink itself — in either font, at any size, with
-   nothing to re-measure when the setting flips.
+   that band, so the flex row's `items-center` centres the ink itself at any size.
    IT REPLACES A NUDGE FITTED IN THE WRONG FONT. `translateY(0.09em)` shipped 2026-08-31, measured on
    rail-status-glyphs-fixture, which set no `data-font` and therefore rendered MONO while the maintainer's
    window runs SANS. Readings from scripts/verify-rail-status-glyphs.mjs, positive = ink sits ABOVE centre:

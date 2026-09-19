@@ -533,7 +533,7 @@ export function Composer({
   }
 
   return (
-    // Focused = the accent (yellow) border: the visual handoff from the nav chevron to the box.
+    // Focused = the accent border: the visual handoff from the nav chevron to the box.
     // While a file drags over, the border dashes and a hint overlay appears (screenshot intake).
     <div
       className={`group relative rounded-xl border bg-bg transition-colors focus-within:border-accent ${
@@ -678,15 +678,7 @@ export function Composer({
       {/* Reserve the right-side action rail. Without this, three shrinkable readouts can extend under
           the absolutely positioned GitHub/send buttons on narrow composers. */}
       {footer && <div className={`flex min-w-0 flex-wrap items-center gap-1 pl-1.5 pb-1.5 ${railAction ? RAIL_RESERVE_WITH_ACTION : RAIL_RESERVE_PLAIN}`}>{footer}</div>}
-      {/* THE RIGHT RAIL, right to left: send, then the optional rail action, then the paperclip. The
-          offsets are NOT an even 36px pitch any more — they are derived from each button's INK, which
-          is the only thing the eye measures the rail by. Send is a FILLED square, so its ink is its
-          whole 28px box; the paperclip paints 13px of its 28 and the GitHub mark 12.75, so an even
-          pitch put 22.25px of clear space between the two icons against 15.75px between the GitHub
-          mark and send — "the attachment icon and the GitHub icon feel further apart than the GitHub
-          icon and the up arrow" (maintainer 2026-08-04). The derivation and the residual are in
-          lib/iconRhythm.ts; the rows above reserve the leftmost button's box edge + 8px so prose keeps
-          its clearance off the rail either way. */}
+      {/* Outlined controls keep 8px between edges; prose reserves the same clearance. */}
       {railAction && <div className={`absolute bottom-2 ${RAIL_ACTION_OFFSET} flex items-center`}>{railAction}</div>}
       {/* Attach: a hidden file input driven by the paperclip. Sits in the right rail LEFT of the send
           button (and left of any railAction), so it never overlaps the mode/model footer or the send
@@ -710,7 +702,7 @@ export function Composer({
         aria-label="Attach files"
         // With no rail action the paperclip TAKES the rail-action slot — at its OWN offset, not the
         // rail action’s, because it paints 1px less dead space on that side (lib/iconRhythm.ts).
-        className={`absolute bottom-2 ${railAction ? RAIL_PAPERCLIP_OFFSET : RAIL_PAPERCLIP_PLAIN_OFFSET} flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-[color,background-color] enabled:hover:bg-panel-2/70 enabled:hover:text-fg disabled:opacity-50`}
+        className={`button-outline absolute bottom-2 ${railAction ? RAIL_PAPERCLIP_OFFSET : RAIL_PAPERCLIP_PLAIN_OFFSET} flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-[color,background-color] enabled:hover:bg-panel-2/70 enabled:hover:text-fg disabled:opacity-50`}
       >
         {uploading ? <Loader2 size={15} strokeWidth={2} className="animate-spin" /> : <Paperclip size={15} strokeWidth={2} />}
       </button>
@@ -725,8 +717,8 @@ export function Composer({
         disabled={!hasContent || busy || uploading}
         title="Send (Enter · ⌘⏎ sends now)"
         aria-label="Send"
-        className={`absolute bottom-2 ${RAIL_SEND_OFFSET} flex h-7 w-7 items-center justify-center rounded-lg transition-all ${
-          // Active = neutral-bright (light-on-dark) primary, NOT accent — yellow stays the focus motif.
+        className={`button-outline absolute bottom-2 ${RAIL_SEND_OFFSET} flex h-7 w-7 items-center justify-center rounded-lg transition-all ${
+          // Primary actions use neutral contrast; the accent marks focus.
           hasContent && !busy && !uploading
             ? "bg-fg text-bg hover:opacity-90 active:scale-95"
             : "bg-panel-2 text-muted"
