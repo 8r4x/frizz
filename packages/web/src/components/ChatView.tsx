@@ -1496,7 +1496,7 @@ function JumpToLatest({ overlay, hidden, onJump }: { overlay: HTMLElement | null
       type="button"
       data-jump-to-latest
       onClick={onJump}
-      className="flex items-center gap-1.5 rounded-full border border-border-strong bg-elevated px-3 py-1.5 text-[11px] font-medium text-fg shadow-lg shadow-black/30 hover:bg-panel-2"
+      className="flex items-center gap-1.5 rounded-full border border-border-strong bg-elevated px-3 py-1.5 text-[11px] font-medium text-fg shadow-lg shadow-shadow-ink/30 hover:bg-panel-2"
     >
       <ArrowDown size={12} />
       Jump to latest

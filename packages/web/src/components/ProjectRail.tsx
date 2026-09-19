@@ -251,7 +251,7 @@ function RailLink({
         <span
           className={`rounded-[30%] transition-[transform,opacity,box-shadow] duration-150 group-focus-visible:ring-1 group-focus-visible:ring-focus-ink-60 ${
             held
-              ? "scale-[1.12] opacity-100 shadow-lg shadow-black/50"
+              ? "scale-[1.12] opacity-100 shadow-lg shadow-shadow-ink/50"
               : `group-hover:scale-[1.06] ${current ? "" : "opacity-75 group-hover:opacity-100"}`
           } ${project.stale ? "grayscale" : ""}`}
         >
@@ -367,7 +367,7 @@ export function ProjectIconMenu({
           <RadixDropdown.Content
             align="start"
             sideOffset={6}
-            className="z-[220] min-w-[190px] rounded-lg border border-border bg-panel p-1 shadow-xl shadow-black/40"
+            className="z-[220] min-w-[190px] rounded-lg border border-border bg-panel p-1 shadow-xl shadow-shadow-ink/40"
           >
             <RadixDropdown.Item className={item} onSelect={() => pick.mutate()}>
               {set.isPending ? "Uploading…" : "Choose an icon…"}

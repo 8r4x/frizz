@@ -35,7 +35,7 @@ export function Dialog({
           aria-modal="true"
           onEscapeKeyDown={handleDialogEscape}
           onOpenAutoFocus={onOpenAutoFocus}
-          className={`pop-in fixed left-1/2 top-1/2 z-[200] flex -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-xl border border-border bg-panel shadow-2xl shadow-black/50 outline-none ${className}`}
+          className={`pop-in fixed left-1/2 top-1/2 z-[200] flex -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-xl border border-border bg-panel shadow-2xl shadow-shadow-ink/50 outline-none ${className}`}
         >
           <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border px-4">
             <RadixDialog.Title className="min-w-0 flex-1 truncate text-[13px] font-medium">

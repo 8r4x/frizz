@@ -185,7 +185,7 @@ function ProjectMenu({
         <RadixDropdown.Content
           align="end"
           sideOffset={6}
-          className="z-[220] min-w-[170px] rounded-lg border border-border bg-panel p-1 shadow-xl shadow-black/40"
+          className="z-[220] min-w-[170px] rounded-lg border border-border bg-panel p-1 shadow-xl shadow-shadow-ink/40"
         >
           <RadixDropdown.Item
             className="cursor-default rounded px-2 py-1.5 text-[12.5px] text-fg outline-none data-[highlighted]:bg-panel-2"
@@ -495,7 +495,7 @@ function AddProjectDialog({
         <RadixDialog.Content
           aria-modal="true"
           aria-describedby={undefined}
-          className="fixed left-1/2 top-1/2 z-[210] w-[460px] max-w-[90vw] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-panel p-5 shadow-2xl shadow-black/50 outline-none"
+          className="fixed left-1/2 top-1/2 z-[210] w-[460px] max-w-[90vw] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-panel p-5 shadow-2xl shadow-shadow-ink/50 outline-none"
         >
           <RadixDialog.Title className="mb-1 text-[14px] font-medium">
             {proposed ? "Add this folder as a project?" : "Add a project"}

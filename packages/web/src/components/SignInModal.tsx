@@ -118,7 +118,7 @@ export function SignInModal({
         <RadixDialog.Content
           aria-modal="true"
           aria-describedby={undefined}
-          className={`fixed left-1/2 top-1/2 z-[210] ${attempt ? "w-[680px]" : "w-[440px]"} max-w-[92vw] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-panel p-5 shadow-2xl shadow-black/50 outline-none`}
+          className={`fixed left-1/2 top-1/2 z-[210] ${attempt ? "w-[680px]" : "w-[440px]"} max-w-[92vw] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-panel p-5 shadow-2xl shadow-shadow-ink/50 outline-none`}
         >
           <RadixDialog.Title className="mb-1 text-[14px] font-medium">Signed out of {label}</RadixDialog.Title>
 
@@ -232,7 +232,7 @@ export function LogoutConfirmModal({ backend, onClose }: { backend: AccountBacke
         <RadixDialog.Content
           aria-modal="true"
           aria-describedby={undefined}
-          className="fixed left-1/2 top-1/2 z-[210] w-[420px] max-w-[86vw] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-panel p-5 shadow-2xl shadow-black/50 outline-none"
+          className="fixed left-1/2 top-1/2 z-[210] w-[420px] max-w-[86vw] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-panel p-5 shadow-2xl shadow-shadow-ink/50 outline-none"
         >
           <RadixDialog.Title className="mb-1 text-[14px] font-medium">Sign out of {label}?</RadixDialog.Title>
           <p className="mb-4 text-[12.5px] leading-relaxed text-muted">

@@ -123,7 +123,7 @@ const NOTICE_WIDTH = "sm:w-[min(34rem,calc(100vw-1.5rem))]"
 // (maintainer, 2026-08-01, on a wall of build log over the board: "these translucent error messages
 // look insane"). Same contract as lib/overlaySurface.ts states for portal menus: opaque from the
 // first painted frame.
-const PANEL_SURFACE = "rounded-xl bg-elevated p-3.5 shadow-xl shadow-black/45"
+const PANEL_SURFACE = "rounded-xl bg-elevated p-3.5 shadow-xl shadow-shadow-ink/45"
 
 export function UpdateRestartPopover({
   open,
@@ -210,7 +210,7 @@ export function RestartFailureNotice({
           type="button"
           aria-label="Dismiss"
           onClick={onDismiss}
-          className="-mr-1 ml-auto flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-border-strong"
+          className="button-outline -mr-1 ml-auto flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-border-strong"
         >
           <X aria-hidden="true" size={14} strokeWidth={2.25} />
         </button>

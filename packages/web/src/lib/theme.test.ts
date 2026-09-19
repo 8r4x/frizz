@@ -55,6 +55,8 @@ test("the approved light palette keeps questions neutral and actions subtly outl
   for (const [name, value] of Object.entries({ bg: "#f7f7f7", question: "#ffffff", "question-border": "#dcdcdc", accent: "#416896", selection: "#f1f5fa", "selection-border": "#7891ad" })) {
     assert.equal(light[`--frizz-${name}`], value)
   }
+  assert.equal(light["--shadow-ink"], "rgb(0 0 0 / .3)")
+  assert.equal(declarations(css.split(':root, :root[data-theme="dark"] {')[1]!.split("}")[0]!)["--shadow-ink"], "#000000")
   const style = readFileSync(new URL("../styles.css", import.meta.url), "utf8")
   assert.match(style, /@utility button-outline\s*\{\s*@apply inset-ring inset-ring-button-border/)
   const picker = readFileSync(new URL("../components/GithubPickerModal.tsx", import.meta.url), "utf8")

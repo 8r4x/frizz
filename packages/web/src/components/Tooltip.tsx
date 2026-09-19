@@ -72,7 +72,7 @@ export function Tooltip({
           <span
             id={contentId}
             role="tooltip"
-            className={`${OVERLAY_Z_CLASS} max-w-[min(22rem,calc(100vw-1.5rem))] rounded-md border border-border bg-elevated px-3 py-2 text-[11px] leading-relaxed text-fg shadow-md shadow-black/40 break-words ${whitespace}`}
+            className={`${OVERLAY_Z_CLASS} max-w-[min(22rem,calc(100vw-1.5rem))] rounded-md border border-border bg-elevated px-3 py-2 text-[11px] leading-relaxed text-fg shadow-md shadow-shadow-ink/40 break-words ${whitespace}`}
             style={{ position: "fixed", left, top }}
           >
             {label}
@@ -92,7 +92,7 @@ export function Tooltip({
           side={side}
           sideOffset={5}
           collisionPadding={12}
-          className={`${OVERLAY_Z_CLASS} max-w-[min(22rem,calc(100vw-1.5rem))] select-none rounded-md border border-border bg-elevated px-3 py-2 text-[11px] leading-relaxed text-fg shadow-md shadow-black/40 break-words ${whitespace}`}
+          className={`${OVERLAY_Z_CLASS} max-w-[min(22rem,calc(100vw-1.5rem))] select-none rounded-md border border-border bg-elevated px-3 py-2 text-[11px] leading-relaxed text-fg shadow-md shadow-shadow-ink/40 break-words ${whitespace}`}
         >
           {label}
           <RT.Arrow className="fill-elevated" />

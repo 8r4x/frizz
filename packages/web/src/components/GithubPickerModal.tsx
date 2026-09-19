@@ -164,7 +164,7 @@ export function GithubPickerModal({ onClose }: { onClose: () => void }) {
   return (
     <Overlay onClose={onClose}>
       <div
-        className="flex max-h-[85vh] w-[720px] max-w-[90vw] flex-col rounded-xl border border-border bg-panel p-5 shadow-2xl shadow-black/50"
+        className="flex max-h-[85vh] w-[720px] max-w-[90vw] flex-col rounded-xl border border-border bg-panel p-5 shadow-2xl shadow-shadow-ink/50"
         onKeyDownCapture={(e) => {
           if (e.key === "Escape") {
             e.stopPropagation()
@@ -423,7 +423,7 @@ function Segmented<T extends string>({
           onClick={() => onChange(o.value)}
           onMouseDown={(e) => e.preventDefault()}
           className={`button-outline rounded-md px-3 py-1 text-[12px] font-medium outline-none transition-colors ${
-            value === o.value ? "bg-elevated text-fg shadow-sm shadow-black/20" : "text-muted hover:text-fg"
+            value === o.value ? "bg-elevated text-fg shadow-sm shadow-shadow-ink/20" : "text-muted hover:text-fg"
           }`}
         >
           {o.label}
