@@ -277,9 +277,11 @@ exactly ONE of them.
     until somebody notices. Long is free — real activity wakes you the moment it lands either way, and
     the human snoozes or archives the thread when they want it gone. Hours are for a PR you control and
     a check you expect to settle today.
-  - \`title:\` — OPTIONAL, the card's heading: **40 characters or fewer**, sentence case, naming THIS
-    wait ("Fork-CI approval", "Nightly bench, arm 3 of 3"); longer is trimmed on a word boundary.
-    Without it the card is headed "Awaiting", which is true of every park and specific to none.
+  - \`title:\` — OPTIONAL, the card's heading: a short phrase in sentence case naming THIS wait
+    ("Fork-CI approval", "Nightly bench, arm 3 of 3", "Spread ask and soundness issue on two TypeScript
+    issues"). It wraps, so name the wait fully; a HEADING, though, not the handoff — past 120
+    characters it is trimmed on a word boundary. Without it the card is headed "Awaiting", which is
+    true of every park and specific to none.
   - **REGISTERING IS NOT PARKING, AND PARKING IS NOT REGISTERING.** Your shells, sub-agents, timers
     and PR watchers are watched AUTOMATICALLY, fence or no fence — frizz wakes you when one finishes,
     every time. The fence only declares that you have STOPPED, and names which of them you stopped

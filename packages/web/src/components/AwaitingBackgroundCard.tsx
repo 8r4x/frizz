@@ -135,8 +135,8 @@ function hasUnrowedWork(thread: Pick<ThreadView, "subAgents" | "bgShells">): boo
 // THE WORKER MAY NAME IT ITSELF (maintainer 2026-08-26: "let's let the agent specify its own title for
 // these awaiting cards"). A `title:` in the fence frontmatter wins over both derived headings, because
 // only the worker knows what this particular wait IS — "Awaiting" is true of every park and specific to
-// none. It is capped at parse time (AWAITING_TITLE_MAX) so a worker cannot write a paragraph into a
-// heading: the card already carries its full prose one line below.
+// none. It WRAPS, and it is capped at parse time (AWAITING_TITLE_MAX) only so a worker cannot write a
+// paragraph into a heading: the card already carries its full prose one line below.
 //
 // THE HINTS ARE A PARAMETER, not `thread.lastFence`, and that is what lets ONE card state a fence the
 // BOARD no longer holds: the tailer clears `lastFence` on the user record that bumps the thread, and

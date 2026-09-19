@@ -4039,9 +4039,14 @@ test("parseSignalFence: a title: rides the frontmatter, trimmed to the cap", () 
     { kind: "title", value: "Three-platform CI run" },
   ])
   assert.equal(parsed?.body, "The macOS leg is the flaky one.", "a title is structure, never prose")
-  // Over the cap ⇒ trimmed on a word boundary, at the parse rather than at the card.
-  const long = parseSignalFence("```awaiting\nfor: 2h\ntitle: Waiting on the three-platform CI run before porting the v2 drivers\n```")
-  assert.deepEqual(long?.hints.find((h) => h.kind === "title"), { kind: "title", value: "Waiting on the three-platform CI run…" })
+  // A heading-length title survives WHOLE — the card wraps it (the cap was 40 until 2026-09-19, and cut
+  // real headings mid-thought). Over the cap ⇒ trimmed on a word boundary, at the parse rather than at
+  // the card.
+  const whole = parseSignalFence("```awaiting\nfor: 2h\ntitle: Waiting on the three-platform CI run before porting the v2 drivers\n```")
+  assert.deepEqual(whole?.hints.find((h) => h.kind === "title"), { kind: "title", value: "Waiting on the three-platform CI run before porting the v2 drivers" })
+  const paragraph = "Waiting on the three-platform CI run before porting the v2 drivers, then on the macOS leg which has been flaky for a week, then on the review of the second driver"
+  const long = parseSignalFence(`\`\`\`awaiting\nfor: 2h\ntitle: ${paragraph}\n\`\`\``)
+  assert.deepEqual(long?.hints.find((h) => h.kind === "title"), { kind: "title", value: "Waiting on the three-platform CI run before porting the v2 drivers, then on the macOS leg which has been flaky for a…" })
   // …and the wire schema takes the kind, which is what carries it to the client at all.
   assert.deepEqual(AwaitingHint.parse({ kind: "title", value: "Three-platform CI run" }), { kind: "title", value: "Three-platform CI run" })
 })

@@ -628,19 +628,21 @@ export const AWAITING_HINT_VALUE_MAX = 200
  *  worker's full prose below it and a row per awaited thing under that, so a title that restates either
  *  is the doubling this card has been trimmed for twice.
  *
- *  40 IS MEASURED, NOT CHOSEN. The heading renders at 16px/600 in whichever font the reader has set, and
- *  it WRAPS rather than truncating — so the cap has to fit the NARROWEST card on ONE line or a long park
- *  grows a two-line heading. Measured in a real browser on the queue card at its 368px content box
- *  (awaiting-bg-fixture, 500px viewport): MONO is the binding font at 8.40px per character against sans's
- *  7.21px, and in mono even an all-wide-glyph 40 ("WmWm…") draws 351.88px and still fits. 44 does not —
- *  a 43-character heading measured 369.47px in mono and wrapped to two line boxes.
+ *  THE CAP IS DEFENSIVE, NOT A FIT. It was 40 from 2026-08-26 to 2026-09-19, measured so the heading
+ *  drew on ONE line at the queue card's narrowest (368px content box) in the then-wider mono font — and
+ *  that cut real headings mid-thought: "Spread ask and soundness issue on…" was the whole title a reader
+ *  got of a park on two TypeScript issues (maintainer 2026-09-19: "We are truncating this title way too
+ *  aggressively. It should wrap if need be."). The heading WRAPS (TranscriptCard's head, plus
+ *  `overflow-wrap:anywhere` on this one because a worker can write an unbreakable token), so the cap
+ *  only has to stop a paragraph from becoming a heading: 120 is about two and a half lines at that
+ *  narrowest width in sans (7.21px per character), which is still a heading and never a handoff.
  *
  *  Longer is TRIMMED on a word boundary rather than refused: a worker that overruns still meant something
  *  specific, and "Waiting on the three-platform CI run…" says more than falling back to "Awaiting".
  *
  *  Sentence case, like every other piece of copy in the app (CLAUDE.md), and the trim never invents
  *  capitalisation. */
-export const AWAITING_TITLE_MAX = 40
+export const AWAITING_TITLE_MAX = 120
 
 /** The title as it will RENDER: collapsed to one line, cap-trimmed on a word boundary. Applied at PARSE
  *  time so the stored hint is already what the card draws — every consumer then agrees by construction,

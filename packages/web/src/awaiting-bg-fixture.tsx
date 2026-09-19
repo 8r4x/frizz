@@ -31,10 +31,11 @@ const params = new URLSearchParams(location.search)
 // ?watch=one — ONE green, mergeable PR and nothing else. The shape the maintainer actually meets on a
 // real board, and the one they were looking at when they called the old three-line row busy (2026-08-14).
 const watchMode = params.get("watch")
-// THIS APP RENDERS IN TWO FONTS and a fixture that sets neither silently takes the MONO default, which
-// is how a glyph measured at a 0.00px residual once rode visibly high in the maintainer's sans window.
-// `?font=sans|mono`, applied before first paint exactly as index.html does it.
-document.documentElement.dataset.font = params.get("font") === "sans" ? "sans" : "mono"
+// THE APP RENDERS IN SANS, and the stylesheet still defaults to MONO without the attribute — a fixture
+// that set neither silently took mono, which is how a glyph measured at a 0.00px residual once rode
+// visibly high in the maintainer's sans window. index.html pins `data-font="sans"` since the mono
+// option was dropped (2026-09-19), so this defaults the same way; `?font=mono` still shows the other.
+document.documentElement.dataset.font = params.get("font") === "mono" ? "mono" : "sans"
 // The card renders LIVE elapsed durations now, so a hardcoded instant reads as "550hr 27m" and the
 // fixture stops being judgeable the day after it is written. Everything dates off NOW.
 const ago = (min: number) => new Date(Date.now() - min * 60_000).toISOString()
@@ -47,13 +48,13 @@ const wantWatch = wantAll || watchMode !== null
 const wantShells = wantAll || (!wantAgents && watchMode !== "1" && watchMode !== "one")
 const shellOnly = wantShells && !wantAgents
 // ?title=<text> — the WORKER'S OWN HEADING (2026-08-26), which replaces the derived "Awaiting" /
-// "Background shells running". Bare `?title` seeds a near-full-length one, which is the case worth
-// looking at: AWAITING_TITLE_MAX is measured so a heading at the cap still draws on ONE line at this
-// card's narrowest (368px content box, i.e. a 500px viewport here) in BOTH fonts — check it at
-// `?font=mono`, which is the wider of the two per character and therefore the binding one. The fence
-// also carries the prose the card opens with, so the heading and the handoff can be judged together.
+// "Background shells running". Bare `?title` seeds a heading that WRAPS at this card's narrowest (368px
+// content box, i.e. a 500px viewport here), which is the case worth looking at: the cap was 40 until
+// 2026-09-19 so the heading always fit one line, and cut real titles mid-thought; now the heading
+// wraps and only a paragraph is trimmed (AWAITING_TITLE_MAX). The fence also carries the prose the
+// card opens with, so the heading and the handoff can be judged together.
 const titleParam = params.get("title")
-const declaredTitle = titleParam === "" ? "Nightly bench, arm 3 of 3 — macOS red" : titleParam
+const declaredTitle = titleParam === "" ? "Spread ask and soundness issue on two TypeScript issues" : titleParam
 
 const tail = shellOnly
   ? "Left the dev server and the CI poller running; I'll pick this back up when they report."

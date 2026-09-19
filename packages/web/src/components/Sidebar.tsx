@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 
 import { useQueryClient } from "@tanstack/react-query"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { useSnapshot } from "valtio"
-import { Check, ChevronRight, CircleDashed, Ellipsis, Github, Hourglass, Loader2, Pin, PinOff, RotateCcw, Timer } from "lucide-react"
+import { AlarmClock, Check, ChevronRight, CircleDashed, Ellipsis, Github, Hourglass, Loader2, Pin, PinOff, RotateCcw, Timer } from "lucide-react"
 import type { BoardSnapshot, ThreadView } from "@frizz/shared"
 import { store, openThread, scrollToQueueCard, queueCardTargetY, pushSubAgentDrawer, showToast, QUEUE_CARD_VIEWPORT_TOP } from "../store.ts"
 import { rpc } from "../api/rpc.ts"
@@ -233,13 +233,17 @@ export function Sidebar() {
         </div>
         <div ref={railRef} data-sidebar-rail className="min-h-0 min-w-0 overflow-y-auto overflow-x-hidden max-[800px]:overflow-y-visible">
           {/* PINNED — the human's shelf, at the very top, above the cue (maintainer 2026-09-02, variant
-              A of the pin mockups: unlabeled, each row wearing the small solid pin where the cue's rest
-              time would sit). These rows are OUT of the band system entirely — sectionThreads diverts
-              them before any band claims them, so a pinned thread stays here spinning, resting, snoozed
-              or Done alike — and the band is ordered by the pin instants, oldest first, never by
-              activity: it is an arrangement the human made, and nothing the threads do may shuffle it. */}
+              A of the pin mockups: each row wearing the small solid pin where the cue's rest time would
+              sit). These rows are OUT of the band system entirely — sectionThreads diverts them before
+              any band claims them, so a pinned thread stays here spinning, resting, snoozed or Done
+              alike — and the band is ordered by the pin instants, oldest first, never by activity: it
+              is an arrangement the human made, and nothing the threads do may shuffle it.
+              LABELED since 2026-09-19, like every band below it, and NOT collapsible (maintainer: the
+              Pinned, Queue and Running labels "should not be collapsible") — the header is the static
+              form of SectionHeader, so it lines up with the collapsible Snoozed/Done headers. */}
           {sections.pinned.length > 0 && (
             <section aria-label="Pinned">
+              <SectionHeader label="Pinned" count={sections.pinned.length} />
               {sections.pinned.map((t) => (
                 <div key={t.id}>
                   <ThreadRow t={t} active={activeId === t.id} onQueueNavigate={navigateToQueueCard} />
@@ -253,14 +257,19 @@ export function Sidebar() {
             </section>
           )}
           {/* RESTED + ACTIVE — always shown, NEVER collapsible (you can't hide your queue or your live
-              work), no label. Two rule-separated bands (see groups.ts orderActive/partitionActive):
+              work). Two rule-separated bands (see groups.ts orderActive/partitionActive), each under a
+              static label since 2026-09-19 (maintainer: "sidebar labels for pinned, queue, and running
+              … should not be collapsible"). The labels use the maintainer's own words for the bands —
+              QUEUE for the cue, RUNNING for the spinning rows — rather than the code's Rested/Active
+              keys, because the label is copy the human reads, and "the queue" is what they call it.
               RESTED — the cue — sits FIRST, right under the prompt box (maintainer 2026-08-08), in the
               EXACT queue order, so the rail's top row is opposite the queue's top card and scrolling
               the queue walks the scroll marker straight down this rail. ACTIVE — live work that isn't
               waiting on you — runs BELOW the rule (an Active row has no queue card — the maintainer's
               ask: they don't render in the queue), so it stays glanceable without pushing the cue down.
               Only the cue's rows carry the rest-time column: it dates a HANDOFF, and a row that is
-              still spinning has not made one. */}
+              still spinning has not made one. An empty band draws no label, the same as Snoozed and
+              Done: a "Queue 0" header over nothing is a count nobody needs. */}
           {activeThreads.length > 0 ? (
             (() => {
               const { running, rested } = partitionActive(activeThreads)
@@ -272,8 +281,10 @@ export function Sidebar() {
               )
               return (
                 <>
+                  {rested.length > 0 && <SectionHeader label="Queue" count={rested.length} />}
                   {rested.map(renderRow(true))}
                   {running.length > 0 && rested.length > 0 && <hr className="my-3 border-border/50" />}
+                  {running.length > 0 && <SectionHeader label="Running" count={running.length} />}
                   {running.map(renderRow(false))}
                 </>
               )
@@ -364,9 +375,9 @@ export function Sidebar() {
 }
 
 // A section header: an optional collapse caret, the label, and the count. ONE source of truth for
-// every band header (Snoozed, Done) so they can never visually drift apart again. Every band in
-// the real rail is collapsible; omitting onToggle renders a static div with a caret-width spacer, so
-// a header without a toggle (the QA fixtures' Active/Snoozed bands) still aligns with the rest.
+// every band header so they can never visually drift apart again. Snoozed, Done and External are
+// collapsible; Pinned, Queue and Running (since 2026-09-19) omit onToggle and render as a static div
+// with a caret-width spacer, so a non-collapsible label still aligns with the collapsible ones.
 export function SectionHeader({ label, count, collapsed, onToggle }: { label: string; count: number; collapsed?: boolean; onToggle?: () => void }) {
   const inner = (
     <>
@@ -1009,8 +1020,10 @@ export function ThreadIndicator({ t, legacy }: { t: ThreadView; legacy?: boolean
 //                     way, because the next action is the same: Retry. Exactly the rows that carry the
 //                     inline Retry verb (offersRetry === this kind — one decision, two surfaces).
 //   [⧗] on the clock — awaiting a TIMER (muted hourglass), in the queue or parked in Snoozed alike; the
-//                     Snoozed band's other parks wear the same hourglass (a user snooze) or the mark of
-//                     what they wait on (the octocat for a PR, the dot for a shell). See hourglassMark.
+//                     Snoozed band's other parks wear the mark of what they wait on (the octocat for a
+//                     PR, the dot for a shell). See hourglassMark.
+//   [⏰] snoozed     — the human's OWN wall-clock park (muted alarm clock): the one wait the operator
+//                     set rather than the worker, and the one that rings for THEM. See alarmMark.
 //   [✓] done        — a ```done fence at rest, OR an archived thread (muted check — NOTHING else)
 //   […] at rest     — an ordinary rest with no concrete ask, INCLUDING a queued thread whose own
 //                     dispatched sub-agents are still running (they spin on their own child rows)
@@ -1021,7 +1034,7 @@ export function ThreadIndicator({ t, legacy }: { t: ThreadView; legacy?: boolean
 export function sessionIndicatorFor(t: ThreadView): { node: ReactElement; tip: string | null } {
   const base = sessionStateIndicatorFor(t)
   // The tooltip is now the ONLY place a snooze is legible on the rail (the subtitle no longer names it),
-  // so it has to say so on every parked row — not just the ones the park actually quiets. The hourglass
+  // so it has to say so on every parked row — not just the ones the park actually quiets. The alarm-clock
   // arm below already tells that story for a Snoozed row. These are the rows a snooze does NOT silence:
   // one whose own turn is running, and one still waiting on a sub-agent it dispatched. Each keeps its
   // live glyph — MOTION is a fact about the process that a park does not change — and gains a second
@@ -1029,7 +1042,7 @@ export function sessionIndicatorFor(t: ThreadView): { node: ReactElement; tip: s
   // A CONCRETE ASK USED TO BE THE THIRD such row, and it was the one case where the rail lied: the
   // server dequeues a user-snoozed thread before it ever reaches its ask gates (deriveNeedsYou), so the
   // [?] pointed at a card that did not exist on any surface (2026-08-31 — see sessionIndicatorKind). It
-  // takes the hourglass now, and that arm names the ask the park is holding.
+  // takes the alarm clock now, and that arm names the ask the park is holding.
   if (sessionIndicatorKind(t) === "snoozed") return base
   const snoozedUntil = futureSnoozedUntil(t)
   const parked = snoozedUntil ? formatUserSnooze(snoozedUntil, t.snoozePrompt) : null
@@ -1114,8 +1127,9 @@ const githubMark = (
 )
 
 // THE ONE MARK FOR "THIS THREAD IS PARKED ON THE CLOCK" — the muted hourglass, drawn by every arm whose
-// row is waiting for an instant rather than a process: a user snooze, a park with no fence to read, and
-// since 2026-09-07 a wait on a TIMER in whichever band it sits. A timer park QUEUES (board.deriveNeedsYou
+// row is waiting for an instant the WORKER set: a park with no fence to read, and since 2026-09-07 a
+// wait on a TIMER in whichever band it sits. (A user snooze wore it too until 2026-09-19; it is the
+// alarm clock below now.) A timer park QUEUES (board.deriveNeedsYou
 // keeps it a visible handoff), so most timer waits live below the rule in the Rested band, and there the
 // row wore the shell's blue dot — groups.restingOnLiveBackgroundWork counted an armed timer as motion —
 // while the SAME wait parked in Snoozed drew lucide's Clock. Three readings of one fact (maintainer:
@@ -1124,6 +1138,17 @@ const githubMark = (
 // clock", and the limit kill's accent hourglass is this same glyph in the attention colour, so the
 // family stays one glyph in two tones rather than two glyphs for one idea.
 const hourglassMark = <StatusBox><Hourglass size={9} className="text-muted-70" /></StatusBox>
+
+// THE ONE MARK FOR "THE HUMAN SNOOZED THIS" — the muted alarm clock, on the row whose park the OPERATOR
+// set on a wall clock (futureSnoozedUntil), whether it re-surfaces the card or resumes the worker with a
+// prompt. Until 2026-09-19 it wore the hourglass above, which made the operator's own park read as one
+// more of the worker's timer waits (maintainer: "something that's snoozed … switch it over to some kind of
+// icon that's like Zs, or an alarm clock"). An alarm is the snooze metaphor everyone already carries, and
+// lucide has no Zs. Size 9, like the hourglass: the box's content is 13px, so only an ODD size centres
+// on a whole pixel, and 11 would put the clock's bells and feet — which reach its viewBox edge — over
+// the 0.62 extent ceiling the family holds to. The verify script has the readings
+// (scripts/verify-rail-status-glyphs.mjs, the `user-snoozed` slot).
+const alarmMark = <StatusBox><AlarmClock size={9} className="text-muted/70" /></StatusBox>
 
 /** "fires in 34m" for the SOONEST armed timer — the resting card's TimerRow words, so the rail's hover
  *  and the card never count down in two vocabularies. A due-but-undelivered timer (the scheduler's tick
@@ -1211,7 +1236,7 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
     const github = githubMark
     // A snoozed row whose fence names a PR (`prs:` since the 2026-08-24 YAML cutover; `pr:` and `pr-watch:`
     // before it, both retired) is snoozed FOR A PR, and the rail says so with GitHub's mark instead of the
-    // hourglass. The hourglass means "parked on the clock", and for a watch the clock is only the
+    // clock. The alarm clock means "the human parked this until an instant", and for a watch the clock is only the
     // backstop: the scheduler polls the PR and CLEARS the park the moment new activity lands
     // (scheduler.ts, the clear-snooze-on-PR-wake), so what actually wakes this row is GitHub. A PR wait
     // never parks itself — parkedAwaitingHint excludes it so a watch stays a visible queue handoff — so
@@ -1225,7 +1250,7 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
     // It reads the REGISTERED watch as well as the fence, so a row parked on a watch it never fenced
     // stops wearing the clock — the fence-only reading was why the mark looked like a property of the
     // Snoozed band rather than of the wait.
-    const parkMark = waitNamesPr(t) ? github : hourglass
+    const parkMark = waitNamesPr(t) ? github : alarmMark
     // A snoozed row carries its whole "what it is waiting for" story HERE, in the popover — the rail row itself
     // is a title and nothing else. The two time-based holds are ONE concept — a snooze (park until a wall-clock instant) — sharing the same
     // parkMark + single-line layout. They differ only in WHO resolves the park at the deadline, which
