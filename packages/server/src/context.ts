@@ -71,9 +71,11 @@ import { homedir } from "node:os"
 
 export const CONTEXT_STARTUP_CLEANUP_TIMEOUT_MS = 4_000
 
-// How often the server proactively refreshes the shared Claude quota cache (see the heartbeat wired
-// below). One cheap endpoint GET every two minutes per account keeps the sidebar chip reading fresh.
-const QUOTA_REFRESH_INTERVAL_MS = 2 * 60_000
+// How often the server's quota heartbeat TICKS (see the heartbeat wired below). A tick is not a request:
+// it reads one small cache file and only calls the usage endpoint once the reading has outlived its
+// 2-minute TTL AND any `retry-after` the endpoint last answered with has passed. Ticking faster than
+// either bound is what lands the refresh within 30s of the moment the endpoint allows one.
+const QUOTA_REFRESH_INTERVAL_MS = 30_000
 
 export type ContextStartupPhase =
   | "storage"
@@ -605,11 +607,11 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   adoptionReconcileTimer.unref?.()
   contextUnsubscribers.push(() => clearInterval(adoptionReconcileTimer))
 
-  // Keep the shared Claude quota cache warm on a fixed 2-minute cadence, independent of any browser
+  // Keep the shared Claude quota cache warm (as often as the endpoint allows), independent of any browser
   // poll, so the sidebar chip (and the scheduler's weekly-reset check) always reads a recent value
   // rather than the multi-minute-stale reading a purely read-driven cache served during a fast
   // fleet burn. One cheap endpoint GET, on the same non-blocking background path a stale read kicks;
-  // the cross-process lock keeps N Frizz windows to ~one request every two minutes per account. Gated on the
+  // the cross-process lock and the persisted `retryAt` keep N Frizz processes to one request per window. Gated on the
   // same FRIZZ_WAKERS_OFF flag as the scheduler so a disposable adhoc/test stack never touches the real
   // account with the real credential.
   if (process.env.FRIZZ_WAKERS_OFF !== "1") {
