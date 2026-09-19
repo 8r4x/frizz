@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useSnapshot } from "valtio"
-import { Check, ChevronLeft, ChevronRight, Clock, Ellipsis, Hourglass, Plus, Settings as SettingsIcon } from "lucide-react"
+import { AlarmClock, Check, ChevronLeft, ChevronRight, Clock, Ellipsis, Hourglass, Plus, Settings as SettingsIcon } from "lucide-react"
 import type { ThreadView } from "@frizz/shared"
 import { openThread, pushSubAgentDrawer, store, type ConnectionState } from "../store.ts"
 import { asThreads, useBoard } from "../hooks.ts"
 import { prefs } from "../lib/prefs.ts"
 import {
   displayTitle,
+  futureSnoozedUntil,
   lastActiveLabelAt,
   needsAction,
   sectionThreads,
@@ -107,8 +108,21 @@ function HourglassMark({ size = 18 }: { size?: number }) {
   )
 }
 
+/** The human's own wall-clock park: the rail's muted alarm clock (Sidebar.tsx alarmMark), drawn here at
+ *  the phone's box size — the hourglass's own 10/15 ratio, since the two are one weight family on the
+ *  rail (verify-rail-status-glyphs.mjs: 0.55 of the box each). Only `userSnoozed` rows take it — the
+ *  `snoozed` kind also covers a worker's fenced park and the resting card's event-snooze, which stay on
+ *  the hourglass and the dim. */
+function AlarmMark({ size = 18 }: { size?: number }) {
+  return (
+    <StatusBox size={size}>
+      <AlarmClock size={Math.round((size * 10) / 15)} className="text-muted/75" />
+    </StatusBox>
+  )
+}
+
 /** One kind → one mark. The kinds are the rail's; only the drawing is the phone's. */
-function ThreadMark({ kind }: { kind: SessionIndicatorKind }) {
+function ThreadMark({ kind, userSnoozed }: { kind: SessionIndicatorKind; userSnoozed?: boolean }) {
   if (kind === "needs-input") return <AskMark />
   if (kind === "stalled") {
     return (
@@ -127,8 +141,10 @@ function ThreadMark({ kind }: { kind: SessionIndicatorKind }) {
       </StatusBox>
     )
   }
-  // Parked on the clock — a Snoozed park, or a queued wait on a TIMER (2026-09-07; it read as `background`
-  // and drew the play mark before). The row's dim, not the mark, is what separates the two.
+  // The human's own snooze rings for them: the alarm clock (2026-09-19; it shared the hourglass before).
+  if (kind === "snoozed" && userSnoozed) return <AlarmMark />
+  // Parked on the clock — a worker's Snoozed park, or a queued wait on a TIMER (2026-09-07; it read as
+  // `background` and drew the play mark before). The row's dim, not the mark, is what separates the two.
   if (kind === "snoozed" || kind === "timer") return <HourglassMark />
   if (kind === "done" || kind === "archived") return <DoneMark />
   // Awaiting a PR: the rail draws GitHub's octocat; the phone has no mark for it yet and stays at rest.
@@ -324,7 +340,7 @@ function MobileThreadRow({
         className="flex w-full items-start gap-3 px-4 pb-2.5 pt-2.5 text-left active:bg-white/[0.04]"
       >
         <span className="flex h-[21px] shrink-0 items-center justify-center">
-          <ThreadMark kind={kind} />
+          <ThreadMark kind={kind} userSnoozed={futureSnoozedUntil(t) !== undefined} />
         </span>
         <span className="flex min-w-0 flex-1 flex-col gap-[3px]">
           <span className="flex min-w-0 items-baseline gap-3">

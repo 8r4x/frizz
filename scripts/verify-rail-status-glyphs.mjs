@@ -112,27 +112,37 @@ try {
   // shipping at `calc(15px * 0.31)` = 4.65px: the exact defect the rule below describes, in the exact
   // place the rule was written to prevent it (maintainer: "this is also not perfectly centered"). Any
   // mark that stands INSIDE the box is measured now, whatever element draws it.
+  // A MARK IS NAMED BY THE FIXTURE'S SLOT, NOT BY ITS KIND. `data-rail-glyph` carries the kind
+  // sessionIndicatorKind resolved, and since 2026-09-19 two slots share one: a worker's timer park and the
+  // human's own snooze are both `snoozed`, drawing the hourglass and the alarm clock. Keyed by the
+  // attribute, every lookup below found the FIRST `snoozed` twice and the alarm clock was never measured
+  // — it printed the hourglass's numbers under its own row. The fixture wraps each slot in a
+  // `title`, so that is the name; the calibration span has none and keeps its attribute.
   const sizes = await page.$$eval("[data-rail-glyph] svg, [data-rail-glyph] .frizz-rail-dot", (marks) =>
-    marks.map((s) => ({ name: s.closest("[data-rail-glyph]").getAttribute("data-rail-glyph"), w: s.getBoundingClientRect().width })),
+    marks.map((s) => {
+      const host = s.closest("[data-rail-glyph]")
+      return { name: host.closest("[title]")?.getAttribute("title") ?? host.getAttribute("data-rail-glyph"), w: s.getBoundingClientRect().width }
+    }),
   )
   for (const { name, w } of sizes) {
     if (ODD_SIZE_EXEMPT.has(name) || UNGATED.has(name)) continue
     if (!Number.isInteger(w) || w % 2 !== 1) failures.push(`${name} draws a ${w}px glyph — anything but an ODD whole number centres onto a half pixel in the 13px content box, and its ink lands 0.5px right and down`)
   }
 
-  const names = await page.$$eval("[data-rail-glyph]", (els) => els.map((e) => e.getAttribute("data-rail-glyph")))
-  for (const name of names) {
-    const sel = `[data-rail-glyph="${name}"]`
+  const marks = await page.$$("[data-rail-glyph]")
+  const names = await page.$$eval("[data-rail-glyph]", (els) => els.map((e) => e.closest("[title]")?.getAttribute("title") ?? e.getAttribute("data-rail-glyph")))
+  for (const [i, name] of names.entries()) {
+    const mark = marks[i]
     // Hide the box's border so ONLY the inner mark paints — its ink box is then unambiguous. The
     // attribute sits on the tooltip wrapper, so the border to hide is on a DESCENDANT (StatusBox).
-    await page.evaluate((s) => {
-      for (const el of [document.querySelector(s), ...document.querySelectorAll(`${s} *`)]) el.style.borderColor = "transparent"
-    }, sel)
+    await mark.evaluate((root) => {
+      for (const el of [root, ...root.querySelectorAll("*")]) el.style.borderColor = "transparent"
+    })
     await new Promise((r) => setTimeout(r, 60))
-    const buf = await (await page.$(sel)).screenshot({ encoding: "base64" })
-    await page.evaluate((s) => {
-      for (const el of [document.querySelector(s), ...document.querySelectorAll(`${s} *`)]) el.style.borderColor = ""
-    }, sel)
+    const buf = await mark.screenshot({ encoding: "base64" })
+    await mark.evaluate((root) => {
+      for (const el of [root, ...root.querySelectorAll("*")]) el.style.borderColor = ""
+    })
 
     const ink = await page.evaluate(async (b64, dsf) => {
       const img = new Image()

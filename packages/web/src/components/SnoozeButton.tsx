@@ -1,6 +1,6 @@
 import { useId, useMemo, useState } from "react"
 import { useSnapshot } from "valtio"
-import { ChevronDown, Clock, Loader2 } from "lucide-react"
+import { AlarmClock, ChevronDown, Loader2 } from "lucide-react"
 import { SNOOZE_PROMPT_MAX, type ThreadView } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { futureSnoozedUntil } from "../groups.ts"
@@ -116,7 +116,7 @@ export function SnoozeButton({ thread, onSnoozed }: { thread: ThreadView; onSnoo
           </MenuTrigger>
           <MenuContent align="end">
             {SNOOZE_PRESETS.map((preset) => (
-              <MenuItem key={preset.value} onSelect={() => applyPreset(preset.value)} icon={<Clock size={12} />}>
+              <MenuItem key={preset.value} onSelect={() => applyPreset(preset.value)} icon={<AlarmClock size={12} />}>
                 <span className="flex min-w-0 flex-1 items-center justify-between gap-4">
                   <span>{preset.label}</span>
                   <span className="text-[10px] text-muted/55">{preset.detail}</span>

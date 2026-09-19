@@ -67,12 +67,18 @@
  *  bare glyphs start to read as one mark; above ~14px the two pills come apart. */
 export const STRIP_INK_GAP = "gap-3"
 
-/** `PendingSnooze` — lucide `Hourglass` at 12px (ink 8px, so 2px inset a side) inside `px-0.5`.
+/** `PendingSnooze` — lucide `AlarmClock` at 12px (ink 9.5px across, so 1.25px inset a side) inside `px-0.5`.
+ *
+ *  It was the `Hourglass` until 2026-09-19 (ink 7px across, 2.5px inset, `-mx-1`); the human's own
+ *  snooze wears the alarm clock on every surface now. The clock's bells and feet reach further out than
+ *  the hourglass's caps, so the trim is nearly just the padding. Measured on the rail fixture at dsf 8
+ *  (scripts/verify-rail-status-glyphs.mjs, the `user-snoozed` slot): the clock inks 0.79 of its box
+ *  across against the hourglass's 0.58, and the ratio is the glyph's, whatever the size.
  *
  *  There is deliberately no constant for `ContextMeter`: its `em`-sized ring reaches its own svg edge
  *  (0.3px a side), which is under the floor where a correction smears the mark rather than moving it.
  *  It is measured, not missed. */
-export const INK_TRIM_HOURGLASS = "-mx-1"
+export const INK_TRIM_ALARM = "-mx-[3px]"
 
 /** `RecurringPromptControl` (the Goal control) — Tabler's `target-arrow` at 12px inside `px-0.5`.
  *

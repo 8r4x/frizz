@@ -13,7 +13,7 @@
 // the human has parked the thread, "awaiting background work" is not the state the park is about
 // (same rule showsRestingCard already applies to the event-snooze).
 import { useEffect, useState } from "react"
-import { Hourglass } from "lucide-react"
+import { AlarmClock } from "lucide-react"
 import type { ThreadView } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { futureSnoozedUntil } from "../groups.ts"
@@ -72,8 +72,10 @@ export function SnoozeCard({ thread }: {
     }
   }
 
+  // The alarm clock, not the hourglass (2026-09-19): this is the human's own park, and the rail's row
+  // for it wears the same mark (Sidebar.tsx alarmMark). The hourglass stays the worker's timer.
   return (
-    <TranscriptCard data-snooze-card icon={Hourglass} label="Snoozed">
+    <TranscriptCard data-snooze-card icon={AlarmClock} label="Snoozed">
       {/* The countdown IS the card (maintainer: "it should basically look like a countdown"), so it
           takes the headline scale. `tabular-nums` holds the digits to one width and formatCountdown
           holds the SHAPE (padded trailing unit), so the line ticks in place instead of reflowing. The

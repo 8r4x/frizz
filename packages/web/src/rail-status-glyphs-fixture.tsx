@@ -66,6 +66,10 @@ const STATES: { kind: string; t: ThreadView }[] = [
   // alive behind this", whichever band the row sits in). A `shell` hint here would therefore render a
   // second copy of the `background` dot two entries up and leave the park glyph unmeasured.
   { kind: "snoozed", t: { ...base, id: "snoozed", runtime: "turn-idle", needsYou: false, lastFence: { kind: "awaiting", body: "", hints: [{ kind: "timer", value: "tmr_a1b2c3d4e5f6" }] } } as unknown as ThreadView },
+  // THE HUMAN'S OWN SNOOZE (2026-09-19): a wall-clock park the operator set, no fence. It resolves to the
+  // same `snoozed` kind as the slot above but draws the alarm clock (Sidebar.tsx alarmMark) rather than
+  // the worker's hourglass, so it needs its own slot to be measured at all.
+  { kind: "user-snoozed", t: { ...base, id: "user-snoozed", runtime: "turn-idle", needsYou: false, snoozedUntil: "2099-09-19T16:00:00.000Z" } as unknown as ThreadView },
   // AWAITING A TIMER, IN THE QUEUE (2026-09-07). A REGISTERED armed timer, queued, no fence — the shape
   // a worker that armed `mcp__frizz__timer` and rested leaves behind, and the row that wore the blue dot.
   // It draws the same hourglass as the `snoozed` slot (Sidebar.tsx hourglassMark), so the two measure
