@@ -491,7 +491,7 @@ function Row({ item, checked, onActivate }: { item: GithubItem; checked: boolean
           onActivate(e.shiftKey)
         }
       }}
-      className="group flex w-full cursor-pointer items-start gap-2.5 border-b border-border/40 px-3 py-2.5 text-left outline-none transition-colors last:border-b-0 hover:bg-white/[0.03]"
+      className="group flex w-full cursor-pointer items-start gap-2.5 border-b border-border/40 px-3 py-2.5 text-left outline-none transition-colors last:border-b-0 hover:bg-hover"
     >
       <span className="mt-px shrink-0">
         <Checkbox checked={checked} />

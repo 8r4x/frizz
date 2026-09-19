@@ -11,6 +11,7 @@ import { InteractionCard } from "./components/InteractionCards.tsx"
 import { ImageFrame, FRAMED_IMAGE } from "./components/ImageFrame.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
 import { Toaster } from "./components/Toaster.tsx"
+import { DrawerErrorSheet } from "./components/ErrorBoundary.tsx"
 import { initFont } from "./lib/font.ts"
 import { setThemePreference } from "./lib/theme.ts"
 import "./styles.css"
@@ -60,6 +61,7 @@ createRoot(document.getElementById("root")!).render(
         {mode === "signin" && <SignInModal backend="claude" onClose={() => {}} onAuthed={() => {}} />}
         {mode === "restart" && <RestartOverlay open message="Preparing the verified application build…" />}
         {mode === "stalled" && <RestartOverlay open stalled silentFor="3m" />}
+        {mode === "render-error" && <DrawerErrorSheet id={1} depth={0} widthDepth={0} error={new Error("The transcript could not be rendered")} onRetry={() => {}} />}
       </main>
       <Toaster />
     </TooltipProvider>
