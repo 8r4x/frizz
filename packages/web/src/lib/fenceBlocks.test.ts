@@ -178,11 +178,18 @@ test("an awaiting fence carries a title: hint beside its items", () => {
   assert.equal(body, "The macOS leg is the flaky one.", "the title never lands in the prose")
 })
 
-test("an over-long title is trimmed on a word boundary at parse time", () => {
-  const long = "Waiting on the three-platform CI run before porting the v2 drivers"
-  const { hints } = parseFenceBody(`for: 2h\ntitle: ${long}`, "awaiting")
+// THE CAP IS DEFENSIVE, NOT A FIT. It was 40 until 2026-09-19 — sized to one line on the narrowest
+// card — and cut "Spread ask and soundness issue on two TypeScript issues" to "Spread ask and soundness
+// issue on…" (maintainer: "We are truncating this title way too aggressively. It should wrap if need
+// be."). A heading-length title now survives whole and wraps at the card; only a paragraph is trimmed.
+test("a heading-length title survives the parse whole; only a paragraph is trimmed", () => {
+  const whole = "Waiting on the three-platform CI run before porting the v2 drivers"
+  assert.equal(parseFenceBody(`for: 2h\ntitle: ${whole}`, "awaiting").hints.find((h) => h.kind === "title")?.value, whole)
+  const paragraph = "Waiting on the three-platform CI run before porting the v2 drivers, then on the macOS leg which has been flaky for a week, then on the review of the second driver"
+  assert.ok(paragraph.length > AWAITING_TITLE_MAX)
+  const { hints } = parseFenceBody(`for: 2h\ntitle: ${paragraph}`, "awaiting")
   const title = hints.find((h) => h.kind === "title")!.value
-  assert.equal(title, "Waiting on the three-platform CI run…")
+  assert.equal(title, "Waiting on the three-platform CI run before porting the v2 drivers, then on the macOS leg which has been flaky for a…")
   assert.ok(title.length <= AWAITING_TITLE_MAX + 1, "…and never exceeds the cap plus its ellipsis")
   // A worker that hard-wraps its title in the YAML gets ONE line: a heading with a newline in it draws
   // as a broken card rather than as two lines.
