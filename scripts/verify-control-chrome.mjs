@@ -42,6 +42,7 @@ try {
       const labelCenter = center(label), badgeCenter = center(badge), box = badge.getBoundingClientRect()
       return [{ sample: sample.dataset.case, labelCenter, textResidual: +(badgeCenter - labelCenter).toFixed(3), borderResidual: +((box.top + box.bottom) / 2 - labelCenter).toFixed(3), height: box.height }]
     }))
+    assert.deepEqual(ink.map(item => item.sample), ['inline-long', 'inline-short', 'legacy-fallback'])
     results.push({ theme, width, ink })
     if (!baseline) for (const item of ink) {
       assert.ok(Math.abs(item.textResidual) < .5, JSON.stringify(item))

@@ -59,7 +59,7 @@ try {
     await page.waitForSelector('[data-row-number]')
     await shot('github-picker')
     const tabs = await page.$$eval('button[aria-pressed]', buttons => buttons.map(el => ({ border: getComputedStyle(el).borderTopWidth, ring: getComputedStyle(el).getPropertyValue('--tw-inset-ring-shadow') })))
-    assert.equal(tabs.length, 2)
+    assert.equal(tabs.length, 4, 'Both the Issues/PRs and Recent/Reactions segmented groups are present')
     for (const tab of tabs) {
       assert.equal(tab.border, '0px', 'GitHub tabs share the group frame')
       assert.doesNotMatch(tab.ring, /inset/, 'No separate tab outlines')

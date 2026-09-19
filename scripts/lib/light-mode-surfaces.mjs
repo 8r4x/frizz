@@ -212,6 +212,7 @@ export async function checkSurfaceStates({ page, url, font, palette, out, check,
   }
   page.off("request", request)
   assert.equal(serverWrites, 0, "Appearance never writes server settings")
+  await settle()
   const formEdges = await page.evaluate(() => {
     const dropdown = document.querySelector('button[aria-label="Appearance"]')
     const segments = [...document.querySelectorAll('.frizz-sheet-panel button[aria-pressed]')]
