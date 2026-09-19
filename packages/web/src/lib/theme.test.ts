@@ -35,16 +35,16 @@ test("the pre-paint resolver handles stored, denied-storage, and unavailable-med
   const noMedia = run({ storageFails: true, mediaAvailable: false })
   assert.equal(noMedia.documentElement.dataset.theme, "light")
   assert.equal(noMedia.documentElement.style.colorScheme, "light")
-  assert.equal(noMedia.meta.content, "#f6f8fa")
+  assert.equal(noMedia.meta.content, "#f7f7f7")
 })
 
 test("the runtime and pre-paint resolver share the dedicated preference key and canvas values", () => {
   const entry = readFileSync(new URL("../../index.html", import.meta.url), "utf8")
   const runtime = readFileSync(new URL("./theme.ts", import.meta.url), "utf8")
   assert.match(entry, /frizz-theme/)
-  assert.match(entry, /#f6f8fa/)
+  assert.match(entry, /#f7f7f7/)
   assert.match(runtime, /THEME_STORAGE_KEY = "frizz-theme"/)
-  assert.match(runtime, /LIGHT_CANVAS = "#f6f8fa"/)
+  assert.match(runtime, /LIGHT_CANVAS = "#f7f7f7"/)
 })
 
 const declarations = (css: string) => Object.fromEntries([...css.matchAll(/(--[\w-]+):\s*([^;]+);/g)].map(([, name, value]) => [name, value.trim()]))

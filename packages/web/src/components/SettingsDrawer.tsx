@@ -22,7 +22,6 @@ export const SETTINGS_HELP = {
   appearance: "Applies to this browser across all projects. System follows the device appearance.",
   permissionMode: "The permission mode new Claude Code threads launch with. Auto runs safe actions and asks you to approve the risky ones in the thread. Bypass launches the worker with --dangerously-skip-permissions: it never asks, so nothing waits on you and nothing is checked either. Takes effect on the next thread you dispatch; to change a thread that already exists, use the picker beside its model in the prompt box. Codex threads always run with full workspace access and are unaffected.",
   promptCacheTtl: "Which prompt-cache tier a new Claude thread writes to. A 1-hour entry costs twice the input price to write, a 5-minute entry 1.25 times; the hour only pays off when the thread's cache actually survives that long. Measured 2026-09-03: cache writes were half of a day's spend and the entries were lost every 15 to 30 minutes regardless, so 5 minutes was the cheaper tier. Automatic leaves the choice to Claude Code, which picks 1 hour on a subscription. Takes effect on the next thread you dispatch and on a thread that resumes after its worker exited.",
-  font: "Changes the interface reading font for this browser.",
   localFileOpener: "Chooses how vetted local artifact links open. Markdown files open in Frizz's own reader (which carries an Open action that uses this setting), and image clicks always use the OS default viewer.",
   density: "How much of a diff shows before you ask for it, in this browser. Compact collapses every diff to its header row (click one to open it); Comfortable shows them in full. Applies immediately.",
   queueOrder: "Orders the Needs-you queue and the sidebar's rested threads by when each was last active. Oldest first (FIFO, default) surfaces the longest-waiting item first so you cycle through everything; Newest first (LIFO) keeps the most recently active on top. Applies immediately in this browser.",
@@ -209,10 +208,6 @@ export function SettingsDrawer() {
                 permission picker led the form until 2026-08-24, so the first thing the drawer said was
                 about one vendor's CLI (maintainer: "weird that the very first setting in the settings
                 panel is Claude-specific"). */}
-            <SettingsField label="Font" help={SETTINGS_HELP.font}>
-              <FontToggle value={draft.font ?? "mono"} onChange={(font) => update({ ...draft, font })} />
-            </SettingsField>
-
             <SettingsField label="Project sidebar" help={SETTINGS_HELP.projectRail}>
               <Select
                 variant="bordered"
@@ -542,33 +537,8 @@ function GithubPromptField({
   )
 }
 
-// Small segmented control for the mono/sans experiment. Two options, the active one inverted
-// (bright-on-panel) like the primary button — quiet, no accent (yellow stays the focus motif). Each
-// label previews its own family so the choice reads at a glance.
-function FontToggle({ value, onChange }: { value: "mono" | "sans"; onChange: (v: "mono" | "sans") => void }) {
-  const opts: { v: "mono" | "sans"; label: string; cls: string }[] = [
-    { v: "mono", label: "Mono", cls: "" },
-    { v: "sans", label: "Sans", cls: "" },
-  ]
-  return (
-    <div className="inline-flex w-fit rounded-md border border-border bg-bg p-0.5">
-      {opts.map((o) => (
-        <button
-          key={o.v}
-          onClick={() => onChange(o.v)}
-          className={`rounded px-3 py-1 text-[12px] transition-colors ${o.cls} ${
-            value === o.v ? "bg-fg text-bg" : "text-muted hover:text-fg"
-          }`}
-        >
-          {o.label}
-        </button>
-      ))}
-    </div>
-  )
-}
-
 // The ONE boolean control shape for the whole form: a segmented Off|On pair, Off always on the LEFT
-// (switch convention — right = on). Active segment inverted like the font toggle.
+// (switch convention — right = on). The active segment uses an inverted neutral fill.
 function OnOffToggle({ value, onChange }: { value: boolean; onChange: (v: boolean) => void }) {
   const opts: { v: boolean; label: string }[] = [
     { v: false, label: "Off" },

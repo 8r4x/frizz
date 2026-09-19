@@ -43,7 +43,7 @@ test("contextWindowSet patches one persisted project setting and can restore the
   try {
     h.ctx.getSettings = () => getSettings(h.storage, h.dir)
     h.ctx.setSettings = (next) => setSettings(h.storage, next, h.dir)
-    const before = h.ctx.setSettings({ ...h.ctx.getSettings(), promptCacheTtl: "5m", font: "sans" })
+    const before = h.ctx.setSettings({ ...h.ctx.getSettings(), promptCacheTtl: "5m" })
     const proc = h.router.contextWindowSet
     for (const input of [{ backend: "acp", tokens: 400000 }, { backend: "codex", tokens: 0 }, { backend: "codex", tokens: 1.5 }, { backend: "claude", tokens: -1 }]) {
       assert.equal(proc.input.safeParse(input).success, false)

@@ -2928,13 +2928,9 @@ export const Settings = z.object({
    * to, not furniture you sit beside. Hidden, the way back is a breadcrumb in the status bar, which
    * costs a click exactly when you meant to switch and nothing when you did not.
    *
-   * Machine-level, like the font: which chrome you want is a property of the person, not the repo.
+   * Machine-level: which chrome you want is a property of the person, not the repo.
    */
   projectRail: z.boolean(),
-  // UI type family. `mono` (default) is the mono-forward system; `sans` swaps prose/UI chrome to a
-  // sans stack while code / tool lines / the terminal stay mono. Optional so an old settings blob
-  // parses; defaultSettings pins "mono".
-  font: z.enum(["mono", "sans"]).optional(),
   // Default action for a vetted non-image local path in agent markdown. Image clicks always use the
   // OS default viewer so screenshots retain their expected behavior.
   localFileOpener: LocalFileOpener.optional(),

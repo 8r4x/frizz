@@ -35,7 +35,7 @@ test("a reload paints the font, the project rail and the sidebar column in their
     const r = await fetch(`${rpc}/settingsSet`, { method: "POST", headers, body: JSON.stringify({ ...current.result, ...patch }) })
     assert.equal(r.status, 200, `settingsSet must succeed: ${await r.text()}`)
   }
-  await set({ font: "sans", projectRail: true })
+  await set({ projectRail: true })
 
   const { default: puppeteer } = await import("puppeteer")
   const browser = await puppeteer.launch({ headless: "new", args: ["--no-sandbox"] })
@@ -83,13 +83,13 @@ test("a reload paints the font, the project rail and the sidebar column in their
     assert.deepEqual(new Set(painted.map((s) => s.workpaneLeft)), new Set([settledLeft]), `the workpane never moved: ${JSON.stringify(warm)}`)
     assert.equal(painted[0]!.rail, true, `the rail is on the first painted frame: ${JSON.stringify(warm)}`)
 
-    // CONTROL: no mirrors and the other font on the server — the same sampler must see the flip,
-    // the rail arriving late and the workpane moving.
+    // Old Mono settings and cache must not change the font. Clearing the rail/board mirrors
+    // remains the negative control: the sampler must see the rail arrive and the workpane move.
     await set({ font: "mono", projectRail: true })
-    await page.evaluate(() => localStorage.clear())
+    await page.evaluate(() => { localStorage.clear(); localStorage.setItem("frizz-font", "mono") })
     const control = await load()
     const controlPainted = control.filter((s) => s.workpaneLeft !== null)
-    assert.ok(new Set(control.map((s) => s.font)).has("mono") && control[0]!.font === "sans", `the control saw the font flip: ${JSON.stringify(control)}`)
+    assert.deepEqual(new Set(control.map((s) => s.font)), new Set(["sans"]), `obsolete Mono settings cannot change the font: ${JSON.stringify(control)}`)
     assert.ok(new Set(controlPainted.map((s) => s.workpaneLeft)).size > 1, `the control saw the workpane move: ${JSON.stringify(control)}`)
     assert.equal(controlPainted[0]!.rail, false, `the control saw the rail arrive late: ${JSON.stringify(control)}`)
 

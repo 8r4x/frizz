@@ -36,19 +36,19 @@ test("the drawer offers no Save or Cancel — a toggle writes on the click", { s
     )
     assert.ok(!buttons.some((label) => /^(Save|Saving…|Cancel)$/.test(label)), `no Save/Cancel button: ${buttons.join("|")}`)
 
-    // Font: Mono. One discrete intent, so it must be on the wire without a debounce to wait out.
+    // Notifications: Off. One discrete intent, so it must be on the wire without a debounce to wait out.
     await page.evaluate(() => {
-      const mono = [...document.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Mono")!
+      const mono = [...document.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Off")!
       mono.click()
     })
     await page.waitForFunction(() => (window as unknown as { __settingsWrites: Write[] }).__settingsWrites.length === 1, { timeout: 2000 })
 
     const writes = await readWrites(page)
     assert.equal(writes.length, 1, "exactly one write for one click")
-    assert.equal(writes[0]!.body.font, "mono")
+    assert.equal(writes[0]!.body.notifications, false)
     // The whole object goes over, not a patch — anything dropped here is a setting silently reset.
     assert.equal(writes[0]!.body.permissionMode, "auto")
-    assert.equal(writes[0]!.body.notifications, true)
+    assert.equal(writes[0]!.body.notifications, false)
 
     // The header reports the save rather than leaving the operator guessing.
     await page.waitForFunction(() => /Saving…|Saved/.test(document.querySelector("header")?.textContent ?? ""), { timeout: 2000 })
@@ -93,7 +93,7 @@ test("a replayable refusal is replayed until it lands, and says so meanwhile", {
   const { browser, page, errors } = await launch("?retryableFailures=1")
   try {
     await page.evaluate(() => {
-      [...document.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Mono")!.click()
+      [...document.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Off")!.click()
     })
     await page.waitForFunction(() => (window as unknown as { __settingsWrites: Write[] }).__settingsWrites.length === 1, { timeout: 2000 })
     // While the retry is pending the header owns up to it rather than implying the change was stored.
@@ -103,7 +103,7 @@ test("a replayable refusal is replayed until it lands, and says so meanwhile", {
     const writes = await readWrites(page)
     assert.equal(writes[0]!.ok, false, "the first attempt was refused")
     assert.equal(writes[1]!.ok, true, "the replay landed")
-    assert.equal(writes[1]!.body.font, "mono", "the replay carries the same value, not a reverted one")
+    assert.equal(writes[1]!.body.notifications, false, "the replay carries the same value, not a reverted one")
     await page.waitForFunction(() => /Saved/.test(document.querySelector("header")?.textContent ?? ""), { timeout: 2000 })
     assert.deepEqual(errors, [])
   } finally {

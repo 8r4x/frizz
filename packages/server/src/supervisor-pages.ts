@@ -61,17 +61,17 @@ const BASE_STYLE = `
 }
 :root[data-theme=light]{
   color-scheme:light;
-  --bg:#f6f8fa;--panel:#fff;--panel-2:#f1f4f7;
-  --border:#d0d7de;--border-strong:#afb8c1;--control-border:#858e98;--control-strong:#7d8791;
-  --fg:#1f2328;--muted:#57606a;--accent:#9a6700;--danger:#cf222e;
+  --bg:#f7f7f7;--panel:#fff;--panel-2:#f2f2f2;
+  --border:#d6d6d6;--border-strong:#b8b8b8;--control-border:#858585;--control-strong:#7d7d7d;
+  --fg:#242424;--muted:#595959;--accent:#9a6700;--danger:#cf222e;
   --focus-border:#9a6700;--focus-ring:#9a6700;
 }
 @media(prefers-color-scheme:light){
   :root:not([data-theme]){
     color-scheme:light;
-    --bg:#f6f8fa;--panel:#fff;--panel-2:#f1f4f7;
-    --border:#d0d7de;--border-strong:#afb8c1;--control-border:#858e98;--control-strong:#7d8791;
-    --fg:#1f2328;--muted:#57606a;--accent:#9a6700;--danger:#cf222e;
+    --bg:#f7f7f7;--panel:#fff;--panel-2:#f2f2f2;
+    --border:#d6d6d6;--border-strong:#b8b8b8;--control-border:#858585;--control-strong:#7d7d7d;
+    --fg:#242424;--muted:#595959;--accent:#9a6700;--danger:#cf222e;
     --focus-border:#9a6700;--focus-ring:#9a6700;
   }
 }
@@ -82,7 +82,6 @@ body{
   color:var(--fg);font-family:var(--sans);font-size:12.5px;line-height:1.55;
   -webkit-font-smoothing:antialiased;
 }
-html[data-font=mono] body{font-family:var(--mono)}
 main{width:100%;max-width:28rem;padding:18px;border:1px solid var(--border-strong);border-radius:12px;background:var(--panel-2)}
 h1{margin:0;display:flex;align-items:baseline;gap:7px;font-size:14px;font-weight:600;letter-spacing:-.01em;line-height:1.4}
 p{margin:0;text-wrap:pretty}
@@ -125,8 +124,7 @@ const RECOVERY_STYLE = `
    Alignment is an INK problem. A baseline-aligned flex item with no text of its own contributes its
    BORDER-BOX BOTTOM as the baseline, so the dot's ink centre lands 3px above it while the cap band's
    centre sits 0.5cap above it. \`cap\` is the resolved font's own cap height, so the correction holds
-   in BOTH board fonts and at any size, with nothing to re-measure when the type scale moves or the
-   font setting flips. The em spelling is the fallback for a browser without the unit (.35em ~= 0.5 x a
+   at any size, with nothing to re-measure when the type scale moves. The em spelling is the fallback for a browser without the unit (.35em ~= 0.5 x a
    0.7em cap) and is overwritten wherever \`cap\` parses. */
 .dot{
   width:6px;height:6px;flex:0 0 auto;border-radius:9999px;background:var(--accent);
@@ -158,12 +156,7 @@ const RECOVERY_STYLE = `
 }
 `.trim()
 
-// The board applies the operator's font choice from localStorage before first paint (see
-// packages/web/index.html). This page renders while the bundle that owns that setting is unreachable,
-// so it reads the same key for itself — otherwise a restart flips a sans board to mono for two seconds.
-// Branded pages only: the key names the product.
-const FONT_SCRIPT = `try{document.documentElement.dataset.font=localStorage.getItem("frizz-font")==="mono"?"mono":"sans"}catch{}`
-const THEME_SCRIPT = `var p;try{p=localStorage.getItem("frizz-theme")}catch{}var d=false;try{d=matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches}catch{}var t=p==="dark"||p==="light"?p:d?"dark":"light";document.documentElement.dataset.theme=t;document.documentElement.style.colorScheme=t;document.querySelector('meta[name="theme-color"]').content=t==="dark"?"#0d0e10":"#f6f8fa"`
+const THEME_SCRIPT = `var p;try{p=localStorage.getItem("frizz-theme")}catch{}var d=false;try{d=matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches}catch{}var t=p==="dark"||p==="light"?p:d?"dark":"light";document.documentElement.dataset.theme=t;document.documentElement.style.colorScheme=t;document.querySelector('meta[name="theme-color"]').content=t==="dark"?"#0d0e10":"#f7f7f7"`
 
 /**
  * THE RECOVERY PAGE POLLS, and the comment this replaces said it deliberately did not: "a broken child
@@ -285,17 +278,17 @@ function documentShell(options: {
   style?: string
   script?: string
   bodyAttributes?: string
-  /** Carry the operator's font choice over from the board. Names the product, so branded pages only. */
-  font?: boolean
+  /** Carry the browser appearance preference on branded pages only. */
+  appearance?: boolean
 }): string {
   return `<!doctype html><html lang="en" data-font="sans"><head><meta charset="utf-8">`
     + `<title>${options.title}</title>`
     + `<meta name="viewport" content="width=device-width,initial-scale=1">`
-    + (options.font
+    + (options.appearance
       ? `<meta name="color-scheme" content="dark light"><meta name="theme-color" content="#0d0e10">`
-      : `<meta name="color-scheme" content="dark light"><meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0d0e10"><meta name="theme-color" media="(prefers-color-scheme: light)" content="#f6f8fa">`)
+      : `<meta name="color-scheme" content="dark light"><meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0d0e10"><meta name="theme-color" media="(prefers-color-scheme: light)" content="#f7f7f7">`)
     + `<style>${options.style ? `${BASE_STYLE}\n${options.style}` : BASE_STYLE}</style>`
-    + (options.font ? `<script>${THEME_SCRIPT}</script><script>${FONT_SCRIPT}</script>` : "")
+    + (options.appearance ? `<script>${THEME_SCRIPT}</script>` : "")
     + `</head>`
     + `<body${options.bodyAttributes ? ` ${options.bodyAttributes}` : ""}><main>${options.body}</main>`
     + (options.script ? `<script>${options.script}</script>` : "")
@@ -333,7 +326,7 @@ export function recoveryPage(url: string, variant: RecoveryVariant = "starting")
   return documentShell({
     title: copy.title,
     style: RECOVERY_STYLE,
-    font: true,
+    appearance: true,
     bodyAttributes: `data-target="${target}"`,
     body: `<h1><span class="dot" id="dot" aria-hidden="true"></span>`
       + `<span id="heading">${copy.heading}</span></h1>`
@@ -380,7 +373,7 @@ export function unlistedHostPage(name: string): string {
   const shown = escapeHtml(name)
   return documentShell({
     title: "Not served by this name",
-    font: true,
+    appearance: true,
     body: `<h1>Not served by this name</h1>`
       + `<p class="detail">Frizz does not answer to <code>${shown}</code>. A name a browser has to resolve is how DNS rebinding makes another site's page count as this board, so an exposed board accepts only its own hostname and the names its operator lists.</p>`
       + `<p class="note">Open the board by its IP address, or relaunch with <code>--allowed-host ${shown}</code> (or <code>FRIZZ_ALLOWED_HOSTS=${shown}</code>) to accept this one.</p>`,

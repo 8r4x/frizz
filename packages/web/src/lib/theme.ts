@@ -9,7 +9,7 @@ export interface ThemeSnapshot {
 export const THEME_STORAGE_KEY = "frizz-theme"
 
 const DARK_CANVAS = "#0d0e10"
-const LIGHT_CANVAS = "#f6f8fa"
+const LIGHT_CANVAS = "#f7f7f7"
 const listeners = new Set<() => void>()
 let snapshot: ThemeSnapshot = { preference: "system", resolved: "dark" }
 let media: MediaQueryList | undefined

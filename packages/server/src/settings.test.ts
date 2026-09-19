@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { test } from "node:test"
 import { createStorage } from "./storage.ts"
-import { machineConfigPath, readMachineConfig } from "./machine-config.ts"
+import { machineConfigPath, readMachineConfig, writeMachineConfig } from "./machine-config.ts"
 import {
   defaultSettings,
   getSettings,
@@ -40,18 +40,39 @@ function sandbox(): { home: string; open: (name: string) => ReturnType<typeof cr
   }
 }
 
-test("font, notifications and the file opener are the MACHINE's, shared by every project", () => {
+test("retired font preferences are stripped from every settings source without resetting other values", () => {
+  const box = sandbox()
+  try {
+    const alpha = box.open("alpha")
+    alpha.setSetting("settings", { ...defaultSettings(), font: "mono", promptCacheTtl: "5m" })
+    for (const source of ["project", "legacy", "machine"]) {
+      if (source === "legacy") writeLegacySettings(box.home, { font: "mono", notifications: false })
+      if (source === "machine") writeMachineConfig(box.home, "settings", { font: "mono", notifications: false })
+      const settings = getSettings(alpha, box.home)
+      assert.equal("font" in settings, false, source)
+      assert.equal(settings.promptCacheTtl, "5m")
+      if (source !== "project") assert.equal(settings.notifications, false)
+    }
+    setSettings(alpha, Settings.parse({ ...getSettings(alpha, box.home), font: "mono" }), box.home)
+    assert.equal("font" in (alpha.getSetting("settings") as object), false)
+    assert.equal("font" in readMachineConfig(box.home, "settings", z.record(z.string(), z.unknown()))!, false)
+  } finally {
+    box.done()
+  }
+})
+
+test("notifications and the file opener are the MACHINE's, shared by every project", () => {
   const box = sandbox()
   try {
     const alpha = box.open("alpha")
     const beta = box.open("beta")
-    assert.equal(getSettings(alpha, box.home).font, "sans")
+    assert.equal(getSettings(alpha, box.home).localFileOpener, "system")
 
-    setSettings(alpha, { ...defaultSettings(), font: "mono", notifications: false, localFileOpener: "cursor" }, box.home)
+    setSettings(alpha, { ...defaultSettings(), localFileOpener: "cursor", notifications: false }, box.home)
 
     // The point: a project that was never touched sees it, because the value is not its to hold.
     const seen = getSettings(beta, box.home)
-    assert.equal(seen.font, "mono")
+    assert.equal(seen.localFileOpener, "cursor")
     assert.equal(seen.notifications, false)
     assert.equal(seen.localFileOpener, "cursor")
     assert.ok(existsSync(machineConfigPath(box.home)))
@@ -76,18 +97,18 @@ test("a project's own settings stay its own", () => {
 
 // No migration ships with this: resolution falls back through the project blob, so an existing
 // project keeps what it had until the next save promotes it.
-test("a project that already stored a font keeps it with no machine file present", () => {
+test("a project that already stored a localFileOpener keeps it with no machine file present", () => {
   const box = sandbox()
   try {
     const alpha = box.open("alpha")
-    alpha.setSetting("settings", { ...defaultSettings(), font: "mono" })
+    alpha.setSetting("settings", { ...defaultSettings(), localFileOpener: "cursor" })
     assert.deepEqual(readMachineSettings(box.home), {})
-    assert.equal(getSettings(alpha, box.home).font, "mono")
+    assert.equal(getSettings(alpha, box.home).localFileOpener, "cursor")
 
     // …and the next save is what makes it the machine's.
     setSettings(alpha, getSettings(alpha, box.home), box.home)
-    assert.equal(readMachineSettings(box.home).font, "mono")
-    assert.equal(getSettings(box.open("beta"), box.home).font, "mono")
+    assert.equal(readMachineSettings(box.home).localFileOpener, "cursor")
+    assert.equal(getSettings(box.open("beta"), box.home).localFileOpener, "cursor")
   } finally {
     box.done()
   }
@@ -97,12 +118,12 @@ test("reset means defaults, so the machine record goes with the project blob", (
   const box = sandbox()
   try {
     const alpha = box.open("alpha")
-    writeLegacySettings(box.home, { font: "mono" })
-    setSettings(alpha, { ...defaultSettings(), font: "mono" }, box.home)
-    assert.equal(resetSettings(alpha, box.home).font, "sans")
-    assert.equal(readMachineConfig(box.home, "settings", z.unknown()), undefined, "leaving it would resurrect the old font")
+    writeLegacySettings(box.home, { localFileOpener: "cursor" })
+    setSettings(alpha, { ...defaultSettings(), localFileOpener: "cursor" }, box.home)
+    assert.equal(resetSettings(alpha, box.home).localFileOpener, "system")
+    assert.equal(readMachineConfig(box.home, "settings", z.unknown()), undefined, "leaving it would resurrect the old localFileOpener")
     assert.equal(existsSync(legacyMachineSettingsPath(box.home)), false, "…and so would the pre-store file")
-    assert.equal(getSettings(alpha, box.home).font, "sans")
+    assert.equal(getSettings(alpha, box.home).localFileOpener, "system")
   } finally {
     box.done()
   }
@@ -112,31 +133,31 @@ test("an unreadable machine store degrades to the project's values rather than t
   const box = sandbox()
   try {
     const alpha = box.open("alpha")
-    setSettings(alpha, { ...defaultSettings(), font: "mono" }, box.home)
+    setSettings(alpha, { ...defaultSettings(), localFileOpener: "cursor" }, box.home)
     writeFileSync(machineConfigPath(box.home), "{ not json")
     assert.deepEqual(readMachineSettings(box.home), {})
-    assert.equal(getSettings(alpha, box.home).font, "mono", "the project blob is still there")
+    assert.equal(getSettings(alpha, box.home).localFileOpener, "cursor", "the project blob is still there")
   } finally {
     box.done()
   }
 })
 
 // The machine settings were their own file until the machine config store arrived (2026-08-25). An
-// install that has that file keeps its font from it; the next save writes the store and never the file.
+// install that has that file keeps its localFileOpener from it; the next save writes the store and never the file.
 test("a pre-store settings.json is read until the next save promotes it into the store", () => {
   const box = sandbox()
   try {
     const alpha = box.open("alpha")
-    writeLegacySettings(box.home, { font: "mono", projectRail: true })
-    assert.deepEqual(readMachineSettings(box.home), { font: "mono", projectRail: true })
-    assert.equal(getSettings(alpha, box.home).font, "mono")
+    writeLegacySettings(box.home, { localFileOpener: "cursor", projectRail: true })
+    assert.deepEqual(readMachineSettings(box.home), { localFileOpener: "cursor", projectRail: true })
+    assert.equal(getSettings(alpha, box.home).localFileOpener, "cursor")
 
     setSettings(alpha, { ...getSettings(alpha, box.home), notifications: false }, box.home)
-    assert.deepEqual(readMachineConfig(box.home, "settings", Settings.partial()), { font: "mono", notifications: false, localFileOpener: "system", projectRail: true })
+    assert.deepEqual(readMachineConfig(box.home, "settings", Settings.partial()), { localFileOpener: "cursor", notifications: false, projectRail: true })
     assert.equal(JSON.parse(readFileSync(legacyMachineSettingsPath(box.home), "utf8")).notifications, undefined, "the legacy file is never written again")
     // The store now wins outright, even where the legacy file disagrees.
-    writeLegacySettings(box.home, { font: "sans" })
-    assert.equal(getSettings(box.open("beta"), box.home).font, "mono")
+    writeLegacySettings(box.home, { localFileOpener: "system" })
+    assert.equal(getSettings(box.open("beta"), box.home).localFileOpener, "cursor")
   } finally {
     box.done()
   }

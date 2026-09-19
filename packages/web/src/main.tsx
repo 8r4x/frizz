@@ -56,7 +56,7 @@ if (!settingsFixture) {
   // The ONE listener for the control-action wake event, so an accepted restart costs one status read
   // rather than one per surface reading the supervisor — see api/supervisorStatus.ts.
   initSupervisorStatus(queryClient)
-  initFont(queryClient)
+  initFont()
   installExternalLinkInterceptor()
   installLocalFileLinkInterceptor()
   installCodeCopyInterceptor()

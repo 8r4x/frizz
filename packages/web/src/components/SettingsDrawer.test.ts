@@ -8,7 +8,7 @@ const tooltipSource = readFileSync(new URL("./Tooltip.tsx", import.meta.url), "u
 test("settings maps each contextual explanation to a help control", () => {
   // `subagentInstructions` is gone: the settings preamble was retired in favour of FRIZZ.md, so there
   // is exactly one operator-authored surface for project conventions.
-  for (const key of ["permissionMode", "font", "density", "notifications"]) {
+  for (const key of ["permissionMode", "density", "notifications"]) {
     assert.match(source, new RegExp(`\\b${key}:`), `missing settings help mapping: ${key}`)
   }
   assert.match(source, /label="Permissions" help=\{SETTINGS_HELP\.permissionMode\}/)
@@ -41,6 +41,7 @@ test("settings save themselves — no Save button, no Cancel, no unsaved marker"
 test("the drawer no longer duplicates the composer's controls or offers vestigial toggles", () => {
   // Model and effort are chosen per-dispatch in the prompt box (DispatchPreferences), so a second,
   // divergent copy of them here was only ever a way to confuse which one applied.
+  assert.doesNotMatch(source, /label="Font"|FontToggle|label: "Mono"/)
   assert.doesNotMatch(source, /label="Model"/)
   assert.doesNotMatch(source, /label="Effort"/)
   // The Runtime QA gate setting is gone entirely — browser-QA policy is a project's own FRIZZ.md
@@ -90,7 +91,7 @@ test("the form leads with interface preferences and keeps the Claude field under
   const form = source.slice(source.indexOf('className="flex-1 overflow-y-auto p-5'), source.indexOf("function SaveStatus"))
   const fields = [...form.matchAll(/<SettingsField label="([^"]+)"/g)].map((m) => m[1])
   assert.equal(fields[0], "Appearance")
-  assert.equal(fields[1], "Font")
+  assert.equal(fields[1], "Project sidebar")
   assert.match(source, /Applies to this browser across all projects\. System follows the device appearance\./)
   assert.ok(!fields.includes("Permissions"), "the Claude field is not loose in the general list")
   // The band precedes its field, and the field's label no longer repeats the band's name.

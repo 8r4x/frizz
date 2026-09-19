@@ -10,15 +10,12 @@ const SETTINGS_KEY = "settings"
 /**
  * The settings that describe the MACHINE rather than a project.
  *
- * `font` was already inconsistent before one server served every project: the server stored it per
- * project while the client mirrors it to localStorage per ORIGIN for the pre-paint FOUC guard
- * (web/lib/font.ts). One origin turns that latent split into a visible one — the previous project's
- * font flashing on load. `notifications` tracks an OS permission and `localFileOpener` names which
+ * `notifications` tracks an OS permission and `localFileOpener` names which
  * editor is installed; neither was ever a property of a repository.
  *
  * They live as the `settings` record of the machine config store (machine-config.ts). Before that
  * store existed (2026-08-25) they were a file of their own, `<data>/settings.json`; it is read as a
- * fallback and never written again, so an existing install keeps its font until the next save
+ * fallback and never written again, so an existing install keeps its preferences until the next save
  * promotes it. Below that, resolution falls back through the project blob (see getSettings) — the
  * same shape, one level down, and the reason neither step needed a migration.
  *
@@ -28,7 +25,7 @@ const SETTINGS_KEY = "settings"
  * hypothetical: the first run of this change wrote `notifications: false` into the maintainer's own
  * settings, which would have quietly turned their desktop notifications off.
  */
-const MACHINE_KEYS = ["font", "notifications", "localFileOpener", "projectRail"] as const
+const MACHINE_KEYS = ["notifications", "localFileOpener", "projectRail"] as const
 type MachineSettings = Pick<Settings, (typeof MACHINE_KEYS)[number]>
 const MachineSettingsRecord = Settings.partial()
 
@@ -77,7 +74,6 @@ export const defaultSettings = (): Settings => ({
   model: undefined,
   effort: undefined,
   notifications: true,
-  font: "sans",
   localFileOpener: "system",
   // 500K tokens: half the 1M window every Claude worker is dispatched with. See the schema for why a
   // worker left to compact at 1M is the biggest single reason a Frizz thread out-spends the TUI.
@@ -102,7 +98,7 @@ export function getSettings(storage: Storage, home: string): Settings {
       ? defaultSettings()
       : (Settings.safeParse({ ...defaultSettings(), ...(raw as object) }).data ?? defaultSettings())
   // machine file → this project's stored blob → shipped default. The middle term is what makes this
-  // need no migration: a project that has a font keeps it until the next save promotes it upward.
+  // need no migration: a project keeps its preferences until the next save promotes it upward.
   return { ...project, ...readMachineSettings(home) }
 }
 
@@ -115,7 +111,7 @@ export function setSettings(storage: Storage, next: Settings, home: string): Set
 
 // Clear the stored blob so getSettings falls back to defaults (incl. the shipped default prompt).
 // A reset means DEFAULTS, so the machine record goes too — and the legacy file with it, or the
-// fallback would resurrect the old font. Other records in the store (the prompt box's profile) are
+// fallback would resurrect the old preferences. Other records in the store (the prompt box's profile) are
 // not settings and stay.
 export function resetSettings(storage: Storage, home: string): Settings {
   storage.deleteSetting(SETTINGS_KEY)

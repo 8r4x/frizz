@@ -152,9 +152,12 @@ export async function checkSurfaceStates({ page, url, font, palette, out, check,
   }
   page.off("request", request)
   assert.equal(serverWrites, 0, "Appearance never writes server settings")
-  for (const choice of [font === 'sans' ? 'Mono' : 'Sans', font === 'sans' ? 'Sans' : 'Mono']) {
+  assert.equal(await page.$$eval('.frizz-sheet-panel button', buttons => buttons.some(el => ['Mono', 'Sans'].includes(el.textContent.trim()))), false, 'There is no font setting')
+  for (const choice of ['Hidden', 'Always shown']) {
     const saved = page.waitForResponse(response => response.url().includes('/rpc/settingsSet') && response.ok())
-    await page.evaluate(choice => [...document.querySelectorAll('.frizz-sheet-panel button')].find(el => el.textContent.trim() === choice).click(), choice)
+    await page.click('button[aria-label="Project sidebar"]')
+    await page.waitForSelector('[role="menuitemradio"]')
+    await page.evaluate(choice => [...document.querySelectorAll('[role="menuitemradio"]')].find(el => el.textContent.trim() === choice).click(), choice)
     await saved
     await page.waitForFunction(() => [...document.querySelectorAll('header span')].some(el => el.textContent === 'Saved'))
     await page.evaluate(async () => {
@@ -247,7 +250,25 @@ export async function checkSurfaceStates({ page, url, font, palette, out, check,
   await page.goto(new URL('/', url).href, { waitUntil: 'networkidle2' })
   await page.hover('[aria-label="More actions for theme-project"]')
   await page.click('[aria-label="More actions for theme-project"]')
-  await page.click('[role="menuitem"]')
+  await page.evaluate(() => [...document.querySelectorAll('[role="menuitem"]')].find(el => el.textContent.includes('Rename')).click())
+  await page.waitForSelector('[aria-label="Project name"]')
+  await page.type('[aria-label="Project name"]', 'renamed-project')
+  await contrast('rename-project')
+  await shot('rename-project')
+  // The launching project's directory cannot move. Exercise the real refusal without renaming it.
+  await page.click('#rename-project input[type="checkbox"]')
+  const refusal = page.waitForResponse(response => response.url().endsWith('/rpc/projectRename'))
+  await page.click('button[form="rename-project"]')
+  assert.equal((await refusal).status(), 500, 'The real server refuses moving its own launching directory')
+  result.expectedConsoleErrors ??= []
+  result.expectedConsoleErrors.push(`Failed to load resource: the server responded with a status of 500 (Internal Server Error) ${new URL('/_frizz/rpc/projectRename', url)}`)
+  await page.waitForFunction(() => document.querySelector('#rename-project')?.textContent.includes('cannot be renamed'))
+  await contrast('rename-project-error')
+  await shot('rename-project-error')
+  await page.keyboard.press('Escape')
+  await page.waitForSelector('[role="dialog"]', { hidden: true })
+  await page.click('[aria-label="More actions for theme-project"]')
+  await page.evaluate(() => [...document.querySelectorAll('[role="menuitem"]')].find(el => el.textContent.includes('Delete')).click())
   await inspectDestructive('delete-project')
   await page.goto(`${url}/thread/theme-rich/full`, { waitUntil: 'networkidle2' })
   // The alias trims whitespace; skip skill discovery against the transcript-only fixture.

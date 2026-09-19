@@ -61,7 +61,7 @@ try {
   const api = createRpcClient(stack.gridUrl)
   await seedLightModeFixture(stack, api)
   const settings = await api.query("settingsGet")
-  await api.mutate("settingsSet", { ...settings, font: "sans", projectRail: true })
+  await api.mutate("settingsSet", { ...settings, projectRail: true })
   browser = await puppeteer.launch({ headless: true, executablePath: process.env.CHROME_PATH ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", args: ["--no-sandbox", "--force-color-profile=srgb"], protocolTimeout: 120_000 })
   console.log("BROWSER", browser.process().pid)
   page = await browser.newPage()
@@ -96,9 +96,8 @@ try {
     })
   }
   const palettes = baseline ? ["dark"] : ["dark", "light"]
-  for (const font of process.argv.includes("--behavior-only") ? [] : ["sans", "mono"]) {
-    await api.mutate("settingsSet", { ...settings, font, projectRail: true })
-    await page.evaluate(font => localStorage.setItem("frizz-font", font), font)
+  for (const font of process.argv.includes("--behavior-only") ? [] : ["sans"]) {
+    await api.mutate("settingsSet", { ...settings, projectRail: true })
     await page.reload({ waitUntil: "networkidle2" })
     for (const palette of palettes) {
       if (!baseline) await setTheme(palette)
@@ -156,8 +155,8 @@ try {
   for (const [key, ink] of Object.entries(result).filter(([key]) => key.startsWith('light-') && key.endsWith('-ink'))) {
     assert.deepEqual(ink, result[key.replace(/^light-/, 'dark-')], 'Theme changes preserve upstream title alignment and spacing')
   }
-  assert.deepEqual(errors, [], "No console or page errors")
-  check("Console and page errors are clean")
+  assert.deepEqual(errors, result.expectedConsoleErrors ?? [], "Only the deliberately exercised rename refusal may emit console errors")
+  check("No unexpected console or page errors")
 } catch (error) {
   if (page) await page.screenshot({ path: join(out, "failure.png") }).catch(() => {})
   result.failure = String(error.stack ?? error)

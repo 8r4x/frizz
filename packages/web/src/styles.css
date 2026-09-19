@@ -1,8 +1,7 @@
 @import "tailwindcss";
 @import "./theme.css";
 
-/* Dark, dense orchestration surface. Yellow accent = "awaiting you".
-   Mono-forward type system (Cursor/Linear-flavored), 13px base. */
+/* Dense orchestration surface. Yellow accent = "awaiting you"; system sans-serif, 13px base. */
 @theme {
   /* WHERE /full BECOMES TWO COLUMNS — the `split:` variant, used only by StandaloneThreadPage.
      Below it the page is ONE thread column at the drawer's own width; at and above it the 50/50 rule
@@ -142,26 +141,18 @@ body {
   margin: 0;
   background: var(--color-bg);
   color: var(--color-fg);
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: 13px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Font experiment: html[data-font="sans"] (set by src/lib/font.ts from Settings.font) swaps the
-   prose/UI-chrome type to a sans stack. Literal code MUST stay mono, so re-assert it below. An
-   element that sets font-family directly (mono code, xterm's own stack) always beats this inherited
-   body switch, so the terminal is unaffected; the .font-mono-keep utility lets any surface opt a
-   subtree back to mono (tool lines / slugs live in files this agent doesn't own — apply it there to
-   pin them mono under sans). */
-html[data-font="sans"] body {
-  font-family: var(--font-sans);
-}
-html[data-font="sans"] .md-body code,
-html[data-font="sans"] .md-inline code,
-html[data-font="sans"] .md-body pre,
-html[data-font="sans"] .font-mono-keep {
+/* Code remains monospace; application prose and controls inherit the sans-serif body. */
+.md-body code,
+.md-inline code,
+.md-body pre,
+.font-mono-keep {
   font-family: var(--font-mono);
 }
 
@@ -180,24 +171,14 @@ html[data-font="sans"] .font-mono-keep {
    Applied by ThreadComposerBox (and SubAgentSheet's steer footer) to a wrapper around the column,
    which stays `empty:hidden` — with no live ops the composer's own 12px must survive intact. */
 :root {
-  --ops-column-optical-inset: -6.25px;
-}
-html[data-font="sans"] {
   --ops-column-optical-inset: -4.25px;
 }
 .ops-column-optical-inset {
   margin-bottom: var(--ops-column-optical-inset);
 }
 
-/* Optical centring for a small lucide icon beside a short label — see lib/iconAlign.ts for the
-   measurements and why `items-center` alone leaves the icon reading low. The amount is FONT-DEPENDENT,
-   which is why it lives here beside the font switch rather than as a Tailwind constant: the mono stack
-   needs -1.7px, while system-ui already sits where its ink is and needs nothing. Applying mono's value
-   under sans is what made every card eyebrow read 1.5px high. */
+/* System sans-serif already centres small label icons optically: measured nudge 0px. */
 :root {
-  --icon-label-nudge: -1.7px;
-}
-html[data-font="sans"] {
   --icon-label-nudge: 0px;
 }
 .icon-label-nudge {
@@ -211,43 +192,24 @@ html[data-font="sans"] {
    lower in its font box and wanted 3px + 1.36 → 4.4px. Residuals re-measured at ≤0.1px after.
    `translate`, not a margin, so the offset can never grow the title row. */
 :root {
-  --card-icon-offset: 2.9px;
-}
-html[data-font="sans"] {
   --card-icon-offset: 4.4px;
 }
 .card-icon-offset {
   translate: 0 var(--card-icon-offset);
 }
-/* The AI-rename REFRESH mark beside a thread title (AiRenameButton) — a 12px lucide `RotateCw` in a
-   24px hover square, optically centred on the 15px semibold title it belongs to. Third instance of the
-   same font-dependence as --icon-label-nudge and --card-icon-offset above, measured the same way
-   (svg ink centre against the title's cap band, on icon-rhythm-fixture.html, both settings): the mark
-   read 0.40px HIGH under system-ui and 2.10px LOW under the mono stack — over five times apart and of
-   opposite sign, so no single constant can serve both, which is exactly why this lives beside the font
-   switch. Residuals re-measured at ≤0.05px after. `translate`, not a margin, so the offset can never
-   grow the title row.
-
-   MEASURE THE BASELINE WITH A ZERO-SIZE INLINE PROBE inside the title's own box, never by deriving it
-   from the div's rect and the font's ascent/descent — that route reported 0.72/1.29 here, off by ~0.4px
-   in sans and ~0.8px in mono, which is most of the correction. */
+/* AI-rename refresh mark: measured 0.40px high against the 15px sans title cap band.
+   Translate without growing the title row; re-measure after changing its font or size. */
 :root {
-  --title-refresh-offset: -2.1px;
-}
-html[data-font="sans"] {
   --title-refresh-offset: 0.4px;
 }
 .title-refresh-offset {
   translate: 0 var(--title-refresh-offset);
 }
 /* Markdown prose rendered INSIDE a .frizz-bash card (the SendMessage peer-message body) is PROSE, not
-   code — so it must read in the app's prose font (mono by default, sans under the font experiment),
+   code — so it must read in the app's sans-serif prose font,
    matching the surrounding assistant messages. Re-assert the body-font rule here so the mono that
    .frizz-bash forces onto its code/command bodies doesn't bleed into this one prose body. */
 .frizz-bash .md-body {
-  font-family: var(--font-mono);
-}
-html[data-font="sans"] .frizz-bash .md-body {
   font-family: var(--font-sans);
 }
 
@@ -354,21 +316,20 @@ html[data-font="sans"] .frizz-bash .md-body {
    2026-08-13: "the vertical alignment of these labels with the status indicator dots… they're not
    looking so hot").
 
-   MEASURED IN BOTH FONTS, because this app ships in two (html[data-font], applied before first paint)
+   Historical measurements before the Mono option was removed
    and a constant fitted in one is only ever right in one. Canvas cap-band reference, 11.5px rows, ops
    strip, live and quiet dots alike — the dot's centre minus the label's cap-band centre:
 
      mono   -1.29px   → wants a lift of 0.112em (1.29 / 11.5)
      sans   +0.32px   → sub-pixel, wants nothing
 
-   So the lift is scoped to mono and sans is left alone: below ~0.3px you are under the device grid and
+   Sans is left alone: below ~0.3px you are under the device grid and
    a nudge only blurs the mark. Applying the mono constant to both put sans 1.61px HIGH, which is worse
    than the error it was fixing. Residual after correcting: -0.01px mono, +0.32px sans.
 
    The readings live here rather than at the call site so the next reader knows to RE-MEASURE rather than
    re-guess — and if the row's type scale or its line-height moves, both numbers are stale together. */
-.frizz-op-dot-slot { transform: translateY(var(--op-dot-nudge, -0.112em)); }
-html[data-font="sans"] .frizz-op-dot-slot { --op-dot-nudge: 0em; }
+.frizz-op-dot-slot { transform: translateY(0); }
 /* THE KIND TAG'S COLUMN — one fixed track behind every `AGENT` / `SHELL` / `WATCH` / `File` / `Link` tag
    on the ops strip (ChildOpRow's sheet density and ThreadLinks, both via CHILD_KIND_TAG_CLASS), so every
    label on the strip starts at the same x. Each row is its own flex line, so nothing shares a track
@@ -386,8 +347,7 @@ html[data-font="sans"] .frizz-op-dot-slot { --op-dot-nudge: 0em; }
    Mono keeps exactly the column its five-letter tags always had; sans takes its widest tag plus a quarter
    pixel, which also closes the ~2px AGENT-vs-SHELL raggedness that column carried there. Re-measure both
    if the tag's size or any tag's word changes. */
-.frizz-kind-tag { width: var(--kind-tag-w, 2.25em); }
-html[data-font="sans"] .frizz-kind-tag { --kind-tag-w: 3.4em; }
+.frizz-kind-tag { width: 3.4em; }
 /* THE RAIL's rest-with-live-work mark — a pulsing dot centred in the sidebar's 15px StatusBox. Same
    hue, same cadence and the same meaning as `.frizz-live-dot` above, but it is a mark INSIDE the
    checkbox family's box, so it takes THAT family's geometry rather than the transcript's. Two
@@ -1012,10 +972,10 @@ a[href] {
 /* Inline code is MONO inside a sans (or mono) prose run. Mono has a smaller x-height, so at the old
    0.9em it read visibly smaller than the surrounding copy. 0.95em optically matches the sans body:
    the mono glyphs land at the same apparent size as the prose around them. (Applies in both the
-   default mono-prose mode and html[data-font="sans"] — code stays mono in both.) */
+   sans-serif prose mode — code stays mono.) */
 /* Inline code chip — shared by block prose (.md-body) and inline-only runs (.md-inline: answer chips,
    the recommendation caption). Same font pinning as everything else: inherits mono from the body by
-   default, re-pinned to mono under the sans experiment (see html[data-font="sans"] .md-*inline* code). */
+   default, explicitly monospace on .md-inline code. */
 .md-body code,
 .md-inline code {
   font-size: 0.95em;

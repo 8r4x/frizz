@@ -269,7 +269,7 @@ function RenameProjectDialog({
             type="submit"
             form="rename-project"
             disabled={rename.isPending || trimmed.length === 0}
-            className="flex items-center gap-1.5 rounded-md border border-accent bg-accent px-3 py-1.5 text-[12.5px] font-medium text-bg outline-none hover:brightness-110 focus-visible:ring-1 focus-visible:ring-fg/60 disabled:opacity-50"
+            className="flex items-center gap-1.5 rounded-md border border-accent-fill bg-accent-fill px-3 py-1.5 text-[12.5px] font-medium text-on-accent outline-none hover:brightness-110 focus-visible:ring-1 focus-visible:ring-focus-accent-60 disabled:opacity-50"
           >
             {rename.isPending && <Loader2 size={12} className="animate-spin" />}
             {offerFolder && renameDirectory ? "Rename project and folder" : "Rename project"}
@@ -291,8 +291,8 @@ function RenameProjectDialog({
           onChange={(event) => setName(event.target.value)}
           spellCheck={false}
           aria-label="Project name"
-          className={`w-full rounded-md border bg-bg px-2.5 py-2 text-[12.5px] text-fg outline-none placeholder:text-muted/50 focus-visible:ring-1 focus-visible:ring-fg/60 ${
-            error ? "border-red-500/60" : "border-border-strong"
+          className={`w-full rounded-md border bg-bg px-2.5 py-2 text-[12.5px] text-fg outline-none placeholder:text-muted-50 focus-visible:ring-1 focus-visible:ring-focus-accent-60 ${
+            error ? "border-danger-fill/60" : "border-border-strong"
           }`}
         />
         <p>
@@ -311,7 +311,7 @@ function RenameProjectDialog({
             />
             <span className="flex flex-col gap-0.5">
               <span>Also rename the folder</span>
-              <span className="text-[11.5px] text-muted/80">
+              <span className="text-[11.5px] text-muted-80">
                 {renameDirectory
                   ? <><span className="font-mono text-[11px]">{shortPath(project.path, home)}</span> becomes <span className="font-mono text-[11px]">{shortPath(parent + trimmed, home)}</span>. Running workers keep going.</>
                   : "Left off, the folder keeps its name and only what Frizz calls it changes."}
@@ -319,7 +319,7 @@ function RenameProjectDialog({
             </span>
           </label>
         ) : null}
-        {error ? <p className="text-[11.5px] text-red-400">{error}</p> : null}
+        {error ? <p className="text-[11.5px] text-danger">{error}</p> : null}
       </form>
     </Dialog>
   )
