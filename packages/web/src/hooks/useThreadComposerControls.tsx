@@ -45,6 +45,18 @@ export function useThreadComposerControls(slug: string): { busy: boolean; footer
     mutationFn: (permissionMode: PermissionMode) => rpc.setThreadPermission({ slug, permissionMode }),
   })
   const localBusy = profile.isPending || permission.isPending
+  const backend = thread?.backend === "codex" ? "codex" : thread?.backend === "acp" ? "acp" : "claude"
+  // An ACP thread's model slug is `acp:<agent>[@<model>]`. The AGENT cannot be swapped under a live
+  // session, so the thread's one control is the model inside it (AcpModelSelect below); the agent's
+  // label only names that control. The same catalogue query the dispatch composer runs; react-query
+  // serves both from one fetch.
+  //
+  // ABOVE the early return, and it must stay there. This query sat below it until 2026-09-19, so the
+  // render in which a thread LEFT the board — a steered queue card whose row drops before its fade
+  // ends, exactly the moment TodosView holds the card to dissolve it — called one hook fewer than the
+  // render before, and React tore the whole queue down ("change in the order of Hooks"). Every card
+  // vanished in one frame instead of one card fading; queueSteerDissolve.e2e.test.ts is the pin.
+  const acpAgents = useQuery({ queryKey: ["acpAgents"], queryFn: () => rpc.acpAgents(), enabled: Boolean(thread) && backend === "acp" })
 
   // Legacy/rowless and foreign transcripts have no Frizz-owned runtime profile to mutate. Keep their
   // existing composer behavior, but never render a misleading disabled control.
@@ -57,12 +69,6 @@ export function useThreadComposerControls(slug: string): { busy: boolean; footer
 
   const model = thread.model?.trim()
   const effort = thread.effort?.trim()
-  const backend = thread.backend === "codex" ? "codex" : thread.backend === "acp" ? "acp" : "claude"
-  // An ACP thread's model slug is `acp:<agent>[@<model>]`. The AGENT cannot be swapped under a live
-  // session, so the thread's one control is the model inside it (AcpModelSelect below); the agent's
-  // label only names that control. The same catalogue query the dispatch composer runs; react-query
-  // serves both from one fetch.
-  const acpAgents = useQuery({ queryKey: ["acpAgents"], queryFn: () => rpc.acpAgents(), enabled: backend === "acp" })
   const acpAgentId = backend === "acp" ? acpAgentIdFromModel(model) : undefined
   const acpModelId = backend === "acp" ? acpModelIdFromModel(model) : undefined
   // OPTIMISTIC PENDING. The profile control is backed by a runtime handoff that can take a half-second
