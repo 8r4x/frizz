@@ -8,6 +8,8 @@ tags: [design, web, themes]
 
 Status: proposed architecture, not implemented. Written 2026-09-11 against `e330dbd1`. This is a design record under the [plans archive convention](./README.md).
 
+**Implementation update — September 19:** this design is now implemented and verified; see the [implementation audit](pr-36-implementation-audit.md). The approved visual direction supersedes two choices below: light mode uses neutral gray surfaces and restrained blue instead of yellow accents, and Mono is no longer an interface preference. The original proposal is retained as history.
+
 ## Decision
 
 Frizz gets one interface with two color palettes. Components keep semantic names such as `bg-panel` and `text-muted`. The document root selects the palette. Theme selection must not reload the page, reconnect a terminal, or reset a transcript.
