@@ -19,8 +19,8 @@ const GH_PROMPT_TOKENS: { token: string; gloss: string }[] = [
   { token: "body", gloss: "description" },
 ]
 
-// The GitHub-picker triage template, wherever it is edited: the Settings drawer's Project tab and the
-// picker's own settings popover render this one editor. It PREFILLS with the shipped default (fetched
+// The GitHub-picker triage template's editor, rendered by the picker's own settings popover
+// (GithubPromptPopover) — the one place the prompt is edited. It PREFILLS with the shipped default (fetched
 // from the server, the single source of truth) so the user edits from the real prompt; a stored
 // override supersedes it. Empty override = default.
 //
@@ -52,8 +52,8 @@ export function GithubPromptEditor({
 // A real click-popover (NOT a hover tooltip) listing the substitution tokens, built on the shared
 // Radix Popover: opaque from the first frame, portaled above the drawer, and it flips/shifts to stay
 // on-screen. Opens on click; dismisses on outside-click or Esc. While open it holds the shared
-// open-select registry, so an Escape reaches it FIRST and closes only this panel — never the drawer
-// or the settings popover it was opened from. Prefers opening UPWARD: it sits on the prompt field's
+// open-select registry, so an Escape reaches it FIRST and closes only this panel — never the
+// settings popover it was opened from. Prefers opening UPWARD: it sits on the prompt field's
 // label row with the roomy textarea below it and space above.
 //
 // The trigger is a WORD, not a "?" circle. It was a HelpCircle while it lived on a row of its own; on

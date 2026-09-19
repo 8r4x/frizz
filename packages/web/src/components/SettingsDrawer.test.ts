@@ -35,7 +35,7 @@ test("settings save themselves — no Save button, no Cancel, no unsaved marker"
   assert.doesNotMatch(source, />\s*Save\s*</)
   assert.doesNotMatch(source, />\s*Cancel\s*</)
   assert.doesNotMatch(source, /● unsaved/)
-  // The footer those two buttons lived in went with them; the sheet is header + tabs + scroll body.
+  // The footer those two buttons lived in went with them; the sheet is header + scroll body.
   assert.doesNotMatch(source, /<footer/)
   // Every control routes through the one updater, and only free text debounces.
   assert.match(source, /const \{ draft, update, saveState, flush \} = useSettingsDraft\(\)/)
@@ -64,29 +64,33 @@ test("the drawer no longer duplicates the composer's controls or offers vestigia
   assert.doesNotMatch(source, /Auto-resume after usage limits/)
 })
 
-// The drawer is TWO tabs, full width, under the header — Frizz (the machine and this browser) and
-// Project (what the server stores per project) — and the runtime settings are in neither: they open
-// off the gear on their runtime's band in the model picker (maintainer 2026-09-19: "we want settings
-// to appear in the context where they are relevant").
-test("the drawer is a Frizz|Project tab strip, and carries no runtime settings", () => {
-  const tabs = source.slice(source.indexOf("function SettingsTabs"), source.indexOf("function FontToggle"))
-  assert.match(tabs, /role="tablist"/)
-  assert.match(tabs, /grid shrink-0 grid-cols-2/)
-  assert.match(tabs, /\{ id: "frizz", label: "Frizz settings" \},\s*\{ id: "project", label: "Project settings" \}/)
-  // The strip sits between the header and the body, and the body switches on it.
-  assert.ok(source.indexOf("<SettingsTabs") > source.indexOf('<SheetHeader title="Settings"'))
-  assert.ok(source.indexOf("<SettingsTabs") < source.indexOf('tab === "frizz"'))
-  // Frizz tab: the interface preferences, in this order, and nothing vendor-specific.
-  const frizz = source.slice(source.indexOf('tab === "frizz"'), source.indexOf(") : ("))
-  const fields = [...frizz.matchAll(/<SettingsField label="([^"]+)"/g)].map((m) => m[1])
+// The drawer holds only machine and browser preferences. A setting that belongs to a project or to
+// one runtime is edited where it applies, and nowhere else: the runtime fields behind the gear on
+// their band in the model picker, the triage prompt behind the gear in the GitHub picker's header
+// (maintainer 2026-09-19: "the whole point of moving these settings to other places is that we don't
+// need to have them in the drawer anymore, so yeah, you can drop the tab switcher").
+test("the drawer is one untabbed list of interface preferences, with no project or runtime settings", () => {
+  // (The note above the component NAMES the retired tab in prose; what must be gone is the markup.)
+  assert.doesNotMatch(source, /role="tab(?:list)?"|SettingsTabs|label: "(?:Project|Frizz) settings"/)
+  const fields = [...source.matchAll(/<SettingsField label="([^"]+)"/g)].map((m) => m[1])
   assert.deepEqual(fields, ["Font", "Project sidebar", "Local file links", "Density", "Queue order", "Desktop notifications"])
-  // Project tab: names the project and carries the triage prompt editor.
-  const project = source.slice(source.indexOf(") : ("), source.indexOf("function SettingsTabs"))
-  assert.match(project, /projectLabel/)
-  assert.match(project, /<GithubPromptEditor draft=\{draft\} onChange=\{update\} \/>/)
+  // The triage prompt has exactly one editor, and it is the picker's.
+  assert.doesNotMatch(source, /GithubPromptEditor|githubPrompt|<textarea/)
+  assert.match(promptPopoverSource, /<GithubPromptEditor draft=\{draft\} onChange=\{update\} rows=\{14\} \/>/)
   // Nothing Claude- or Codex-specific is left in the drawer.
   assert.doesNotMatch(source, /ClaudeSection|CodexSection|DividerLabel|permissionMode|promptCacheTtl|autoCompactWindow|codexContextWindow/)
   assert.doesNotMatch(source, /label="(?:Permissions|Prompt cache tier|Compaction|Context window)"/)
+})
+
+// Both in-context panels open off THE APP'S settings gear — lucide `Settings`, the glyph the status
+// row and the mobile board use — never a second "settings" glyph (a sliders icon stood here briefly;
+// maintainer 2026-09-19: "it should be a gear icon for settings. That's the one we use everywhere else").
+test("every settings affordance wears the same gear", () => {
+  for (const src of [agentSource, promptPopoverSource, readFileSync(new URL("./StatusRow.tsx", import.meta.url), "utf8")]) {
+    assert.match(src, /Settings as SettingsIcon[^\n]*from "lucide-react"/)
+    assert.match(src, /<SettingsIcon\b/)
+    assert.doesNotMatch(src, /Settings2|SlidersHorizontal/)
+  }
 })
 
 // The runtime settings live on the model picker's band header, behind a gear, in a MODAL popover.

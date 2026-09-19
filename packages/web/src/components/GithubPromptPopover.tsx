@@ -1,13 +1,14 @@
 import { useState } from "react"
-import { Settings2 } from "lucide-react"
+import { Settings as SettingsIcon } from "lucide-react"
 import { useEscapeToClose } from "../hooks/useEscapeToClose.ts"
 import { SaveStatus, useSettingsDraft } from "../hooks/useSettingsAutosave.tsx"
 import { GithubPromptEditor } from "./GithubPromptField.tsx"
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/Popover.tsx"
 
 // The gear in the GitHub picker's header, and the panel it opens: the triage prompt every thread this
-// picker dispatches will run — editable right where it is about to be used, rather than a drawer away
-// under Settings › Project (which still carries the same editor, for finding it cold).
+// picker dispatches will run — editable right where it is about to be used. This is its ONLY editor:
+// it lived in the Settings drawer until 2026-09-19, and moving a setting to its context means it no
+// longer lives there at all. The glyph is the app's own settings gear (lucide `Settings`).
 //
 // MODAL for the same reason the model picker's agent-settings panel is (see AgentSettingsPopover): a
 // panel with a textarea in it must not be dismissable by anything short of a pointer-down outside,
@@ -28,13 +29,13 @@ export function GithubPromptPopover() {
           // A 15px glyph in a 24px hover square on the picker's `items-baseline` header row. The
           // square hands the row its SVG's bottom edge as a baseline, so the translate — half the
           // glyph minus half the title's resolved cap height — puts the glyph's centre on the title's
-          // cap band in either font. Settings2 paints 10 of its 15px, so the square carries 7px of
-          // dead space a side: `-ml-2` brings its ink to ~11px from the link's arrow (18.8px before),
-          // and `-mr-[5px]` ends the ink 2px inside the header's right edge, the same clearance the
-          // GitHub mark's ink has from the left.
+          // cap band in either font. The gear paints 12.5 of its 15px, so the square carries ~6px of
+          // dead space a side: `-ml-2` brings its ink to 10px from the link's arrow, and `-mr-[5px]`
+          // ends the ink 1.4px inside the header's right edge, against the 1.25px the GitHub mark's
+          // ink has from the left.
           className="github-prompt-trigger -ml-2 -mr-[5px] inline-flex size-6 shrink-0 self-baseline translate-y-[calc(7.5px_-_0.5cap)] items-center justify-center rounded-md text-muted/70 outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:bg-panel-2 focus-visible:text-fg data-[state=open]:bg-panel-2 data-[state=open]:text-fg"
         >
-          <Settings2 aria-hidden="true" size={15} />
+          <SettingsIcon aria-hidden="true" size={15} />
         </button>
       </PopoverTrigger>
       <PopoverContent side="bottom" align="end" sideOffset={6} className="w-[560px] max-w-[calc(100vw-1rem)] p-4" data-github-prompt-menu="">

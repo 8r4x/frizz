@@ -11,7 +11,6 @@ import { SHEET_CLOSE_MS, SHEET_PANEL_CLASS, SHEET_SCRIM_CLASS, prefersReducedMot
 import { SaveStatus, useSettingsDraft } from "../hooks/useSettingsAutosave.tsx"
 import { SheetHeader } from "./ui/SheetHeader.tsx"
 import { Select } from "./ui/Select.tsx"
-import { GithubPromptEditor } from "./GithubPromptField.tsx"
 import { SettingsField } from "./SettingsField.tsx"
 
 type NotifPerm = "default" | "granted" | "denied" | "unsupported"
@@ -20,17 +19,16 @@ function currentPerm(): NotifPerm {
   return Notification.permission as NotifPerm
 }
 
-// The drawer's two tabs. "Frizz" is the machine and the browser — the keys settings.ts keeps in the
-// machine record plus the localStorage view prefs; "Project" is what the server stores per project.
-// The split is the storage split made visible: a font is a property of the person, a triage prompt
-// is a property of the repository, and one flat list had been saying otherwise.
-type SettingsTab = "frizz" | "project"
-
+// The drawer holds ONLY what belongs to the machine and this browser — the font, the rail, how local
+// links open, density, queue order, notifications. Everything that belongs to a project or to one
+// runtime is edited where it applies: a runtime's launch settings behind the gear on its band in the
+// model picker (AgentSettingsPopover), the GitHub triage prompt behind the gear in the GitHub picker's
+// header (GithubPromptPopover). A "Project settings" tab stood here for a few hours on 2026-09-19
+// carrying that prompt a second time; the maintainer's call was that moving a setting to its context
+// means it no longer lives here at all, so the tab strip went with it.
 export function SettingsDrawer() {
   const { draft, update, saveState, flush } = useSettingsDraft()
   const [perm, setPerm] = useState<NotifPerm>(currentPerm())
-  const [tab, setTab] = useState<SettingsTab>("frizz")
-  const projectLabel = useSnapshot(store).board?.projectLabel
 
   // Enter/exit animation. `shown` drives the slide (mount → next frame flips it true → slides in;
   // close flips it false → slides out). App renders <SettingsDrawer> only while showSettings is true,
@@ -80,18 +78,12 @@ export function SettingsDrawer() {
       >
         <SheetHeader title="Settings" actions={<SaveStatus state={saveState} />} onClose={close} />
 
-        <SettingsTabs value={tab} onChange={setTab} />
-
         {!draft ? (
           <div className="p-4 text-[13px] text-muted">Loading…</div>
-        ) : tab === "frizz" ? (
+        ) : (
           <div className="flex-1 overflow-y-auto p-5 flex flex-col gap-6">
-            {/* ORDER: the preferences that shape the interface every operator looks at come first. The
-                Claude permission picker led the form until 2026-08-24, so the first thing the drawer
-                said was about one vendor's CLI (maintainer: "weird that the very first setting in the
-                settings panel is Claude-specific"); since 2026-09-19 the runtime settings are not here
-                at all — they open off the gear on their runtime's band in the model picker
-                (AgentSettingsPopover), where a worker is actually being chosen. */}
+            {/* ORDER: the preferences that shape the interface every operator looks at, top down. Nothing
+                here belongs to a project or to one runtime — see the note above SettingsDrawer. */}
             <SettingsField label="Font" help={SETTINGS_HELP.font}>
               <FontToggle value={draft.font ?? "mono"} onChange={(font) => update({ ...draft, font })} />
             </SettingsField>
@@ -145,51 +137,8 @@ export function SettingsDrawer() {
               {draft.notifications && <PermHint perm={perm} />}
             </SettingsField>
           </div>
-        ) : (
-          <div className="flex-1 overflow-y-auto p-5 flex flex-col gap-6">
-            {/* WHICH project, because the drawer opens over whichever board is showing and nothing
-                else in it says. The label is the origin's owner/repo where there is one. */}
-            {projectLabel && (
-              <p className="text-[12px] text-muted">
-                Settings for <span className="font-mono-keep text-fg/80">{projectLabel}</span>. They apply to this project only.
-              </p>
-            )}
-            {/* The GitHub-picker triage template — the same editor the picker itself opens from its
-                gear (GithubPromptPopover), here for finding it cold. */}
-            <GithubPromptEditor draft={draft} onChange={update} />
-          </div>
         )}
       </div>
-    </div>
-  )
-}
-
-// The full-width tab strip under the header: two cells, one row, the selected cell lifted to
-// `elevated` in the app's segmented idiom (the GitHub picker's Issues|PRs control), stretched across
-// the drawer so it reads as the drawer's own navigation rather than a control inside the form.
-function SettingsTabs({ value, onChange }: { value: SettingsTab; onChange: (tab: SettingsTab) => void }) {
-  const tabs: { id: SettingsTab; label: string }[] = [
-    { id: "frizz", label: "Frizz settings" },
-    { id: "project", label: "Project settings" },
-  ]
-  return (
-    <div role="tablist" aria-label="Settings sections" className="mx-5 mt-4 grid shrink-0 grid-cols-2 gap-0.5 rounded-lg border border-border bg-panel-2 p-0.5">
-      {tabs.map((tab) => (
-        <button
-          key={tab.id}
-          type="button"
-          role="tab"
-          id={`settings-tab-${tab.id}`}
-          aria-selected={value === tab.id}
-          onClick={() => onChange(tab.id)}
-          onMouseDown={(e) => e.preventDefault()}
-          className={`rounded-md px-3 py-1.5 text-center text-[12px] font-medium outline-none transition-colors ${
-            value === tab.id ? "bg-elevated text-fg shadow-sm shadow-black/20" : "text-muted hover:text-fg"
-          }`}
-        >
-          {tab.label}
-        </button>
-      ))}
     </div>
   )
 }

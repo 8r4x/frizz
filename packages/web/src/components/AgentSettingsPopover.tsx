@@ -1,6 +1,6 @@
 import * as RadixMenu from "@radix-ui/react-dropdown-menu"
 import { useQuery } from "@tanstack/react-query"
-import { Settings2 } from "lucide-react"
+import { Settings as SettingsIcon } from "lucide-react"
 import { type Settings } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { useEscapeToClose } from "../hooks/useEscapeToClose.ts"
@@ -57,20 +57,22 @@ export function AgentSettingsPopover({ backend, open, onOpenChange }: {
             type="button"
             aria-label={`${provider} settings`}
             title={`${provider} settings for new threads in this project`}
-            // A 14px glyph in a 20px hover square, MEASURED into place on the band's header row:
+            // The app's own settings gear (lucide `Settings`, the glyph the status row and the mobile
+            // board already use — a sliders glyph stood here for a few hours and read as a different
+            // control), 14px in a 20px hover square, MEASURED into place on the band's header row:
             //  - VERTICAL. The row is `items-baseline`, and a flex button with only an SVG in it hands
             //    the row its SVG's bottom edge as a baseline, so the glyph's centre landed 7px above
-            //    the label's baseline — 2.8px (sans) / 3.2px (mono) above the label's cap band. The
+            //    the label's baseline — ~3px above the label's cap band, by a different amount per font. The
             //    translate moves it down by exactly the difference between half the 14px glyph and
             //    half the resolved cap height, so it tracks the font setting with nothing to re-fit
             //    (measured after: 0.0px in both fonts).
-            //  - HORIZONTAL. Settings2 paints 9.3 of its 14px, so the square carries 5.3px of dead
-            //    space a side; `-mr-3` pulls the box out so the glyph's INK ends 13px from the menu's
-            //    right edge — the same 13px the label's ink starts from on the left (it was 21px).
+            //  - HORIZONTAL. The gear paints 11.7 of its 14px, so the square carries ~4px of dead
+            //    space a side; `-mr-3` pulls the box out so the glyph's INK ends 12.7px from the menu's
+            //    right edge, against the 13px the label's ink starts from on the left.
             //  - `-my-1` keeps the square from stretching the header row.
             className="agent-settings-trigger -my-1 -mr-3 inline-flex size-5 shrink-0 translate-y-[calc(7px_-_0.5cap)] items-center justify-center rounded-[5px] text-muted/70 outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:bg-panel-2 focus-visible:text-fg data-[state=open]:bg-panel-2 data-[state=open]:text-fg"
           >
-            <Settings2 aria-hidden="true" size={14} />
+            <SettingsIcon aria-hidden="true" size={14} />
           </button>
         </PopoverTrigger>
       </RadixMenu.Item>

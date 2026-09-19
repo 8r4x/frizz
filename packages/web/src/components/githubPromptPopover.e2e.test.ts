@@ -47,9 +47,12 @@ test("the header links out to the repo, right-justified, with the gear beside it
         target: link.target,
         text: link.textContent?.trim(),
         hasArrow: link.querySelector("svg") !== null,
-        linkRight: link.getBoundingClientRect().right,
-        gearLeft: gear.getBoundingClientRect().left,
-        gearRight: gear.getBoundingClientRect().right,
+        // INK, not boxes: the gear's hover square is trimmed onto its glyph with negative margins, so
+        // its box deliberately overlaps the link's and overhangs the header. What the eye reads is
+        // where the glyphs' own geometry sits.
+        linkRight: link.querySelector("svg")!.getBoundingClientRect().right,
+        gearLeft: Math.min(...[...gear.querySelectorAll("svg *")].map((g) => g.getBoundingClientRect().left)),
+        gearRight: Math.max(...[...gear.querySelectorAll("svg *")].map((g) => g.getBoundingClientRect().right)),
         h2Right: h2.getBoundingClientRect().right,
         titleRight: title.getBoundingClientRect().right,
         dash: /—/.test(h2.textContent ?? ""),
@@ -61,7 +64,8 @@ test("the header links out to the repo, right-justified, with the gear beside it
     assert.equal(header.hasArrow, true)
     assert.equal(header.dash, false, "the slug is no longer an em-dashed suffix of the title")
     assert.ok(header.linkRight < header.gearLeft, "the slug sits left of the gear")
-    assert.ok(header.h2Right - header.gearRight < 2, "the gear is flush with the header's right edge")
+    const inset = header.h2Right - header.gearRight
+    assert.ok(inset >= 0 && inset < 3, `the gear's ink ends just inside the header's right edge, got ${inset}`)
     assert.ok(header.linkRight - header.titleRight > 100, "the slug is right-justified, well clear of the title")
     assert.deepEqual(errors, [])
   } finally {
@@ -125,6 +129,39 @@ test("closing the panel by clicking outside flushes a pending keystroke, closes 
     const sent = await writes(page)
     assert.equal(sent.length, 1)
     assert.equal(sent[0]!.githubPrompt, "Flushed", "the half-typed value survived the close")
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+// The picker's issue and PR prompts merged into ONE field on 2026-08-15. Two properties of the RENDERED
+// panel: there is exactly one editor (a stray second one would mean a per-kind field survived the
+// merge), and "Reset to default" clears the override to undefined — the wire value that means "use the
+// server default", as opposed to a copy of the default text frozen into the user's settings.
+test("one prompt editor, and Reset clears the override rather than freezing the default text", { skip: !baseUrl, timeout: 60_000 }, async () => {
+  const { browser, page, errors } = await launch()
+  try {
+    await page.click(GEAR)
+    await page.waitForSelector(`${PANEL} textarea`)
+    assert.equal(await page.evaluate(() => document.querySelectorAll("textarea").length), 1, "one editor, not one per kind")
+    const labels = () => page.evaluate((panel) => [...document.querySelectorAll(`${panel} button`)].map((b) => (b.textContent ?? "").trim()), PANEL)
+    assert.ok(!(await labels()).includes("Reset to default"), "no Reset while the box shows the shipped default")
+
+    await selectAllInTextarea(page)
+    await page.keyboard.type("mine", { delay: 30 })
+    await page.waitForFunction(() => (window as unknown as { githubPickerRangeFixture: Fixture }).githubPickerRangeFixture.settingsWrites.length === 1, { timeout: 5000 })
+    assert.equal((await writes(page))[0]!.githubPrompt, "mine")
+
+    await page.evaluate((panel) => {
+      [...document.querySelectorAll<HTMLButtonElement>(`${panel} button`)].find((b) => b.textContent?.trim() === "Reset to default")!.click()
+    }, PANEL)
+    await page.waitForFunction(() => (window as unknown as { githubPickerRangeFixture: Fixture }).githubPickerRangeFixture.settingsWrites.length === 2, { timeout: 5000 })
+    const sent = await writes(page)
+    assert.equal(sent[1]!.githubPrompt, undefined, "cleared to unset, which is what the server reads as 'default'")
+    assert.ok(!("githubIssuePrompt" in sent[1]!), "the merged-away key never reappears on the wire")
+    assert.ok(!("githubPrPrompt" in sent[1]!))
+    assert.match(await page.$eval(`${PANEL} textarea`, (el) => (el as HTMLTextAreaElement).value), /^Triage \{repo\}/, "the box shows the shipped default again")
     assert.deepEqual(errors, [])
   } finally {
     await browser.close()
