@@ -233,13 +233,17 @@ export function Sidebar() {
         </div>
         <div ref={railRef} data-sidebar-rail className="min-h-0 min-w-0 overflow-y-auto overflow-x-hidden max-[800px]:overflow-y-visible">
           {/* PINNED — the human's shelf, at the very top, above the cue (maintainer 2026-09-02, variant
-              A of the pin mockups: unlabeled, each row wearing the small solid pin where the cue's rest
-              time would sit). These rows are OUT of the band system entirely — sectionThreads diverts
-              them before any band claims them, so a pinned thread stays here spinning, resting, snoozed
-              or Done alike — and the band is ordered by the pin instants, oldest first, never by
-              activity: it is an arrangement the human made, and nothing the threads do may shuffle it. */}
+              A of the pin mockups: each row wearing the small solid pin where the cue's rest time would
+              sit). These rows are OUT of the band system entirely — sectionThreads diverts them before
+              any band claims them, so a pinned thread stays here spinning, resting, snoozed or Done
+              alike — and the band is ordered by the pin instants, oldest first, never by activity: it
+              is an arrangement the human made, and nothing the threads do may shuffle it.
+              LABELED since 2026-09-19, like every band below it, and NOT collapsible (maintainer: the
+              Pinned, Queue and Running labels "should not be collapsible") — the header is the static
+              form of SectionHeader, so it lines up with the collapsible Snoozed/Done headers. */}
           {sections.pinned.length > 0 && (
             <section aria-label="Pinned">
+              <SectionHeader label="Pinned" count={sections.pinned.length} />
               {sections.pinned.map((t) => (
                 <div key={t.id}>
                   <ThreadRow t={t} active={activeId === t.id} onQueueNavigate={navigateToQueueCard} />
@@ -253,14 +257,19 @@ export function Sidebar() {
             </section>
           )}
           {/* RESTED + ACTIVE — always shown, NEVER collapsible (you can't hide your queue or your live
-              work), no label. Two rule-separated bands (see groups.ts orderActive/partitionActive):
+              work). Two rule-separated bands (see groups.ts orderActive/partitionActive), each under a
+              static label since 2026-09-19 (maintainer: "sidebar labels for pinned, queue, and running
+              … should not be collapsible"). The labels use the maintainer's own words for the bands —
+              QUEUE for the cue, RUNNING for the spinning rows — rather than the code's Rested/Active
+              keys, because the label is copy the human reads, and "the queue" is what they call it.
               RESTED — the cue — sits FIRST, right under the prompt box (maintainer 2026-08-08), in the
               EXACT queue order, so the rail's top row is opposite the queue's top card and scrolling
               the queue walks the scroll marker straight down this rail. ACTIVE — live work that isn't
               waiting on you — runs BELOW the rule (an Active row has no queue card — the maintainer's
               ask: they don't render in the queue), so it stays glanceable without pushing the cue down.
               Only the cue's rows carry the rest-time column: it dates a HANDOFF, and a row that is
-              still spinning has not made one. */}
+              still spinning has not made one. An empty band draws no label, the same as Snoozed and
+              Done: a "Queue 0" header over nothing is a count nobody needs. */}
           {activeThreads.length > 0 ? (
             (() => {
               const { running, rested } = partitionActive(activeThreads)
@@ -272,8 +281,10 @@ export function Sidebar() {
               )
               return (
                 <>
+                  {rested.length > 0 && <SectionHeader label="Queue" count={rested.length} />}
                   {rested.map(renderRow(true))}
                   {running.length > 0 && rested.length > 0 && <hr className="my-3 border-border/50" />}
+                  {running.length > 0 && <SectionHeader label="Running" count={running.length} />}
                   {running.map(renderRow(false))}
                 </>
               )
@@ -364,9 +375,9 @@ export function Sidebar() {
 }
 
 // A section header: an optional collapse caret, the label, and the count. ONE source of truth for
-// every band header (Snoozed, Done) so they can never visually drift apart again. Every band in
-// the real rail is collapsible; omitting onToggle renders a static div with a caret-width spacer, so
-// a header without a toggle (the QA fixtures' Active/Snoozed bands) still aligns with the rest.
+// every band header so they can never visually drift apart again. Snoozed, Done and External are
+// collapsible; Pinned, Queue and Running (since 2026-09-19) omit onToggle and render as a static div
+// with a caret-width spacer, so a non-collapsible label still aligns with the collapsible ones.
 export function SectionHeader({ label, count, collapsed, onToggle }: { label: string; count: number; collapsed?: boolean; onToggle?: () => void }) {
   const inner = (
     <>
