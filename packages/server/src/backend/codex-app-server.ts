@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto"
+import { existsSync } from "node:fs"
 import { StringDecoder } from "node:string_decoder"
 import type { Readable, Writable } from "node:stream"
 import type Database from "../sqlite.ts"
@@ -76,7 +77,7 @@ export function selectCodexHostKind(
   if (flagValue === "1" || flagValue === "true") return nativeSupported ? "native" : "daemon"
   return nativeSupported ? "native" : "daemon"
 }
-export const CODEX_APP_SERVER_SUPPORTED_VERSION = "0.155.0"
+export const CODEX_APP_SERVER_SUPPORTED_VERSION = "0.155.1"
 // Upgrade policy: the AUDITED version is an exact coordinate — changing it requires a fresh
 // generated-protocol audit plus a source audit at the matching immutable Rust tag/commit, then a new
 // fingerprint and contract fixtures. These coordinates are intentionally runtime-visible diagnostics,
@@ -85,8 +86,8 @@ export const CODEX_APP_SERVER_SUPPORTED_VERSION = "0.155.0"
 // The ACCEPTANCE RULE is deliberately not that exact coordinate — see codexVersionVerdict below.
 export const CODEX_APP_SERVER_PROTOCOL_REVISION = Object.freeze({
   packageVersion: CODEX_APP_SERVER_SUPPORTED_VERSION,
-  sourceTag: "rust-v0.155.0",
-  sourceCommit: "f0a1b8f0849d90960bc406b848f32e5a129b0457",
+  sourceTag: "rust-v0.155.1",
+  sourceCommit: "be2951ea34f0d295ed0becf97079f92fa5f6950e",
 })
 /** Numeric semver compare; a version that will not parse sorts BELOW everything (fails closed). */
 export function compareCodexVersions(a: string, b: string): number {
@@ -2017,11 +2018,13 @@ export class CodexAppServerBridge {
       if (binding.state === "active" && binding.connection_epoch === this.connectionEpoch) return bindingFromRow(binding)
       if (binding.ephemeral === 1) throw new Error("disposable Codex app-server session is detached")
 
+      const cwdOverride = this.resumeCwdOverride(binding)
       const rawResponse = await connection.request("thread/resume", {
         threadId: binding.codex_thread_id,
         excludeTurns: true,
         approvalsReviewer: "user",
         ...this.resumeSandboxOverride(binding),
+        ...cwdOverride,
         // A resume by an app-server that ALREADY holds this thread keeps the MCP child it started
         // with, so this changes nothing there. It matters on a resume by a FRESH app-server — the
         // one after a daemon death or a frizz restart — which is exactly when the thread would
@@ -2033,6 +2036,7 @@ export class CodexAppServerBridge {
         throw new Error("Codex app-server resumed a different or disposable thread")
       }
       this.updateResumedBinding(binding, response.thread.sessionId, effectiveResumeSandbox(rawResponse))
+      this.recordResumedCwd(binding, cwdOverride)
       return bindingFromRow(this.bindingForScope(threadSlug, sessionId)!)
     } finally {
       releaseOperation()
@@ -2981,14 +2985,26 @@ export class CodexAppServerBridge {
         continue
       }
       try {
+        const cwdOverride = this.resumeCwdOverride(row)
         const rawResponse = await connection.request("thread/resume", {
           threadId: row.codex_thread_id,
           excludeTurns: true,
           approvalsReviewer: "user",
           ...this.resumeSandboxOverride(row),
+          ...cwdOverride,
+          // The per-thread frizz MCP mount, exactly as resumeOwnedSession sends it. THIS is the resume a
+          // Frizz restart issues for every thread that was mid-turn when the app-server died, and it
+          // was the one resume that did not carry it (2026-09-18, hypergres/this-is-a-fresh-project-i:
+          // the 0.13.9 restart replaced the daemon, this path resumed the thread with no mount, and the
+          // worker's next registry probe listed no `mcp__frizz__*` at all — "The restart removed
+          // Frizz's question-registration tool"). The argv mount is not a fallback here: a thread
+          // resumed onto a FRESH app-server gets its MCP children from this call, so without the
+          // override it keeps neither its identity nor, in practice, the tools.
+          ...this.threadConfig(row.thread_slug),
         })
         const response = ThreadResponse.parse(rawResponse)
         if (response.thread.id !== row.codex_thread_id || response.thread.ephemeral) throw new Error("resume ownership mismatch")
+        this.recordResumedCwd(row, cwdOverride)
         const interruptedTurn = row.current_turn_id
         // The resume RESPONSE settles what the stream could not: is that turn still running?
         //
@@ -3198,6 +3214,32 @@ export class CodexAppServerBridge {
       ?? this.options.sandboxFor?.(row.thread_slug, row.frizz_session_id)
       ?? CODEX_DEFAULT_SANDBOX
     return { sandbox: intent, approvalPolicy: CODEX_APPROVAL_POLICY }
+  }
+
+  /**
+   * The `cwd` to attach to a `thread/resume` — and only when the recorded one is GONE.
+   *
+   * A thread's cwd is fixed at thread/start and every resume reads it back from the rollout. A project
+   * directory rename (3baa6371 reopens the project at its new path) leaves every existing codex thread
+   * recorded at a path that no longer exists, and codex does not merely fail the thread's next command:
+   * it spawns NO stdio MCP child for the thread at all, so the worker's registry lists no
+   * `mcp__frizz__*` and it cannot ask, sign off or name itself. Measured 2026-09-18 with
+   * `_live_codex_resume_mcp.mts` (`STALE_CWD=1`: no child spawned, the model answers NOTOOL) after
+   * hypergres → porg took `this-is-a-fresh-project-i` down exactly that way. `thread/resume` takes a
+   * `cwd` override, so a resume whose recorded cwd is missing retargets the thread at the project's
+   * CURRENT directory — the only path a frizz worker was ever dispatched into — and the binding is
+   * re-recorded on success (recordResumedCwd). A cwd that still exists is left alone: an adopted
+   * external rollout may legitimately live somewhere else.
+   */
+  private resumeCwdOverride(row: Pick<BindingRow, "cwd">): { cwd?: string } {
+    if (existsSync(row.cwd)) return {}
+    return { cwd: this.options.projectDir }
+  }
+
+  private recordResumedCwd(row: Pick<BindingRow, "frizz_session_id">, override: { cwd?: string }): void {
+    if (!override.cwd) return
+    this.scope.prepare("UPDATE codex_app_server_session SET cwd = ?, updated_at = ? WHERE project_id = @project_id AND frizz_session_id = ?")
+      .run(override.cwd, this.now().toISOString(), row.frizz_session_id)
   }
 
   /**

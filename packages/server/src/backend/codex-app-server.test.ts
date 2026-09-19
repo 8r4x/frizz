@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events"
-import { rmSync, mkdtempSync } from "node:fs"
+import { rmSync, mkdirSync, mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { PassThrough } from "node:stream"
@@ -10,6 +10,7 @@ import { createInteractionStore, InteractionStoreError } from "../interaction-st
 import { createStorage, type SessionRow } from "../storage.ts"
 import { directChildHost } from "./codex-app-server-host.ts"
 import { CodexExecutionHealth } from "./codex-execution-health.ts"
+import { FRIZZ_MCP } from "./types.ts"
 import {
   CODEX_APP_SERVER_PROTOCOL_REVISION,
   CODEX_APP_SERVER_SUPPORTED_VERSION,
@@ -257,6 +258,7 @@ function harness(
   attachmentAccountId?: (requested: string | undefined, attachment: number) => string | undefined,
   authReplacementWaitMs?: number,
   getSettings?: () => { codexContextWindow?: number },
+  frizzMcp?: import("./types.ts").FrizzMcp,
 ) {
   const dir = mkdtempSync(join(tmpdir(), "frizz-codex-app-server-"))
   const dbPath = join(dir, "ui.db")
@@ -303,6 +305,7 @@ function harness(
       codexAuthAccountId: codexAuthAccountId ?? (() => undefined),
       ...(authReplacementWaitMs === undefined ? {} : { authReplacementWaitMs }),
       ...(getSettings ? { getSettings } : {}),
+      ...(frizzMcp ? { frizzMcp } : {}),
     })
     bridges.push(bridge)
     return bridge
@@ -581,9 +584,9 @@ test("bridge is the sole codex transport (always enabled) and negotiates exact i
   // be retyped by hand, so a bump that moves the version and forgets the source tag or the commit
   // fails here instead of shipping a revision that names a build nobody audited.
   assert.deepEqual(CODEX_APP_SERVER_PROTOCOL_REVISION, {
-    packageVersion: "0.155.0",
-    sourceTag: "rust-v0.155.0",
-    sourceCommit: "f0a1b8f0849d90960bc406b848f32e5a129b0457",
+    packageVersion: "0.155.1",
+    sourceTag: "rust-v0.155.1",
+    sourceCommit: "be2951ea34f0d295ed0becf97079f92fa5f6950e",
   })
   assert.notEqual(h.calls[0]!.env, process.env, "the child receives a point-in-time environment snapshot")
   // Looked up the way the OS does, because the snapshot is a PLAIN object: `process.env` is a
@@ -1448,6 +1451,64 @@ test("a fresh bridge inherits no active bindings: boot detaches what a SIGKILLed
 
   await restarted.resumeOwnedSession(binding.threadSlug, binding.sessionId)
   assert.equal(restarted.binding(binding.threadSlug, binding.sessionId)?.currentTurnId, null)
+  h.close()
+})
+
+// The resume a Frizz RESTART issues: the fresh bridge's warmUp() reconciles every row that was mid-turn
+// when its app-server died. That `thread/resume` carried no per-thread frizz mount until 2026-09-18, so
+// a codex worker that was working through a restart came back onto the new app-server with no
+// `mcp__frizz__*` at all and could neither ask nor sign off (hypergres/this-is-a-fresh-project-i: "The
+// restart removed Frizz's question-registration tool"). The argv mount is no fallback on that path —
+// see codexThreadMcpConfig — so the mount has to ride this resume exactly as it rides the lazy one.
+test("a mid-turn thread reconciled onto a FRESH app-server carries the per-thread frizz mount on its thread/resume", async () => {
+  const h = harness(undefined, undefined, undefined, undefined, undefined, undefined, {
+    scriptPath: "/plugin/bin/frizz-mcp.mjs", stateDir: "/state/project-1", projectId: "project-1",
+  })
+  const binding = await h.bridge.startDisposableSession({ threadSlug: "mid-turn", sessionId: "mid-turn-session", cwd: h.dir, ephemeral: false })
+  const { turnId } = await h.bridge.startTurn({ threadSlug: binding.threadSlug, sessionId: binding.sessionId, text: "Work" })
+  await waitFor(() => h.bridge.binding(binding.threadSlug, binding.sessionId)?.currentTurnId === turnId, "turn active")
+
+  // A SIGKILLed frizz: close() never ran, the row still says active with a turn — the boot reconcile
+  // is the only thing that will ever resume it.
+  const restarted = h.newBridge()
+  await restarted.warmUp()
+  const resume = h.processes[1]!.clientRequests.find((message) => message.method === "thread/resume")!
+  const config = (resume.params as Message).config as { mcp_servers: Record<string, { env: Record<string, string>; cwd: string; default_tools_approval_mode: string }> }
+  const frizz = config.mcp_servers[FRIZZ_MCP.name]!
+  assert.equal(frizz.env.FRIZZ_THREAD_SLUG, "mid-turn", "the resumed thread must know who it is")
+  assert.equal(frizz.default_tools_approval_mode, "approve")
+  assert.equal(frizz.cwd, "/state/project-1")
+  assert.equal((resume.params as Message).cwd, undefined, "a recorded cwd that still exists is left alone")
+  // ...and the recovery nudge went out on the mounted thread, as before.
+  assert.ok(h.processes[1]!.clientRequests.some((message) => message.method === "turn/start"), "the interrupted turn is auto-resumed")
+  h.close()
+})
+
+// A project directory rename (3baa6371) leaves every existing codex thread recorded at a path that no
+// longer exists, and codex then spawns NO stdio MCP child for the thread at all (measured 2026-09-18,
+// `_live_codex_resume_mcp.mts` with STALE_CWD=1: no child, the model answers NOTOOL). `thread/resume`
+// takes a `cwd` override, so a resume whose recorded cwd is gone follows the project to where it is now.
+test("a resume whose recorded cwd no longer exists retargets the thread at the project's current directory", async () => {
+  const h = harness()
+  const renamedAway = join(h.dir, "old-name")
+  mkdirSync(renamedAway)
+  const binding = await h.bridge.startDisposableSession({ threadSlug: "moved", sessionId: "moved-session", cwd: renamedAway, ephemeral: false })
+  h.processes[0]!.disconnect()
+  await waitFor(() => h.bridge.binding(binding.threadSlug, binding.sessionId)?.state === "detached", "detached on disconnect")
+  rmSync(renamedAway, { recursive: true }) // the directory was renamed under the thread
+
+  await h.bridge.resumeOwnedSession(binding.threadSlug, binding.sessionId)
+  const resume = h.processes[1]!.clientRequests.find((message) => message.method === "thread/resume")!
+  assert.equal((resume.params as Message).cwd, h.dir, "the thread follows the project to its current path")
+  assert.equal(h.bridge.binding(binding.threadSlug, binding.sessionId)?.cwd, h.dir, "and the binding records where it now lives")
+
+  // A cwd that is still there is never second-guessed — an adopted rollout may live anywhere.
+  const stay = await h.bridge.startDisposableSession({ threadSlug: "stay", sessionId: "stay-session", cwd: h.dir, ephemeral: false })
+  h.processes[1]!.disconnect()
+  await waitFor(() => h.bridge.binding(stay.threadSlug, stay.sessionId)?.state === "detached", "detached again")
+  await h.bridge.resumeOwnedSession(stay.threadSlug, stay.sessionId)
+  const untouched = h.processes[2]!.clientRequests.find((message) => message.method === "thread/resume")!
+  assert.equal((untouched.params as Message).cwd, undefined)
   h.close()
 })
 
