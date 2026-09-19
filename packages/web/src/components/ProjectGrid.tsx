@@ -37,15 +37,23 @@ function shortPath(path: string, home: string | undefined): string {
   return home && path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path
 }
 
+// `px-3 py-2.5`, not `px-4 py-3`: the grid runs three across, so a card is ~290px wide and its
+// three lines are the whole point — the padding is what was left to give (2026-09-19, "make it a
+// little denser"). The two menu triggers below are placed from this inset; change it and re-derive them.
 const CARD_BASE =
-  "flex flex-col gap-1 rounded-lg border px-4 py-3 outline-none transition-colors focus-visible:ring-1 focus-visible:ring-fg/60"
+  "flex flex-col gap-1 rounded-lg border px-3 py-2.5 outline-none transition-colors focus-visible:ring-1 focus-visible:ring-fg/60"
 
 // On a phone the same rows go FULL WIDTH: no card border, no radius, no grid gutter — a hairline
 // between rows instead, and the whole row is the target. The grid above the breakpoint is untouched.
-const MOBILE_ROW = "max-[700px]:rounded-none max-[700px]:border-x-0 max-[700px]:border-t-0 max-[700px]:border-b-border/70 max-[700px]:bg-transparent max-[700px]:py-3.5"
+// The row keeps the 16px inset the desktop card gave up: a full-bleed row wants a page margin, not a
+// card's, and the trigger offsets below were measured against it. `pl-4`, not `px-4`: a media-query
+// utility outranks the link's own `pr-9`, so `px-4` here would shrink the strip the overflow trigger
+// sits on to 16px and the truncated path would run into the ellipsis (seen at 390px, 2026-09-19).
+// The row's strip is 40: the same 28px box, 7 from the edge, plus 5.
+const MOBILE_ROW = "max-[700px]:rounded-none max-[700px]:border-x-0 max-[700px]:border-t-0 max-[700px]:border-b-border/70 max-[700px]:bg-transparent max-[700px]:pl-4 max-[700px]:pr-10 max-[700px]:py-3.5"
 
 /** The card's icon is the rail's square at card size, and the one place to change it. */
-const CARD_ICON = 38
+const CARD_ICON = 34
 
 function Card({ project, home }: { project: ProjectCard; home: string | undefined }) {
   const opened = relativeAge(project.lastOpenedAt)
@@ -61,12 +69,12 @@ function Card({ project, home }: { project: ProjectCard; home: string | undefine
     <div className="group/card relative">
       <Link
         to={projectHref(project.slug)}
-        // `pr-10` overrides CARD_BASE's `px-4` on the right only, and it is reserved UNCONDITIONALLY
+        // `pr-9` overrides CARD_BASE's `px-3` on the right only, and it is reserved UNCONDITIONALLY
         // rather than on hover: the overflow trigger sits over that strip, and three truncating lines
-        // that reflow the moment the pointer arrives read as the card flinching away from it. 40 is the
-        // trigger's own 36px footprint (28px box, 8px from the edge) plus 4px, so the truncated text
+        // that reflow the moment the pointer arrives read as the card flinching away from it. 36 is the
+        // trigger's own 32px footprint (28px box, 4px from the edge) plus 4px, so the truncated text
         // never runs up against a box it cannot see.
-        className={`${CARD_BASE} ${MOBILE_ROW} flex-row items-center gap-3 border-border bg-panel pr-10 group-hover/card:border-border-strong group-hover/card:bg-panel-2 ${
+        className={`${CARD_BASE} ${MOBILE_ROW} flex-row items-center gap-3 border-border bg-panel pr-9 group-hover/card:border-border-strong group-hover/card:bg-panel-2 ${
           project.stale ? "opacity-60" : ""
         }`}
       >
@@ -75,7 +83,7 @@ function Card({ project, home }: { project: ProjectCard; home: string | undefine
         </span>
         {/* min-w-0 is what makes truncate real: a flex item will not shrink below its content
             without it, so a long name would push its slug straight through the card border. */}
-        <span className="flex min-w-0 flex-1 flex-col gap-1">
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="flex min-w-0 items-baseline gap-2">
             <span className="min-w-0 truncate text-[13px] font-medium text-fg">{project.name}</span>
             {/* Shown only when it is not simply the name: a directory called "app" under "pullfrog"
@@ -96,9 +104,9 @@ function Card({ project, home }: { project: ProjectCard; home: string | undefine
       </Link>
       {/* THE ICON IS THE CONTROL. The trigger is the square's own footprint — same size, same corner
           radius, laid exactly over it. The offsets are the link's frame, which this sits outside of:
-          17 is its 1px border plus `px-4`, and the square is centred in the link, so `top-1/2` plus the
+          13 is its 1px border plus `px-3`, and the square is centred in the link, so `top-1/2` plus the
           translate centres this on it. The phone row (MOBILE_ROW) drops the side and top borders and
-          keeps the bottom one, so there it is 16, and the centre moves up half the missing top border
+          pads 16 of its own, so there it is 16, and the centre moves up half the missing top border
           — measured 2026-08-24: 1px left and 0.5px low without these. It draws nothing until the
           pointer is over the square, when a scrim and an image glyph say "this changes the picture" —
           the scrim at 75%, because at 60% a monogram's letters and a logo's strokes still showed
@@ -113,7 +121,7 @@ function Card({ project, home }: { project: ProjectCard; home: string | undefine
           type="button"
           aria-label={`Change the icon for ${project.name}`}
           style={{ width: CARD_ICON, height: CARD_ICON }}
-          className="absolute left-[17px] top-1/2 flex -translate-y-1/2 items-center justify-center rounded-[30%] bg-black/75 text-fg opacity-0 outline-none transition-opacity hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-fg/60 data-[state=open]:opacity-100 max-[700px]:left-4 max-[700px]:top-[calc(50%-0.5px)]"
+          className="absolute left-[13px] top-1/2 flex -translate-y-1/2 items-center justify-center rounded-[30%] bg-black/75 text-fg opacity-0 outline-none transition-opacity hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-fg/60 data-[state=open]:opacity-100 max-[700px]:left-4 max-[700px]:top-[calc(50%-0.5px)]"
         >
           <ImagePlus size={16} strokeWidth={1.75} />
         </button>
@@ -121,19 +129,20 @@ function Card({ project, home }: { project: ProjectCard; home: string | undefine
       {/* THE OVERFLOW MENU — everything you can do to a project that is not "change its picture", which
           has its own control on the square. It sits OUTSIDE the <a> for the same reason that one does:
           a button nested in a link is invalid, and clicking it would navigate.
-          THE OFFSET IS INK, NOT BOX. The card's left inset is 17px — its 1px border plus `px-4` — and
+          THE OFFSET IS INK, NOT BOX. The card's left inset is 13px — its 1px border plus `px-3` — and
           the square is a filled tile whose ink IS its box, so that is what the eye reads there. The
           ellipsis paints only 10 of the 15px glyph it draws at, centred in a 28px hit area, which is
-          9px of dead space a side (measured 2026-08-26). 8 + 9 = the same 17, so the two ends of the
-          card balance; `right-[5px]` had put it at 14 and the mark read as crowding the border. The
-          phone row (MOBILE_ROW) drops the side borders, so its inset is 16 and this is 7.
+          9px of dead space a side (measured 2026-08-26). 4 + 9 = the same 13, so the two ends of the
+          card balance; at the old 17px inset this was `right-[8px]`, and `right-[5px]` had put the
+          mark at 14 where it read as crowding the border. The phone row (MOBILE_ROW) drops the side
+          borders and pads 16, so there it is 7.
           It is revealed by the CARD's hover rather than its own, because a control nobody can see until
           they happen to cross nine pixels of empty box is a control nobody finds. */}
       <ProjectMenu onRename={() => setRenaming(true)} onDelete={() => setConfirmingDelete(true)}>
         <button
           type="button"
           aria-label={`More actions for ${project.name}`}
-          className="absolute right-[8px] top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-muted opacity-0 outline-none transition-opacity hover:bg-panel-2 hover:text-fg focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-fg/60 group-hover/card:opacity-100 data-[state=open]:opacity-100 max-[700px]:right-[7px] max-[700px]:opacity-100"
+          className="absolute right-[4px] top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-muted opacity-0 outline-none transition-opacity hover:bg-panel-2 hover:text-fg focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-fg/60 group-hover/card:opacity-100 data-[state=open]:opacity-100 max-[700px]:right-[7px] max-[700px]:opacity-100"
         >
           <Ellipsis size={15} />
         </button>
@@ -592,7 +601,7 @@ export function ProjectGrid() {
     // still letting the page scroll from its real top.
     <div className="flex min-h-dvh w-full flex-col px-6 py-14 max-[700px]:px-0 max-[700px]:py-10">
       <div className="m-auto flex w-full flex-col items-center">
-      <div className="mb-8 flex flex-col items-center gap-2.5 text-center">
+      <div className="mb-6 flex flex-col items-center gap-2.5 text-center">
         <img src="/favicon.svg" width={MARK_PX} height={MARK_PX} alt="" className="rounded-[17px]" />
         <h1 className="text-[19px] font-semibold tracking-[-0.01em] text-fg">
           {empty ? "Welcome to Frizz" : "Select a project"}
@@ -611,9 +620,15 @@ export function ProjectGrid() {
         <p className="text-[13px] text-muted">Loading…</p>
       ) : (
         <>
+          {/* THREE ACROSS WHEN THE WINDOW ALLOWS IT, FEWER WHEN IT DOES NOT. `auto-fill` fits as many
+              272px tracks as the width holds and stretches them, and the 900px cap is what makes three
+              the ceiling: a fourth track would need 1112. So the grid is one column under the phone
+              breakpoint, two from there to 832px of content width, and three above — the page pads
+              24 a side and the rail reserves 57, so three columns arrive at a 937px window. It was two
+              across at 720 until 2026-09-19 (maintainer: "three columns when possible"). */}
           <div
-            className={`grid w-full gap-2.5 max-[700px]:gap-0 ${
-              empty ? "max-w-[360px] grid-cols-1" : "max-w-[720px] grid-cols-1 sm:grid-cols-2"
+            className={`grid w-full gap-2 max-[700px]:gap-0 max-[700px]:grid-cols-1 ${
+              empty ? "max-w-[360px] grid-cols-1" : "max-w-[900px] grid-cols-[repeat(auto-fill,minmax(272px,1fr))]"
             }`}
           >
             {data.map((project) => (
