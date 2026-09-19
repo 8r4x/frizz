@@ -18,9 +18,12 @@ const SIZE = 64
 // rather than painted, because the strip behind it is the browser theme's and cannot be known.
 const DOT_RADIUS = 12
 const RING = 4
-// Bottom right: the corner the mark's ink leaves emptiest at 16px, so the dot covers tile rather than
-// stroke. Inset so the ring's outer edge lands exactly on the canvas edge instead of being clipped flat.
-const DOT_CENTER = SIZE - DOT_RADIUS - RING
+// TOP RIGHT (maintainer 2026-09-19: "I feel like it should be in the top right") — where a notification
+// badge sits on every icon the eye already knows. The mark has 180-degree rotational symmetry, so no
+// corner covers less ink than another and the choice is convention alone. Inset so the ring's outer
+// edge lands exactly on the canvas edge instead of being clipped flat.
+const DOT_X = SIZE - DOT_RADIUS - RING
+const DOT_Y = DOT_RADIUS + RING
 // NOT the accent, though the accent is what says "attention" everywhere else. The mark itself is drawn
 // in the accent's gold, so at 16px a gold dot reads as one more loop of the logo; the badge has to
 // differ from the art in HUE to register as a badge at all. Compared at tab size on Chrome's four
@@ -58,12 +61,12 @@ export function drawBadgedIcon(base: CanvasImageSource): string {
   ctx.drawImage(base, 0, 0, SIZE, SIZE)
   ctx.globalCompositeOperation = "destination-out"
   ctx.beginPath()
-  ctx.arc(DOT_CENTER, DOT_CENTER, DOT_RADIUS + RING, 0, Math.PI * 2)
+  ctx.arc(DOT_X, DOT_Y, DOT_RADIUS + RING, 0, Math.PI * 2)
   ctx.fill()
   ctx.globalCompositeOperation = "source-over"
   ctx.fillStyle = DOT_COLOR
   ctx.beginPath()
-  ctx.arc(DOT_CENTER, DOT_CENTER, DOT_RADIUS, 0, Math.PI * 2)
+  ctx.arc(DOT_X, DOT_Y, DOT_RADIUS, 0, Math.PI * 2)
   ctx.fill()
   return canvas.toDataURL("image/png")
 }

@@ -62,13 +62,16 @@ test("the rest dot repoints every icon link at a badged raster, and clearing it 
       const ctx = canvas.getContext("2d")!
       ctx.drawImage(img, 0, 0)
       const at = (x: number, y: number) => [...ctx.getImageData(x, y, 1, 1).data]
-      return { size: [img.naturalWidth, img.naturalHeight], dot: at(48, 48), ring: at(48, 34), tile: at(32, 8) }
+      return { size: [img.naturalWidth, img.naturalHeight], dot: at(48, 16), ring: at(48, 30), tile: at(32, 56), oldCorner: at(48, 48) }
     }, badged[0]!.href!)
     assert.deepEqual(pixels.size, [64, 64])
     assert.deepEqual(pixels.dot, [0x4a, 0x9e, 0xff, 255])
     // The ring is PUNCHED OUT, not painted: the strip behind a favicon is the browser theme's colour.
     assert.equal(pixels.ring[3], 0)
     assert.equal(pixels.tile[3], 255)
+    // TOP right, not bottom: the corner it first shipped in is plain tile again.
+    assert.equal(pixels.oldCorner[3], 255)
+    assert.notDeepEqual(pixels.oldCorner, pixels.dot)
 
     await page.evaluate(() => window.setFaviconBadge(false))
     assert.deepEqual(await page.evaluate(readLinks), ORIGINAL)
