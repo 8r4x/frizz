@@ -15,7 +15,7 @@ const tooltipSource = readFileSync(new URL("./Tooltip.tsx", import.meta.url), "u
 test("settings maps each contextual explanation to a help control", () => {
   // `subagentInstructions` is gone: the settings preamble was retired in favour of FRIZZ.md, so there
   // is exactly one operator-authored surface for project conventions.
-  for (const key of ["permissionMode", "promptCacheTtl", "font", "density", "notifications", "githubPrompt"]) {
+  for (const key of ["permissionMode", "promptCacheTtl", "projectRail", "density", "notifications", "githubPrompt"]) {
     assert.match(helpSource, new RegExp(`\\b${key}:`), `missing settings help mapping: ${key}`)
   }
   assert.match(source, /label="Density" help=\{SETTINGS_HELP\.density\}/)
@@ -73,7 +73,13 @@ test("the drawer is one untabbed list of interface preferences, with no project 
   // (The note above the component NAMES the retired tab in prose; what must be gone is the markup.)
   assert.doesNotMatch(source, /role="tab(?:list)?"|SettingsTabs|label: "(?:Project|Frizz) settings"/)
   const fields = [...source.matchAll(/<SettingsField label="([^"]+)"/g)].map((m) => m[1])
-  assert.deepEqual(fields, ["Font", "Project sidebar", "Local file links", "Density", "Queue order", "Desktop notifications"])
+  // The rail leads; local file links — the power-user knob — closes the list; there is no font row
+  // (mono was dropped as an option on 2026-09-19).
+  assert.deepEqual(fields, ["Project sidebar", "Density", "Queue order", "Desktop notifications", "Local file links"])
+  assert.doesNotMatch(source, /FontToggle|label="Font"|"mono"/)
+  // Every boolean is the same Off|On pair — the rail was a Hidden|Always shown dropdown for a day.
+  assert.match(source, /<OnOffToggle value=\{draft\.projectRail\}/)
+  assert.doesNotMatch(source, /Always shown/)
   // The triage prompt has exactly one editor, and it is the picker's.
   assert.doesNotMatch(source, /GithubPromptEditor|githubPrompt|<textarea/)
   assert.match(promptPopoverSource, /<GithubPromptEditor draft=\{draft\} onChange=\{update\} rows=\{14\} \/>/)

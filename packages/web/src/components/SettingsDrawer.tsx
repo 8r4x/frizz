@@ -19,8 +19,8 @@ function currentPerm(): NotifPerm {
   return Notification.permission as NotifPerm
 }
 
-// The drawer holds ONLY what belongs to the machine and this browser — the font, the rail, how local
-// links open, density, queue order, notifications. Everything that belongs to a project or to one
+// The drawer holds ONLY what belongs to the machine and this browser — the rail, density, queue
+// order, notifications, how local links open. Everything that belongs to a project or to one
 // runtime is edited where it applies: a runtime's launch settings behind the gear on its band in the
 // model picker (AgentSettingsPopover), the GitHub triage prompt behind the gear in the GitHub picker's
 // header (GithubPromptPopover). A "Project settings" tab stood here for a few hours on 2026-09-19
@@ -84,39 +84,11 @@ export function SettingsDrawer() {
           <div className="flex-1 overflow-y-auto p-5 flex flex-col gap-6">
             {/* ORDER: the preferences that shape the interface every operator looks at, top down. Nothing
                 here belongs to a project or to one runtime — see the note above SettingsDrawer. */}
-            <SettingsField label="Font" help={SETTINGS_HELP.font}>
-              <FontToggle value={draft.font ?? "mono"} onChange={(font) => update({ ...draft, font })} />
-            </SettingsField>
-
+            {/* The same segmented Off|On pair as every other boolean here. It was a Hidden|Always
+                shown dropdown for a day (maintainer 2026-09-19: "why is the project sidebar a
+                dropdown instead of a toggle?"). */}
             <SettingsField label="Project sidebar" help={SETTINGS_HELP.projectRail}>
-              <Select
-                variant="bordered"
-                value={draft.projectRail ? "shown" : "hidden"}
-                onValueChange={(v) => update({ ...draft, projectRail: v === "shown" })}
-                options={[
-                  { value: "hidden", label: "Hidden" },
-                  { value: "shown", label: "Always shown" },
-                ]}
-                indicatorPosition="right"
-                ariaLabel="Project sidebar"
-              />
-            </SettingsField>
-
-            <SettingsField label="Local file links" help={SETTINGS_HELP.localFileOpener}>
-              <Select
-                variant="bordered"
-                value={draft.localFileOpener ?? "system"}
-                onValueChange={(v) => update({ ...draft, localFileOpener: v as Settings["localFileOpener"] })}
-                options={[
-                  { value: "system", label: "System default" },
-                  { value: "cursor", label: "Cursor" },
-                  { value: "vscode", label: "VS Code" },
-                  { value: "finder", label: "Reveal in Finder" },
-                  { value: "copy", label: "Copy path" },
-                ]}
-                indicatorPosition="right"
-                ariaLabel="Local file link opener"
-              />
+              <OnOffToggle value={draft.projectRail} onChange={(projectRail) => update({ ...draft, projectRail })} />
             </SettingsField>
 
             {/* A client-only VIEW preference (localStorage, not server Settings): it never travels to
@@ -136,6 +108,25 @@ export function SettingsDrawer() {
               <OnOffToggle value={draft.notifications} onChange={toggleNotifications} />
               {draft.notifications && <PermHint perm={perm} />}
             </SettingsField>
+
+            {/* LAST, on purpose: which editor a vetted local path opens in is the one power-user
+                knob in the drawer, so it sits below everything an ordinary operator adjusts. */}
+            <SettingsField label="Local file links" help={SETTINGS_HELP.localFileOpener}>
+              <Select
+                variant="bordered"
+                value={draft.localFileOpener ?? "system"}
+                onValueChange={(v) => update({ ...draft, localFileOpener: v as Settings["localFileOpener"] })}
+                options={[
+                  { value: "system", label: "System default" },
+                  { value: "cursor", label: "Cursor" },
+                  { value: "vscode", label: "VS Code" },
+                  { value: "finder", label: "Reveal in Finder" },
+                  { value: "copy", label: "Copy path" },
+                ]}
+                indicatorPosition="right"
+                ariaLabel="Local file link opener"
+              />
+            </SettingsField>
           </div>
         )}
       </div>
@@ -143,33 +134,9 @@ export function SettingsDrawer() {
   )
 }
 
-// Small segmented control for the mono/sans experiment. Two options, the active one inverted
-// (bright-on-panel) like the primary button — quiet, no accent (yellow stays the focus motif). Each
-// label previews its own family so the choice reads at a glance.
-function FontToggle({ value, onChange }: { value: "mono" | "sans"; onChange: (v: "mono" | "sans") => void }) {
-  const opts: { v: "mono" | "sans"; label: string; cls: string }[] = [
-    { v: "mono", label: "Mono", cls: "" },
-    { v: "sans", label: "Sans", cls: "" },
-  ]
-  return (
-    <div className="inline-flex w-fit rounded-md border border-border bg-bg p-0.5">
-      {opts.map((o) => (
-        <button
-          key={o.v}
-          onClick={() => onChange(o.v)}
-          className={`rounded px-3 py-1 text-[12px] transition-colors ${o.cls} ${
-            value === o.v ? "bg-fg text-bg" : "text-muted hover:text-fg"
-          }`}
-        >
-          {o.label}
-        </button>
-      ))}
-    </div>
-  )
-}
-
 // The ONE boolean control shape for the whole form: a segmented Off|On pair, Off always on the LEFT
-// (switch convention — right = on). Active segment inverted like the font toggle.
+// (switch convention — right = on). Active segment inverted (bright-on-panel) like the primary button —
+// quiet, no accent (yellow stays the focus motif).
 function OnOffToggle({ value, onChange }: { value: boolean; onChange: (v: boolean) => void }) {
   const opts: { v: boolean; label: string }[] = [
     { v: false, label: "Off" },

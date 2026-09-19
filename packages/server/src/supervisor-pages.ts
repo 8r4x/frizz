@@ -141,11 +141,6 @@ const RECOVERY_STYLE = `
 }
 `.trim()
 
-// The board applies the operator's font choice from localStorage before first paint (see
-// packages/web/index.html). This page renders while the bundle that owns that setting is unreachable,
-// so it reads the same key for itself — otherwise a restart flips a sans board to mono for two seconds.
-// Branded pages only: the key names the product.
-const FONT_SCRIPT = `try{document.documentElement.dataset.font=localStorage.getItem("frizz-font")==="mono"?"mono":"sans"}catch{}`
 
 /**
  * THE RECOVERY PAGE POLLS, and the comment this replaces said it deliberately did not: "a broken child
@@ -267,15 +262,12 @@ function documentShell(options: {
   style?: string
   script?: string
   bodyAttributes?: string
-  /** Carry the operator's font choice over from the board. Names the product, so branded pages only. */
-  font?: boolean
 }): string {
   return `<!doctype html><html lang="en" data-font="sans"><head><meta charset="utf-8">`
     + `<title>${options.title}</title>`
     + `<meta name="viewport" content="width=device-width,initial-scale=1">`
     + `<meta name="color-scheme" content="dark"><meta name="theme-color" content="#0d0e10">`
     + `<style>${options.style ? `${BASE_STYLE}\n${options.style}` : BASE_STYLE}</style>`
-    + (options.font ? `<script>${FONT_SCRIPT}</script>` : "")
     + `</head>`
     + `<body${options.bodyAttributes ? ` ${options.bodyAttributes}` : ""}><main>${options.body}</main>`
     + (options.script ? `<script>${options.script}</script>` : "")
@@ -313,7 +305,6 @@ export function recoveryPage(url: string, variant: RecoveryVariant = "starting")
   return documentShell({
     title: copy.title,
     style: RECOVERY_STYLE,
-    font: true,
     bodyAttributes: `data-target="${target}"`,
     body: `<h1><span class="dot" id="dot" aria-hidden="true"></span>`
       + `<span id="heading">${copy.heading}</span></h1>`
@@ -360,7 +351,6 @@ export function unlistedHostPage(name: string): string {
   const shown = escapeHtml(name)
   return documentShell({
     title: "Not served by this name",
-    font: true,
     body: `<h1>Not served by this name</h1>`
       + `<p class="detail">Frizz does not answer to <code>${shown}</code>. A name a browser has to resolve is how DNS rebinding makes another site's page count as this board, so an exposed board accepts only its own hostname and the names its operator lists.</p>`
       + `<p class="note">Open the board by its IP address, or relaunch with <code>--allowed-host ${shown}</code> (or <code>FRIZZ_ALLOWED_HOSTS=${shown}</code>) to accept this one.</p>`,

@@ -53,7 +53,10 @@ test("each recovery variant states its own cause, and both offer the same two wa
     // page should not have to guess.
     assert.match(page, /Threads already running are not affected/)
     // A `</script>` anywhere inside the inline script would end it early and dump the rest as markup.
-    assert.equal(page.split("</script>").length - 1, 2, "one font script, one recovery script")
+    // The recovery script and nothing else: the font script that used to precede it read a mirror the
+    // board no longer writes (the mono setting is gone since 2026-09-19).
+    assert.equal(page.split("</script>").length - 1, 1, "one recovery script")
+    assert.match(page, /<html lang="en" data-font="sans">/)
   }
 })
 

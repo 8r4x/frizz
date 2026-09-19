@@ -2931,10 +2931,10 @@ export const Settings = z.object({
    * Machine-level, like the font: which chrome you want is a property of the person, not the repo.
    */
   projectRail: z.boolean(),
-  // UI type family. `mono` (default) is the mono-forward system; `sans` swaps prose/UI chrome to a
-  // sans stack while code / tool lines / the terminal stay mono. Optional so an old settings blob
-  // parses; defaultSettings pins "mono".
-  font: z.enum(["mono", "sans"]).optional(),
+  // There is no `font` key any more. The interface rendered in one of two type families as a machine
+  // setting until 2026-09-19 (maintainer: "let's drop monospace as an option"); every surface is sans
+  // now, and index.html pins `data-font="sans"` on <html> directly. Settings is a non-strict object,
+  // so a stored `font` is stripped the moment an old blob parses — no migration.
   // Default action for a vetted non-image local path in agent markdown. Image clicks always use the
   // OS default viewer so screenshots retain their expected behavior.
   localFileOpener: LocalFileOpener.optional(),

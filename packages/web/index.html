@@ -1,5 +1,7 @@
 <!doctype html>
-<html lang="en">
+<!-- data-font="sans" on the tag itself: styles.css keys the sans rules on it, and the interface has
+     rendered in sans only since 2026-09-19 (the mono alternative was a setting until then). -->
+<html lang="en" data-font="sans">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -28,12 +30,6 @@
     <style>
       html, body { background: #0d0e10; }
     </style>
-    <!-- FOUC guard: the font choice lives in server settings, which arrive an RPC round-trip after
-         first paint — apply the last-known value synchronously from localStorage so the page never
-         flashes mono before swapping to sans (font.ts confirms/corrects once settings load). -->
-    <script>
-      try { document.documentElement.dataset.font = localStorage.getItem("frizz-font") === "mono" ? "mono" : "sans" } catch {}
-    </script>
   </head>
   <body>
     <div id="root"></div>
