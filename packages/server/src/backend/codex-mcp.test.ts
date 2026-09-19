@@ -106,6 +106,30 @@ test("codexThreadMcpConfig: no descriptor ⇒ an EMPTY bag, so no `config` key i
   assert.deepEqual(codexThreadMcpConfig(undefined, "compiled-hono", "/abs/node"), {})
 })
 
+// The argv entry is what a thread falls back to when a resume reaches the app-server without the
+// per-thread bag. Measured 2026-09-18 (`_live_codex_resume_mcp.mts`, codex 0.155.0/0.155.1): without
+// the per-entry key that fallback listed the tool and refused every call — "MCP tool call requires
+// approval, but approval policy is never" — so the top-level `default_tools_approval_mode` beside it
+// was never enough on its own.
+test("codexMcpConfigArgs: the argv entry carries its OWN default_tools_approval_mode, not just the top-level key", () => {
+  const vals = values(codexMcpConfigArgs({ scriptPath: "/abs/plugin/bin/frizz-mcp.mjs", stateDir: "/abs/state" }, "/abs/node"))
+  const frizz = vals.find((v) => v.startsWith(`mcp_servers.${FRIZZ_MCP.name}=`))!
+  assert.match(frizz, /default_tools_approval_mode="approve"/)
+})
+
+// Codex runs a thread's stdio MCP children in the THREAD's cwd unless the entry pins its own, and a
+// thread whose recorded cwd no longer exists (a project directory rename) then gets NO MCP children
+// at all — measured 2026-09-18 with `STALE_CWD=1`: no child spawned, the model answered NOTOOL. The
+// state dir exists for as long as the project is registered, and the script reads nothing relative
+// to its cwd.
+test("both mounts pin the MCP child's cwd to the project state dir, never the thread's", () => {
+  const descriptor = { scriptPath: "/plugin/bin/frizz-mcp.mjs", stateDir: "/state/proj-1", projectId: "proj-1" }
+  const argv = values(codexMcpConfigArgs(descriptor, "/abs/node")).find((v) => v.startsWith(`mcp_servers.${FRIZZ_MCP.name}=`))!
+  assert.match(argv, /cwd="\/state\/proj-1"/)
+  const bag = codexThreadMcpConfig(descriptor, "compiled-hono", "/abs/node") as { mcp_servers: Record<string, { cwd: string }> }
+  assert.equal(bag.mcp_servers[FRIZZ_MCP.name]!.cwd, "/state/proj-1")
+})
+
 test("codexContextWindowConfig: a positive integer window becomes `model_context_window`, anything else sends nothing", () => {
   // The value is passed through UNCLAMPED: codex clamps it to the model's max_context_window itself
   // (measured 2026-09-11: 1_000_000 on gpt-5.6-sol reported 828_400 = 872K × 95%), and a table of

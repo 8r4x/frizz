@@ -35,14 +35,20 @@ function inlineTable(entries: [string, string][]): string {
   return `{${entries.map(([k, v]) => `${k}=${v}`).join(",")}}`
 }
 
-function serverTable(command: string, args: readonly string[], env?: Record<string, string>): string {
+function serverTable(command: string, args: readonly string[], cwd: string, env?: Record<string, string>): string {
   const entries: [string, string][] = [
     ["command", tomlString(command)],
     ["args", `[${args.map(tomlString).join(",")}]`],
+    // Where the child RUNS, pinned so it never depends on the thread's own cwd — see
+    // codexThreadMcpConfig for the rename that took a thread's tools with it.
+    ["cwd", tomlString(cwd)],
   ]
   if (env && Object.keys(env).length > 0) {
     entries.push(["env", inlineTable(Object.entries(env).map(([k, v]) => [k, tomlString(v)]))])
   }
+  // ON THE ENTRY, not inherited from the top-level `default_tools_approval_mode` key beside it: without
+  // this the argv-mounted tool is listed and every call is refused — see codexThreadMcpConfig.
+  entries.push(["default_tools_approval_mode", tomlString("approve")])
   return inlineTable(entries)
 }
 
@@ -67,7 +73,7 @@ export function codexMcpConfigArgs(frizzMcp?: FrizzMcp, nodeBin: string = proces
     // start, so the tool merely never appears.
     args.push(
       "-c",
-      `mcp_servers.${FRIZZ_MCP.name}=${serverTable(nodeBin, [frizzMcp.scriptPath], frizzMcpEnv(frizzMcp))}`,
+      `mcp_servers.${FRIZZ_MCP.name}=${serverTable(nodeBin, [frizzMcp.scriptPath], frizzMcp.stateDir, frizzMcpEnv(frizzMcp))}`,
     )
   }
   // Headless workers cannot answer an approval prompt, and an unapproved MCP call is cancelled at the
@@ -97,15 +103,29 @@ export function codexMcpConfigArgs(frizzMcp?: FrizzMcp, nodeBin: string = proces
  * two threads started with different slugs produced two children each reporting its own. It also merges
  * with `~/.codex/config.toml` rather than replacing it.
  *
- * THE ARGV MOUNT STAYS. It is what a thread with no per-thread config still gets — a resume handled by
- * the app-server that already holds the thread cannot retarget its MCP child, and an adopted or
- * pre-upgrade thread never had one. Those degrade to exactly today's behaviour (tools present, no
- * identity) instead of losing the tools outright.
+ * THE ARGV MOUNT STAYS, as the process-wide default for a thread that reaches the app-server with no
+ * per-thread config (an adopted or pre-upgrade thread), and EVERY resume frizz issues carries this
+ * override — the lazy one, adoption, and the boot-time reconcile of a thread that was mid-turn when
+ * its app-server died. That last one did not until 2026-09-18, and the claim that the argv mount
+ * would then "degrade to tools present, no identity" was measured false the same day
+ * (`_live_codex_resume_mcp.mts`, codex 0.155.0 and 0.155.1, stdio and the native listener alike): a
+ * thread resumed onto a FRESH app-server gets its MCP children from that resume, the argv entry it
+ * fell back to listed the tool, and every call was refused — "MCP tool call requires approval, but
+ * approval policy is never" — because the argv entry did not carry the per-entry key below.
  *
  * `default_tools_approval_mode` is repeated ON THE ENTRY, not inherited from the top-level argv key:
  * it is a member of codex's per-server config, and on 0.153.2 a server entry without it was refused
  * with "MCP tool call requires approval, but approval policy is never" under the identical argv that
- * approved the entry carrying it.
+ * approved the entry carrying it. Both mounts carry it now (serverTable for the argv one).
+ *
+ * `cwd` is pinned to the project state dir on both mounts. Codex runs a thread's stdio MCP children in
+ * the THREAD's cwd unless the entry names its own, and a thread whose recorded cwd no longer exists —
+ * a project directory rename, hypergres → porg on 2026-09-18 — gets NO MCP children at all: measured
+ * with `STALE_CWD=1`, no child was spawned and the model answered NOTOOL, which is exactly the
+ * incident's "no `mcp__frizz__*` in the registry" (the operator's own gmail server survived it
+ * because its config.toml entry pins a `cwd`). The state dir exists for as long as the project is
+ * registered, and the script reads nothing relative to its cwd. The thread's own cwd is retargeted
+ * separately, on resume — see resumeCwdOverride in codex-app-server.ts.
  */
 export function codexThreadMcpConfig(frizzMcp: FrizzMcp | undefined, slug: string, nodeBin: string = process.execPath): Record<string, unknown> {
   if (!frizzMcp) return {}
@@ -115,6 +135,7 @@ export function codexThreadMcpConfig(frizzMcp: FrizzMcp | undefined, slug: strin
         // The ABSOLUTE node path, for the same reason the argv mount pins it — see codexMcpConfigArgs.
         command: nodeBin,
         args: [frizzMcp.scriptPath],
+        cwd: frizzMcp.stateDir,
         env: frizzMcpEnv({ ...frizzMcp, slug }),
         default_tools_approval_mode: "approve",
       },
