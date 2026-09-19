@@ -40,39 +40,18 @@ function sandbox(): { home: string; open: (name: string) => ReturnType<typeof cr
   }
 }
 
-test("retired font preferences are stripped from every settings source without resetting other values", () => {
-  const box = sandbox()
-  try {
-    const alpha = box.open("alpha")
-    alpha.setSetting("settings", { ...defaultSettings(), font: "mono", promptCacheTtl: "5m" })
-    for (const source of ["project", "legacy", "machine"]) {
-      if (source === "legacy") writeLegacySettings(box.home, { font: "mono", notifications: false })
-      if (source === "machine") writeMachineConfig(box.home, "settings", { font: "mono", notifications: false })
-      const settings = getSettings(alpha, box.home)
-      assert.equal("font" in settings, false, source)
-      assert.equal(settings.promptCacheTtl, "5m")
-      if (source !== "project") assert.equal(settings.notifications, false)
-    }
-    setSettings(alpha, Settings.parse({ ...getSettings(alpha, box.home), font: "mono" }), box.home)
-    assert.equal("font" in (alpha.getSetting("settings") as object), false)
-    assert.equal("font" in readMachineConfig(box.home, "settings", z.record(z.string(), z.unknown()))!, false)
-  } finally {
-    box.done()
-  }
-})
-
-test("notifications and the file opener are the MACHINE's, shared by every project", () => {
+test("the rail, notifications and the file opener are the MACHINE's, shared by every project", () => {
   const box = sandbox()
   try {
     const alpha = box.open("alpha")
     const beta = box.open("beta")
-    assert.equal(getSettings(alpha, box.home).localFileOpener, "system")
+    assert.equal(getSettings(alpha, box.home).projectRail, false)
 
-    setSettings(alpha, { ...defaultSettings(), localFileOpener: "cursor", notifications: false }, box.home)
+    setSettings(alpha, { ...defaultSettings(), projectRail: true, notifications: false, localFileOpener: "cursor" }, box.home)
 
     // The point: a project that was never touched sees it, because the value is not its to hold.
     const seen = getSettings(beta, box.home)
-    assert.equal(seen.localFileOpener, "cursor")
+    assert.equal(seen.projectRail, true)
     assert.equal(seen.notifications, false)
     assert.equal(seen.localFileOpener, "cursor")
     assert.ok(existsSync(machineConfigPath(box.home)))
@@ -97,7 +76,7 @@ test("a project's own settings stay its own", () => {
 
 // No migration ships with this: resolution falls back through the project blob, so an existing
 // project keeps what it had until the next save promotes it.
-test("a project that already stored a localFileOpener keeps it with no machine file present", () => {
+test("a project that already stored a machine value keeps it with no machine file present", () => {
   const box = sandbox()
   try {
     const alpha = box.open("alpha")
@@ -121,7 +100,7 @@ test("reset means defaults, so the machine record goes with the project blob", (
     writeLegacySettings(box.home, { localFileOpener: "cursor" })
     setSettings(alpha, { ...defaultSettings(), localFileOpener: "cursor" }, box.home)
     assert.equal(resetSettings(alpha, box.home).localFileOpener, "system")
-    assert.equal(readMachineConfig(box.home, "settings", z.unknown()), undefined, "leaving it would resurrect the old localFileOpener")
+    assert.equal(readMachineConfig(box.home, "settings", z.unknown()), undefined, "leaving it would resurrect the old value")
     assert.equal(existsSync(legacyMachineSettingsPath(box.home)), false, "…and so would the pre-store file")
     assert.equal(getSettings(alpha, box.home).localFileOpener, "system")
   } finally {
@@ -143,20 +122,22 @@ test("an unreadable machine store degrades to the project's values rather than t
 })
 
 // The machine settings were their own file until the machine config store arrived (2026-08-25). An
-// install that has that file keeps its localFileOpener from it; the next save writes the store and never the file.
+// install that has that file keeps its values from it; the next save writes the store and never the
+// file. A `font` in that file — the key the file was created for — is stripped on read now that the
+// setting is gone (2026-09-19); the other machine keys survive.
 test("a pre-store settings.json is read until the next save promotes it into the store", () => {
   const box = sandbox()
   try {
     const alpha = box.open("alpha")
-    writeLegacySettings(box.home, { localFileOpener: "cursor", projectRail: true })
+    writeLegacySettings(box.home, { font: "mono", localFileOpener: "cursor", projectRail: true })
     assert.deepEqual(readMachineSettings(box.home), { localFileOpener: "cursor", projectRail: true })
     assert.equal(getSettings(alpha, box.home).localFileOpener, "cursor")
 
     setSettings(alpha, { ...getSettings(alpha, box.home), notifications: false }, box.home)
-    assert.deepEqual(readMachineConfig(box.home, "settings", Settings.partial()), { localFileOpener: "cursor", notifications: false, projectRail: true })
+    assert.deepEqual(readMachineConfig(box.home, "settings", Settings.partial()), { notifications: false, localFileOpener: "cursor", projectRail: true })
     assert.equal(JSON.parse(readFileSync(legacyMachineSettingsPath(box.home), "utf8")).notifications, undefined, "the legacy file is never written again")
     // The store now wins outright, even where the legacy file disagrees.
-    writeLegacySettings(box.home, { localFileOpener: "system" })
+    writeLegacySettings(box.home, { localFileOpener: "vscode" })
     assert.equal(getSettings(box.open("beta"), box.home).localFileOpener, "cursor")
   } finally {
     box.done()
@@ -188,6 +169,27 @@ test("an old blob's githubIssuePrompt/githubPrPrompt are dropped, not carried in
     const stored = alpha.getSetting("settings") as Record<string, unknown>
     assert.equal("githubIssuePrompt" in stored, false)
     assert.equal("githubPrPrompt" in stored, false)
+  } finally {
+    box.done()
+  }
+})
+
+test("retired font preferences are stripped from every settings source without resetting other values", () => {
+  const box = sandbox()
+  try {
+    const alpha = box.open("alpha")
+    alpha.setSetting("settings", { ...defaultSettings(), font: "mono", promptCacheTtl: "5m" })
+    for (const source of ["project", "legacy", "machine"]) {
+      if (source === "legacy") writeLegacySettings(box.home, { font: "mono", notifications: false })
+      if (source === "machine") writeMachineConfig(box.home, "settings", { font: "mono", notifications: false })
+      const settings = getSettings(alpha, box.home)
+      assert.equal("font" in settings, false, source)
+      assert.equal(settings.promptCacheTtl, "5m")
+      if (source !== "project") assert.equal(settings.notifications, false)
+    }
+    setSettings(alpha, Settings.parse({ ...getSettings(alpha, box.home), font: "mono" }), box.home)
+    assert.equal("font" in (alpha.getSetting("settings") as object), false)
+    assert.equal("font" in readMachineConfig(box.home, "settings", z.record(z.string(), z.unknown()))!, false)
   } finally {
     box.done()
   }

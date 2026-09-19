@@ -91,7 +91,7 @@ test("the prompt panel shows the effective prompt, survives the pointer leaving,
     const sent = await writes(page)
     assert.equal(sent.length, 1, "one write for a burst of typing")
     assert.equal(sent[0]!.githubPrompt, "Custom prompt")
-    assert.equal(sent[0]!.font, "sans", "the whole object goes over")
+    assert.equal(sent[0]!.notifications, true, "the whole object goes over")
     assert.match(await page.$eval(PANEL, (el) => el.textContent ?? ""), /Reset to default/, "a customized prompt offers its reset")
 
     // Escape closes the panel and ONLY the panel — the picker's own Escape handler closes the whole

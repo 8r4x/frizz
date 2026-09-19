@@ -15,13 +15,12 @@ const baseUrl = process.env.FRIZZ_FIRST_PAINT_E2E_URL
 // each used to be guessed at first and corrected a round trip later, moving everything on screen:
 // the type family flipped mono → sans (a document-wide reflow), the rail appeared and pushed the page
 // 57px right, and the sidebar mounted and pushed the workpane 269px right (maintainer 2026-08-25:
-// "This is layout shift"). Each now keeps its last answer in localStorage and uses it for the first
-// frame. A requestAnimationFrame sampler installed before any script runs records every change to
+// "This is layout shift"). The rail and the sidebar keep their last answer in localStorage and use it
+// for the first frame; the font stopped being a setting on 2026-09-19 and is pinned sans on <html>. A requestAnimationFrame sampler installed before any script runs records every change to
 // the three, so the assertion is over the whole load rather than a screenshot of one moment.
 //
-// The CONTROL clears the mirrors and sets the server's font to the other family: the same sampler
-// must then SEE the font flip and the workpane move, or the assertions above were passing on a
-// sampler that could not observe a shift.
+// The CONTROL clears the mirrors: the same sampler must then SEE the rail arrive late and the
+// workpane move, or the assertions above were passing on a sampler that could not observe a shift.
 type Sample = { t: number; font: string | undefined; rail: boolean; workpaneLeft: number | null }
 
 test("a reload paints the font, the project rail and the sidebar column in their final state on the first frame", {
@@ -79,6 +78,9 @@ test("a reload paints the font, the project rail and the sidebar column in their
     const warm = await load()
     const painted = warm.filter((s) => s.workpaneLeft !== null)
     assert.ok(painted.length > 0, "the reload rendered a workpane")
+    // `data-font` is pinned on the <html> tag since 2026-09-19 (the mono setting is gone), so it is
+    // sans on every frame by construction; sampled anyway so a regression that reintroduces a
+    // late-applied font shows up here.
     assert.deepEqual(new Set(warm.map((s) => s.font)), new Set(["sans"]), `the font never left sans: ${JSON.stringify(warm)}`)
     assert.deepEqual(new Set(painted.map((s) => s.workpaneLeft)), new Set([settledLeft]), `the workpane never moved: ${JSON.stringify(warm)}`)
     assert.equal(painted[0]!.rail, true, `the rail is on the first painted frame: ${JSON.stringify(warm)}`)

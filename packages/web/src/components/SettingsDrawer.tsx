@@ -79,45 +79,17 @@ export function SettingsDrawer() {
       >
         <SheetHeader title="Settings" actions={<SaveStatus state={saveState} />} onClose={close} />
 
-        {!draft ? (
-          <div className="p-4 text-[13px] text-muted">Loading…</div>
-        ) : (
-          <div className="flex-1 overflow-y-auto p-5 flex flex-col gap-6">
-            {/* ORDER: the preferences that shape the interface every operator looks at, top down. Nothing
-                here belongs to a project or to one runtime — see the note above SettingsDrawer. */}
-            <SettingsField label="Appearance" help={SETTINGS_HELP.appearance}>
-              <AppearanceControl />
-            </SettingsField>
-
+        <div className="flex-1 overflow-y-auto p-5 flex flex-col gap-6">
+          {/* Browser appearance remains usable even while server settings are unavailable. */}
+          <SettingsField label="Appearance" help={SETTINGS_HELP.appearance}>
+            <AppearanceControl />
+          </SettingsField>
+          {!draft ? (
+            <div className="text-[13px] text-muted">Loading server settings…</div>
+          ) : (
+            <>
             <SettingsField label="Project sidebar" help={SETTINGS_HELP.projectRail}>
-              <Select
-                variant="bordered"
-                value={draft.projectRail ? "shown" : "hidden"}
-                onValueChange={(v) => update({ ...draft, projectRail: v === "shown" })}
-                options={[
-                  { value: "hidden", label: "Hidden" },
-                  { value: "shown", label: "Always shown" },
-                ]}
-                indicatorPosition="right"
-                ariaLabel="Project sidebar"
-              />
-            </SettingsField>
-
-            <SettingsField label="Local file links" help={SETTINGS_HELP.localFileOpener}>
-              <Select
-                variant="bordered"
-                value={draft.localFileOpener ?? "system"}
-                onValueChange={(v) => update({ ...draft, localFileOpener: v as Settings["localFileOpener"] })}
-                options={[
-                  { value: "system", label: "System default" },
-                  { value: "cursor", label: "Cursor" },
-                  { value: "vscode", label: "VS Code" },
-                  { value: "finder", label: "Reveal in Finder" },
-                  { value: "copy", label: "Copy path" },
-                ]}
-                indicatorPosition="right"
-                ariaLabel="Local file link opener"
-              />
+              <OnOffToggle value={draft.projectRail} onChange={(projectRail) => update({ ...draft, projectRail })} />
             </SettingsField>
 
             {/* A client-only VIEW preference (localStorage, not server Settings): it never travels to
@@ -137,8 +109,28 @@ export function SettingsDrawer() {
               <OnOffToggle value={draft.notifications} onChange={toggleNotifications} />
               {draft.notifications && <PermHint perm={perm} />}
             </SettingsField>
-          </div>
-        )}
+
+            {/* LAST, on purpose: which editor a vetted local path opens in is the one power-user
+                knob in the drawer, so it sits below everything an ordinary operator adjusts. */}
+            <SettingsField label="Local file links" help={SETTINGS_HELP.localFileOpener}>
+              <Select
+                variant="bordered"
+                value={draft.localFileOpener ?? "system"}
+                onValueChange={(v) => update({ ...draft, localFileOpener: v as Settings["localFileOpener"] })}
+                options={[
+                  { value: "system", label: "System default" },
+                  { value: "cursor", label: "Cursor" },
+                  { value: "vscode", label: "VS Code" },
+                  { value: "finder", label: "Reveal in Finder" },
+                  { value: "copy", label: "Copy path" },
+                ]}
+                indicatorPosition="right"
+                ariaLabel="Local file link opener"
+              />
+            </SettingsField>
+            </>
+          )}
+        </div>
       </div>
     </div>
   )

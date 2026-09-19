@@ -10,13 +10,16 @@ const SETTINGS_KEY = "settings"
 /**
  * The settings that describe the MACHINE rather than a project.
  *
- * `notifications` tracks an OS permission and `localFileOpener` names which
- * editor is installed; neither was ever a property of a repository.
+ * `notifications` tracks an OS permission, `localFileOpener` names which editor is installed and
+ * `projectRail` is which chrome the person wants; none was ever a property of a repository. The
+ * record was created for `font` (2026-08-25), which was inconsistent before one server served every
+ * project — stored per project, mirrored per ORIGIN for a pre-paint guard — and that key is gone
+ * since 2026-09-19: the interface is sans everywhere and offers no choice.
  *
  * They live as the `settings` record of the machine config store (machine-config.ts). Before that
  * store existed (2026-08-25) they were a file of their own, `<data>/settings.json`; it is read as a
- * fallback and never written again, so an existing install keeps its preferences until the next save
- * promotes it. Below that, resolution falls back through the project blob (see getSettings) — the
+ * fallback and never written again, so an existing install keeps its values until the next save
+ * promotes them. Below that, resolution falls back through the project blob (see getSettings) — the
  * same shape, one level down, and the reason neither step needed a migration.
  *
  * `home` is REQUIRED and deliberately not defaulted to homedir(). These were pure storage functions
@@ -98,7 +101,7 @@ export function getSettings(storage: Storage, home: string): Settings {
       ? defaultSettings()
       : (Settings.safeParse({ ...defaultSettings(), ...(raw as object) }).data ?? defaultSettings())
   // machine file → this project's stored blob → shipped default. The middle term is what makes this
-  // need no migration: a project keeps its preferences until the next save promotes it upward.
+  // need no migration: a project that has a value keeps it until the next save promotes it upward.
   return { ...project, ...readMachineSettings(home) }
 }
 
@@ -111,7 +114,7 @@ export function setSettings(storage: Storage, next: Settings, home: string): Set
 
 // Clear the stored blob so getSettings falls back to defaults (incl. the shipped default prompt).
 // A reset means DEFAULTS, so the machine record goes too — and the legacy file with it, or the
-// fallback would resurrect the old preferences. Other records in the store (the prompt box's profile) are
+// fallback would resurrect the old values. Other records in the store (the prompt box's profile) are
 // not settings and stay.
 export function resetSettings(storage: Storage, home: string): Settings {
   storage.deleteSetting(SETTINGS_KEY)

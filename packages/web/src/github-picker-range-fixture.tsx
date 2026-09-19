@@ -60,7 +60,7 @@ const dispatched: unknown[] = []
 // The project settings the header gear edits (GithubPromptPopover): every settingsSet is recorded so
 // a test can prove a typing burst writes ONCE, and `?settingsDelay=N` holds each write for N ms to
 // drive the dispatch gate.
-let settings: Record<string, unknown> = { permissionMode: "bypassPermissions", notifications: true, font: "sans" }
+let settings: Record<string, unknown> = { permissionMode: "bypassPermissions", notifications: true }
 const settingsWrites: Record<string, unknown>[] = []
 const settingsDelay = Number(new URLSearchParams(location.search).get("settingsDelay") ?? 0)
 
