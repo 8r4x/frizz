@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState, type ComponentType } from "react"
 import { keepPreviousData, useIsMutating, useMutation, useQuery } from "@tanstack/react-query"
-import { Check, ChevronLeft, ChevronRight, CircleCheck, CircleDot, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, Github, Inbox, Loader2, MessageSquare } from "lucide-react"
+import { ArrowUpRight, Check, ChevronLeft, ChevronRight, CircleCheck, CircleDot, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, Github, Inbox, Loader2, MessageSquare } from "lucide-react"
 import { acpModelSlug, type DispatchInput, type DispatchProfileSnapshot, type GithubBatchInput, type GithubItem } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { showToast } from "../store.ts"
 import { Overlay } from "./NewThreadModal.tsx"
 import { ProfileGridSelector } from "./ProfileGridSelector.tsx"
 import { AcpModelSelect } from "./AcpModelSelect.tsx"
+import { GithubPromptPopover } from "./GithubPromptPopover.tsx"
+import { SETTINGS_WRITE_KEY } from "../hooks/useSettingsAutosave.tsx"
 import { useDispatchProfile } from "../hooks/useDispatchProfile.ts"
 import { dispatchProfileGroups } from "../lib/dispatchPreferences.ts"
 import { OPAQUE_PORTAL_SURFACE_ABOVE_DIALOG_Z } from "../lib/overlaySurface.ts"
@@ -38,7 +40,9 @@ export function GithubPickerModal({ onClose }: { onClose: () => void }) {
   // picker-local copy that silently diverges). A Codex cache refresh can invalidate the saved pair
   // while the picker is open; the final revalidation below then fails closed rather than downgrading.
   const { resolved, codexList, acpList, loadError, saveProfile } = useDispatchProfile()
-  const savingContext = useIsMutating({ mutationKey: ["contextWindowSet"] }) > 0
+  // A settings write still in flight — the triage prompt just edited in the header popover, a
+  // compaction window picked in the selector — must land before a batch that would read it.
+  const savingSettings = useIsMutating({ mutationKey: [...SETTINGS_WRITE_KEY] }) > 0
 
   const [kind, setKind] = useState<Kind>("issues")
   const [sort, setSort] = useState<Sort>("recent")
@@ -126,7 +130,6 @@ export function GithubPickerModal({ onClose }: { onClose: () => void }) {
     setAnchor(null)
   }
 
-  const nameWithOwner = status.data?.nameWithOwner ?? "this repo"
   const n = selected.size
   // Stable identity: ProfileGridSelector memoizes off `groups`, and this modal re-renders on every
   // row toggle.
@@ -144,7 +147,7 @@ export function GithubPickerModal({ onClose }: { onClose: () => void }) {
     : loadError
       ? "Could not load the model catalogue — reopen once it loads"
       : undefined
-  const dispatchBlocked = profileError ?? (savingContext ? "Saving context window…" : profile ? undefined : "Loading the model catalogue…")
+  const dispatchBlocked = profileError ?? (savingSettings ? "Saving settings…" : profile ? undefined : "Loading the model catalogue…")
 
   function startDispatch() {
     if (!profile || dispatchBlocked) {
@@ -168,12 +171,17 @@ export function GithubPickerModal({ onClose }: { onClose: () => void }) {
           }
         }}
       >
-        {/* Header */}
+        {/* Header: the title left; the repo slug RIGHT-justified as a link out to github.com, then the
+            gear that opens the triage prompt this picker dispatches with. The slug was an em-dashed
+            suffix of the title until 2026-09-19; as a link in the far corner it is the picker's one
+            way OUT to the repo, and the gear beside it is the picker's own settings, where they apply. */}
         <h2 className="mb-4 flex items-center gap-2 text-[14px] font-medium">
           <Github size={15} className="text-muted" />
-          <span>Investigate this issue and make recommendations</span>
-          <span className="text-muted/40">—</span>
-          <span className="font-mono-keep text-[12.5px] text-muted">{nameWithOwner}</span>
+          <span className="min-w-0 truncate">Investigate this issue and make recommendations</span>
+          <span className="ml-auto flex shrink-0 items-center gap-2">
+            {status.data?.nameWithOwner && <RepoLink nameWithOwner={status.data.nameWithOwner} />}
+            <GithubPromptPopover />
+          </span>
         </h2>
 
         {/* Controls: tabs (Issues | PRs) left, sort (Recent | Reactions) right */}
@@ -285,7 +293,7 @@ export function GithubPickerModal({ onClose }: { onClose: () => void }) {
             <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
             <ProfileGridSelector
               groups={profileGroups}
-              contextWindows
+              agentSettings
               value={resolved ? { provider: resolved.backend, model: resolved.pickerModel, effort: resolved.effort } : undefined}
               onValueChange={(selection) => saveProfile({
                 field: "profile",
@@ -333,6 +341,26 @@ export function GithubPickerModal({ onClose }: { onClose: () => void }) {
         </div>
       </div>
     </Overlay>
+  )
+}
+
+// The repo slug as a link OUT to github.com, in the picker header's far corner. Mono for the slug
+// (it is an identifier), the arrow at the slug's own size so the pair reads as one link: the glyph
+// is lucide's arrow-up-right, the "opens elsewhere" mark GitHub itself uses beside external links.
+// Its ink sits centred in a 15px box; `-ml-[0.2em]` closes the box's dead side so the arrow reads as
+// the slug's tail rather than a separate mark (measured: see the optical notes in the commit).
+function RepoLink({ nameWithOwner }: { nameWithOwner: string }) {
+  return (
+    <a
+      href={`https://github.com/${nameWithOwner}`}
+      target="_blank"
+      rel="noreferrer noopener"
+      title={`Open ${nameWithOwner} on GitHub`}
+      className="github-repo-link inline-flex min-w-0 items-center gap-1 rounded-sm font-mono-keep text-[12.5px] font-normal text-muted outline-none transition-colors hover:text-fg focus-visible:text-fg"
+    >
+      <span className="truncate">{nameWithOwner}</span>
+      <ArrowUpRight aria-hidden="true" size={13} className="shrink-0" />
+    </a>
   )
 }
 

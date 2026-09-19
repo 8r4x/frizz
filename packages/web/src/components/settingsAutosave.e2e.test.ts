@@ -21,8 +21,14 @@ async function launch(query = "") {
   page.on("console", (m) => { if (m.type() === "error" && !/404|favicon/i.test(m.text())) errors.push(m.text()) })
   page.on("pageerror", (e) => errors.push(String(e)))
   await page.goto(`${baseUrl}/settings-formatting-fixture.html${query}`, { waitUntil: "networkidle0" })
-  await page.waitForSelector("textarea")
+  await page.waitForSelector('[role="tab"]')
   return { browser, page, errors }
+}
+
+// The triage prompt lives on the Project tab since 2026-09-19; the drawer opens on Frizz.
+async function openProjectTab(page: import("puppeteer").Page) {
+  await page.click("#settings-tab-project")
+  await page.waitForSelector("textarea")
 }
 
 const readWrites = (page: import("puppeteer").Page) =>
@@ -62,6 +68,7 @@ test("the drawer offers no Save or Cancel — a toggle writes on the click", { s
 test("typing debounces to ONE write, and it carries the last keystroke", { skip: !baseUrl, timeout: 60_000 }, async () => {
   const { browser, page, errors } = await launch()
   try {
+    await openProjectTab(page)
     await page.focus("textarea")
     await page.evaluate(() => {
       const box = document.querySelector("textarea")!
@@ -114,6 +121,7 @@ test("a replayable refusal is replayed until it lands, and says so meanwhile", {
 test("closing the drawer flushes a pending keystroke instead of dropping it", { skip: !baseUrl, timeout: 60_000 }, async () => {
   const { browser, page, errors } = await launch()
   try {
+    await openProjectTab(page)
     await page.focus("textarea")
     await page.evaluate(() => {
       const box = document.querySelector("textarea")!
@@ -141,6 +149,7 @@ test("closing the drawer flushes a pending keystroke instead of dropping it", { 
 test("one prompt editor, and Reset clears the override rather than freezing the default text", { skip: !baseUrl, timeout: 60_000 }, async () => {
   const { browser, page, errors } = await launch()
   try {
+    await openProjectTab(page)
     assert.equal(await page.evaluate(() => document.querySelectorAll("textarea").length), 1, "one editor, not one per kind")
 
     const labels = () => page.evaluate(() => [...document.querySelectorAll("button")].map((b) => (b.textContent ?? "").trim()))

@@ -1,134 +1,36 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
-import { useQuery } from "@tanstack/react-query"
+import { useEffect, useMemo, useState } from "react"
 import { useSnapshot } from "valtio"
-import { Check, Copy, HelpCircle } from "lucide-react"
+import { Check, Copy } from "lucide-react"
 import { type Settings } from "@frizz/shared"
-import { isRetryableRpcError, rpc } from "../api/rpc.ts"
 import { store } from "../store.ts"
 import { copyTextToClipboard } from "../lib/clipboard.ts"
 import { prefs } from "../lib/prefs.ts"
 import { registerSettingsClose } from "../lib/overlays.ts"
+import { SETTINGS_HELP } from "../lib/settingsHelp.ts"
 import { SHEET_CLOSE_MS, SHEET_PANEL_CLASS, SHEET_SCRIM_CLASS, prefersReducedMotion } from "../lib/sheet.ts"
-import { queryClient } from "../main.tsx"
+import { SaveStatus, useSettingsDraft } from "../hooks/useSettingsAutosave.tsx"
 import { SheetHeader } from "./ui/SheetHeader.tsx"
 import { Select } from "./ui/Select.tsx"
-import { Popover, PopoverContent, PopoverTrigger } from "./ui/Popover.tsx"
-import { Tooltip } from "./Tooltip.tsx"
-import { CLAUDE_DISPATCH_PERMISSION_OPTIONS } from "../lib/options.ts"
+import { GithubPromptEditor } from "./GithubPromptField.tsx"
+import { SettingsField } from "./SettingsField.tsx"
 
 type NotifPerm = "default" | "granted" | "denied" | "unsupported"
-export const SETTINGS_HELP = {
-  permissionMode: "The permission mode new Claude Code threads launch with. Auto runs safe actions and asks you to approve the risky ones in the thread. Bypass launches the worker with --dangerously-skip-permissions: it never asks, so nothing waits on you and nothing is checked either. Takes effect on the next thread you dispatch; to change a thread that already exists, use the picker beside its model in the prompt box. Codex threads always run with full workspace access and are unaffected.",
-  promptCacheTtl: "Which prompt-cache tier a new Claude thread writes to. A 1-hour entry costs twice the input price to write, a 5-minute entry 1.25 times; the hour only pays off when the thread's cache actually survives that long. Measured 2026-09-03: cache writes were half of a day's spend and the entries were lost every 15 to 30 minutes regardless, so 5 minutes was the cheaper tier. Automatic leaves the choice to Claude Code, which picks 1 hour on a subscription. Takes effect on the next thread you dispatch and on a thread that resumes after its worker exited.",
-  font: "Changes the interface reading font for this browser.",
-  localFileOpener: "Chooses how vetted local artifact links open. Markdown files open in Frizz's own reader (which carries an Open action that uses this setting), and image clicks always use the OS default viewer.",
-  density: "How much of a diff shows before you ask for it, in this browser. Compact collapses every diff to its header row (click one to open it); Comfortable shows them in full. Applies immediately.",
-  queueOrder: "Orders the Needs-you queue and the sidebar's rested threads by when each was last active. Oldest first (FIFO, default) surfaces the longest-waiting item first so you cycle through everything; Newest first (LIFO) keeps the most recently active on top. Applies immediately in this browser.",
-  notifications: "Shows a desktop notification when work needs attention while this window is hidden.",
-  projectRail: "Shows a permanent column of every project on this machine down the left edge. Off by default: Frizz's home is one board, and a standing list of the others is an easy way to leave the thread you were in. With it off, the home crumb in the status bar is the way back to the projects page.",
-} as const
 function currentPerm(): NotifPerm {
   if (typeof Notification === "undefined") return "unsupported"
   return Notification.permission as NotifPerm
 }
 
-// Every control here WRITES AS YOU TOUCH IT — there is no Save button and no Cancel. A picker or a
-// toggle persists on the click; a textarea persists this long after the last keystroke, so a long
-// prompt is one write instead of one per character.
-const SAVE_DEBOUNCE_MS = 500
-// How long "Saved" lingers in the header before the row goes quiet again.
-const SAVED_LINGER_MS = 1600
-// A REPLAYABLE failure — a mutation refused because Frizz is mid-update — is worth waiting out rather
-// than reporting. A promotion takes a few seconds; six tries covers it without becoming a poller.
-const RETRY_DELAY_MS = 2000
-const MAX_RETRIES = 6
-
-type SaveState = "idle" | "saving" | "saved" | "error"
-
-// The write side of the drawer. Three invariants, all silent when broken:
-//
-//  - WRITES ARE SERIALIZED. Every payload is a WHOLE Settings object, so two overlapping requests that
-//    land out of order leave the server holding the older snapshot. Chaining each write onto the
-//    previous one's settled promise makes the last thing touched the last thing stored.
-//  - A PENDING DEBOUNCE IS FLUSHED ON CLOSE. Otherwise the last half-second of typing dies with the
-//    unmount — precisely the keystrokes the Save button used to capture.
-//  - A RETRYABLE FAILURE IS RETRIED. Removing the Save button also removed the operator's way to try
-//    again, so the one failure the RPC layer certifies as side-effect-free — `isRetryableRpcError`,
-//    which the composer already leans on during a control-plane restart — has to be replayed here.
-//    Anything else is AMBIGUOUS (it may have landed) and must be reported, never re-sent.
-function useAutosave() {
-  const [state, setState] = useState<SaveState>("idle")
-  const pending = useRef<Settings | null>(null)
-  const timer = useRef<number | undefined>(undefined)
-  const chain = useRef<Promise<unknown>>(Promise.resolve())
-  const inflight = useRef(0)
-  const linger = useRef<number | undefined>(undefined)
-  const retries = useRef(0)
-  // `flush` schedules its own retry, so it needs a handle to itself that doesn't make the callback
-  // depend on its own identity. Assigned immediately below.
-  const flushRef = useRef<() => void>(() => {})
-
-  const flush = useCallback(() => {
-    if (timer.current !== undefined) window.clearTimeout(timer.current)
-    timer.current = undefined
-    const next = pending.current
-    if (!next) return
-    pending.current = null
-    inflight.current += 1
-    setState("saving")
-    chain.current = chain.current
-      .then(() => rpc.settingsSet(next))
-      .then((saved) => {
-        // Publish the server's validated copy rather than racing queued writes with a refetch.
-        queryClient.setQueryData(["settingsGet"], saved)
-        inflight.current -= 1
-        retries.current = 0
-        if (inflight.current > 0 || pending.current) return
-        setState("saved")
-        if (linger.current !== undefined) window.clearTimeout(linger.current)
-        linger.current = window.setTimeout(() => setState("idle"), SAVED_LINGER_MS)
-      })
-      .catch((error: unknown) => {
-        inflight.current -= 1
-        setState("error")
-        // A newer value is already queued behind this one — it supersedes this payload entirely, so
-        // replaying the stale one would undo the newer edit.
-        if (pending.current || !isRetryableRpcError(error) || retries.current >= MAX_RETRIES) return
-        retries.current += 1
-        pending.current = next
-        timer.current = window.setTimeout(flushRef.current, RETRY_DELAY_MS)
-      })
-  }, [])
-  flushRef.current = flush
-
-  const queue = useCallback(
-    (next: Settings, debounce = false) => {
-      pending.current = next
-      retries.current = 0
-      if (timer.current !== undefined) window.clearTimeout(timer.current)
-      timer.current = undefined
-      if (!debounce) return flush()
-      timer.current = window.setTimeout(flush, SAVE_DEBOUNCE_MS)
-    },
-    [flush],
-  )
-
-  useEffect(
-    () => () => {
-      flush()
-      if (linger.current !== undefined) window.clearTimeout(linger.current)
-    },
-    [flush],
-  )
-
-  return { state, queue, flush }
-}
+// The drawer's two tabs. "Frizz" is the machine and the browser — the keys settings.ts keeps in the
+// machine record plus the localStorage view prefs; "Project" is what the server stores per project.
+// The split is the storage split made visible: a font is a property of the person, a triage prompt
+// is a property of the repository, and one flat list had been saying otherwise.
+type SettingsTab = "frizz" | "project"
 
 export function SettingsDrawer() {
-  const settings = useQuery({ queryKey: ["settingsGet"], queryFn: () => rpc.settingsGet() })
-  const [draft, setDraft] = useState<Settings | null>(null)
+  const { draft, update, saveState, flush } = useSettingsDraft()
   const [perm, setPerm] = useState<NotifPerm>(currentPerm())
-  const { state: saveState, queue, flush } = useAutosave()
+  const [tab, setTab] = useState<SettingsTab>("frizz")
+  const projectLabel = useSnapshot(store).board?.projectLabel
 
   // Enter/exit animation. `shown` drives the slide (mount → next frame flips it true → slides in;
   // close flips it false → slides out). App renders <SettingsDrawer> only while showSettings is true,
@@ -147,22 +49,6 @@ export function SettingsDrawer() {
     return () => registerSettingsClose(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
-
-  // The server's copy seeds the form once. It is never re-seeded afterwards: every save publishes the
-  // stored value straight into this query's cache, so a later fetch can only agree with what is here.
-  useEffect(() => {
-    if (settings.data && !draft) setDraft(settings.data)
-  }, [settings.data, draft])
-
-  // The one entry point for every control: render the change, then persist it. `debounce` is for the
-  // free-text fields alone — a picker or a toggle is a single discrete intent and writes on the spot.
-  const update = useCallback(
-    (next: Settings, opts?: { debounce?: boolean }) => {
-      setDraft(next)
-      queue(next, opts?.debounce)
-    },
-    [queue],
-  )
 
   function close() {
     if (closing) return
@@ -194,15 +80,18 @@ export function SettingsDrawer() {
       >
         <SheetHeader title="Settings" actions={<SaveStatus state={saveState} />} onClose={close} />
 
+        <SettingsTabs value={tab} onChange={setTab} />
+
         {!draft ? (
           <div className="p-4 text-[13px] text-muted">Loading…</div>
-        ) : (
+        ) : tab === "frizz" ? (
           <div className="flex-1 overflow-y-auto p-5 flex flex-col gap-6">
-            {/* ORDER: the preferences that shape the interface every operator looks at come first, and
-                anything that belongs to ONE runtime sits under a band that names it. The Claude
-                permission picker led the form until 2026-08-24, so the first thing the drawer said was
-                about one vendor's CLI (maintainer: "weird that the very first setting in the settings
-                panel is Claude-specific"). */}
+            {/* ORDER: the preferences that shape the interface every operator looks at come first. The
+                Claude permission picker led the form until 2026-08-24, so the first thing the drawer
+                said was about one vendor's CLI (maintainer: "weird that the very first setting in the
+                settings panel is Claude-specific"); since 2026-09-19 the runtime settings are not here
+                at all — they open off the gear on their runtime's band in the model picker
+                (AgentSettingsPopover), where a worker is actually being chosen. */}
             <SettingsField label="Font" help={SETTINGS_HELP.font}>
               <FontToggle value={draft.font ?? "mono"} onChange={(font) => update({ ...draft, font })} />
             </SettingsField>
@@ -255,10 +144,19 @@ export function SettingsDrawer() {
               <OnOffToggle value={draft.notifications} onChange={toggleNotifications} />
               {draft.notifications && <PermHint perm={perm} />}
             </SettingsField>
-
-            <ClaudeSection draft={draft} setDraft={update} />
-
-            <PromptsSection draft={draft} setDraft={update} />
+          </div>
+        ) : (
+          <div className="flex-1 overflow-y-auto p-5 flex flex-col gap-6">
+            {/* WHICH project, because the drawer opens over whichever board is showing and nothing
+                else in it says. The label is the origin's owner/repo where there is one. */}
+            {projectLabel && (
+              <p className="text-[12px] text-muted">
+                Settings for <span className="font-mono-keep text-fg/80">{projectLabel}</span>. They apply to this project only.
+              </p>
+            )}
+            {/* The GitHub-picker triage template — the same editor the picker itself opens from its
+                gear (GithubPromptPopover), here for finding it cold. */}
+            <GithubPromptEditor draft={draft} onChange={update} />
           </div>
         )}
       </div>
@@ -266,262 +164,32 @@ export function SettingsDrawer() {
   )
 }
 
-// The header's whole account of persistence, now that no button carries it. Quiet by design: the form
-// writes itself, so the only states worth a word are the write in flight, the moment it lands, and the
-// one that matters — a write that did NOT land, in the accent that means "this wants you".
-function SaveStatus({ state }: { state: SaveState }) {
-  if (state === "idle") return null
-  if (state === "error") return <span className="text-[11px] font-normal text-accent">Couldn't save</span>
+// The full-width tab strip under the header: two cells, one row, the selected cell lifted to
+// `elevated` in the app's segmented idiom (the GitHub picker's Issues|PRs control), stretched across
+// the drawer so it reads as the drawer's own navigation rather than a control inside the form.
+function SettingsTabs({ value, onChange }: { value: SettingsTab; onChange: (tab: SettingsTab) => void }) {
+  const tabs: { id: SettingsTab; label: string }[] = [
+    { id: "frizz", label: "Frizz settings" },
+    { id: "project", label: "Project settings" },
+  ]
   return (
-    <span className={`text-[11px] font-normal text-muted transition-opacity ${state === "saved" ? "opacity-70" : "opacity-100"}`}>
-      {state === "saving" ? "Saving…" : "Saved"}
-    </span>
-  )
-}
-
-// A settings label with an instant tooltip on a small HelpCircle — keeps explanatory prose OUT of the
-// form body (one control per line reads clean when the "why" lives in the tooltip).
-function LabelWithHelp({ label, help }: { label: string; help: string }) {
-  return (
-    <span className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-muted">
-      {label}
-      <Tooltip label={help} side="right" clickable>
-        <button type="button" aria-label={`About ${label}`} className="inline-flex size-4 items-center justify-center text-muted/60 hover:text-fg transition-colors">
-          <HelpCircle size={12} />
-        </button>
-      </Tooltip>
-    </span>
-  )
-}
-
-function SettingsField({ label, help, children }: { label: string; help: string; children: ReactNode }) {
-  return (
-    <div className="flex flex-col gap-1.5">
-      <LabelWithHelp label={label} help={help} />
-      {children}
-    </div>
-  )
-}
-
-// The 6 substitution tokens the server fills in a GitHub batch-dispatch template, each with a one-word
-// gloss of what it expands to. Kept in lockstep with PROMPT_TOKENS in server/github.ts (there is no
-// shared const; this is a display hint only). Surfaced once, via the "?" popover on the token fields.
-const GH_PROMPT_TOKENS: { token: string; gloss: string }[] = [
-  { token: "repo", gloss: "repository" },
-  { token: "n", gloss: "number" },
-  { token: "title", gloss: "title" },
-  { token: "url", gloss: "link" },
-  { token: "labels", gloss: "labels" },
-  { token: "body", gloss: "description" },
-]
-
-// The prompt-cache tiers Claude Code understands (CLAUDE_CODE_PROMPT_CACHE_TTL). "auto" passes nothing
-// and the CLI picks for itself — 1 hour on a subscription — so it is the server default (settings.ts).
-const PROMPT_CACHE_TTL_OPTIONS = [
-  { value: "auto", label: "Automatic (default)" },
-  { value: "5m", label: "5 minutes" },
-  { value: "1h", label: "1 hour" },
-]
-
-// "Claude" — launch permissions and prompt caching. Context controls live in the new-thread model
-// picker. Only the two modes a headless worker can actually run in are
-// offered (see CLAUDE_DISPATCH_PERMISSION_OPTIONS); the server's workerDispatchPermission enforces the
-// same floor, so a restrictive value left in an old DB can never reach a spawn. A stored mode outside
-// the two reads as the "Auto" floor — which is exactly what would be dispatched — rather than
-// rendering the select blank. The band carries the vendor's name so the field itself does not have to.
-function ClaudeSection({
-  draft,
-  setDraft,
-}: {
-  draft: Settings
-  setDraft: (s: Settings) => void
-}) {
-  return (
-    <div className="flex flex-col gap-6">
-      <DividerLabel label="Claude" />
-      <SettingsField label="Permissions" help={SETTINGS_HELP.permissionMode}>
-        <Select
-          variant="bordered"
-          value={draft.permissionMode === "bypassPermissions" ? "bypassPermissions" : "auto"}
-          onValueChange={(v) => setDraft({ ...draft, permissionMode: v as Settings["permissionMode"] })}
-          options={CLAUDE_DISPATCH_PERMISSION_OPTIONS}
-          indicatorPosition="right"
-          ariaLabel="Claude permission mode"
-        />
-      </SettingsField>
-      <SettingsField label="Prompt cache tier" help={SETTINGS_HELP.promptCacheTtl}>
-        <Select
-          variant="bordered"
-          value={draft.promptCacheTtl ?? "auto"}
-          onValueChange={(v) => setDraft({ ...draft, promptCacheTtl: v as Settings["promptCacheTtl"] })}
-          options={PROMPT_CACHE_TTL_OPTIONS}
-          indicatorPosition="right"
-          ariaLabel="Claude prompt cache tier"
-        />
-      </SettingsField>
-    </div>
-  )
-}
-
-// "Prompts" — the user-editable prompt text, which is now exactly one box: the GitHub-picker triage
-// template. It PREFILLS with the shipped default (fetched from the server, the single source of truth)
-// so the user edits from the real prompt; a stored override supersedes it. Empty override = default.
-//
-// ONE editor, not two. Issue and PR had a box each until 2026-08-15; the two prompts said much the same
-// thing, so "make triage more skeptical" meant the same edit twice and a pair that drifted apart.
-function PromptsSection({
-  draft,
-  setDraft,
-}: {
-  draft: Settings
-  setDraft: (s: Settings, opts?: { debounce?: boolean }) => void
-}) {
-  const defaults = useQuery({ queryKey: ["githubPromptDefaults"], queryFn: () => rpc.githubPromptDefaults() })
-  return (
-    <div className="flex flex-col gap-6">
-      <DividerLabel label="Prompts" />
-
-      {/* The GitHub-picker triage template. The token "?" rides the field's OWN label row (see
-          GithubPromptField): it used to sit on a right-aligned row of its own, which read as a shared
-          header while there were two fields under it and as an orphan floating in dead space the moment
-          there was one. */}
-      {!defaults.data ? (
-        <div className="text-[12px] text-muted">Loading defaults…</div>
-      ) : (
-        <GithubPromptField
-          label="Issue and PR triage prompt"
-          help="The prompt for every item dispatched from the GitHub picker, issues and PRs alike. The default has the worker read the whole thread, classify it, and branch — reproduce + fix-plan for a bug, a plan for a feature, an adversarial review for a PR."
-          value={draft.githubPrompt}
-          fallback={defaults.data.prompt}
-          onChange={(v, opts) => setDraft({ ...draft, githubPrompt: v }, opts)}
-        />
-      )}
-    </div>
-  )
-}
-
-// A section header in the transcript's centered-divider idiom (see ChatView's EventLine): a small
-// muted label flanked by faint hairlines, so a settings group reads as a titled band rather than a
-// left-aligned caption.
-//
-// It carries its own vertical margin on top of the body's uniform `gap-6`, asymmetric on purpose: the
-// band belongs to the fields BELOW it, so the larger step is above (24 + 16 = 40px from the previous
-// control to the hairline) and the smaller one below (24 + 4 = 28px to the first label). With the
-// body gap alone the rule sat a uniform 24px from both neighbours and read as one more row in the
-// list rather than a break between groups (maintainer 2026-09-11: "a little more space between each
-// hairline divider").
-function DividerLabel({ label }: { label: string }) {
-  return (
-    <div className="mt-4 mb-1 flex items-center gap-2.5 text-[11px] uppercase tracking-wide text-muted/70">
-      <span aria-hidden className="h-px flex-1 bg-border/60" />
-      <span className="shrink-0">{label}</span>
-      <span aria-hidden className="h-px flex-1 bg-border/60" />
-    </div>
-  )
-}
-
-// A real click-popover (NOT a hover tooltip) listing the substitution tokens, built on the shared
-// Radix Popover: opaque from the first frame, portaled above the drawer, and it flips/shifts to stay
-// on-screen. Opens on click; dismisses on outside-click or Esc (Radix handles both, and — being a
-// non-modal Popover portaled to <body> — its Esc does not bubble to App's window-level Esc, so it
-// closes only the panel, never the whole Settings drawer). Prefers opening UPWARD: it sits on the
-// prompt field's label row, low in the scroll body, with the roomy textarea below it and space above.
-//
-// The trigger is a WORD, not a "?" circle. It was a HelpCircle while it lived on a row of its own; on
-// the field's label row it would be the second identical question-mark glyph in ~800px — LabelWithHelp
-// already puts one right after the label, and the two do different things (that one hovers prose, this
-// one clicks open a list). "Tokens" also says what the panel holds, which the circle never did, and it
-// matches the "Reset to default" text button it now sits beside.
-function TokenHelpPopover() {
-  const [open, setOpen] = useState(false)
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
+    <div role="tablist" aria-label="Settings sections" className="mx-5 mt-4 grid shrink-0 grid-cols-2 gap-0.5 rounded-lg border border-border bg-panel-2 p-0.5">
+      {tabs.map((tab) => (
         <button
+          key={tab.id}
           type="button"
-          className={`shrink-0 text-[11px] transition-colors ${open ? "text-accent" : "text-muted hover:text-accent"}`}
+          role="tab"
+          id={`settings-tab-${tab.id}`}
+          aria-selected={value === tab.id}
+          onClick={() => onChange(tab.id)}
+          onMouseDown={(e) => e.preventDefault()}
+          className={`rounded-md px-3 py-1.5 text-center text-[12px] font-medium outline-none transition-colors ${
+            value === tab.id ? "bg-elevated text-fg shadow-sm shadow-black/20" : "text-muted hover:text-fg"
+          }`}
         >
-          Tokens
+          {tab.label}
         </button>
-      </PopoverTrigger>
-      <PopoverContent side="top" align="end" className="w-56 p-3">
-        <div className="mb-2 text-[11px] font-medium text-fg">Substitution tokens</div>
-        <ul className="flex flex-col gap-1.5">
-          {GH_PROMPT_TOKENS.map(({ token, gloss }) => (
-            <li key={token} className="flex items-center justify-between gap-3 text-[11px]">
-              <code className="font-mono-keep rounded border border-border bg-bg px-1 py-0.5 text-[10px] text-fg/80">
-                {`{${token}}`}
-              </code>
-              <span className="text-muted/80">{gloss}</span>
-            </li>
-          ))}
-        </ul>
-      </PopoverContent>
-    </Popover>
-  )
-}
-
-// One prompt editor. `value` is the stored override (undefined = "use default"); `fallback` is the
-// shipped default shown when there is no override, so the box always renders the effective prompt.
-// Typing sets a concrete override; "Reset to default" clears it back to undefined (server default).
-// Typing is the one input in the drawer that DEBOUNCES its write — a keystroke is not an intent, a
-// pause is; "Reset to default" is a click, so it saves at once like every other control here.
-function GithubPromptField({
-  label,
-  help,
-  value,
-  fallback,
-  onChange,
-}: {
-  label: string
-  help: string
-  value: string | undefined
-  fallback: string
-  onChange: (v: string | undefined, opts?: { debounce?: boolean }) => void
-}) {
-  const customized = value != null
-  return (
-    <div className="flex flex-col gap-2">
-      {/* Label left; "Reset to default" and "Tokens" right, in that order — "Tokens" holds the far
-          corner whether or not Reset is showing, so it never shifts when the field becomes customized.
-          The MIDDOT is doing real work, not decoration. Both actions are 11px text runs whose boxes sit
-          tight to their ink (0.5-0.8px dead a side), so a flex gap here IS the ink gap — but the number
-          that decides whether they read as two controls or one phrase is the gap measured in WORD
-          SPACES, and this app ships two fonts with very different ones. At gap-3 (12px): sans spaces
-          3.15px ⇒ 3.81×, mono spaces 6.03px ⇒ 1.99×. Two word-spaces is the ambiguity zone, so the same
-          CSS that read as two controls in sans read as a phrase in mono, and no single gap fixes both.
-          A delimiter does, in any font, for one glyph of ink. It renders only when both are present.
-          Measured after: gap-2 sits the dot symmetrically — 10.60/10.56px of ink either side in mono,
-          9.44/9.68px in sans — at 124/118 mean contrast against the actions' ~307, so it separates
-          them without joining the conversation. */}
-      <div className="flex items-center justify-between gap-2">
-        <LabelWithHelp label={label} help={help} />
-        <div className="flex shrink-0 items-center gap-2">
-          {customized && (
-            <>
-              <button
-                type="button"
-                className="text-[11px] text-muted hover:text-accent transition-colors"
-                onClick={() => onChange(undefined)}
-              >
-                Reset to default
-              </button>
-              <span aria-hidden className="text-[11px] text-muted/40">·</span>
-            </>
-          )}
-          <TokenHelpPopover />
-        </div>
-      </div>
-      <textarea
-        value={value ?? fallback}
-        // Emptying the box clears the override (→ undefined), so it snaps back to showing the default
-        // and drops the "Reset" affordance — matching the server's blank-means-default semantics
-        // instead of leaving a confusing empty box that still reads as "customized".
-        onChange={(e) => onChange(e.target.value === "" ? undefined : e.target.value, { debounce: true })}
-        rows={10}
-        className="input resize-none text-[12px] leading-relaxed font-mono-keep"
-        spellCheck={false}
-      />
+      ))}
     </div>
   )
 }

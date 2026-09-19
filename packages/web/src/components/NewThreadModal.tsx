@@ -7,6 +7,7 @@ import { showToast, store } from "../store.ts"
 import { Composer } from "./Composer.tsx"
 import { GithubTrigger, useGithubTriggerVisible } from "./GithubTrigger.tsx"
 import { ProfileGridSelector } from "./ProfileGridSelector.tsx"
+import { SETTINGS_WRITE_KEY } from "../hooks/useSettingsAutosave.tsx"
 import { AcpModelSelect } from "./AcpModelSelect.tsx"
 import { LogoutConfirmModal, SignInModal } from "./SignInModal.tsx"
 import { dispatchProfileGroups } from "../lib/dispatchPreferences.ts"
@@ -28,7 +29,9 @@ export function DispatchForm({
 }) {
   // The one durable new-thread profile, shared with the GitHub picker's own selector.
   const { resolved, codexList, acpList, loadError: profileLoadError, saveProfile } = useDispatchProfile()
-  const savingContext = useIsMutating({ mutationKey: ["contextWindowSet"] }) > 0
+  // A settings write still in flight — a compaction window picked in the model picker a moment ago —
+  // must land before a dispatch that would read it.
+  const savingSettings = useIsMutating({ mutationKey: [...SETTINGS_WRITE_KEY] }) > 0
   // Gate the leftAction slot itself, not just the icon: Composer reserves rail space whenever the
   // prop is set, so a hidden GithubTrigger must mean NO prop — not a null-rendering element.
   const githubTriggerVisible = useGithubTriggerVisible()
@@ -92,7 +95,7 @@ export function DispatchForm({
   }
 
   function submit() {
-    if (!prompt.trim() || !resolved || savingContext) return
+    if (!prompt.trim() || !resolved || savingSettings) return
     // `/login` and `/logout` are frizz-owned aliases for the typed provider account actions — they
     // invoke the sign-in / sign-out flow for the SELECTED backend and never become prompt text.
     const alias = parseAccountAlias(prompt)
@@ -170,7 +173,7 @@ export function DispatchForm({
       <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-0.5">
         <ProfileGridSelector
           groups={profileGroups}
-          contextWindows
+          agentSettings
           // `pickerModel`, not `model`: an ACP row is keyed on the bare agent slug; the model inside
           // the agent is the dropdown's, below.
           value={{ provider: resolved.backend, model: resolved.pickerModel, effort: resolved.effort }}
@@ -213,7 +216,7 @@ export function DispatchForm({
         placeholder="Describe the task…"
         minHeight={96}
         maxHeight={340}
-        busy={dispatch.isPending || savingContext}
+        busy={dispatch.isPending || savingSettings}
         footer={footer}
         leftAction={githubTriggerVisible ? <GithubTrigger /> : undefined}
       />
