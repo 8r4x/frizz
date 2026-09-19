@@ -553,7 +553,7 @@ export function MobileBoard() {
             aria-label="Board actions"
             data-mobile-more
             onClick={() => setMoreOpen(true)}
-            className="button-outline ml-auto flex size-[44px] items-center justify-center rounded-full text-fg/85 active:bg-hover-strong"
+            className="icon-hover-outline ml-auto flex size-[44px] items-center justify-center rounded-full text-fg/85 active:bg-hover-strong"
           >
             <Ellipsis size={20} />
           </button>

@@ -141,7 +141,7 @@ export function RecurringPromptControl({ thread }: { thread: ThreadView }) {
           // what is armed, exactly as hovering it would.
           onFocus={() => setMode((m) => (m === "closed" ? "preview" : m))}
           onBlur={closePreview}
-          className="button-outline flex items-center rounded-md p-1 outline-none"
+          className="icon-hover-outline flex items-center rounded-md p-1 outline-none"
         >
           {/* A TARGET WITH AN ARROW IN IT (see GoalMark for the geometry and why it is drawn rather
               than imported), and the ONLY surface that says this exists (the rail deliberately carries

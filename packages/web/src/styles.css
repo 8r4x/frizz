@@ -6,6 +6,18 @@
   @apply inset-ring inset-ring-button-border;
 }
 
+/* Bare icon actions stay quiet at rest in both palettes. Keyboard focus gets the same edge. */
+@utility icon-hover-outline {
+  @media (hover: hover) {
+    &:enabled:hover {
+      @apply button-outline;
+    }
+  }
+  &:enabled:focus-visible {
+    @apply button-outline;
+  }
+}
+
 /* Dense orchestration surface; system sans-serif, 13px base. */
 @theme {
   /* WHERE /full BECOMES TWO COLUMNS — the `split:` variant, used only by StandaloneThreadPage.
@@ -1361,7 +1373,7 @@ a[href] {
 @layer components {
   /* Text inputs. Quiet border, no ring — a soft accent border on focus is the whole affordance. */
   .input {
-    @apply w-full rounded-md border border-control-border bg-bg px-2.5 py-1.5 text-[13px] outline-none transition-colors focus:border-input-focus placeholder:text-muted;
+    @apply w-full rounded-md border border-border bg-bg px-2.5 py-1.5 text-[13px] outline-none transition-colors focus:border-input-focus placeholder:text-muted;
   }
   .btn-ghost {
     @apply px-2.5 py-1.5 rounded-md text-[12px] text-muted transition-colors hover:text-fg hover:bg-panel-2 outline-none;

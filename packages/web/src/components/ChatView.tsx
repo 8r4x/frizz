@@ -1572,7 +1572,7 @@ export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue
             aria-label="Close"
             data-dialog-initial-focus
             onClick={onClose}
-            className="button-outline ml-0.5 shrink-0 rounded-md p-1.5 text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg"
+            className="icon-hover-outline ml-0.5 shrink-0 rounded-md p-1.5 text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg"
           >
             <X size={15} />
           </button>
@@ -3129,7 +3129,7 @@ function UserBubble({ text, rawText, queued, deliveryUnconfirmed, deliveryId, so
             disabled={pushNowPending}
             title="Send now — interrupts what the worker is doing so it reads the queue immediately"
             aria-label="Send now"
-            className="button-outline absolute bottom-0 right-full mr-2 flex h-7 w-7 items-center justify-center rounded-lg text-muted opacity-0 outline-none transition-[opacity,color,background-color] group-hover:opacity-100 enabled:hover:bg-panel-2/70 enabled:hover:text-fg enabled:focus-visible:opacity-100 enabled:focus-visible:bg-panel-2/70 enabled:focus-visible:ring-1 enabled:focus-visible:ring-muted/80 enabled:focus-visible:ring-offset-1 enabled:focus-visible:ring-offset-bg enabled:active:bg-elevated"
+            className="icon-hover-outline absolute bottom-0 right-full mr-2 flex h-7 w-7 items-center justify-center rounded-lg text-muted opacity-0 outline-none transition-[opacity,color,background-color] group-hover:opacity-100 enabled:hover:bg-panel-2/70 enabled:hover:text-fg enabled:focus-visible:opacity-100 enabled:focus-visible:bg-panel-2/70 enabled:focus-visible:ring-1 enabled:focus-visible:ring-muted/80 enabled:focus-visible:ring-offset-1 enabled:focus-visible:ring-offset-bg enabled:active:bg-elevated"
           >
             {pushNowPending ? <Loader2 size={15} strokeWidth={2.2} className="animate-spin" /> : <ArrowUp size={15} strokeWidth={2.2} />}
           </button>

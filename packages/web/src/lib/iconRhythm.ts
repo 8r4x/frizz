@@ -81,13 +81,14 @@ export const STRIP_INK_GAP = "gap-3"
 export const INK_TRIM_ALARM = "-mx-[3px]"
 
 
-/** Outlined 28px composer buttons paint their full boxes. A 36px pitch therefore leaves 8px
- *  between visible edges, whether the middle GitHub action is present or not. */
+/** Bare composer icons carry dead space; the filled Send button paints its full box.
+ *  These offsets leave ~14.5px between resting ink edges (not uniform box gaps).
+ *  Hover outlines do not participate in the resting rhythm. */
 export const RAIL_SEND_OFFSET = "right-2"
-export const RAIL_ACTION_OFFSET = "right-[44px]"
-export const RAIL_PAPERCLIP_OFFSET = "right-[80px]"
+export const RAIL_ACTION_OFFSET = "right-[43px]"
+export const RAIL_PAPERCLIP_OFFSET = "right-[71px]"
 export const RAIL_PAPERCLIP_PLAIN_OFFSET = "right-[44px]"
 
-/** Reserve the leftmost button's edge (108px with GitHub, 72px without), plus 8px for prose. */
-export const RAIL_RESERVE_WITH_ACTION = "pr-[7.25rem]"
+/** Reserve the leftmost button's edge (99px with GitHub, 72px without), plus 8px for prose. */
+export const RAIL_RESERVE_WITH_ACTION = "pr-[6.6875rem]"
 export const RAIL_RESERVE_PLAIN = "pr-20"

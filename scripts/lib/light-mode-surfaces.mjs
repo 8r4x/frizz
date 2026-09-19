@@ -212,6 +212,17 @@ export async function checkSurfaceStates({ page, url, font, palette, out, check,
   }
   page.off("request", request)
   assert.equal(serverWrites, 0, "Appearance never writes server settings")
+  const formEdges = await page.evaluate(() => {
+    const dropdown = document.querySelector('button[aria-label="Appearance"]')
+    const segments = [...document.querySelectorAll('.frizz-sheet-panel button[aria-pressed]')]
+    return { dropdown: getComputedStyle(dropdown).borderTopColor, segments: segments.map(el => ({ border: getComputedStyle(el).borderTopWidth, ring: getComputedStyle(el).getPropertyValue('--tw-inset-ring-shadow'), group: getComputedStyle(el.parentElement).borderTopColor })) }
+  })
+  assert.ok(formEdges.segments.length >= 6)
+  for (const segment of formEdges.segments) {
+    assert.equal(segment.border, '0px', 'Segments do not own separate frames')
+    assert.doesNotMatch(segment.ring, /inset/, 'Segments do not own inset outlines')
+    assert.equal(segment.group, formEdges.dropdown, 'Dropdown and segmented group share one border tone')
+  }
   assert.equal(await page.$$eval('.frizz-sheet-panel button', buttons => buttons.some(el => ['Mono', 'Sans'].includes(el.textContent.trim()))), false, 'There is no font setting')
   for (const choice of ['Off', 'On']) {
     const saved = page.waitForResponse(response => response.url().includes('/rpc/settingsSet') && response.ok())
@@ -236,7 +247,8 @@ export async function checkSurfaceStates({ page, url, font, palette, out, check,
     await Promise.all(document.getAnimations().filter(animation => animation.effect?.getTiming().iterations !== Infinity).map(animation => animation.finished.catch(() => {})))
   })
   const controls = await measureControlContrast(page, [
-    { label: 'Appearance border', selector: 'button[aria-label="Appearance"]', property: 'borderTopColor' },
+    // The light-gray frame is decorative; the readable value, chevron and keyboard focus identify
+    // the control. Its resting edge deliberately matches the neighboring segmented controls.
     { label: 'Appearance focus', selector: 'button[aria-label="Appearance"]', property: 'outlineColor' },
     { label: 'Appearance chevron', selector: 'button[aria-label="Appearance"] svg', property: 'color' },
   ])

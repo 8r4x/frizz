@@ -702,7 +702,7 @@ export function Composer({
         aria-label="Attach files"
         // With no rail action the paperclip TAKES the rail-action slot — at its OWN offset, not the
         // rail action’s, because it paints 1px less dead space on that side (lib/iconRhythm.ts).
-        className={`button-outline absolute bottom-2 ${railAction ? RAIL_PAPERCLIP_OFFSET : RAIL_PAPERCLIP_PLAIN_OFFSET} flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-[color,background-color] enabled:hover:bg-panel-2/70 enabled:hover:text-fg disabled:opacity-50`}
+        className={`icon-hover-outline absolute bottom-2 ${railAction ? RAIL_PAPERCLIP_OFFSET : RAIL_PAPERCLIP_PLAIN_OFFSET} flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-[color,background-color] enabled:hover:bg-panel-2/70 enabled:hover:text-fg disabled:opacity-50`}
       >
         {uploading ? <Loader2 size={15} strokeWidth={2} className="animate-spin" /> : <Paperclip size={15} strokeWidth={2} />}
       </button>
@@ -717,7 +717,7 @@ export function Composer({
         disabled={!hasContent || busy || uploading}
         title="Send (Enter · ⌘⏎ sends now)"
         aria-label="Send"
-        className={`button-outline absolute bottom-2 ${RAIL_SEND_OFFSET} flex h-7 w-7 items-center justify-center rounded-lg transition-all ${
+        className={`icon-hover-outline absolute bottom-2 ${RAIL_SEND_OFFSET} flex h-7 w-7 items-center justify-center rounded-lg transition-all ${
           // Primary actions use neutral contrast; the accent marks focus.
           hasContent && !busy && !uploading
             ? "bg-fg text-bg hover:opacity-90 active:scale-95"

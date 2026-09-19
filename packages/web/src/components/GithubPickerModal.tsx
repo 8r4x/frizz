@@ -421,8 +421,9 @@ function Segmented<T extends string>({
         <button
           key={o.value}
           onClick={() => onChange(o.value)}
+          aria-pressed={value === o.value}
           onMouseDown={(e) => e.preventDefault()}
-          className={`button-outline rounded-md px-3 py-1 text-[12px] font-medium outline-none transition-colors ${
+          className={`rounded-md px-3 py-1 text-[12px] font-medium outline-none transition-colors ${
             value === o.value ? "bg-elevated text-fg shadow-sm shadow-shadow-ink/20" : "text-muted hover:text-fg"
           }`}
         >

@@ -58,11 +58,18 @@ try {
     await load('github-picker-range', 'rows=8')
     await page.waitForSelector('[data-row-number]')
     await shot('github-picker')
+    const tabs = await page.$$eval('button[aria-pressed]', buttons => buttons.map(el => ({ border: getComputedStyle(el).borderTopWidth, ring: getComputedStyle(el).getPropertyValue('--tw-inset-ring-shadow') })))
+    assert.equal(tabs.length, 2)
+    for (const tab of tabs) {
+      assert.equal(tab.border, '0px', 'GitHub tabs share the group frame')
+      assert.doesNotMatch(tab.ring, /inset/, 'No separate tab outlines')
+    }
     await page.click('[data-row-number]')
     await shot('github-picker-selected')
     await page.click('[aria-label="Triage prompt settings"]')
     await page.waitForSelector('[data-github-prompt-menu] textarea')
     await shot('github-prompt')
+    assert.equal(await page.$eval('[data-github-prompt-menu] textarea', el => getComputedStyle(el).borderTopColor), await page.$eval('button[aria-pressed]', el => getComputedStyle(el.parentElement).borderTopColor), 'Triage prompt and tab group share one border tone')
     await load('first-run')
     await page.waitForSelector('[data-quota-bar] button')
     await shot('first-run')
@@ -77,7 +84,8 @@ try {
       const selectors = `${scope} [title^="Attach"],${scope} [aria-label="Investigate this issue and make recommendations"],${scope} button[title^="Send"]`
       const ink = await promisify(execFile)('nub', [join(root, 'scripts/ink-gaps.mjs'), page.url(), selectors, `--browser=${browser.wsEndpoint()}`, '--dsf=8', '--w=1100', '--h=1000', '--pad=0', `--before=document.documentElement.dataset.theme='${theme}'`], { cwd: root })
       writeFileSync(join(out, `${theme}-composer-ink.txt`), ink.stdout)
-      assert.deepEqual(JSON.parse(ink.stdout).gaps.map(row => row.inkGap), [8, 8], 'Outlined composer controls keep equal 8px ink gaps')
+      const gaps = JSON.parse(ink.stdout).gaps.map(row => row.inkGap)
+      assert.ok(gaps.every(gap => gap >= 13.5 && gap <= 15.5) && Math.abs(gaps[0] - gaps[1]) < 1, `Bare composer icons keep even ink gaps: ${gaps}`)
       await page.bringToFront()
       const viewport = page.viewport()
       await page.setViewport({ ...viewport, deviceScaleFactor: 8 })

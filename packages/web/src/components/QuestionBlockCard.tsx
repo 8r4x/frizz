@@ -438,15 +438,11 @@ function Chip({
             take effect. */}
         <div id={labelId}>
           {recommended && (
-            // Optically centred on the option text's CAP BLOCK, not on its line box. Measured on the
-            // rendered page: the pill's ink centre sat 1.88px (sans) / 1.80px (mono) BELOW the label's,
-            // because a 9.5px pill inside a 12px line resolves a shorter line box and lands its baseline
-            // 1px low. Unlike the icon nudge this is font-INDEPENDENT — both sides scale with the same
-            // font — so it is a constant, and 2px lands on a whole device pixel at 2× DPR. `translate`
-            // (not a margin) so the float's exclusion area, and therefore the text wrap, is untouched.
-            // `pointer-events-none`: the transform makes the badge a stacking context that paints above
-            // the stretched button, and a click on the badge must still pick the option.
-            <span className="pointer-events-none float-right ml-2 mt-px -translate-y-[2px] rounded-full border border-border-strong px-1.5 py-px text-[9.5px] uppercase tracking-wide text-muted">
+            // Keep the pill inside the first answer line, not taller than it. In system sans,
+            // leading-none gives a 13.5px pill; its border/text centers are within 0.2px of the
+            // answer's cap band at desktop and phone widths (verify-control-chrome.mjs).
+            // The float still lets wrapped answers reclaim the full width below it.
+            <span className="pointer-events-none float-right ml-2 mt-px rounded-full border border-border-strong px-1.5 py-px text-[9.5px] leading-none uppercase tracking-wide text-muted">
               Recommended
             </span>
           )}
