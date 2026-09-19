@@ -68,8 +68,8 @@ export function writeMachineSettings(next: MachineSettings, home: string): void 
 
 export const defaultSettings = (): Settings => ({
   // `bypassPermissions` = claude's --dangerously-skip-permissions: a headless worker never stops on an
-  // approval card. Shipped default since 0.7.2 (maintainer 2026-08-24); the Settings "Permissions"
-  // (under Claude) control can lower it to `auto` — the CLI's classifier mode, where risky actions
+  // approval card. Shipped default since 0.7.2 (maintainer 2026-08-24); the "Permissions" control
+  // behind the Claude Code gear in the model picker can lower it to `auto` — the CLI's classifier mode, where risky actions
   // still surface an approval card in the thread. Those are the only two values a headless worker can
   // run in: the dispatch floor (WORKER_DISPATCH_PERMISSION) stays `auto`, and workerDispatchPermission
   // honors exactly one deviation from it, which is this one.

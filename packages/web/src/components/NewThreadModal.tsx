@@ -125,7 +125,8 @@ export function DispatchForm({
       prompt: prompt.trim(),
       // No permissionMode: the server stamps every created worker itself (workerDispatchPermission —
       // the non-interactive floor, raised to bypass only when Settings asks). Dispatch offers no
-      // per-thread permission choice; the Settings "Permissions" control (under Claude) owns the default.
+      // per-thread permission choice; the "Permissions" control behind the Claude Code gear in the model
+      // picker (AgentSettingsPopover) owns the default.
       model: resolved.model,
       backend: resolved.backend,
       // An ACP profile resolves to effort "" (no effort axis); the RPC's enum takes that as ABSENT.
