@@ -57,11 +57,18 @@ export function AgentSettingsPopover({ backend, open, onOpenChange }: {
             type="button"
             aria-label={`${provider} settings`}
             title={`${provider} settings for new threads in this project`}
-            // Ink-square: the 14px glyph in a 20px hover square (3px of padding a side), the same
-            // proportion as the row's other bare glyphs. `-my-1` keeps the square from stretching the
-            // 16px header row; `-mr-1` lets the glyph's ink, not its box, sit flush with the menu's
-            // right edge, where the band label's ink sits flush with the left.
-            className="agent-settings-trigger -my-1 -mr-1 inline-flex size-5 shrink-0 items-center justify-center rounded-[5px] text-muted/70 outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:bg-panel-2 focus-visible:text-fg data-[state=open]:bg-panel-2 data-[state=open]:text-fg"
+            // A 14px glyph in a 20px hover square, MEASURED into place on the band's header row:
+            //  - VERTICAL. The row is `items-baseline`, and a flex button with only an SVG in it hands
+            //    the row its SVG's bottom edge as a baseline, so the glyph's centre landed 7px above
+            //    the label's baseline — 2.8px (sans) / 3.2px (mono) above the label's cap band. The
+            //    translate moves it down by exactly the difference between half the 14px glyph and
+            //    half the resolved cap height, so it tracks the font setting with nothing to re-fit
+            //    (measured after: 0.0px in both fonts).
+            //  - HORIZONTAL. Settings2 paints 9.3 of its 14px, so the square carries 5.3px of dead
+            //    space a side; `-mr-3` pulls the box out so the glyph's INK ends 13px from the menu's
+            //    right edge — the same 13px the label's ink starts from on the left (it was 21px).
+            //  - `-my-1` keeps the square from stretching the header row.
+            className="agent-settings-trigger -my-1 -mr-3 inline-flex size-5 shrink-0 translate-y-[calc(7px_-_0.5cap)] items-center justify-center rounded-[5px] text-muted/70 outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:bg-panel-2 focus-visible:text-fg data-[state=open]:bg-panel-2 data-[state=open]:text-fg"
           >
             <Settings2 aria-hidden="true" size={14} />
           </button>

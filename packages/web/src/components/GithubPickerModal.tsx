@@ -175,10 +175,15 @@ export function GithubPickerModal({ onClose }: { onClose: () => void }) {
             gear that opens the triage prompt this picker dispatches with. The slug was an em-dashed
             suffix of the title until 2026-09-19; as a link in the far corner it is the picker's one
             way OUT to the repo, and the gear beside it is the picker's own settings, where they apply. */}
-        <h2 className="mb-4 flex items-center gap-2 text-[14px] font-medium">
-          <Github size={15} className="text-muted" />
+        {/* `items-baseline`, not `items-center`: the three glyphs on this row (the GitHub mark, the
+            link's arrow, the gear) are each put on the title's CAP BAND by a browser-computed
+            translate — half the glyph's box minus half the resolved cap height — which needs a shared
+            baseline to work from. Centred boxes put the gear 0.6px high in sans and 2.0px low in mono
+            (measured 2026-09-19); on the cap band the residual is 0.0px in both. */}
+        <h2 className="mb-4 flex items-baseline gap-2 text-[14px] font-medium">
+          <Github size={15} aria-hidden="true" className="shrink-0 self-baseline translate-y-[calc(7.5px_-_0.5cap)] text-muted" />
           <span className="min-w-0 truncate">Investigate this issue and make recommendations</span>
-          <span className="ml-auto flex shrink-0 items-center gap-2">
+          <span className="ml-auto flex shrink-0 items-baseline gap-2">
             {status.data?.nameWithOwner && <RepoLink nameWithOwner={status.data.nameWithOwner} />}
             <GithubPromptPopover />
           </span>
@@ -345,10 +350,15 @@ export function GithubPickerModal({ onClose }: { onClose: () => void }) {
 }
 
 // The repo slug as a link OUT to github.com, in the picker header's far corner. Mono for the slug
-// (it is an identifier), the arrow at the slug's own size so the pair reads as one link: the glyph
-// is lucide's arrow-up-right, the "opens elsewhere" mark GitHub itself uses beside external links.
-// Its ink sits centred in a 15px box; `-ml-[0.2em]` closes the box's dead side so the arrow reads as
-// the slug's tail rather than a separate mark (measured: see the optical notes in the commit).
+// (it is an identifier); the arrow is lucide's arrow-up-right, the "opens elsewhere" mark GitHub
+// itself uses beside external links, at the slug's own `1em` so the pair reads as one link.
+//
+// The arrow's ink is centred in its box (7..17 of 24), so with the link `items-baseline` the
+// documented `0.5em - 0.5cap` translate puts it exactly on the slug's cap band in either font. It
+// paints 10 of its 24 box units — 0.29em of dead space a side — so `-ml-[0.29em]` collapses the box
+// onto its ink and the `gap-1` becomes 4px of INK between the slug's last glyph and the arrow (it
+// read 8.4px before the trim), which is what makes the arrow the slug's tail rather than a mark
+// standing next to it.
 function RepoLink({ nameWithOwner }: { nameWithOwner: string }) {
   return (
     <a
@@ -356,10 +366,10 @@ function RepoLink({ nameWithOwner }: { nameWithOwner: string }) {
       target="_blank"
       rel="noreferrer noopener"
       title={`Open ${nameWithOwner} on GitHub`}
-      className="github-repo-link inline-flex min-w-0 items-center gap-1 rounded-sm font-mono-keep text-[12.5px] font-normal text-muted outline-none transition-colors hover:text-fg focus-visible:text-fg"
+      className="github-repo-link inline-flex min-w-0 items-baseline gap-1 rounded-sm font-mono-keep text-[12.5px] font-normal text-muted outline-none transition-colors hover:text-fg focus-visible:text-fg"
     >
       <span className="truncate">{nameWithOwner}</span>
-      <ArrowUpRight aria-hidden="true" size={13} className="shrink-0" />
+      <ArrowUpRight aria-hidden="true" className="-ml-[0.29em] size-[1em] shrink-0 self-baseline translate-y-[calc(0.5em_-_0.5cap)]" />
     </a>
   )
 }

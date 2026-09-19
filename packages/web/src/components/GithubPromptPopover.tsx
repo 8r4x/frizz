@@ -25,7 +25,14 @@ export function GithubPromptPopover() {
           aria-label="Triage prompt settings"
           title="Edit the prompt every thread this picker starts will run"
           onMouseDown={(e) => e.preventDefault()}
-          className="github-prompt-trigger inline-flex size-6 shrink-0 items-center justify-center rounded-md text-muted/70 outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:bg-panel-2 focus-visible:text-fg data-[state=open]:bg-panel-2 data-[state=open]:text-fg"
+          // A 15px glyph in a 24px hover square on the picker's `items-baseline` header row. The
+          // square hands the row its SVG's bottom edge as a baseline, so the translate — half the
+          // glyph minus half the title's resolved cap height — puts the glyph's centre on the title's
+          // cap band in either font. Settings2 paints 10 of its 15px, so the square carries 7px of
+          // dead space a side: `-ml-2` brings its ink to ~11px from the link's arrow (18.8px before),
+          // and `-mr-[5px]` ends the ink 2px inside the header's right edge, the same clearance the
+          // GitHub mark's ink has from the left.
+          className="github-prompt-trigger -ml-2 -mr-[5px] inline-flex size-6 shrink-0 self-baseline translate-y-[calc(7.5px_-_0.5cap)] items-center justify-center rounded-md text-muted/70 outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:bg-panel-2 focus-visible:text-fg data-[state=open]:bg-panel-2 data-[state=open]:text-fg"
         >
           <Settings2 aria-hidden="true" size={15} />
         </button>
