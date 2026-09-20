@@ -48,7 +48,13 @@ const liveChild = [{ id: "a1", label: "c", startedAt: "2026-08-01T09:05:00.000Z"
 
 // One thread per state the rail can resolve, named by the kind sessionIndicatorKind returns for it.
 const STATES: { kind: string; t: ThreadView }[] = [
-  { kind: "working", t: { ...base, id: "working", runtime: "turn-idle", needsYou: false, subAgents: liveChild } as unknown as ThreadView },
+  // OWN TURN RUNNING: the empty spinner. Until 2026-09-20 this slot was a turn-idle parent with a live
+  // child, which resolves to the same kind — but that shape now draws the ellipsis INSIDE the spinner
+  // (Sidebar.tsx, the `working` arm reading groups.restingOnSubAgents), so it has its own slot below.
+  { kind: "working", t: { ...base, id: "working", runtime: "running", needsYou: false } as unknown as ThreadView },
+  // A PARENT AT REST WITH ITS SUB-AGENTS OUT: the spinner around the ellipsis. `needsYou: false` because
+  // the server excuses a rest on live own work from the queue, so the row sits in the Running band.
+  { kind: "children", t: { ...base, id: "children", runtime: "turn-idle", needsYou: false, subAgents: liveChild } as unknown as ThreadView },
   // Shell-only, deliberately: a live sub-agent resolves to `working`, not to this mark. `needsYou: false`
   // because the server excuses a rest on live own work from the queue outright.
   { kind: "background", t: { ...base, id: "background", runtime: "turn-idle", needsYou: false, awaitingBackground: true, bgShells: [{ label: "nub run dev", startedAt: "2026-08-01T09:02:00.000Z", state: "running" }] } as unknown as ThreadView },
@@ -81,6 +87,12 @@ const STATES: { kind: string; t: ThreadView }[] = [
   // octocat is the only mark here whose ink is not symmetric about its own viewBox centre, so it is the
   // one that needs a measured nudge rather than an odd size — see PR_MARK_NUDGE in Sidebar.tsx.
   { kind: "pr", t: { ...base, id: "pr", runtime: "turn-idle", needsYou: true, watches: [{ id: "wch_1", kind: "github", target: "colinhacks/frizz#1", state: "armed", createdAt: "2026-09-04T09:00:00.000Z" }] } as unknown as ThreadView },
+  // AWAITING A PR WHOSE CHECKS ARE RUNNING (2026-09-20): the same octocat inside the spinner. The server
+  // holds this thread in the Running band (board.heldByRunningChecks), so `needsYou: false`.
+  { kind: "pr-running", t: { ...base, id: "pr-running", runtime: "turn-idle", needsYou: false, awaitingBackground: true, watches: [{ id: "wch_2", kind: "github", target: "colinhacks/frizz#2", state: "armed", createdAt: "2026-09-20T09:00:00.000Z", github: { checks: "running", running: 2, passed: 1, failed: 0, skipped: 0, gated: 0, gating: [], failing: [], merge: "unknown", state: "open", polledAt: "2026-09-20T09:01:00.000Z" } }] } as unknown as ThreadView },
+  // GATED CI READS `running` BUT DOES NOT SPIN: nothing moves until a maintainer approves the workflows,
+  // so the row wears the static octocat (groups.prChecksRunning refuses `running === 0 && gated > 0`).
+  { kind: "pr-gated", t: { ...base, id: "pr-gated", runtime: "turn-idle", needsYou: true, watches: [{ id: "wch_3", kind: "github", target: "colinhacks/frizz#3", state: "armed", createdAt: "2026-09-20T09:00:00.000Z", github: { checks: "running", running: 0, passed: 0, failed: 0, skipped: 0, gated: 3, gating: ["Test Linux", "Test macOS", "Linters"], failing: [], merge: "unknown", state: "open", polledAt: "2026-09-20T09:01:00.000Z" } }] } as unknown as ThreadView },
 ]
 
 createRoot(document.getElementById("root")!).render(

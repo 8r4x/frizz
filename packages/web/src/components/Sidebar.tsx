@@ -8,7 +8,7 @@ import { store, openThread, scrollToQueueCard, queueCardTargetY, pushSubAgentDra
 import { rpc } from "../api/rpc.ts"
 import { useBoard, asThreads } from "../hooks.ts"
 import { prefs } from "../lib/prefs.ts"
-import { sectionThreads, externalThreads, orderByInteraction, partitionActive, needsAction, displayTitle, titleIsProvisional, isPinned, isSnoozed, parkedAwaitingHint, sessionIndicatorKind, offersRetry, futureSnoozedUntil, lastActiveLabelAt, waitNamesPr } from "../groups.ts"
+import { sectionThreads, externalThreads, orderByInteraction, partitionActive, needsAction, displayTitle, titleIsProvisional, isPinned, isSnoozed, parkedAwaitingHint, sessionIndicatorKind, offersRetry, futureSnoozedUntil, lastActiveLabelAt, waitNamesPr, prChecksRunning, restingOnSubAgents } from "../groups.ts"
 import { ageSpan, relativeAge, limitResumeClock } from "../lib/activityTime.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { BoxSpinner, STATUS_BOX } from "./BoxSpinner.tsx"
@@ -1008,11 +1008,17 @@ export function ThreadIndicator({ t, legacy }: { t: ThreadView; legacy?: boolean
 // the SAME rounded-rect outer box with a glyph inside, so the rail reads like a to-do list.
 //   [ ] idle        — at rest, nothing pending (empty box)
 //   [/] in progress — the rounded-RECT spinner (a segment travels the box perimeter): this thread's own
-//                     turn, or a live SUB-AGENT whose return will re-invoke it. Both are real motion.
+//                     turn. SINCE 2026-09-20 THE SPINNER IS ALSO THE FRAME for every row something will
+//                     wake, and the mark inside says what (maintainer: "everything in the running rail
+//                     should always have this spinner animation going"): empty for an own turn, the
+//                     ellipsis for a parent at rest with a live SUB-AGENT out (restingOnSubAgents — the
+//                     children spin on their own rows), the blue dot below for a shell, the octocat for
+//                     a PR whose checks are running (prChecksRunning).
 //   [•] background  — at rest with only a detached background SHELL still running (never a sub-agent —
-//                     maintainer 2026-08-01). Nothing is coming back, so nothing spins; the pulsing blue
-//                     dot says "alive, not moving". The row holds its place in the running band — and
-//                     keeps this same dot once the human snoozes its card into the Snoozed band, because
+//                     maintainer 2026-08-01): a SOLID blue dot inside the spinner. It was a pulsing dot in
+//                     a static box until 2026-09-20; the motion moved to the frame and the dot went solid
+//                     ("a solid, non-pulsing blue dot"). The row holds its place in the running band — and
+//                     keeps this same mark once the human snoozes its card into the Snoozed band, because
 //                     the shell is the fact and the park is only how the row is presented (see shellDot).
 //   [?] needs input — a question / native ask / permission prompt (accent box + "?")
 //   [!] stalled     — the agent's PROCESS EXITED with the work unfinished (accent box + "!"), whether
@@ -1080,11 +1086,15 @@ function stackParked(tip: string | null, parked: string): string {
 // sub-agent pulses elsewhere: a LIVE sub-agent makes isSnoozed false outright (hasLiveSubAgents), so
 // the arm is reachable only on a park the server honoured for something else in the same fence.
 //
-// AND IT KEEPS ITS PULSE IN THE SNOOZED BAND. The band's own dim (opacity-65 on the row) is what says
-// "parked" — the same ruling .frizz-rail-dot already states for its own animation, that only TONE may
-// move because the geometry is what identifies the mark. A static twin would be a second mark to keep
-// in sync for a distinction the band already draws, and the shell really is still running.
-const shellDot = <StatusBox><span aria-hidden className="frizz-rail-dot" data-running-indicator="thread-background" /></StatusBox>
+// SINCE 2026-09-20 THE DOT SITS INSIDE THE SPINNER AND NO LONGER PULSES. The maintainer's rule for the
+// Running band is that every row spins and the mark inside says what is alive ("an empty square if the
+// thread is actively running … a blue dot if there's a background shell, a solid, non-pulsing blue
+// dot"). The motion moved from the dot to the frame: the spinner says "something will wake this", the
+// solid dot says "it is a shell". The pulse was the dot's way of saying alive-not-moving while the box
+// stood still; with the box tracing, a pulsing dot inside it would be two animations for one fact.
+// It keeps this same frame in the Snoozed band — the band's own dim (opacity-65 on the row) is what
+// says "parked", and the shell really is still running.
+const shellDot = <BoxSpinner><span aria-hidden className="frizz-rail-dot" data-running-indicator="thread-background" /></BoxSpinner>
 
 // THE OCTOCAT IS THE ONE MARK IN THIS FAMILY WHOSE INK IS NOT CENTRED IN ITS OWN VIEWBOX, so it is the
 // one that needs a correction rather than just an odd size. `items-center justify-center` centres the
@@ -1120,11 +1130,14 @@ const PR_MARK_NUDGE = PR_MARK_SIZE / 24
 // is shared: the PR is the fact, and which band the row happens to sit in is only how it is presented
 // (maintainer 2026-09-04: "the GitHub icon should show up anytime that an agent is awaiting a PR").
 //
-const githubMark = (
-  <StatusBox>
-    <Github size={PR_MARK_SIZE} className="text-muted-70" style={{ transform: `translateX(${PR_MARK_NUDGE}px)` }} />
-  </StatusBox>
-)
+// The glyph alone, so the same octocat can sit inside the static box (settled checks) and inside the
+// spinner (checks running) — one glyph, two frames; see the `pr` arm.
+const githubGlyph = <Github size={PR_MARK_SIZE} className="text-muted-70" style={{ transform: `translateX(${PR_MARK_NUDGE}px)` }} />
+const githubMark = <StatusBox>{githubGlyph}</StatusBox>
+
+// The at-rest ellipsis, alone, for the same reason: the bare-rest arm draws it in the static box, and
+// since 2026-09-20 the `working` arm draws it inside the spinner for a parent resting on its sub-agents.
+const ellipsisGlyph = <Ellipsis size={11} className="text-muted-70" />
 
 // THE ONE MARK FOR "THIS THREAD IS PARKED ON THE CLOCK" — the muted hourglass, drawn by every arm whose
 // row is waiting for an instant the WORKER set: a park with no fence to read, and since 2026-09-07 a
@@ -1172,10 +1185,17 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
     // by sitting in the ⚖ queue, so the rail indicator adds NO extra color (maintainer 2026-07-10).
     return { node: <StatusBox><Glyph ch="?" muted /></StatusBox>, tip: "Needs your input" }
   }
-  if (kind === "working") return { node: <BoxSpinner />, tip: "Working" }
+  if (kind === "working") {
+    // A PARENT AT REST WITH ITS SUB-AGENTS OUT spins with the ellipsis inside (2026-09-20): the spinner
+    // says a child's return will re-invoke it, the ellipsis says the parent itself has stopped. Same
+    // kind, same band — only the mark inside changes — because the motion is real either way and the
+    // kind is what offersRetry and the band read. A thread whose own turn is running keeps the empty box.
+    if (restingOnSubAgents(t)) return { node: <BoxSpinner>{ellipsisGlyph}</BoxSpinner>, tip: "At rest — waiting on its sub-agents" }
+    return { node: <BoxSpinner />, tip: "Working" }
+  }
   // The thread has stopped and nothing is going to wake it — only a detached shell it launched is still
-  // running — so the box stops tracing and the row simply stays alive in the running band. The mark is
-  // `shellDot`, shared with the parked arm below; see its note for why one dot serves both.
+  // running — so the row simply stays alive. The mark is `shellDot` (the solid blue dot inside the
+  // spinner), shared with the parked arm below; see its note for why one mark serves both.
   if (kind === "background") {
     // The fence, when there is one, names the shell itself (and any PR riding beside it), so the lead
     // drops to a bare "At rest" rather than saying "a background shell" twice in one sentence.
@@ -1219,7 +1239,16 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
   // where MOST PR waits actually live, and until 2026-09-04 every one of them wore either the shell's
   // blue dot (checks still running) or the bare-rest ellipsis (checks settled). The tooltip is the
   // fence's own clause, which names the ref — "waiting on acme/app#391" — so the hover reaches the PR.
-  if (kind === "pr") return { node: githubMark, tip: popover(t, "At rest") }
+  // WHILE CHECKS RUN THE OCTOCAT SPINS (2026-09-20). CI running is the one PR reading that is motion with
+  // a known end — the server already holds such a thread in the Running band for exactly that reason
+  // (board.heldByRunningChecks, maintainer 2026-08-14) — so the row wears the spinner around GitHub's
+  // mark there, and drops back to the static octocat in the queue once the checks settle and the wait
+  // is for a person. prChecksRunning refuses a gated PR, so a maintainer's approval gate never spins.
+  if (kind === "pr") {
+    return prChecksRunning(t)
+      ? { node: <BoxSpinner>{githubGlyph}</BoxSpinner>, tip: popover(t, "At rest — checks are running") }
+      : { node: githubMark, tip: popover(t, "At rest") }
+  }
   // AWAITING A TIMER, IN THE QUEUE — the same hourglass the Snoozed arm draws, on the rows that never
   // park. A timer park queues (board.deriveNeedsYou), so this is where MOST timer waits actually live,
   // and until 2026-09-07 every one of them wore the shell's blue dot (groups.awaitingTimerWatch carries
@@ -1327,7 +1356,7 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
   // glyph says "at rest" and the popover says what it thinks it is waiting for, which is the one thing
   // the rail cannot show and the operator most wants on hover (maintainer 2026-08-16).
   return {
-    node: <StatusBox><Ellipsis size={11} className="text-muted-70" /></StatusBox>,
+    node: <StatusBox>{ellipsisGlyph}</StatusBox>,
     tip: popover(t, "At rest"),
   }
 }

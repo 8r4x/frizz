@@ -228,6 +228,28 @@ test("checks still running hold the thread OUT of the queue — the active rail,
   assert.equal(deriveAwaitingBackground(row(), watching(), "turn-idle", false, NOW, undefined, false, running, REGISTERED), true)
 })
 
+// THE REGISTERED WATCH ALONE HOLDS (2026-09-20). A worker that called `mcp__frizz__watch_pr` and rested
+// without a fence — the shape the worker contract steers toward — was queued while its checks ran, while
+// the rail's mark read the same registered row and called the thread live. The registry is the signal.
+test("a registered watch with no fence holds the thread out of the queue while checks run", () => {
+  const unfenced = { ...watching(), lastFence: undefined } as unknown as SessionTelemetry
+  const running = book({ checks: "running", running: 2, passed: 1 })
+  assert.equal(deriveNeedsYou(row(), unfenced, "turn-idle", false, NOW, undefined, true, false, running, REGISTERED), false)
+  // …and with nothing registered the same telemetry is an ordinary rest: a visible handoff.
+  assert.equal(deriveNeedsYou(row(), unfenced, "turn-idle", false, NOW, undefined, true, false, running, new Set()), true)
+})
+
+// GATED CI DOES NOT HOLD. `checks` reads `running` for workflows parked at GitHub's "Approve and run"
+// gate — nothing has settled — but nothing is moving either, and nothing will until a maintainer presses
+// the button. A thread held behind that forever would hide, in the Running band, the one PR wait that
+// never resolves on its own.
+test("a PR whose only unfinished checks are gated requeues the thread; one live run beside the gate still holds", () => {
+  const gated = book({ checks: "running", running: 0, gated: 3, gating: ["Test Linux", "Test macOS", "Linters"] })
+  assert.equal(deriveNeedsYou(row(), watching(), "turn-idle", false, NOW, undefined, true, false, gated, REGISTERED), true)
+  const partlyGated = book({ checks: "running", running: 1, gated: 2, gating: ["Test macOS", "Linters"] })
+  assert.equal(deriveNeedsYou(row(), watching(), "turn-idle", false, NOW, undefined, true, false, partlyGated, REGISTERED), false)
+})
+
 test("every terminal reading puts it back in the queue", () => {
   for (const [what, over] of [
     ["passing", { checks: "passing" as const, passed: 3 }],

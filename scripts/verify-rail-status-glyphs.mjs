@@ -135,13 +135,22 @@ try {
     const mark = marks[i]
     // Hide the box's border so ONLY the inner mark paints — its ink box is then unambiguous. The
     // attribute sits on the tooltip wrapper, so the border to hide is on a DESCENDANT (StatusBox).
+    // SINCE 2026-09-20 THE FRAME MAY BE THE SPINNER instead of a border: a rest on a shell, a parent
+    // resting on its sub-agents and a PR with checks running all draw their mark INSIDE the BoxSpinner
+    // (its SVG has the 15-unit viewBox; nothing else in the family does). It is the box, traced, so it is
+    // hidden the same way the border is — but only when a mark stands inside it. An empty spinner
+    // (`working`) has nothing else to measure and stays visible, as it always has.
     await mark.evaluate((root) => {
       for (const el of [root, ...root.querySelectorAll("*")]) el.style.borderColor = "transparent"
+      const frames = [...root.querySelectorAll('svg[viewBox="0 0 15 15"]')]
+      const inner = [...root.querySelectorAll("svg, .frizz-rail-dot")].filter((el) => !frames.includes(el))
+      if (inner.length) for (const f of frames) f.style.visibility = "hidden"
     })
     await new Promise((r) => setTimeout(r, 60))
     const buf = await mark.screenshot({ encoding: "base64" })
     await mark.evaluate((root) => {
       for (const el of [root, ...root.querySelectorAll("*")]) el.style.borderColor = ""
+      for (const f of root.querySelectorAll('svg[viewBox="0 0 15 15"]')) f.style.visibility = ""
     })
 
     const ink = await page.evaluate(async (b64, dsf) => {

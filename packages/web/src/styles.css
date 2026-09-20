@@ -415,17 +415,12 @@ body {
   height: 5px;
   border-radius: 9999px;
   background: var(--color-shell);
-  animation: frizz-rail-dot-pulse 1.25s ease-in-out infinite;
-}
-/* Brightness alone — the geometry is what says "this is the same kind of mark", so only tone may move
-   (the same ruling the quiet shell dot's breathe follows). */
-@keyframes frizz-rail-dot-pulse {
-  50% { opacity: 0.45; }
-}
-@media (prefers-reduced-motion: reduce) {
-  /* No ring substitution needed: this dot is solid at full opacity already, and the box around it is
-     what carries the "there is a mark here" reading. */
-  .frizz-rail-dot { animation: none; opacity: 1; }
+  /* SOLID SINCE 2026-09-20 — no pulse. The dot pulsed at 1.25s (tone only, 50% → 0.45) while the box
+     around it stood still, which was how a shell-only rest said "alive, not moving". The motion now
+     lives on the FRAME: the rail draws this dot inside the BoxSpinner (Sidebar.tsx shellDot), and the
+     maintainer's rule is a "solid, non-pulsing blue dot" inside the spinner — two animations on one
+     15px mark would fight. The transcript's live-shell dot (.frizz-live-dot--shell) keeps its own pulse;
+     that surface has no spinner around it. */
 }
 /* The armed heartbeat's pulse. Slower than the shell dot's 1.25s and shallower — this mark says "frizz
    will nudge this in a few minutes", not "something is happening right now", and a mark that beats as
