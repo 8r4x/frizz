@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import { generateClaimIdentity, exportClaimPublicKey, relayHandshakeInput } from "@frizz/shared"
-import { boardNameFor, handshakeAccepted, ownerPubkeyFor, type RelayEnv } from "./worker.ts"
+import { boardNameFor, handshakeAccepted, ownerPubkeyFor, visitorResponseInit, type RelayEnv } from "./worker.ts"
 
 const NOW = 1_800_000_000_000
 
@@ -75,4 +75,19 @@ test("the owning key is read from the registry, and a bad row reads as unclaimed
   assert.equal(await ownerPubkeyFor(env, "broken"), null)
   assert.equal(await ownerPubkeyFor(env, "empty"), null)
   assert.equal(await ownerPubkeyFor(env, "nobody"), null)
+})
+
+test("a body the board already encoded is passed through, never encoded a second time", () => {
+  // Workers compress a constructed Response to match its content-encoding header unless told the body
+  // already is. The board brotli-encodes index.html, so without "manual" a phone got brotli twice.
+  const brotli = visitorResponseInit(200, [["content-type", "text/html"], ["Content-Encoding", "br"]])
+  assert.equal(brotli.encodeBody, "manual")
+  assert.equal(brotli.status, 200)
+  const gzip = visitorResponseInit(200, [["content-encoding", "gzip"]])
+  assert.equal(gzip.encodeBody, "manual")
+  // A plain body keeps the default so the edge can still compress it for a client that accepts it.
+  const plain = visitorResponseInit(401, [["content-type", "text/html; charset=utf-8"]])
+  assert.equal(plain.encodeBody, undefined)
+  const identity = visitorResponseInit(200, [["content-encoding", "identity"]])
+  assert.equal(identity.encodeBody, undefined)
 })

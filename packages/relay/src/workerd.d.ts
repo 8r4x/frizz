@@ -67,4 +67,9 @@ declare class WebSocketPair {
 interface ResponseInit {
   /** workerd's extension: the client half of a pair, returned with a 101. */
   webSocket?: WorkerWebSocket | null
+  /**
+   * workerd's extension: whether the runtime encodes the body to match `content-encoding`
+   * ("automatic", the default) or the body already is ("manual"). See `visitorResponseInit`.
+   */
+  encodeBody?: "automatic" | "manual"
 }
