@@ -156,13 +156,17 @@ const WINDOWS_RAISE_NATIVE =
  * picker had none at all. The form itself is a pixel at -32000,-32000 that nobody sees; with `Location`
  * set, WinForms does not re-centre it on `Show`.
  *
- * AttachThreadInput needs a foreground THREAD to share with. When there is none (a locked desktop), or
- * the foreground is already this thread, or the foreground window is hung (sharing a hung queue would
- * hang the picker too), the attach is skipped and SetForegroundWindow is tried anyway — that is the
- * plain "no foreground rights" refusal then, which is where the picker was before.
+ * The plain, sanctioned SetForegroundWindow goes first, and it is often enough: Windows grants it when
+ * its foreground lock has lapsed (200 s without input, by default), and measured 2026-09-21 it took on
+ * every idle run — from a background node process, even from the Task Scheduler. It is refused exactly
+ * when the operator has just been clicking, which is what "Add a project" IS. Only then is the
+ * foreground thread's input queue shared (AttachThreadInput) for a second attempt. That step is the
+ * documented way to be refused less, not a right, and it is used for one call: when there is no
+ * foreground thread (a locked desktop), or it is this thread, or its window is hung (sharing a hung
+ * queue would hang the picker too), it is skipped, and the taskbar button is what is left.
  *
- * The raise is checked, not assumed: in 1 of 4 review rounds the first SetForegroundWindow did not take
- * even with the attach in place (the operator was mid-input), so a miss is retried a few times.
+ * Both attempts are checked, not assumed: in 1 of 4 review rounds the first SetForegroundWindow did not
+ * take even with the attach in place (the operator was mid-input), so a miss is retried a few times.
  */
 const WINDOWS_RAISE_OWNER =
   "$o = New-Object System.Windows.Forms.Form -Property @{ ShowInTaskbar = $true; StartPosition = 'Manual';" +
@@ -170,10 +174,12 @@ const WINDOWS_RAISE_OWNER =
   "$o.Text = $d.Description;" +
   "$o.Show();" +
   "$fg = [Frizz.Native]::GetForegroundWindow();" +
-  "$theirs = [Frizz.Native]::GetWindowThreadProcessId($fg, [IntPtr]::Zero); $mine = [Frizz.Native]::GetCurrentThreadId();" +
-  "$attached = ($theirs -ne 0) -and ($theirs -ne $mine) -and -not [Frizz.Native]::IsHungAppWindow($fg) -and [Frizz.Native]::AttachThreadInput($theirs, $mine, $true);" +
-  "foreach ($try in 1..4) { [void][Frizz.Native]::SetForegroundWindow($o.Handle); if ([Frizz.Native]::GetForegroundWindow() -eq $o.Handle) { break }; Start-Sleep -Milliseconds 50 };" +
-  "if ($attached) { [void][Frizz.Native]::AttachThreadInput($theirs, $mine, $false) };"
+  "[void][Frizz.Native]::SetForegroundWindow($o.Handle);" +
+  "if ([Frizz.Native]::GetForegroundWindow() -ne $o.Handle) {" +
+  " $theirs = [Frizz.Native]::GetWindowThreadProcessId($fg, [IntPtr]::Zero); $mine = [Frizz.Native]::GetCurrentThreadId();" +
+  " $attached = ($theirs -ne 0) -and ($theirs -ne $mine) -and -not [Frizz.Native]::IsHungAppWindow($fg) -and [Frizz.Native]::AttachThreadInput($theirs, $mine, $true);" +
+  " foreach ($try in 1..4) { [void][Frizz.Native]::SetForegroundWindow($o.Handle); if ([Frizz.Native]::GetForegroundWindow() -eq $o.Handle) { break }; Start-Sleep -Milliseconds 50 };" +
+  " if ($attached) { [void][Frizz.Native]::AttachThreadInput($theirs, $mine, $false) } };"
 
 /**
  * A PowerShell single-quoted literal: nothing inside it is expanded, and `'` is doubled. The curly
