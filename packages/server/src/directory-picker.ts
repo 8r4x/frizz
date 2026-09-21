@@ -110,22 +110,123 @@ export async function pickDirectory(
     }
     return { kind: "unavailable", reason: "install zenity or kdialog for a folder picker" }
   }
-  if (platform === "win32") {
-    const script =
-      "Add-Type -AssemblyName System.Windows.Forms;" +
-      "$d = New-Object System.Windows.Forms.FolderBrowserDialog;" +
-      "if ($d.ShowDialog() -eq 'OK') { $d.SelectedPath }"
+  if (platform === "win32") return pickWindowsFolder(prompt)
+  return { kind: "unavailable", reason: `no folder picker on ${platform}` }
+}
+
+// WINDOWS: a WinForms FolderBrowserDialog, opened from a PowerShell child.
+//
+// Two editions draw two dialogs. `pwsh` (PowerShell 7, .NET 8) draws the modern "Select Folder"
+// dialog, with a path box the operator can paste into; Windows PowerShell 5.1 (.NET Framework, on
+// every Windows install) draws the old tree, which can only be clicked through. The better one is not
+// guaranteed to be installed, so it is tried first and the old one is the fallback, ENOENT deciding.
+//
+// AND THE DIALOG HAS TO BE RAISED, which is the whole reason this is more than one line. The server is
+// a background process — the browser is the foreground one — and Windows refuses a background
+// process the foreground, so the dialog opened BEHIND the browser, where nobody saw it, and sat
+// there until the timeout killed it: "Add a project" read as doing nothing (measured 2026-09-18 and
+// 2026-09-21 on Windows Server 2022; the "Browse For Folder" window was there, below every browser
+// window). Topmost is refused the same way: SetWindowPos(HWND_TOPMOST) reports success and the style
+// never takes. What works is the AttachThreadInput route: share the foreground thread's input queue
+// for the one SetForegroundWindow call, then detach.
+//
+// The window that gets raised is an OWNER, not the dialog. ShowDialog blocks until the dialog is gone,
+// so straight-line script cannot raise the dialog; a timer inside the modal loop can, but it has to
+// guess which window is the dialog, and it once guessed the hidden parking window WinForms gives an
+// ownerless dialog (seen 2026-09-21 on the deployed server). An owner form needs no guess: it is
+// raised BEFORE the dialog opens, and a modal dialog opens on top of its active owner — that is what
+// ownership means to the window manager. The form is one pixel, off-screen, and closed with the dialog.
+const WINDOWS_PICKER_EDITIONS = ["pwsh", "powershell"] as const
+
+const WINDOWS_RAISE_NATIVE =
+  "Add-Type -Namespace Frizz -Name Native -MemberDefinition '" +
+  '[DllImport("user32.dll")] public static extern System.IntPtr GetForegroundWindow();' +
+  '[DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(System.IntPtr h, System.IntPtr pid);' +
+  '[DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();' +
+  '[DllImport("user32.dll")] public static extern bool AttachThreadInput(uint a, uint b, bool attach);' +
+  '[DllImport("user32.dll")] public static extern bool SetForegroundWindow(System.IntPtr h);' +
+  "';"
+
+/**
+ * The owner form, shown and made the foreground window; `$o` is what ShowDialog is then handed.
+ *
+ * It keeps a taskbar button, titled with the prompt, so the operator can find the picker again after a
+ * click back into the browser buries it — an owned dialog has no taskbar button of its own, and the old
+ * picker had none at all. The form itself is a pixel at -32000,-32000 that nobody sees; with `Location`
+ * set, WinForms does not re-centre it on `Show`.
+ *
+ * AttachThreadInput needs a foreground THREAD to share with. When there is none (a locked desktop), or
+ * the foreground is already this thread, the attach is skipped and SetForegroundWindow is tried anyway
+ * — that is the plain "no foreground rights" refusal then, which is where the picker was before.
+ */
+const WINDOWS_RAISE_OWNER =
+  "$o = New-Object System.Windows.Forms.Form -Property @{ ShowInTaskbar = $true; StartPosition = 'Manual';" +
+  " Location = (New-Object System.Drawing.Point(-32000, -32000)); Size = (New-Object System.Drawing.Size(1, 1)) };" +
+  "$o.Text = $d.Description;" +
+  "$o.Show();" +
+  "$fg = [Frizz.Native]::GetForegroundWindow();" +
+  "$theirs = [Frizz.Native]::GetWindowThreadProcessId($fg, [IntPtr]::Zero); $mine = [Frizz.Native]::GetCurrentThreadId();" +
+  "$attached = ($theirs -ne 0) -and ($theirs -ne $mine) -and [Frizz.Native]::AttachThreadInput($theirs, $mine, $true);" +
+  "[void][Frizz.Native]::SetForegroundWindow($o.Handle);" +
+  "if ($attached) { [void][Frizz.Native]::AttachThreadInput($theirs, $mine, $false) };"
+
+/** A PowerShell single-quoted literal: nothing inside it is expanded, and `'` is doubled. */
+function powershellLiteral(text: string): string {
+  return `'${text.replace(/'/gu, "''")}'`
+}
+
+function windowsFolderScript(prompt: string): string {
+  // `Description` is the only prompt the old dialog has; the modern one shows it as a label beside the
+  // path box unless told to use it as the title. The property exists only on .NET 8, so ask first.
+  //
+  // The output encoding is set first. Windows PowerShell 5.1 writes a redirected stdout in the OEM
+  // code page, and node decodes it as UTF-8, so a folder with a non-ASCII name comes back mangled and
+  // registers a path that does not exist. pwsh already writes UTF-8; setting it there is harmless.
+  return (
+    "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8;" +
+    "Add-Type -AssemblyName System.Windows.Forms;" +
+    WINDOWS_RAISE_NATIVE +
+    "$d = New-Object System.Windows.Forms.FolderBrowserDialog;" +
+    `$d.Description = ${powershellLiteral(prompt)};` +
+    "if ($d.PSObject.Properties['UseDescriptionForTitle']) { $d.UseDescriptionForTitle = $true };" +
+    WINDOWS_RAISE_OWNER +
+    "$r = $d.ShowDialog($o); $o.Close();" +
+    "if ($r -eq 'OK') { $d.SelectedPath }"
+  )
+}
+
+/** Exported for the test that pins the edition chain; `pickDirectory` is the door. */
+export async function pickWindowsFolder(
+  prompt: string,
+  editions: readonly string[] = WINDOWS_PICKER_EDITIONS,
+): Promise<DirectoryPick> {
+  const script = windowsFolderScript(prompt)
+  for (const edition of editions) {
     try {
-      const { stdout } = await run("powershell", ["-NoProfile", "-STA", "-Command", script], {
+      const { stdout } = await run(edition, ["-NoProfile", "-STA", "-Command", script], {
         timeout: PICKER_TIMEOUT_MS,
+        // The server has no console. Without this, a console-subsystem child gets a new, visible one
+        // that sits beside the dialog for as long as it is open — and can take the foreground the raise
+        // just won. The rule everywhere else in the server (local-file.ts, the daemon hosts).
+        windowsHide: true,
       })
+      // Cancel writes nothing; the dialog itself strips any trailing separator.
       const path = stdout.trim()
       return path ? { kind: "picked", path } : { kind: "cancelled" }
     } catch (error) {
+      const { code, killed } = error as { code?: unknown; killed?: boolean }
+      // A string code is the SPAWN failing — ENOENT for an edition that is not installed, EPERM for
+      // one Windows would not start for this process (the Store package's app-execution alias, in a
+      // profile it is not registered for) — and either means "the next edition", not "no picker".
+      if (typeof code === "string") continue
+      // The timeout reaped a dialog nobody answered. On a machine where the raise did not take, that
+      // is the dialog nobody SAW, and "cancelled" would make the grid do nothing for a second time; the
+      // typed-path fallback is the only way in that still works, so this must open it.
+      if (killed) return { kind: "unavailable", reason: "no folder was chosen within 5 minutes" }
       return { kind: "unavailable", reason: firstLine(stderrOf(error)) || "the folder picker did not open" }
     }
   }
-  return { kind: "unavailable", reason: `no folder picker on ${platform}` }
+  return { kind: "unavailable", reason: "no PowerShell found to open a folder picker" }
 }
 
 function stderrOf(error: unknown): string {

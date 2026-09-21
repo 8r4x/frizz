@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { pickDirectory } from "./directory-picker.ts"
+import { pickDirectory, pickWindowsFolder } from "./directory-picker.ts"
 
 // The picker opens a real modal window, so the darwin/linux/win32 branches are exercised by hand
 // rather than here — popping a dialog on the operator's desktop is not something a test suite may do.
@@ -12,6 +12,15 @@ test("a platform with no folder picker reports it rather than throwing", async (
     assert.equal(result.kind, "unavailable")
     assert.match(result.kind === "unavailable" ? result.reason : "", new RegExp(platform))
   }
+})
+
+// Windows tries `pwsh` (the modern dialog) and then `powershell` (the old tree), ENOENT deciding. Two
+// editions nobody has installed stand in for a machine with neither, and the answer must be the
+// typed-path fallback, not a rejection — the same contract as an unsupported platform.
+test("windows walks its edition chain and degrades when none is installed", async () => {
+  const result = await pickWindowsFolder("Choose", ["frizz-no-such-shell-a", "frizz-no-such-shell-b"])
+  assert.equal(result.kind, "unavailable")
+  assert.match(result.kind === "unavailable" ? result.reason : "", /no PowerShell/u)
 })
 
 // Verified against the real tool on macOS 2026-08-06, and both details bite:
