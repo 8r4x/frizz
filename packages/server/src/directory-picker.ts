@@ -145,6 +145,7 @@ const WINDOWS_RAISE_NATIVE =
   '[DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();' +
   '[DllImport("user32.dll")] public static extern bool AttachThreadInput(uint a, uint b, bool attach);' +
   '[DllImport("user32.dll")] public static extern bool SetForegroundWindow(System.IntPtr h);' +
+  '[DllImport("user32.dll")] public static extern bool IsHungAppWindow(System.IntPtr h);' +
   "';"
 
 /**
@@ -156,8 +157,12 @@ const WINDOWS_RAISE_NATIVE =
  * set, WinForms does not re-centre it on `Show`.
  *
  * AttachThreadInput needs a foreground THREAD to share with. When there is none (a locked desktop), or
- * the foreground is already this thread, the attach is skipped and SetForegroundWindow is tried anyway
- * — that is the plain "no foreground rights" refusal then, which is where the picker was before.
+ * the foreground is already this thread, or the foreground window is hung (sharing a hung queue would
+ * hang the picker too), the attach is skipped and SetForegroundWindow is tried anyway — that is the
+ * plain "no foreground rights" refusal then, which is where the picker was before.
+ *
+ * The raise is checked, not assumed: in 1 of 4 review rounds the first SetForegroundWindow did not take
+ * even with the attach in place (the operator was mid-input), so a miss is retried a few times.
  */
 const WINDOWS_RAISE_OWNER =
   "$o = New-Object System.Windows.Forms.Form -Property @{ ShowInTaskbar = $true; StartPosition = 'Manual';" +
@@ -166,14 +171,23 @@ const WINDOWS_RAISE_OWNER =
   "$o.Show();" +
   "$fg = [Frizz.Native]::GetForegroundWindow();" +
   "$theirs = [Frizz.Native]::GetWindowThreadProcessId($fg, [IntPtr]::Zero); $mine = [Frizz.Native]::GetCurrentThreadId();" +
-  "$attached = ($theirs -ne 0) -and ($theirs -ne $mine) -and [Frizz.Native]::AttachThreadInput($theirs, $mine, $true);" +
-  "[void][Frizz.Native]::SetForegroundWindow($o.Handle);" +
+  "$attached = ($theirs -ne 0) -and ($theirs -ne $mine) -and -not [Frizz.Native]::IsHungAppWindow($fg) -and [Frizz.Native]::AttachThreadInput($theirs, $mine, $true);" +
+  "foreach ($try in 1..4) { [void][Frizz.Native]::SetForegroundWindow($o.Handle); if ([Frizz.Native]::GetForegroundWindow() -eq $o.Handle) { break }; Start-Sleep -Milliseconds 50 };" +
   "if ($attached) { [void][Frizz.Native]::AttachThreadInput($theirs, $mine, $false) };"
 
-/** A PowerShell single-quoted literal: nothing inside it is expanded, and `'` is doubled. */
+/**
+ * A PowerShell single-quoted literal: nothing inside it is expanded, and `'` is doubled. The curly
+ * quotes U+2018..U+201B close a literal just as `'` does, so they are doubled too.
+ */
 function powershellLiteral(text: string): string {
-  return `'${text.replace(/'/gu, "''")}'`
+  return `'${text.replace(/['\u2018-\u201b]/gu, (quote) => quote + quote)}'`
 }
+
+/**
+ * The picked path is the one stdout line carrying this prefix. Anything else on stdout — a WARNING
+ * both editions write there when redirected, a stray Add-Type line — is not mistaken for the path.
+ */
+const WINDOWS_PICKED_PREFIX = "frizz-picked:"
 
 function windowsFolderScript(prompt: string): string {
   // `Description` is the only prompt the old dialog has; the modern one shows it as a label beside the
@@ -182,7 +196,13 @@ function windowsFolderScript(prompt: string): string {
   // The output encoding is set first. Windows PowerShell 5.1 writes a redirected stdout in the OEM
   // code page, and node decodes it as UTF-8, so a folder with a non-ASCII name comes back mangled and
   // registers a path that does not exist. pwsh already writes UTF-8; setting it there is harmless.
+  //
+  // Every statement runs under Stop inside one try: PowerShell otherwise carries on past a failed
+  // Add-Type or Show, reaches the final if, and exits 0 with nothing on stdout — which reads as
+  // "cancelled", and the grid does nothing for a second time. A failure exits 2 with a plain message
+  // on stderr (pwsh's own error rendering carries ANSI colour codes that would land in the UI).
   return (
+    "$ErrorActionPreference = 'Stop'; try {" +
     "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8;" +
     "Add-Type -AssemblyName System.Windows.Forms;" +
     WINDOWS_RAISE_NATIVE +
@@ -191,7 +211,8 @@ function windowsFolderScript(prompt: string): string {
     "if ($d.PSObject.Properties['UseDescriptionForTitle']) { $d.UseDescriptionForTitle = $true };" +
     WINDOWS_RAISE_OWNER +
     "$r = $d.ShowDialog($o); $o.Close();" +
-    "if ($r -eq 'OK') { $d.SelectedPath }"
+    `if ($r -eq 'OK') { '${WINDOWS_PICKED_PREFIX}' + $d.SelectedPath }` +
+    "} catch { [Console]::Error.WriteLine($_.Exception.Message); exit 2 }"
   )
 }
 
@@ -201,6 +222,7 @@ export async function pickWindowsFolder(
   editions: readonly string[] = WINDOWS_PICKER_EDITIONS,
 ): Promise<DirectoryPick> {
   const script = windowsFolderScript(prompt)
+  let failure: string | undefined
   for (const edition of editions) {
     try {
       const { stdout } = await run(edition, ["-NoProfile", "-STA", "-Command", script], {
@@ -210,23 +232,27 @@ export async function pickWindowsFolder(
         // just won. The rule everywhere else in the server (local-file.ts, the daemon hosts).
         windowsHide: true,
       })
-      // Cancel writes nothing; the dialog itself strips any trailing separator.
-      const path = stdout.trim()
+      // Cancel writes no prefixed line; the dialog itself strips any trailing separator.
+      const picked = stdout.split("\n").find((line) => line.startsWith(WINDOWS_PICKED_PREFIX))
+      const path = picked?.slice(WINDOWS_PICKED_PREFIX.length).trim() ?? ""
       return path ? { kind: "picked", path } : { kind: "cancelled" }
     } catch (error) {
       const { code, killed } = error as { code?: unknown; killed?: boolean }
-      // A string code is the SPAWN failing — ENOENT for an edition that is not installed, EPERM for
-      // one Windows would not start for this process (the Store package's app-execution alias, in a
-      // profile it is not registered for) — and either means "the next edition", not "no picker".
-      if (typeof code === "string") continue
       // The timeout reaped a dialog nobody answered. On a machine where the raise did not take, that
       // is the dialog nobody SAW, and "cancelled" would make the grid do nothing for a second time; the
       // typed-path fallback is the only way in that still works, so this must open it.
       if (killed) return { kind: "unavailable", reason: "no folder was chosen within 5 minutes" }
-      return { kind: "unavailable", reason: firstLine(stderrOf(error)) || "the folder picker did not open" }
+      // ENOENT is an edition that is not installed; EPERM is one Windows would not start for this
+      // process (the Store package's app-execution alias, in a profile it is not registered for); a
+      // non-zero exit is the script itself failing in that edition (a pwsh without WinForms, say).
+      // Each means "the next edition", not "no picker"; the last failure's reason is the one reported.
+      if (code === "ENOENT" || code === "EPERM") continue
+      failure = firstLine(stderrOf(error)) || "the folder picker did not open"
+      if (typeof code === "number") continue
+      return { kind: "unavailable", reason: failure }
     }
   }
-  return { kind: "unavailable", reason: "no PowerShell found to open a folder picker" }
+  return { kind: "unavailable", reason: failure ?? "no PowerShell found to open a folder picker" }
 }
 
 function stderrOf(error: unknown): string {
@@ -237,6 +263,9 @@ function stderrOf(error: unknown): string {
       : String(error)
 }
 
+/** The first non-empty line, with any ANSI colour codes (pwsh's error rendering) stripped. */
 function firstLine(text: string): string {
-  return text.split("\n")[0]?.trim() ?? ""
+  // eslint-disable-next-line no-control-regex
+  const plain = text.replace(/\u001b\[[0-9;]*m/gu, "")
+  return plain.split("\n").map((line) => line.trim()).find(Boolean) ?? ""
 }

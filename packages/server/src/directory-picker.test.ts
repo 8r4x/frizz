@@ -23,6 +23,18 @@ test("windows walks its edition chain and degrades when none is installed", asyn
   assert.match(result.kind === "unavailable" ? result.reason : "", /no PowerShell/u)
 })
 
+// An edition that starts but rejects the script (a pwsh without WinForms, say) exits non-zero, and that
+// is "the next edition" too — but when it was the LAST edition, its message is what the operator sees,
+// not "no PowerShell found". `node` stands in: it starts everywhere and refuses `-NoProfile`.
+test("windows reports the last edition's own failure when none ran the script", async () => {
+  const result = await pickWindowsFolder("Choose", ["frizz-no-such-shell", process.execPath])
+  assert.equal(result.kind, "unavailable")
+  const reason = result.kind === "unavailable" ? result.reason : ""
+  assert.doesNotMatch(reason, /no PowerShell/u)
+  assert.doesNotMatch(reason, /\u001b/u)
+  assert.notEqual(reason, "")
+})
+
 // Verified against the real tool on macOS 2026-08-06, and both details bite:
 //   osascript -e 'POSIX path of (path to home folder)'  →  "/Users/colinmcd94/"   (trailing slash)
 //   osascript -e 'error "User canceled." number -128'   →  "execution error: User canceled. (-128)"
