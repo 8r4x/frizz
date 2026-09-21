@@ -247,7 +247,7 @@ export async function pickWindowsFolder(
       // non-zero exit is the script itself failing in that edition (a pwsh without WinForms, say).
       // Each means "the next edition", not "no picker"; the last failure's reason is the one reported.
       if (code === "ENOENT" || code === "EPERM") continue
-      failure = firstLine(stderrOf(error)) || "the folder picker did not open"
+      failure = windowsFailureLine(stderrOf(error)) || "the folder picker did not open"
       if (typeof code === "number") continue
       return { kind: "unavailable", reason: failure }
     }
@@ -263,8 +263,12 @@ function stderrOf(error: unknown): string {
       : String(error)
 }
 
-/** The first non-empty line, with any ANSI colour codes (pwsh's error rendering) stripped. */
 function firstLine(text: string): string {
+  return text.split("\n")[0]?.trim() ?? ""
+}
+
+/** The first non-empty stderr line, with the ANSI colour codes of pwsh's error rendering stripped. */
+function windowsFailureLine(text: string): string {
   // eslint-disable-next-line no-control-regex
   const plain = text.replace(/\u001b\[[0-9;]*m/gu, "")
   return plain.split("\n").map((line) => line.trim()).find(Boolean) ?? ""
