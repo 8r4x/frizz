@@ -349,7 +349,9 @@ test("loadWorkerPrompt(codex) carries codex's OWN session/wake + model/effort/sa
   assert.match(c, /schema default is a FULL fork/)
   assert.match(c, /`gpt-5\.6-luna` \+ `medium`/)
   assert.match(c, /`gpt-5\.6-terra` \+ `medium`/)
-  assert.match(c, /`gpt-6-astra` \+ `high` or `xhigh` \(or `gpt-5\.6-sol` when Astra is absent/)
+  // The top rung names the whole ladder, newest first: a catalogue that has dropped Astra still leaves
+  // the worker a GPT-6 option before it falls back a generation to 5.6 Sol.
+  assert.match(c, /`gpt-6-astra` \+ `high` or `xhigh` \(or `gpt-6-sol`, then `gpt-5\.6-sol`, when the one above it/)
   assert.match(c, /Before any Astra, Sol or xhigh spawn/)
   assert.match(c, /why Terra \+ medium is inadequate/)
   assert.doesNotMatch(c, /do that work INLINE yourself/)

@@ -6,13 +6,20 @@ import { tmpdir } from "node:os"
 import { parseCodexModelsCache, readCodexModels, CODEX_MODELS_FALLBACK } from "./codex-models.ts"
 
 // A REAL snippet of ~/.codex/models_cache.json (codex-cli 0.144.1, fields verbatim; the gpt-6-astra
-// entry is the codex-cli 0.153.2 bundled shape, 2026-09-04). Deliberately includes: per-model effort
+// entry is the codex-cli 0.153.2 bundled shape, 2026-09-04, and gpt-6-sol the 0.155.1 one, 2026-09-22).
+// Deliberately includes: per-model effort
 // sets (astra/sol → …/ultra, luna → …/max, 5.5 → …/xhigh), OUT-OF-ORDER priorities (5.5 before sol,
 // astra LAST in the array but priority 1) to prove the ascending sort, a hidden model (codex-auto-review)
 // to prove the visibility filter drops it, an api=false-but-listed model (spark) to prove it is KEPT
 // (frizz spawns the TUI, not the Responses API), and the newer sidecar fields astra ships with
 // (`minimal_client_version`, `service_tiers`, `additional_speed_tiers`) to prove the parser ignores
 // them rather than tripping on them. Otherwise trimmed of the fat sidecar fields the parser ignores.
+//
+// gpt-6-sol carries the two sidecars the GPT-6 generation added on top of astra's — `availability_nux`
+// and `model_messages` (trimmed here; the live one is a multi-KB instruction blob) — plus `upgrade:
+// null`, for the same reason: the parser must ignore a growing sidecar set, not trip on it. Its
+// priority 2 is the live number, which is why gpt-5.6-sol moved to its own live 4: the GPT-6 trio
+// pushed the 5.6 trio down the catalogue rather than replacing it.
 const REAL_CACHE = JSON.stringify({
   fetched_at: "2026-07-12T16:21:05.012098Z",
   etag: 'W/"db2a6dc50b1d003969cdc236274e488a"',
@@ -46,7 +53,7 @@ const REAL_CACHE = JSON.stringify({
       ],
       visibility: "list",
       supported_in_api: true,
-      priority: 2,
+      priority: 4,
     },
     {
       slug: "gpt-5.6-luna",
@@ -107,13 +114,38 @@ const REAL_CACHE = JSON.stringify({
       service_tiers: [{ id: "priority", name: "Fast", description: "2x speed, increased usage" }],
       additional_speed_tiers: ["fast"],
     },
+    {
+      slug: "gpt-6-sol",
+      display_name: "GPT-6-Sol",
+      description: "Fast, capable model for everyday coding.",
+      default_reasoning_level: "medium",
+      supported_reasoning_levels: [
+        { effort: "low", description: "Fast responses with lighter reasoning" },
+        { effort: "medium", description: "Balances speed and reasoning depth for everyday tasks" },
+        { effort: "high", description: "Greater reasoning depth for complex problems" },
+        { effort: "xhigh", description: "Extra high reasoning depth for complex problems" },
+        { effort: "max", description: "Maximum reasoning depth for the hardest problems" },
+        { effort: "ultra", description: "Maximum reasoning with automatic task delegation" },
+      ],
+      shell_type: "unified_exec",
+      visibility: "list",
+      supported_in_api: true,
+      priority: 2,
+      context_window: 272_000,
+      max_context_window: 872_000,
+      additional_speed_tiers: ["fast"],
+      availability_nux: { message: "This is GPT-6, a new generation of intelligence." },
+      upgrade: null,
+      model_messages: { persistent_instructions: "## Overview\nYou are now in persistent mode…" },
+    },
   ],
 })
 
 test("parseCodexModelsCache: lists visible models priority-ASC with EXACT per-model effort sets", () => {
   const models = parseCodexModelsCache(REAL_CACHE)
-  // codex-auto-review (visibility:hide) is dropped; the rest are priority-ascending (astra=1, sol=2, luna=3, 5.5=7, spark=26).
-  assert.deepEqual(models.map((m) => m.slug), ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.5", "gpt-5.3-codex-spark"])
+  // codex-auto-review (visibility:hide) is dropped; the rest are priority-ascending (astra=1, gpt-6-sol=2,
+  // 5.6-luna=3, 5.6-sol=4, 5.5=7, spark=26) — note gpt-6-sol is LAST in the array and second out.
+  assert.deepEqual(models.map((m) => m.slug), ["gpt-6-astra", "gpt-6-sol", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.5", "gpt-5.3-codex-spark"])
   const bySlug = Object.fromEntries(models.map((m) => [m.slug, m]))
   // Per-model efforts are the crux of the fix: astra and sol go to ultra, luna to max, 5.5 stops at xhigh.
   assert.deepEqual(bySlug["gpt-6-astra"]!.efforts, ["low", "medium", "high", "xhigh", "max", "ultra"])
@@ -125,6 +157,13 @@ test("parseCodexModelsCache: lists visible models priority-ASC with EXACT per-mo
   assert.deepEqual(bySlug["gpt-5.5"]!.efforts, ["low", "medium", "high", "xhigh"])
   assert.equal(bySlug["gpt-5.6-sol"]!.displayName, "GPT-5.6-Sol")
   assert.equal(bySlug["gpt-5.6-sol"]!.defaultEffort, "medium")
+  // GPT-6 Sol: the same ultra-capable effort set as Astra, its own `medium` default, and the sidecars
+  // the generation added (availability_nux / model_messages / upgrade) ignored rather than tripped on.
+  assert.deepEqual(bySlug["gpt-6-sol"]!.efforts, ["low", "medium", "high", "xhigh", "max", "ultra"])
+  assert.equal(bySlug["gpt-6-sol"]!.defaultEffort, "medium")
+  assert.equal(bySlug["gpt-6-sol"]!.displayName, "GPT-6-Sol")
+  assert.equal(bySlug["gpt-6-sol"]!.contextWindow, 272_000)
+  assert.equal(bySlug["gpt-6-sol"]!.maxContextWindow, 872_000)
   // An api=false model is TUI-selectable (frizz spawns the TUI) — kept, not filtered.
   assert.ok(bySlug["gpt-5.3-codex-spark"])
 })
@@ -179,7 +218,7 @@ test("readCodexModels: reads a real cache from CODEX_HOME; a MISSING cache degra
     const home2 = mkdtempSync(join(tmpdir(), "codex-models-"))
     mkdirSync(home2, { recursive: true })
     writeFileSync(join(home2, "models_cache.json"), REAL_CACHE)
-    assert.deepEqual(readCodexModels(home2).map((m) => m.slug), ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.5", "gpt-5.3-codex-spark"])
+    assert.deepEqual(readCodexModels(home2).map((m) => m.slug), ["gpt-6-astra", "gpt-6-sol", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.5", "gpt-5.3-codex-spark"])
     rmSync(home2, { recursive: true, force: true })
   } finally {
     rmSync(home, { recursive: true, force: true })
