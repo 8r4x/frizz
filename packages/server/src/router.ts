@@ -277,6 +277,9 @@ export interface CodexTurnTerminator {
 export interface AcpTurnTerminator {
   turnLiveness(threadSlug: string, sessionId: string): { turnActive: boolean } | undefined
   interruptTurn(threadSlug: string, sessionId: string): Promise<{ interrupted: boolean }>
+  /** End the agent itself — its daemon outlives frizz (acp-host.ts), so a stop that only cancelled
+   *  the turn would leave the agent running for nobody. */
+  releaseSession(threadSlug: string, sessionId: string, reason: "session-replaced" | "session-deleted"): void
 }
 
 // Which rows the bridge owns. A LEGACY Codex row — dispatched pre-cutover, `codex_runtime` NULL,
@@ -332,9 +335,13 @@ export async function stopThreadRuntime(
 ): Promise<"absent" | "stopped"> {
   if (row.backend === "acp") {
     // The bridge answers both questions: is a turn running, and stop it (session/cancel, then wait for
-    // the prompt to return). A resting ACP thread costs nothing here.
-    if (!acp?.turnLiveness(row.slug, row.session_id)?.turnActive) return "absent"
-    return (await acp.interruptTurn(row.slug, row.session_id)).interrupted ? "stopped" : "absent"
+    // the prompt to return). Then END the agent: it lives in a detached daemon that would otherwise sit
+    // idle for hours after the thread is put away. A resting thread with no daemon costs nothing here.
+    if (!acp) return "absent"
+    const turnActive = acp.turnLiveness(row.slug, row.session_id)?.turnActive === true
+    const stopped = turnActive && (await acp.interruptTurn(row.slug, row.session_id)).interrupted
+    acp.releaseSession(row.slug, row.session_id, "session-deleted")
+    return stopped ? "stopped" : "absent"
   }
   if (isAppServerCodexRow(row)) {
     if (!appServerCodexTurnLive(codex, row)) return "absent"

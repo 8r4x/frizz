@@ -174,6 +174,21 @@ export class AcpConnection {
    *  request that must not time out; callers pass `timeoutMs: 0` through this alias for readability. */
   requestOpenEnded(method: string, params: unknown): Promise<unknown> { return this.request(method, params, { timeoutMs: 0 }) }
 
+  /**
+   * Re-own a request a PREVIOUS connection left in flight (a `session/prompt` still running in a
+   * detached agent, see acp-host.ts). Nothing is written to the agent: an id is allocated and
+   * registered exactly as `request()` would, then handed to `onId` so the caller can tell the daemon
+   * to route that request's response here. Resolves when the response arrives; never times out.
+   */
+  adoptPending(method: string, onId: (id: number) => void): Promise<unknown> {
+    if (this.closedReason !== undefined) return Promise.reject(new AcpConnectionClosed(method, this.closedReason))
+    const id = this.nextId++
+    return new Promise<unknown>((resolve, reject) => {
+      this.pending.set(id, { method, resolve, reject, timer: undefined })
+      onId(id)
+    })
+  }
+
   notify(method: string, params: unknown): void {
     this.write({ jsonrpc: "2.0", method, params })
   }

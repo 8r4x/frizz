@@ -25,6 +25,9 @@ export const DETACHED_DAEMON_ENTRIES = [
   // session survives a frizz restart (frizz reconnects instead of cold resume-from-disk). Forked by
   // claude-broker-host.ts; run as its own `node <file>` process, so it must ship as a real sibling .js.
   "packages/server/src/backend/claude-agent-broker.ts",
+  // The ACP agent daemon: owns one ACP agent child per thread and serves its JSON-RPC over a socket,
+  // so the agent and its running turn survive a frizz restart. Forked by acp-host.ts.
+  "packages/server/src/backend/acp-daemon.ts",
   // Deliberately SHORT beyond these. One thing is pointedly absent:
   //
   //   dev-bootstrap.ts — see the exemption in dev-supervisor.ts. Emitting it woke a control-plane
