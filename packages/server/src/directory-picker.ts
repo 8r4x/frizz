@@ -25,6 +25,20 @@ export type DirectoryPick =
 const PICKER_TIMEOUT_MS = 5 * 60_000
 
 /**
+ * The timeout reaped a dialog nobody answered, possibly one nobody could SEE — it opens on the
+ * server's desktop, which is not always the one in front of the operator. So it is not "cancelled",
+ * which would leave the click doing nothing, and on Linux it is not "try the next tool" either: that
+ * opened kdialog for another five minutes after zenity timed out. It is unavailable, and the caller's
+ * fallback opens.
+ */
+const timedOut = (error: unknown) => (error as { killed?: unknown }).killed === true
+
+const unanswered = (what: "folder" | "image"): DirectoryPick => ({
+  kind: "unavailable",
+  reason: `no ${what} was chosen within 5 minutes`,
+})
+
+/**
  * `choose folder` returns an alias; `POSIX path of` is what turns it into something openable, and it
  * comes back with a trailing slash that every path comparison in the codebase would then miss on.
  */
@@ -56,6 +70,7 @@ export async function pickImageFile(
       const path = stdout.trim().replace(/\/+$/u, "")
       return path ? { kind: "picked", path } : { kind: "cancelled" }
     } catch (error) {
+      if (timedOut(error)) return unanswered("image")
       if (/User canceled|-128/u.test(stderrOf(error))) return { kind: "cancelled" }
       return { kind: "unavailable", reason: firstLine(stderrOf(error)) || "the image picker did not open" }
     }
@@ -70,6 +85,7 @@ export async function pickImageFile(
         const path = stdout.trim()
         return path ? { kind: "picked", path } : { kind: "cancelled" }
       } catch (error) {
+        if (timedOut(error)) return unanswered("image")
         if ((error as { code?: unknown }).code === 1) return { kind: "cancelled" }
       }
     }
@@ -88,6 +104,7 @@ export async function pickDirectory(
       const path = stdout.trim().replace(/\/+$/u, "")
       return path ? { kind: "picked", path } : { kind: "cancelled" }
     } catch (error) {
+      if (timedOut(error)) return unanswered("folder")
       // AppleScript reports a dismissed dialog as an ERROR (-128), not as empty output.
       if (/User canceled|-128/u.test(stderrOf(error))) return { kind: "cancelled" }
       return { kind: "unavailable", reason: firstLine(stderrOf(error)) || "the folder picker did not open" }
@@ -104,6 +121,7 @@ export async function pickDirectory(
         const path = stdout.trim().replace(/\/+$/u, "")
         return path ? { kind: "picked", path } : { kind: "cancelled" }
       } catch (error) {
+        if (timedOut(error)) return unanswered("folder")
         // Exit 1 from either tool means "dismissed"; ENOENT means "not installed, try the next one".
         if ((error as { code?: unknown }).code === 1) return { kind: "cancelled" }
       }
