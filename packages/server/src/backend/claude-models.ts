@@ -1,5 +1,5 @@
 import { query } from "@frizz/claude-agent-sdk-runtime"
-import type { ClaudeModel } from "@frizz/shared"
+import { claudeFamilyLabel, parseClaudeWireId, type ClaudeModel, type ClaudeModelFamily } from "@frizz/shared"
 import { sanitizeProviderChildEnvironment } from "./claude-agent-sdk.ts"
 import { resolveClaudeExecutableAbsolute } from "./claude-broker-host.ts"
 import { inheritWorkerEnvironment } from "./worker-env.ts"
@@ -20,28 +20,13 @@ import { inheritWorkerEnvironment } from "./worker-env.ts"
 // pin cannot change without a restart.
 
 /** The aliases Frizz offers, in capability order — the same order CLAUDE_THREAD_PROFILES keeps. */
-export const CLAUDE_MODEL_ALIASES = ["fable", "opus", "sonnet", "haiku"] as const
+export const CLAUDE_MODEL_ALIASES = ["fable", "opus", "sonnet", "haiku"] as const satisfies readonly ClaudeModelFamily[]
 export type ClaudeModelAlias = (typeof CLAUDE_MODEL_ALIASES)[number]
-
-function familyLabel(alias: string): string {
-  return alias.charAt(0).toUpperCase() + alias.slice(1)
-}
 
 // The DEGRADED answer — the bare family words — for the loading state, a probe that failed, and a
 // runtime too old to answer. Everything that consumed the static picker before this module existed
 // reads exactly these labels.
-export const CLAUDE_MODELS_FALLBACK: ClaudeModel[] = CLAUDE_MODEL_ALIASES.map((alias) => ({ alias, label: familyLabel(alias) }))
-
-// A canonical Claude wire id → its family and edition: `claude-opus-5-5` → opus 5.5, `claude-sonnet-5`
-// → sonnet 5, `claude-haiku-4-5-20251001` → haiku 4.5 (the 8-digit date is a snapshot, not an edition),
-// `claude-fable-5-1[1m]` → fable 5.1 (the 1M suffix is a context window, not a model). Anything else
-// answers undefined rather than a guessed label.
-const WIRE_ID = /^claude-(fable|opus|sonnet|haiku)-(\d+(?:-\d+)*?)(?:-\d{8})?(?:\[1m\])?$/
-export function parseClaudeWireId(id: string): { alias: ClaudeModelAlias; edition: string; resolvedModel: string } | undefined {
-  const m = WIRE_ID.exec(id)
-  if (!m) return undefined
-  return { alias: m[1] as ClaudeModelAlias, edition: m[2]!.split("-").join("."), resolvedModel: id.replace(/\[1m\]$/, "") }
-}
+export const CLAUDE_MODELS_FALLBACK: ClaudeModel[] = CLAUDE_MODEL_ALIASES.map((alias) => ({ alias, label: claudeFamilyLabel(alias) }))
 
 /** Map the runtime's `supportedModels()` rows onto Frizz's aliases. PURE and total: a row of any shape is
  *  tolerated, an alias no row resolves keeps its bare family label, and the order is Frizz's own. Exported
@@ -59,11 +44,11 @@ export function resolveClaudeModels(rows: readonly unknown[]): ClaudeModel[] {
       if (typeof candidate !== "string") continue
       const parsed = parseClaudeWireId(candidate)
       if (!parsed || byAlias.has(parsed.alias)) continue
-      byAlias.set(parsed.alias, { alias: parsed.alias, label: `${familyLabel(parsed.alias)} ${parsed.edition}`, resolvedModel: parsed.resolvedModel })
+      byAlias.set(parsed.alias, { alias: parsed.alias, label: `${claudeFamilyLabel(parsed.alias)} ${parsed.edition}`, resolvedModel: parsed.resolvedModel, edition: parsed.edition })
       break
     }
   }
-  return CLAUDE_MODEL_ALIASES.map((alias) => byAlias.get(alias) ?? { alias, label: familyLabel(alias) })
+  return CLAUDE_MODEL_ALIASES.map((alias) => byAlias.get(alias) ?? { alias, label: claudeFamilyLabel(alias) })
 }
 
 // One probe per executable for the server's life (a resolved list), with the in-flight promise shared
@@ -75,6 +60,13 @@ const FAILURE_BACKOFF_MS = 30_000
 const resolved = new Map<string, ClaudeModel[]>()
 const inFlight = new Map<string, Promise<ClaudeModel[]>>()
 const failedAt = new Map<string, number>()
+// The last catalogue a probe actually resolved, for the SYNCHRONOUS readers — the board's
+// `modelUpgrade` and the follow-up's upgrade-at-compaction check — which cannot await a probe. One
+// server runs one pinned runtime, so one slot is the whole answer; `undefined` until the first probe
+// lands, and every reader treats that as "no upgrade known", never as "behind".
+let lastResolved: ClaudeModel[] | undefined
+// Told when a probe resolves, so a board built before it can re-derive every thread's `modelUpgrade`.
+const resolvedListeners = new Set<() => void>()
 
 export interface ReadClaudeModelsOptions {
   claudeBin?: string
@@ -100,7 +92,11 @@ export async function readClaudeModels(options: ReadClaudeModelsOptions = {}): P
   const probe = probeClaudeModels(executable, options.cwd ?? process.cwd())
     .then((models) => {
       resolved.set(executable, models)
+      lastResolved = models
       failedAt.delete(executable)
+      for (const listener of resolvedListeners) {
+        try { listener() } catch { /* a listener never fails the probe */ }
+      }
       return models
     })
     .catch((err: unknown) => {
@@ -144,9 +140,21 @@ export async function probeClaudeModels(executable: string, cwd: string): Promis
   }
 }
 
+/** The catalogue the pinned runtime last resolved, without waiting for one — see `lastResolved`. */
+export function peekClaudeModels(): readonly ClaudeModel[] | undefined {
+  return lastResolved
+}
+
+/** Subscribe to probe resolutions; returns the unsubscribe. */
+export function onClaudeModelsResolved(listener: () => void): () => void {
+  resolvedListeners.add(listener)
+  return () => { resolvedListeners.delete(listener) }
+}
+
 /** Test seam: forget every memoised probe. */
 export function resetClaudeModelsCache(): void {
   resolved.clear()
   inFlight.clear()
   failedAt.clear()
+  lastResolved = undefined
 }

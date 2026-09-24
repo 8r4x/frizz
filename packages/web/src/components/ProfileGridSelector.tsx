@@ -26,6 +26,29 @@ function effortLabel(effort: string): string {
   return effort.charAt(0).toUpperCase() + effort.slice(1)
 }
 
+// The model column's label: the family word, then its version one step dimmer (maintainer 2026-09-24,
+// picking candidate A of the version mockups: "a grade-out version after the model name in the left
+// column of the selector"). A label that does not END in its edition renders whole — never a guess.
+function ModelLabel({ label, edition }: { label: string; edition?: string }) {
+  const suffix = edition ? ` ${edition}` : ""
+  if (!suffix || !label.endsWith(suffix)) return <>{label}</>
+  return <>{label.slice(0, -suffix.length)} <span className="profile-grid-edition text-muted-55">{edition}</span></>
+}
+
+/** A running Claude thread on an older edition of its family than the pinned runtime now resolves. */
+export interface ProfileGridUpgrade {
+  /** "Opus 5" — what the worker runs. */
+  running: string
+  /** "Opus 5.5" — what the family resolves to now. */
+  latest: string
+  /** No live worker holds the old edition: the next turn starts on `latest` with nothing to do. */
+  staged: boolean
+  /** Why the upgrade cannot run right now (a turn in flight, background work), or null. */
+  blockedReason: string | null
+  pending: boolean
+  onUpgrade: () => void
+}
+
 export function ProfileGridSelector({
   groups,
   value,
@@ -41,6 +64,8 @@ export function ProfileGridSelector({
   menuZClass = OPAQUE_PORTAL_SURFACE_Z,
   className = "",
   agentSettings = false,
+  runningModelLabel,
+  upgrade,
 }: {
   groups: readonly ProfileGridGroup[]
   value?: Partial<ProfileGridSelection>
@@ -62,6 +87,10 @@ export function ProfileGridSelector({
   // (AgentSettingsPopover) — never a promise to retune a running thread. The dispatch surfaces set it;
   // a live thread's own picker does not.
   agentSettings?: boolean
+  // A running thread's readout names the edition its worker RUNS (profileGridDisplayLabel), and its menu
+  // offers the move to the family's current edition — both only on a live thread's own picker.
+  runningModelLabel?: string
+  upgrade?: ProfileGridUpgrade
 }) {
   const [open, setOpen] = useState(false)
   const [settingsGroup, setSettingsGroup] = useState<string | null>(null)
@@ -182,7 +211,7 @@ export function ProfileGridSelector({
         >
           {/* Sans cap-band residual is 0.23px without a text nudge; 3px box gap paints 6.69px of ink. */}
           <span className={`profile-grid-value min-w-0 flex-1 truncate text-left ${typography}`}>
-            {profileGridDisplayLabel(groups, value, placeholder)}
+            {profileGridDisplayLabel(groups, value, placeholder, runningModelLabel)}
           </span>
           {pendingLabel && <Loader2 aria-hidden="true" size={compact ? 10 : 11} className="shrink-0 animate-spin text-muted-65" />}
           <ChevronDown aria-hidden="true" size={compact ? 11 : 13} className="shrink-0 text-fg/65 transition-transform group-data-[state=open]:rotate-180" />
@@ -243,7 +272,7 @@ export function ProfileGridSelector({
                     style={{ gridTemplateColumns: profileGridTemplateColumns(columns.length) }}
                   >
                     <span className={`profile-grid-model-label min-w-0 max-w-[9.5rem] truncate px-1.5 text-left text-muted ${typography}`} title={option.label}>
-                      {option.label}
+                      <ModelLabel label={option.label} edition={option.edition} />
                     </span>
                     {option.efforts.length === 0 && (() => {
                       // A row with NO effort axis — an ACP agent runs on whatever model and effort its
@@ -347,6 +376,36 @@ export function ProfileGridSelector({
           ))}
           {selections.length === 0 && (
             <div className="px-2 py-1.5 text-muted-60">No profiles available</div>
+          )}
+          {upgrade && (
+            <>
+              <RadixMenu.Separator className="my-1 h-px bg-border" />
+              {/* `w-0 min-w-full`: the effort grid sets the menu's width and this row fills it, wrapping its
+                  sentence rather than widening the menu to fit it on one line. */}
+              <div data-profile-grid-upgrade="" className="flex w-0 min-w-full items-center gap-2 px-1.5 py-0.5">
+                <span className="min-w-0 flex-1 text-muted">
+                  {upgrade.staged
+                    ? `This thread ran ${upgrade.running} · its next turn starts on ${upgrade.latest}`
+                    : `This thread runs ${upgrade.running} · ${upgrade.latest} after its next compaction`}
+                </span>
+                {!upgrade.staged && (
+                  <RadixMenu.Item
+                    disabled={upgrade.blockedReason !== null || upgrade.pending}
+                    onSelect={(event) => {
+                      event.preventDefault()
+                      upgrade.onUpgrade()
+                      unregisterOpenRef.current?.()
+                      closeFromRegistry()
+                    }}
+                    title={upgrade.blockedReason
+                      ?? `Restart this thread's worker on ${upgrade.latest}. The conversation resumes from disk on the next turn; the prompt cache is re-read once.`}
+                    className={`flex h-6 shrink-0 cursor-pointer select-none items-center rounded border border-border bg-panel px-1.5 text-fg outline-none transition-colors data-[highlighted]:bg-panel-2 data-[highlighted]:outline data-[highlighted]:outline-1 data-[highlighted]:outline-offset-1 data-[highlighted]:outline-fg/55 data-[disabled]:cursor-not-allowed data-[disabled]:opacity-45 ${typography}`}
+                  >
+                    Upgrade now
+                  </RadixMenu.Item>
+                )}
+              </div>
+            </>
           )}
         </RadixMenu.Content>
       </RadixMenu.Portal>

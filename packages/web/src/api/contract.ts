@@ -38,6 +38,8 @@ import type {
   ThreadProfileOptionsResult,
   SetThreadProfileInput,
   SetThreadProfileResult,
+  UpgradeThreadModelInput,
+  UpgradeThreadModelResult,
   SetThreadRecurringPromptInput,
   SetOwnThreadRecurringPromptInput,
   SetOwnThreadRecurringPromptResult,
@@ -174,6 +176,7 @@ export interface Api {
   // Any failure (no live session, a legacy row) means "no suggestions", never a surfaced error.
   threadSkills(input: ThreadSkillsInput): Promise<ThreadSkillsResult>
   setThreadProfile(input: SetThreadProfileInput): Promise<SetThreadProfileResult>
+  upgradeThreadModel(input: UpgradeThreadModelInput): Promise<UpgradeThreadModelResult>
   markRead(input: { slug: string }): Promise<void>
   // Opening a thread records read/seen telemetry only. Queue membership is lifecycle-driven and is
   // never cleared by viewing a resting thread. No-op for a foreign thread (no registry row).
@@ -388,6 +391,7 @@ export const PROCEDURES = {
   threadProfileOptions: "query",
   threadSkills: "query",
   setThreadProfile: "mutation",
+  upgradeThreadModel: "mutation",
   markRead: "mutation",
   threadSeen: "mutation",
   setThreadState: "mutation",

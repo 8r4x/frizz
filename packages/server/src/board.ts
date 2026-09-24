@@ -7,7 +7,7 @@ import {
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import watcher from "@parcel/watcher"
-import type { BoardSnapshot, ThreadView, RuntimeState, ThreadRecurringPrompt, ProviderError } from "@frizz/shared"
+import type { BoardSnapshot, ClaudeModel, ThreadView, RuntimeState, ThreadRecurringPrompt, ProviderError } from "@frizz/shared"
 import { AskedQuestionSchema, BoardDiffer, PermissionMode, SnoozeUntil, ThreadSlug, isDirectSubAgent, questionAnswerMessage, questionsCancelledWakeMessage, type AskedQuestion, type PermissionMode as PermissionModeValue, type QuestionAnswer, type QuestionDismissal } from "@frizz/shared"
 import type { Bus } from "./bus.ts"
 import type { Project } from "./project.ts"
@@ -15,6 +15,7 @@ import { isHeadlessRow, isBrokerClaudeRow, sessionTitleLocked, type ThreadQuesti
 import type { Storage, SessionRow, PrWatchRow, ThreadTimerRow, ThreadWatchRow, ThreadLinkRow } from "./storage.ts"
 import { threadLinkView } from "./thread-links.ts"
 import { normalizeObservedThreadModel } from "./backend/thread-profiles.ts"
+import { claudeModelStanding } from "./backend/claude-model-upgrade.ts"
 import type { Tailer, SessionTelemetry, FenceView } from "./tailer.ts"
 import type { InteractionChange } from "./interaction-store.ts"
 import { frizzDirExists } from "./frizz.ts"
@@ -1380,6 +1381,9 @@ function sessionThreadView(
   github: GithubStatusBook = {},
   // The watched-ISSUE readings, the same way — its own book because the entries have their own shape.
   issueBook: GithubIssueStatusBook = {},
+  // The pinned Claude runtime's resolved catalogue (claude-models.ts peekClaudeModels), for the edition a
+  // thread runs against the one its family now resolves to. Undefined until the first probe lands.
+  claudeCatalogue: readonly ClaudeModel[] | undefined = undefined,
 ): ThreadView {
   // A REGISTERED completion is presented to everything below as the ```done fence it replaces — same
   // shape, same three predicates, same card — so the two cannot render as two different endings while
@@ -1533,6 +1537,11 @@ function sessionThreadView(
   const crashed = runtime === "exited" && (tele?.turn === "in-flight" || hasLiveBackgroundWork(tele) || headlessLostWork)
   const snoozedUntil = futureSnooze(row, nowMs)
   const profile = resolveSessionProfile(row, tele)
+  // The Claude EDITION behind the family word — see ThreadView.runningModelLabel. Only when the observed
+  // id is the family the readout names: after a model switch the transcript still reports the OLD family
+  // until the next turn, and its edition would be a reading of the wrong model.
+  const standing = (row.backend ?? "claude") === "claude" ? claudeModelStanding(tele?.model, claudeCatalogue) : undefined
+  const edition = standing && standing.running.alias === profile.model ? standing : undefined
   const permissionMode = resolveSessionPermission(row, tele)
   const permissionPending = resolvePendingPermission(row)
   const title = resolveSessionTitle(row, tele)
@@ -1626,6 +1635,10 @@ function sessionThreadView(
     // fall back to current Settings; when both durable sources are silent the readout is omitted.
     model: profile.model,
     effort: profile.effort,
+    runningModelLabel: edition?.running.label,
+    // `staged` reads the daemon's liveness off the same record headlessStalled does: with no live worker,
+    // the next turn forks from the current pin and so starts on the newer edition by itself.
+    modelUpgrade: edition?.newer && isBrokerClaudeRow(row) ? { label: edition.newer.label, staged: headlessStalled } : undefined,
     // Context fullness. Emitted only when the provider has given BOTH halves — a fraction with a
     // guessed denominator is a fabricated reading, and the client's contract is that absence means no
     // dial rather than an empty one. A Claude row therefore carries no `context` until its first turn
@@ -1761,6 +1774,8 @@ export interface BoardManagerDeps {
   now?: () => number
   codexTurnLiveness?: CodexTurnLivenessReader
   claudeBrokerDaemonAlive?: ClaudeBrokerLivenessReader
+  /** The pinned Claude runtime's resolved catalogue, read synchronously per build (peekClaudeModels). */
+  claudeModels?: () => readonly ClaudeModel[] | undefined
 }
 
 export function createBoard(
@@ -1775,6 +1790,7 @@ export function createBoard(
   const now = deps.now ?? Date.now
   const codexTurnLiveness = deps.codexTurnLiveness ?? (() => undefined)
   const claudeBrokerDaemonAlive = deps.claudeBrokerDaemonAlive ?? (() => true)
+  const claudeModels = deps.claudeModels ?? (() => undefined)
   let cached: BoardSnapshot | null = null
   let parcelSub: watcher.AsyncSubscription | null = null
   let watchSetup: Promise<void> | null = null
@@ -1879,6 +1895,7 @@ export function createBoard(
         registries,
         github,
         issueBook,
+        claudeModels(),
       ))
     }
     for (const key of pendingInteractionCache.keys()) {

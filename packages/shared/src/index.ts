@@ -139,6 +139,9 @@ export const ClaudeModel = z.object({
   alias: z.string(),
   label: z.string(),
   resolvedModel: z.string().optional(),
+  // The edition alone ("5.5") — the tail of `label`, which the picker sets dimmer than the family word.
+  // Absent exactly when `resolvedModel` is.
+  edition: z.string().optional(),
 })
 export type ClaudeModel = z.infer<typeof ClaudeModel>
 
@@ -196,6 +199,8 @@ export type AcpAgentModelsInput = z.infer<typeof AcpAgentModelsInput>
 export const ThreadProfileOption = z.object({
   model: z.string().min(1),
   label: z.string().min(1),
+  // The edition at the end of `label` ("5.5" of "Opus 5.5"), for a Claude row the pinned runtime resolved.
+  edition: z.string().optional(),
   defaultEffort: z.string().min(1),
   efforts: z.array(z.string().min(1)).min(1),
 })
@@ -2784,6 +2789,16 @@ export const ThreadView = z.object({
   // values forward-compatible; absent when neither durable source knows → the UI renders no guess.
   model: z.string().optional(),
   effort: z.string().optional(),
+  // The Claude EDITION this thread's worker last ran ("Opus 5"), read off the model id on its own
+  // transcript. It can be older than the edition the picker's row names ("Opus 5.5"): a worker keeps the
+  // runtime it was started on, and a new pin only reaches the workers started after it. Emitted only when
+  // that id belongs to the family `model` names, so a pending model switch never shows the old family's.
+  runningModelLabel: z.string().optional(),
+  // Present when the pinned runtime now resolves this thread's family to a NEWER edition than it runs.
+  // `staged`: no live worker holds the old edition, so the next turn starts on `label` with nothing
+  // further to do; otherwise the composer offers the upgrade, and the first message after the thread's
+  // next compaction takes it on its own.
+  modelUpgrade: z.object({ label: z.string(), staged: z.boolean() }).optional(),
   // How full the session's context window is right now — the footer's fullness readout. BOTH halves
   // are provider-measured and the field is emitted ONLY when both are present, so a client never has
   // to decide what to do with half a fraction: absent ⇒ no reading, never a 0% dial. Codex reports
@@ -3821,6 +3836,14 @@ export const SetThreadProfileResult = z.object({
 })
 export type SetThreadProfileResult = z.infer<typeof SetThreadProfileResult>
 
+// Move a Claude thread onto the newer edition of its family that the pinned runtime resolves (ThreadView
+// `modelUpgrade`). Always `next-turn`: the worker process is retired and the next turn starts in a fresh
+// one, on the current pin.
+export const UpgradeThreadModelInput = z.object({ slug: ThreadSlug, sessionId: z.string().min(1) }).strict()
+export type UpgradeThreadModelInput = z.infer<typeof UpgradeThreadModelInput>
+export const UpgradeThreadModelResult = z.object({ effect: z.literal("next-turn"), label: z.string() })
+export type UpgradeThreadModelResult = z.infer<typeof UpgradeThreadModelResult>
+
 // ---- DISPATCH TASK BANNER (composer ↔ transcript) -------------------------------------------------
 // The loud fence frizz puts between its own dispatch orientation and the human operator's prompt. It is
 // BOTH the worker's system→human handoff cue and the transcript's display boundary, so it lives here,
@@ -4591,6 +4614,7 @@ export type BoardDelta = Extract<ServerEvent, { type: "board-delta" }>
 // Pure delta engine + client apply/decision helpers (kept in a sibling module, re-exported here so
 // `@frizz/shared` stays the single entry point).
 export * from "./claim.ts"
+export * from "./claude-editions.ts"
 export * from "./code-fences.ts"
 export * from "./delta.ts"
 export * from "./drainable-worker.ts"

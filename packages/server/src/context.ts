@@ -32,6 +32,8 @@ import { readClaudePreflightAuth, readCodexAuthState, readCodexBinaryState } fro
 import { createLoginUtility, type LoginUtility } from "./login-utility.ts"
 import type { AgentBackend } from "./backend/types.ts"
 import { needsFreshProcessForLimit } from "./backend/usage-limit.ts"
+import { onClaudeModelsResolved, peekClaudeModels, readClaudeModels } from "./backend/claude-models.ts"
+import { claudeModelUpgradeDue, claudeUpgradeCandidate, SERVER_STARTED_AT_MS } from "./backend/claude-model-upgrade.ts"
 import { detectGithub, type GithubDetection } from "./github.ts"
 import type { InteractionStore } from "./interaction-store.ts"
 import {
@@ -894,8 +896,17 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     // Headless-stall signal for a broker row: the ownerless daemon's record. Absent bridge ⇒ default
     // "alive" so a bridge-less server never falsely crash-cards a broker row (there are none anyway).
     claudeBrokerDaemonAlive: claudeBroker ? (sessionId) => claudeBroker.isDaemonAlive(sessionId) : undefined,
+    claudeModels: peekClaudeModels,
   })
   resources.board = board
+  // The pinned runtime's catalogue, resolved once so the board can say which threads run an older edition
+  // than their family now resolves to, and so the upgrade at compaction does not wait for a browser to
+  // ask for it first. The board re-derives the moment it lands. Same gate as the quota warm-up: a
+  // disposable test stack never spawns the runtime on its own.
+  contextUnsubscribers.push(onClaudeModelsResolved(() => board.refresh()))
+  if (process.env.FRIZZ_WAKERS_OFF !== "1") {
+    void readClaudeModels({ claudeBin: opts.claudeBin, cwd: project.dir, log: (message) => frizzLog.warn("server", message) })
+  }
   opts.startup?.afterPhase?.("board watcher")
   const dispatcher = createDispatcher({
     project,
@@ -972,6 +983,13 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
           process.stderr.write(`[frizz] claude-broker wake for ${slug} dropped: the session broker is unavailable\n`)
           return
         }
+        // The upgrade at compaction, exactly as the followUp RPC takes it (claude-model-upgrade.ts): a
+        // wake is the first input after a compaction as often as an operator's message is.
+        const upgradeCandidate = claudeUpgradeCandidate({ stateDir: project.stateDir, projectId: project.id, storage, telemetry: tailer.get(slug) }, row)
+        const upgrade = upgradeCandidate
+          ? claudeModelUpgradeDue(upgradeCandidate, { catalogue: peekClaudeModels(), nowMs: Date.now(), serverStartedAtMs: SERVER_STARTED_AT_MS })
+          : undefined
+        if (upgrade?.due) frizzLog.info("server", `${slug}: compacted on ${upgrade.from}; this wake starts a fresh worker on ${upgrade.to}`)
         return deliverClaudeBrokerWake({
           bridge: claudeBroker,
           slug,
@@ -982,7 +1000,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
           // Recomputed here rather than carried on the delivery: the outbox stores a message, not a
           // runtime decision, and the tail is the live answer to "is this thread still behind a wall
           // its own process is enforcing".
-          freshProcess: needsFreshProcessForLimit(
+          freshProcess: upgrade?.due === true || needsFreshProcessForLimit(
             tailer.get(slug)?.limitFault,
             Date.now(),
             (tailer.get(slug)?.subAgents ?? []).some((agent) => agent.state === "running"),

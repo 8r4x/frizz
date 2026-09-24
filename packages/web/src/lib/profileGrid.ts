@@ -3,6 +3,9 @@ import { PROMPT_CONTROL_TYPOGRAPHY_CLASS } from "./promptControlTypography.ts"
 export interface ProfileGridOption {
   model: string
   label: string
+  // The version at the END of `label` ("5.5" of "Opus 5.5"). The model column sets it dimmer than the
+  // family word, so the eye reads the family first and the version on a second look.
+  edition?: string
   efforts: readonly string[]
   defaultEffort?: string
 }
@@ -121,10 +124,14 @@ export function profileGridDisplayLabel(
   groups: readonly ProfileGridGroup[],
   selection: Partial<ProfileGridSelection> | undefined,
   placeholder = "Profile unknown",
+  // What a RUNNING thread actually runs ("Opus 5"), when that is not what its row names ("Opus 5.5") —
+  // ThreadView.runningModelLabel. The row is what the family resolves to NOW; the readout must not claim
+  // an edition the worker is not on.
+  modelLabel?: string,
 ): string {
   if (!selection?.model && !selection?.effort) return placeholder
   const option = groups.flatMap((group) => group.options).find((candidate) => candidate.model === selection.model)
-  const model = option?.label ?? selection.model ?? "Model unknown"
+  const model = modelLabel ?? option?.label ?? selection.model ?? "Model unknown"
   // A Claude thread records its resolved model in the provider transcript but never the launch effort,
   // so a thread dispatched without an explicit effort (or an older/foreign session) has a known model
   // and an unknown effort. Show the model alone in that case: a concrete effort is displayed verbatim
