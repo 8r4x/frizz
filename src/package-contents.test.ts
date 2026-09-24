@@ -82,7 +82,7 @@ test("the shell bootstraps the versioned public server contract", () => {
 
 test("native server dependencies do not leak back into the stable shell", () => {
   assert.equal(manifest.dependencies?.["node-pty"], undefined);
-  assert.equal(serverManifest.dependencies?.["node-pty"], "^1.1");
+  assert.equal(serverManifest.dependencies?.["node-pty"], "1.2.0-beta.15");
   assert.equal(serverManifest.dependencies?.["@parcel/watcher"], "^2.5");
 });
 

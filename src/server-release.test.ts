@@ -259,7 +259,7 @@ function fakePty(prefix: string, binaries: string[] = []): string {
 
 test("node-pty's addon is found exactly where its own loader looks, per host", (t) => {
   const { root } = setup(t);
-  // node-pty 1.1 publishes darwin and win32 prebuilds only: a Linux host has nothing to load.
+  // node-pty 1.1 published darwin and win32 prebuilds only: a Linux host has nothing to load.
   const published = fakePty(join(root, "published"), ["prebuilds/darwin-arm64", "prebuilds/darwin-x64", "prebuilds/win32-x64"]);
   assert.equal(nodePtyHasNativeBinary(published, "linux", "x64"), false);
   assert.equal(nodePtyHasNativeBinary(published, "darwin", "arm64"), true);

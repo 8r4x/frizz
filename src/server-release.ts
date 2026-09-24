@@ -146,9 +146,12 @@ export interface ServerPackageInstaller {
  * Does this node-pty directory hold an addon this host can load? Mirrors node-pty's own loader
  * (`lib/utils.js` `loadNativeModule`): a local build first, then the per-target prebuild.
  *
- * node-pty publishes prebuilds for darwin and win32 ONLY. On Linux its `install` script compiles one,
- * and the install below never runs lifecycle scripts, so a Linux server generation had no `pty.node`
- * and every pty (the terminal, provider sign-in) died with "Failed to load native module: pty.node".
+ * node-pty 1.1 published prebuilds for darwin and win32 ONLY. Elsewhere its `install` script compiles
+ * one, and the install below never runs lifecycle scripts, so a Linux server generation had no
+ * `pty.node` and every pty (the terminal, provider sign-in) died with "Failed to load native module:
+ * pty.node". The pinned 1.2 beta adds glibc linux-x64 and linux-arm64 prebuilds; any other host still
+ * needs the build. A musl host is not covered: node-pty's own install skips the build when the glibc
+ * prebuild directory exists, and so does this check.
  */
 export function nodePtyHasNativeBinary(packageDir: string, platform: string = process.platform, arch: string = process.arch): boolean {
   return ["build/Release", "build/Debug", `prebuilds/${platform}-${arch}`]
