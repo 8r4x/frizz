@@ -247,6 +247,8 @@ test("the npm adapter executes a real JS child with isolated prefix and scripts 
 function fakePty(prefix: string, binaries: string[] = []): string {
   const pty = join(prefix, "node_modules", "node-pty");
   mkdirSync(pty, { recursive: true });
+  // The prefix manifest `prepare` writes, as `install --save-exact` leaves it.
+  writeFileSync(join(prefix, "package.json"), JSON.stringify({ private: true, dependencies: { "frizz-server": "1.0.0" } }));
   writeFileSync(join(pty, "package.json"), JSON.stringify({ name: "node-pty", version: "1.1.0" }));
   for (const binary of binaries) {
     mkdirSync(join(pty, binary), { recursive: true });
@@ -305,7 +307,11 @@ test("an already-committed generation missing its addon is repaired in place on 
   await assert.rejects(store.load(), /could not build node-pty/);
 });
 
-/** A stub npm that logs every invocation, and on `rebuild` optionally produces the addon a real build would. */
+/**
+ * A stub npm that logs every invocation, and on `rebuild` optionally produces the addon a real build
+ * would. Like npm 12, it skips a script the prefix manifest's `allowScripts` does not approve and
+ * still exits 0.
+ */
 function stubNpm(root: string, build: boolean) {
   // resolveNpmCli honours npm_execpath only when it names an `npm-cli.js`; anything else silently
   // falls through to the REAL npm, which would make these assertions about the wrong program.
@@ -318,8 +324,13 @@ function stubNpm(root: string, build: boolean) {
     const fs = require('node:fs'), path = require('node:path');
     const argv = process.argv.slice(2);
     fs.appendFileSync(process.env.LOG, JSON.stringify(argv) + '\\n');
+    const prefix = argv[argv.indexOf('--prefix') + 1];
+    if (argv[0] === 'rebuild' && JSON.parse(fs.readFileSync(path.join(prefix, 'package.json'), 'utf8')).allowScripts?.['node-pty'] !== true) {
+      console.error('npm warn rebuild 1 package had install scripts blocked because they are not covered by allowScripts.');
+      process.exit(0);
+    }
     if (argv[0] === 'rebuild' && ${build}) {
-      const out = path.join(argv[argv.indexOf('--prefix') + 1], 'node_modules/node-pty/build/Release');
+      const out = path.join(prefix, 'node_modules/node-pty/build/Release');
       fs.mkdirSync(out, { recursive: true });
       fs.writeFileSync(path.join(out, 'pty.node'), 'addon');
     }
@@ -357,6 +368,10 @@ test("the npm adapter builds node-pty ONLY when this host has no addon, with tha
   assert.equal(argv.includes("--ignore-scripts=false"), true);
   assert.equal(argv.includes("--ignore-scripts"), false);
   assert.equal(nodePtyHasNativeBinary(pty), true);
+  // npm's script policy approves node-pty alone, in the prefix manifest, which keeps everything else.
+  assert.deepEqual(JSON.parse(readFileSync(join(bare, "package.json"), "utf8")), {
+    private: true, dependencies: { "frizz-server": "1.0.0" }, allowScripts: { "node-pty": true },
+  });
 
   // Idempotent: a second pass finds the addon and runs nothing.
   await building.installer.ensureNativeBinaries!(bare);

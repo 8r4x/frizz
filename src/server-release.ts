@@ -168,6 +168,21 @@ function nativeToolchainHint(platform: string = process.platform): string {
   return "install Python 3 and the Visual Studio C++ build tools, then relaunch Frizz";
 }
 
+/**
+ * npm's `allowScripts` policy gates a lifecycle script even when `--ignore-scripts=false` asks for it:
+ * npm 12 skips an unapproved one and still exits 0, and npm 11 fails it under `strict-allow-scripts`.
+ * `--allow-scripts` is refused in a project-scoped install, so the approval goes in the prefix's own
+ * manifest, the one Frizz writes. Written here rather than at staging so a generation an older
+ * launcher staged is approved before its repair too. npm 10 ignores the field.
+ */
+function approveNodePtyScripts(prefix: string): void {
+  const path = join(prefix, "package.json");
+  const manifest = record(readJson(path));
+  const allowScripts = manifest.allowScripts === undefined ? {} : record(manifest.allowScripts);
+  if (allowScripts["node-pty"] === true) return;
+  writeFileSync(path, `${JSON.stringify({ ...manifest, allowScripts: { ...allowScripts, "node-pty": true } })}\n`, { mode: 0o600 });
+}
+
 export function npmServerPackageInstaller(env: NodeJS.ProcessEnv = process.env): ServerPackageInstaller {
   const run = (args: string[], cwd?: string, timeout = 180_000): Promise<string> => new Promise((resolveOutput, reject) => {
     let cli: string;
@@ -200,6 +215,7 @@ export function npmServerPackageInstaller(env: NodeJS.ProcessEnv = process.env):
       // own `install` (check prebuilds, else node-gyp). `rebuild <name>` scopes it to that package, not
       // the tree; `--ignore-scripts=false` beats a user npmrc that disables scripts, which would
       // otherwise make this a silent no-op.
+      approveNodePtyScripts(prefix);
       try {
         await run([
           "rebuild", "node-pty", "--prefix", prefix, "--global=false", "--ignore-scripts=false", "--no-audit", "--no-fund",
