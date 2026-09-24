@@ -261,11 +261,9 @@ export async function pickWindowsFolder(
       const path = picked?.slice(WINDOWS_PICKED_PREFIX.length).trim() ?? ""
       return path ? { kind: "picked", path } : { kind: "cancelled" }
     } catch (error) {
-      const { code, killed } = error as { code?: unknown; killed?: boolean }
-      // The timeout reaped a dialog nobody answered. On a machine where the raise did not take, that
-      // is the dialog nobody SAW, and "cancelled" would make the grid do nothing for a second time; the
-      // typed-path fallback is the only way in that still works, so this must open it.
-      if (killed) return { kind: "unavailable", reason: "no folder was chosen within 5 minutes" }
+      // On a machine where the raise did not take, a timeout is the dialog nobody SAW.
+      if (timedOut(error)) return unanswered("folder")
+      const { code } = error as { code?: unknown }
       // ENOENT is an edition that is not installed; EPERM is one Windows would not start for this
       // process (the Store package's app-execution alias, in a profile it is not registered for); a
       // non-zero exit is the script itself failing in that edition (a pwsh without WinForms, say).
