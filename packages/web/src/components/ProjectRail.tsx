@@ -191,31 +191,19 @@ function railCountsLabel(queued: number, running: number): string {
  * inside the scrolling band, which clips at its own edge, so a 3px moat put the ring flush against the
  * rail's border and shaved its right side off (measured in the running app, 2026-09-24).
  *
- * `pathLength="100"` is what lets one dash pattern and one keyframe serve a circle and a two-digit pill
- * alike; the SVG is inset by half the stroke so a 100%-sized rect puts the stroke's outer edge exactly
- * on the moat's edge. The corner radius is half the moat's fixed 20px height minus that inset.
+ * THE RING IS CSS, NOT SVG, AND THAT IS THE WHOLE POINT. It shipped as an <svg> inset half a stroke
+ * into the moat, and its ink sat 0.375px right of and below the badge it circles (measured off the
+ * rendered pixels, 2026-09-24: disc centred at x 44.94, ring at 45.31, the same on y — maintainer:
+ * "your circles aren't concentric"). Every box reported the same centre; the PAINT did not, because
+ * Chrome pixel-snaps an SVG root's content box, and a 35.625px origin painted at 36. The ring is now
+ * the moat's own box — a conic-gradient segment over a faint base, masked down to a 1.25px band — so
+ * it is concentric with the badge by construction, follows a two-digit pill without measuring
+ * anything, and has no replaced element to snap. See `.frizz-rail-badge-ring` in styles.css.
  */
 function RunningRing() {
   return (
     <span aria-hidden className="absolute -inset-[2px] rounded-full bg-bg">
-      {/* Sized explicitly, not by `inset`: an <svg> is a replaced element, so its width/height never
-          stretch between insets — a `width="100%"` attribute here overrode the right inset and shifted
-          the ring half a stroke right, past the band's clip edge. */}
-      <svg className="absolute left-[0.625px] top-[0.625px] h-[calc(100%-1.25px)] w-[calc(100%-1.25px)] overflow-visible text-muted-85">
-        <rect width="100%" height="100%" rx="9.375" fill="none" stroke="currentColor" strokeOpacity="0.3" strokeWidth="1.25" />
-        <rect
-          width="100%"
-          height="100%"
-          rx="9.375"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.25"
-          strokeLinecap="round"
-          pathLength={100}
-          strokeDasharray="24 76"
-          className="frizz-rail-badge-lap"
-        />
-      </svg>
+      <span className="frizz-rail-badge-ring absolute inset-0 rounded-full text-muted-85" />
     </span>
   )
 }
