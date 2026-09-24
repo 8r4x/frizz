@@ -5,7 +5,7 @@ import { log as frizzLog } from "./logging.ts"
 //
 // Tenants activate LAZILY: `routeToTenant` opens a project the first time a request addresses it, so
 // a project nobody has visited since boot has no board. That is cheap and it was the right default —
-// but the rail's badge is a BOARD FACT (`projectsQueueCounts` counts `queuedThread` rows off each open
+// but the rail's badge is a BOARD FACT (`projectsRailCounts` counts `queuedThread` and `activeBandThread` rows off each open
 // project's snapshot), so the consequence the operator actually experienced was having to click into
 // every square before any of them would tell them how many threads were waiting (2026-08-26: "I
 // currently need to click into every project before the badge shows up with the number of rested

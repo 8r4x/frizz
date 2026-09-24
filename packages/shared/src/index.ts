@@ -5090,6 +5090,18 @@ export const ProjectCard = z.object({
 })
 export type ProjectCard = z.infer<typeof ProjectCard>
 
+/**
+ * One project's rail badge: its queue (`queuedThread`) and its Active band (`activeBandThread`).
+ *
+ * Two numbers rather than their sum because the tooltip splits them, and the spinner reads `running`
+ * alone. A project absent from the map has no board open on this server — no badge, not a zero.
+ */
+export const ProjectRailCounts = z.object({
+  queued: z.number().int().nonnegative(),
+  running: z.number().int().nonnegative(),
+})
+export type ProjectRailCounts = z.infer<typeof ProjectRailCounts>
+
 /** Formats the icon route will serve — a browser renders each of these in an `<img>`. */
 export const PROJECT_ICON_EXTENSIONS = ["png", "svg", "ico", "webp", "jpg", "jpeg", "gif"] as const
 

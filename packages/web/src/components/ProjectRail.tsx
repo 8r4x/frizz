@@ -4,8 +4,8 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties, type Drag
 import { House, Plus } from "lucide-react"
 import { Link, useNavigate } from "react-router"
 import { useSnapshot } from "valtio"
-import type { ProjectCard } from "@frizz/shared"
-import { PROJECT_ICON_EXTENSIONS } from "@frizz/shared"
+import type { ProjectCard, ProjectRailCounts } from "@frizz/shared"
+import { activeBandThread, PROJECT_ICON_EXTENSIONS } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { queued } from "../groups.ts"
 import { asThreads } from "../hooks.ts"
@@ -169,6 +169,58 @@ export function ProjectSquare({ project, size }: { project: ProjectCard; size: n
 const SQUARE = 40
 
 /**
+ * The badge's split, for its tooltip and its accessible name: `1 running, 2 in the queue`. The two
+ * words are the sidebar's own band headings (RUNNING, QUEUE), so the rail names what it counts the
+ * way the rows it counts are labelled.
+ */
+function railCountsLabel(queued: number, running: number): string {
+  const parts: string[] = []
+  if (running) parts.push(`${running} running`)
+  if (queued) parts.push(`${queued} in the queue`)
+  return parts.join(", ")
+}
+
+/**
+ * The spinner lapping the badge while the project has threads in flight.
+ *
+ * The sidebar's BoxSpinner at badge scale — a faint full outline and one bright segment travelling it,
+ * in the same muted ink and at the same 1.1s lap, so a project's rail badge and its rows in the sidebar
+ * say "in flight" with one motion. It sits in a MOAT: the badge's 1.5px cut-out grows by 2px of the
+ * page background, and the ring runs at the moat's outer edge, so the segment reads against the moat
+ * rather than against the icon underneath. 2px and not the mockup's 3: the badge's right edge is 3px
+ * inside the scrolling band, which clips at its own edge, so a 3px moat put the ring flush against the
+ * rail's border and shaved its right side off (measured in the running app, 2026-09-24).
+ *
+ * `pathLength="100"` is what lets one dash pattern and one keyframe serve a circle and a two-digit pill
+ * alike; the SVG is inset by half the stroke so a 100%-sized rect puts the stroke's outer edge exactly
+ * on the moat's edge. The corner radius is half the moat's fixed 20px height minus that inset.
+ */
+function RunningRing() {
+  return (
+    <span aria-hidden className="absolute -inset-[2px] rounded-full bg-bg">
+      {/* Sized explicitly, not by `inset`: an <svg> is a replaced element, so its width/height never
+          stretch between insets — a `width="100%"` attribute here overrode the right inset and shifted
+          the ring half a stroke right, past the band's clip edge. */}
+      <svg className="absolute left-[0.625px] top-[0.625px] h-[calc(100%-1.25px)] w-[calc(100%-1.25px)] overflow-visible text-muted-85">
+        <rect width="100%" height="100%" rx="9.375" fill="none" stroke="currentColor" strokeOpacity="0.3" strokeWidth="1.25" />
+        <rect
+          width="100%"
+          height="100%"
+          rx="9.375"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.25"
+          strokeLinecap="round"
+          pathLength={100}
+          strokeDasharray="24 76"
+          className="frizz-rail-badge-lap"
+        />
+      </svg>
+    </span>
+  )
+}
+
+/**
  * The current project's square grows a pill on the rail's left edge.
  *
  * Discord's indicator, because the alternative — marking the square itself — competes with the icon
@@ -177,7 +229,7 @@ const SQUARE = 40
 function RailLink({
   project,
   current,
-  count,
+  counts,
   index,
   drag,
   onPointerDown,
@@ -185,14 +237,17 @@ function RailLink({
 }: {
   project: ProjectCard
   current: boolean
-  /** Threads in this project's queue, or undefined when this server has not opened the project. */
-  count: number | undefined
+  /** This project's queue and Active band, or undefined when this server has not opened the project. */
+  counts: ProjectRailCounts | undefined
   index: number
   drag: DragState | null
   onPointerDown: (event: PointerEvent_<HTMLAnchorElement>, index: number) => void
   onKeyDown: (event: KeyboardEvent_<HTMLAnchorElement>, index: number) => void
 }) {
   const held = drag?.fromIndex === index
+  const queued = counts?.queued ?? 0
+  const running = counts?.running ?? 0
+  const count = queued + running
   // The held square follows the pointer; everything between its old slot and its new one slides one
   // step to open the gap. `shiftFor` owns which is which — see lib/railReorder.ts.
   const offset = drag
@@ -211,7 +266,7 @@ function RailLink({
       label={
         project.stale
           ? `${project.name} — directory is missing`
-          : count ? `${project.name} — ${count} in the queue` : project.name
+          : count ? `${project.name} — ${railCountsLabel(queued, running)}` : project.name
       }
     >
       <Link
@@ -258,29 +313,43 @@ function RailLink({
           <ProjectSquare project={project} size={SQUARE} />
         </span>
         {count ? (
-          // THE QUEUE BADGE — how many threads in this project are waiting on the human. Discord's
-          // placement: on the square's bottom-right corner, overlapping it, with a cut-out border in the
-          // rail's own colour so it reads as sitting ON the square rather than beside it. Accent, and
-          // only accent, because yellow means exactly one thing in this product: this many want you
-          // (MobileBoard's tab badge draws the same count the same way). A SIBLING of the opacity
+          // THE BADGE — how many threads in this project are in play: waiting on the human (the queue)
+          // PLUS in flight (the Active band), and a spinner lapping it while any are in flight. ONE mark
+          // carrying both, the maintainer's call on issue #41 ("the number inside the yellow dot should
+          // be the sum"), after a round of mockups that gave "running" its own corner — two marks on a
+          // 40px square asked the eye to learn which corner meant which. The tooltip splits the sum.
+          //
+          // THE PLACEMENT is Discord's: on the square's bottom-right corner, overlapping it, with a cut-out
+          // border in the rail's own colour so it reads as sitting ON the square rather than beside it.
+          // Accent, because the badge still answers the queue's question — "go there" — for work in
+          // flight as much as for work waiting; the spinner is what tells the two apart at a glance, so
+          // a badge with no ring is purely a queue count, as MobileBoard's tab badge is. A SIBLING of the opacity
           // wrapper, not a child: a non-current square is dimmed to 75%, and a signal must not dim with
           // the surface it is reporting on. Positioned against the LINK (56px wide, the 40px square
           // centred in it), so `right-[3px]` puts the badge 5px past the square's right edge and
           // `-bottom-[5px]` 5px past its bottom — into the 8px gap, clear of the next square, and
           // inside the band's bottom padding for the last one.
           <span
-            aria-label={`${count} in the queue`}
-            data-rail-queue-count={count}
-            // Proportional figures, not tabular: a badge centres ONE number, it aligns no column, and a
-            // tabular "1" carries a fixed cell's worth of side-bearing that put the ink of "12" 1.02px
-            // left of the pill's centre. Measured 2026-08-24 at 10px/600 in the sans UI font.
-            className="pointer-events-none absolute -bottom-[5px] right-[3px] flex h-[16px] min-w-[16px] items-center justify-center rounded-full border-[1.5px] border-bg bg-accent-fill px-[3.5px] text-[10px] font-semibold leading-none proportional-nums text-on-accent"
+            aria-label={railCountsLabel(queued, running)}
+            data-rail-count={count}
+            data-rail-running={running || undefined}
+            // The WRAPPER is what sits on the corner; it sizes to the badge, so the ring below follows a
+            // two-digit badge into a pill without measuring anything.
+            className="pointer-events-none absolute -bottom-[5px] right-[3px] flex"
           >
-            {/* The cap band, not the line box — the same fix the monogram above uses, for the same reason:
-                `items-center` centred the digits' LINE BOX and their ink rode 0.4–0.5px low in the sans
-                UI font (measured 2026-08-24). Trimming the box to baseline→cap height makes the box the
-                ink, so the browser centres it with nothing to re-measure when the type scale moves. */}
-            <span style={{ textBox: "trim-both cap alphabetic" } as CSSProperties}>{count}</span>
+            {running ? <RunningRing /> : null}
+            <span
+              // Proportional figures, not tabular: a badge centres ONE number, it aligns no column, and a
+              // tabular "1" carries a fixed cell's worth of side-bearing that put the ink of "12" 1.02px
+              // left of the pill's centre. Measured 2026-08-24 at 10px/600 in the sans UI font.
+              className="relative flex h-[16px] min-w-[16px] items-center justify-center rounded-full border-[1.5px] border-bg bg-accent-fill px-[3.5px] text-[10px] font-semibold leading-none proportional-nums text-on-accent"
+            >
+              {/* The cap band, not the line box — the same fix the monogram above uses, for the same reason:
+                  `items-center` centred the digits' LINE BOX and their ink rode 0.4–0.5px low in the sans
+                  UI font (measured 2026-08-24). Trimming the box to baseline→cap height makes the box the
+                  ink, so the browser centres it with nothing to re-measure when the type scale moves. */}
+              <span style={{ textBox: "trim-both cap alphabetic" } as CSSProperties}>{count}</span>
+            </span>
           </span>
         ) : null}
       </Link>
@@ -409,30 +478,32 @@ function justDragged(): boolean {
 }
 
 /**
- * The rail's badges: each project's queue size, keyed by project id.
+ * The rail's badges: each project's queue and Active band, keyed by project id.
  *
  * TWO SOURCES, one per kind of project. The project on screen has a live board in the store — the
- * same rows the sidebar's rested band is drawing a few hundred pixels to the right — so its badge is
- * counted from that and can never lag the rail it sits beside. Every OTHER project is a poll of the
- * server's cached snapshots (`projectsQueueCounts`, machine-wide, see lib/queryKeyScope.ts), because
- * the live feed is one socket per project and a rail that opened a socket per square would be forty
- * boards' worth of push for a number. Five seconds: a badge for a project you are not looking at is a
- * "go there" cue, not a live readout. A project with no board on the server has no count — it draws no
- * badge, which is honest, rather than a zero, which is not. That is now a transient state: the server
- * opens every registered project within about a second of boot (server/tenant-prime.ts), which is what
- * ended having to click into each square before its badge would appear.
+ * same rows the sidebar is drawing a few hundred pixels to the right — so its badge is counted from
+ * that, with the same two predicates, and can never lag the rail it sits beside. Every OTHER project is
+ * a poll of the server's cached snapshots (`projectsRailCounts`, machine-wide, see
+ * lib/queryKeyScope.ts), because the live feed is one socket per project and a rail that opened a
+ * socket per square would be forty boards' worth of push for a number. Five seconds: a badge for a
+ * project you are not looking at is a "go there" cue, not a live readout. A project with no board on the
+ * server has no count — it draws no badge, which is honest, rather than a zero, which is not. That is
+ * now a transient state: the server opens every registered project within about a second of boot
+ * (server/tenant-prime.ts), which is what ended having to click into each square before its badge
+ * would appear.
  */
-function useQueueCounts(currentSlug: string | undefined, projects: readonly ProjectCard[]): (project: ProjectCard) => number | undefined {
+function useRailCounts(currentSlug: string | undefined, projects: readonly ProjectCard[]): (project: ProjectCard) => ProjectRailCounts | undefined {
   const polled = useQuery({
-    queryKey: ["projectsQueueCounts"],
-    queryFn: () => rpc.projectsQueueCounts(),
+    queryKey: ["projectsRailCounts"],
+    queryFn: () => rpc.projectsRailCounts(),
     refetchInterval: 5_000,
   })
   // valtio tracks the property read, so this re-renders on board changes and nothing else.
   const board = useSnapshot(store).board
-  const live = currentSlug !== undefined && board ? asThreads(board.threads).filter(queued).length : undefined
+  const threads = currentSlug !== undefined && board ? asThreads(board.threads) : undefined
+  const live = threads && { queued: threads.filter(queued).length, running: threads.filter(activeBandThread).length }
   const currentId = currentSlug === undefined ? undefined : projects.find((project) => project.slug === currentSlug)?.id
-  return (project) => (project.id === currentId && live !== undefined ? live : polled.data?.[project.id])
+  return (project) => (project.id === currentId && live ? live : polled.data?.[project.id])
 }
 
 export function ProjectRail() {
@@ -468,7 +539,7 @@ export function ProjectRail() {
   })
 
   const projects = optimistic ?? data ?? []
-  const countFor = useQueueCounts(current, projects)
+  const countsFor = useRailCounts(current, projects)
 
   /**
    * Fade the band's bottom edge ONLY while something is actually below it.
@@ -618,9 +689,10 @@ export function ProjectRail() {
       <div
         ref={bandRef}
         data-overflowing={overflowing || undefined}
-        // `pb-1.5` absorbs the last square's queue badge (5px below its square): without it the badge
-        // extends the scroll height, which the bottom fade reads as "there is more" and dims the square.
-        className="frizz-rail-scroll flex w-full min-h-0 flex-1 flex-col items-center gap-2 overflow-y-auto pb-1.5"
+        // `pb-2` absorbs the last square's badge — 5px below its square, 7px once the running ring's
+        // moat is round it: without it the badge extends the scroll height, which the bottom fade reads
+        // as "there is more" and dims the square.
+        className="frizz-rail-scroll flex w-full min-h-0 flex-1 flex-col items-center gap-2 overflow-y-auto pb-2"
       >
         {projects.map((project, index) => (
           <RailLink
@@ -628,7 +700,7 @@ export function ProjectRail() {
             project={project}
             index={index}
             current={project.slug === current}
-            count={countFor(project)}
+            counts={countsFor(project)}
             drag={drag}
             onPointerDown={startDrag}
             onKeyDown={onKeyDown}

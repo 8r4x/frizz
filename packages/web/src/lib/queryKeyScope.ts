@@ -27,7 +27,7 @@ import { projectSlug } from "./base-path.ts"
  * `projectsList` is the rail's own data — scoping it would refetch the whole list on every switch and
  * blank the rail mid-navigation, which is the flicker the client-side router exists to remove.
  * `threadLocate` deliberately searches every registered project server-side, so a per-project copy
- * would be several caches of one answer. `projectsQueueCounts` is the rail's badges — one answer for
+ * would be several caches of one answer. `projectsRailCounts` is the rail's badges — one answer for
  * every project, read by a rail that outlives every switch. `dispatchPreferencesGet` is the prompt
  * box's model + effort profile, which the server keeps in one machine-level file
  * (server/dispatch-preferences.ts): scoping it would let a switch briefly paint the profile this
@@ -36,7 +36,7 @@ import { projectSlug } from "./base-path.ts"
  * project it serves (api/supervisorStatus.ts) — so scoping it would mint a second poll of one answer on
  * every project switch.
  */
-const MACHINE_WIDE = new Set(["projectsList", "projectsQueueCounts", "threadLocate", "dispatchPreferencesGet", "supervisorStatus"])
+const MACHINE_WIDE = new Set(["projectsList", "projectsRailCounts", "threadLocate", "dispatchPreferencesGet", "supervisorStatus"])
 
 /** The `queryKeyHashFn` for this app's QueryClient. Nothing else should need to call it. */
 export function projectScopedQueryKeyHash(key: readonly unknown[]): string {
