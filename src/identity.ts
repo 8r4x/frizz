@@ -23,9 +23,12 @@ import {
  * one, and from then on frizz-paths.ts read that directory's existence as "legacy install" and routed
  * every root there — the registry, the projects and the database written under the XDG roots looked
  * gone. A machine that already has `~/.frizz` resolves to the same file as before.
+ *
+ * `env` is for the one caller that resolves two homes under two environments at once: the sandbox,
+ * which links the operator's key (their XDG roots in force) into a throwaway home (those roots dropped).
  */
-export function claimIdentityPath(home = homedir()): string {
-  return join(frizzPaths({ home }).state, "identity.key");
+export function claimIdentityPath(home = homedir(), env?: NodeJS.ProcessEnv): string {
+  return join(frizzPaths({ home, env }).state, "identity.key");
 }
 
 /**

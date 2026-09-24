@@ -299,18 +299,20 @@ export function boardAddress(url: string): string {
   return url.includes("?") || url.endsWith("/") ? url : `${url}/`;
 }
 
+/** The XDG roots frizz-paths.ts honors, and therefore the ones a throwaway home must not inherit. */
+export const SANDBOX_DROPPED_XDG_ROOTS = ["XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"] as const;
+
 /**
  * Everything a sandbox launch needs, made before anything reads the home directory: a throwaway HOME
  * (so the registry, the lock, the session key and the saved remote setup are all disposable copies), a
  * throwaway repository to be the project, and the cwd moved into it. The caller deletes the home on
  * exit; the state root, logs and the minted project id all live under it.
  */
-/** The XDG roots frizz-paths.ts honors, and therefore the ones a throwaway home must not inherit. */
-export const SANDBOX_DROPPED_XDG_ROOTS = ["XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"] as const;
-
 export function prepareSandbox(env: NodeJS.ProcessEnv = process.env, realHome: string = homedir()): { home: string; project: string } {
   const home = mkdtempSync(join(tmpdir(), "frizz-sandbox-"));
-  shareCredentials(realHome, home);
+  // The operator's environment as it was, because one path below is still theirs to resolve: the
+  // machine's claim identity lives wherever THEIR roots put it, XDG included.
+  const inherited: NodeJS.ProcessEnv = { ...env };
   // POSIX homedir() reads $HOME and Windows reads USERPROFILE, both at call time — this is the whole lever.
   env.HOME = home;
   env.USERPROFILE = home;
@@ -320,6 +322,11 @@ export function prepareSandbox(env: NodeJS.ProcessEnv = process.env, realHome: s
   // real `$XDG_DATA_HOME/frizz`, and the cleanup on exit only removes the throwaway home (raised on
   // PR #43, 2026-09-23). A sandbox is a home that has never run Frizz, so it gets the platform defaults.
   for (const name of SANDBOX_DROPPED_XDG_ROOTS) delete env[name];
+  // AFTER the scrub, so the sandbox end of every link is resolved the way the sandbox itself will
+  // resolve it later. Sharing first and scrubbing second put the identity link at the XDG-resolved
+  // path and then made the sandbox look under its own home: a link nothing read, and a throwaway key
+  // minted on the first claim (second review on PR #43).
+  shareCredentials(realHome, home, inherited, env);
   const project = join(home, "sandbox");
   mkdirSync(project, { recursive: true });
   writeFileSync(join(project, "README.md"), "# frizz sandbox\n\nA throwaway project; everything here is deleted when the sandbox exits.\n");
@@ -349,7 +356,7 @@ export function prepareSandbox(env: NodeJS.ProcessEnv = process.env, realHome: s
  * here is best-effort — a missing file is simply not linked, and a platform that refuses symlinks gets
  * a sandbox without shared credentials rather than no sandbox.
  */
-function shareCredentials(realHome: string, home: string): void {
+function shareCredentials(realHome: string, home: string, realEnv: NodeJS.ProcessEnv, sandboxEnv: NodeJS.ProcessEnv): void {
   const link = (from: string, to: string) => {
     try {
       symlinkSync(from, to);
@@ -362,8 +369,10 @@ function shareCredentials(realHome: string, home: string): void {
   // for that home — never a literal `~/.frizz`, which this used to create on the real home and which
   // frizz-paths.ts reads as "legacy install, route everything here" (found by the Linux suite run of
   // 2026-08-28: one sandbox launch on a fresh machine moved every later launch off the XDG roots).
-  const realKey = claimIdentityPath(realHome);
-  const sandboxKey = claimIdentityPath(home);
+  // Each end under ITS environment: the real key sits under the operator's XDG roots if they set any,
+  // the sandbox's under the throwaway home, since those roots are gone from the sandbox's env.
+  const realKey = claimIdentityPath(realHome, realEnv);
+  const sandboxKey = claimIdentityPath(home, sandboxEnv);
   mkdirSync(dirname(realKey), { recursive: true });
   mkdirSync(dirname(sandboxKey), { recursive: true });
   link(realKey, sandboxKey);

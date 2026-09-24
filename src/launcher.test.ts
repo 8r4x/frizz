@@ -60,7 +60,7 @@ import {
   prepareSandbox,
   SANDBOX_DROPPED_XDG_ROOTS,
 } from "./launcher.ts";
-import { claimIdentityPath } from "./identity.ts";
+import { claimIdentityFingerprint, claimIdentityPath, loadOrCreateClaimIdentity } from "./identity.ts";
 import { DEFAULT_PORT, DEFAULT_DEV_PORT } from "@frizz/shared";
 import { registerProject } from "@frizz/server/project-registry";
 
@@ -2524,10 +2524,51 @@ test("--sandbox does not inherit the operator's XDG roots", () => {
     // With the roots gone, every home-scoped path is contained by the sandbox home on a linux resolve.
     const paths = frizzPaths({ home: sandbox.home, platform: "linux", env });
     for (const root of [paths.data, paths.state, paths.cache]) assert.ok(root.startsWith(sandbox.home), root);
-    assert.equal(existsSync(xdg), false, "nothing was written under the real XDG roots");
+    // The operator's state root gets the directory their identity key lives in — that end of the link is
+    // theirs by design (see the next test) — and nothing else; their data and cache roots are untouched.
+    assert.deepEqual(readdirSync(join(xdg, "state", "frizz")), [], "only the key's directory, still empty");
+    assert.equal(existsSync(join(xdg, "data")), false, "no sandbox state under the real data root");
+    assert.equal(existsSync(join(xdg, "cache")), false, "no sandbox state under the real cache root");
   } finally {
     process.chdir(cwd);
     cleanupSandbox(sandbox.home);
+    rmSync(real, { recursive: true, force: true });
+  }
+});
+
+// Production-shaped: `prepareSandbox()` with no arguments scrubs `process.env` itself, and the identity
+// link is placed by paths that read `process.env` too. Sharing before the scrub put the sandbox end of
+// the link at `$XDG_STATE_HOME/frizz/identity.key` and then had the sandbox read under its own home —
+// so an XDG-configured operator's sandbox minted a throwaway key on its first claim (PR #43 review).
+test("--sandbox keeps the operator's XDG-rooted identity readable after the scrub", async () => {
+  const real = mkdtempSync(join(tmpdir(), "frizz-xdgident-"));
+  const state = join(real, "xdg", "state");
+  const saved = Object.fromEntries(["HOME", "USERPROFILE", ...SANDBOX_DROPPED_XDG_ROOTS].map((name) => [name, process.env[name]]));
+  const cwd = process.cwd();
+  process.env.XDG_STATE_HOME = state;
+  process.env.XDG_DATA_HOME = join(real, "xdg", "data");
+  delete process.env.XDG_CACHE_HOME;
+  let sandbox: { home: string; project: string } | undefined;
+  try {
+    // Minted while the roots are set, so this IS the operator's key, at the XDG path.
+    const realKey = claimIdentityPath(real);
+    assert.equal(realKey, join(state, "frizz", "identity.key"));
+    const machine = await claimIdentityFingerprint(await loadOrCreateClaimIdentity(real));
+    sandbox = prepareSandbox(undefined, real);
+    assert.equal(process.env.XDG_STATE_HOME, undefined);
+    const sandboxKey = claimIdentityPath(sandbox.home);
+    assert.ok(sandboxKey.startsWith(sandbox.home), sandboxKey);
+    assert.equal(readlinkSync(sandboxKey), realKey, "the link's source is the operator's XDG-rooted key");
+    assert.equal(readFileSync(sandboxKey, "utf8"), readFileSync(realKey, "utf8"), "and the sandbox reads it where it looks");
+    // A claim from the sandbox goes through that link, so it is the machine's key, not a fresh one.
+    assert.equal(await claimIdentityFingerprint(await loadOrCreateClaimIdentity(sandbox.home)), machine);
+  } finally {
+    process.chdir(cwd);
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+    if (sandbox) cleanupSandbox(sandbox.home);
     rmSync(real, { recursive: true, force: true });
   }
 });
