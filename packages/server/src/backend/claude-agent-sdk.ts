@@ -1006,6 +1006,17 @@ function startClaudeQuery(executablePath: string, options: ClaudeQueryStartOptio
       // an additional highest-precedence settings source, layered over `settingSources` above.
       ...(claudeEffort.effort ? { effort: claudeEffort.effort as "low" | "medium" | "high" | "xhigh" | "max" } : {}),
       ...(claudeEffort.ultracode ? { settings: claudeUltracodeSettings() } : {}),
+      // AN INTERRUPT MUST NOT KILL THE WORKER'S SUB-AGENTS. The CLI fails closed here: unless the
+      // consumer declares that it renders a per-task stop control wired to `stop_task`, every
+      // interrupt (the ⌘-Enter "interrupt and send", the queued bubble's push-now, a "pause now")
+      // aborts the turn AND kills every background agent under it — because a consumer with no way
+      // to stop a runaway child must not be left with one it cannot end. Frizz HAS that control (the
+      // sub-agent row's stop → `Query.stopTask`, see router.ts / board.ts), so it declares it, and an
+      // interrupt then aborts only the turn: the children keep running and their notifications land
+      // as usual. Measured 2026-09-24 (_live_broker_interrupt_subagent.mts), one variable: the flag
+      // absent → the child was reported `stopped` 7ms after the interrupt; present → it ran
+      // to `completed` after the parent's turn had already been aborted.
+      perTaskStopAffordance: true,
       stderr(data) {
         const redacted = redact(data)
         diagnostic?.({ kind: "stderr", ...redacted })
