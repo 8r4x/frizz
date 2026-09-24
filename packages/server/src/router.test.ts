@@ -1927,3 +1927,33 @@ test("followUp with interrupt:true on an ACP row queues behind the turn and neve
     h.storage.close()
   }
 })
+
+// ---- MARK AS DONE ENDS AN IDLE ACP AGENT ----
+// An ACP agent lives in a detached daemon (acp-host.ts) that outlives frizz, so "live" for Mark as done
+// is "an agent process exists", idle or mid-turn — the broker Claude reading. Reading only the turn
+// let an idle agent outlive its archived thread (promoted-artifact run, 2026-09-24).
+test("Mark as done on an idle ACP thread whose agent is alive asks first, then releases the agent", async () => {
+  const h = harness()
+  const slug = "acp-idle-done"
+  h.storage.upsertSession({ ...row(slug), exited: 0 })
+  h.storage.setBackend(slug, "acp")
+  h.storage.setAcpAgent(slug, "gemini")
+  const released: string[] = []
+  const interrupts: string[] = []
+  ;(h.ctx as { acpBridge?: unknown }).acpBridge = {
+    isAgentAlive: () => released.length === 0,
+    turnLiveness: () => ({ sessionLive: true, turnActive: false, queued: 0 }),
+    interruptTurn: async () => { interrupts.push(slug); return { interrupted: true } },
+    releaseSession: (s: string, sid: string, reason: string) => void released.push(`${s}/${sid}/${reason}`),
+  }
+  try {
+    const asked = await h.router.completeThread.handler({ input: { slug, sessionId: `sid-${slug}`, terminateLive: false } })
+    assert.equal(asked.needsConfirmation, true, "an idle agent is still a worker to end, so it asks")
+    assert.deepEqual(released, [])
+    const done = await h.router.completeThread.handler({ input: { slug, sessionId: `sid-${slug}`, terminateLive: true } })
+    assert.equal(done.needsConfirmation, false)
+    assert.deepEqual(interrupts, [], "nothing to interrupt on an idle turn")
+    assert.deepEqual(released, [`${slug}/sid-${slug}/session-deleted`], "the daemon and its agent are ended")
+    assert.equal(h.storage.getSession(slug)?.state, "archived")
+  } finally { h.storage.close() }
+})

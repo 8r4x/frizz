@@ -593,6 +593,14 @@ export class AcpBridge {
     return { applied: true, ...(live.model ? { model: live.model } : {}) }
   }
 
+  /** An agent process exists for the session: attached here, or held by a daemon nobody has reattached
+   *  to yet. What "live" means to Mark as done and dismiss — an idle agent is still one to end. */
+  isAgentAlive(threadSlug: string, sessionId: string): boolean {
+    const live = this.sessions.get(sessionId)
+    if (live && live.slug === threadSlug && !live.exited && !live.conn.closed) return true
+    return liveAcpDaemonRecord(this.options.stateDir, sessionId) !== null
+  }
+
   turnLiveness(threadSlug: string, sessionId: string): AcpTurnLiveness | undefined {
     const live = this.sessions.get(sessionId)
     if (!live || live.slug !== threadSlug) return undefined

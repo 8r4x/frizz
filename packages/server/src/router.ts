@@ -280,6 +280,9 @@ export interface AcpTurnTerminator {
   /** End the agent itself — its daemon outlives frizz (acp-host.ts), so a stop that only cancelled
    *  the turn would leave the agent running for nobody. */
   releaseSession(threadSlug: string, sessionId: string, reason: "session-replaced" | "session-deleted"): void
+  /** Whether an agent process exists for this session at all — attached or not, mid-turn or idle. The
+   *  Claude broker's `isDaemonAlive` twin: an idle daemon is still a live worker to end. */
+  isAgentAlive(threadSlug: string, sessionId: string): boolean
 }
 
 // Which rows the bridge owns. A LEGACY Codex row — dispatched pre-cutover, `codex_runtime` NULL,
@@ -338,10 +341,11 @@ export async function stopThreadRuntime(
     // the prompt to return). Then END the agent: it lives in a detached daemon that would otherwise sit
     // idle for hours after the thread is put away. A resting thread with no daemon costs nothing here.
     if (!acp) return "absent"
+    const alive = acp.isAgentAlive(row.slug, row.session_id)
     const turnActive = acp.turnLiveness(row.slug, row.session_id)?.turnActive === true
-    const stopped = turnActive && (await acp.interruptTurn(row.slug, row.session_id)).interrupted
+    if (turnActive) await acp.interruptTurn(row.slug, row.session_id)
     acp.releaseSession(row.slug, row.session_id, "session-deleted")
-    return stopped ? "stopped" : "absent"
+    return alive ? "stopped" : "absent"
   }
   if (isAppServerCodexRow(row)) {
     if (!appServerCodexTurnLive(codex, row)) return "absent"
@@ -544,8 +548,12 @@ export async function completeRegisteredThread(
     ? (claudeBroker?.isDaemonAlive(row.session_id) ?? false)
     : appServerCodex
     ? appServerCodexTurnLive(codex, row)
+    // An ACP row is live while its agent's daemon exists — idle or mid-turn — exactly as a broker Claude
+    // row is. Reading only the TURN here left Mark as done on an idle ACP thread skipping the stop, so
+    // the daemon and its agent outlived the archived thread (found on the promoted-artifact run,
+    // 2026-09-24: two `opencode acp` processes still up after both threads were marked done).
     : row.backend === "acp"
-    ? (acp?.turnLiveness(row.slug, row.session_id)?.turnActive ?? false)
+    ? (acp?.isAgentAlive(row.slug, row.session_id) ?? false)
     : false
 
   // A live runtime is asked about when it is still working; a dead one when it never finished. The
