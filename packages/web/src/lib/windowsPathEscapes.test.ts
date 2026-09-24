@@ -44,6 +44,22 @@ test("a Windows path in prose keeps every separator", () => {
   assert.match(block(`| a | b |\n|---|---|\n| ${PATH} | x |`), new RegExp(`<td>${PATH.replace(/[\\.]/g, "\\$&")}</td>`))
 })
 
+// A dot-directory straight under the drive root: the backslash after the colon is itself the escape,
+// so the run holds no separator yet when the escape arrives, and the href has lost it after unescape.
+test("a dot-directory at the drive root keeps its separator", () => {
+  assert.equal(inline(String.raw`see C:\.frizz\x.md now`), String.raw`see C:\.frizz\x.md now`)
+  assert.equal(inline(String.raw`[x](C:\.frizz\x.md)`), `<a href="C:%5C.frizz%5Cx.md">x</a>`)
+})
+
+// The pass keeps constant-size state per run. Carrying the whole run and re-scanning it per token made
+// one long unbroken word quadratic: 80k characters took 13s, where marked alone takes a few ms.
+test("a long unbroken word renders in linear time", () => {
+  const word = "a".repeat(200_000)
+  const started = performance.now()
+  assert.equal(inline(`${word} tail \\. x ${word}\\.`), `${word} tail . x ${word}.`)
+  assert.ok(performance.now() - started < 1000, `took ${Math.round(performance.now() - started)}ms`)
+})
+
 test("an escape outside a Windows path is still an escape", () => {
   assert.equal(inline(String.raw`a \. b`), "a . b")
   assert.equal(inline(String.raw`\*not em\*`), "*not em*")
