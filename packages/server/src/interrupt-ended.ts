@@ -10,11 +10,17 @@
 // bumped NOT RUNNING, and the bump never reached it because each next follow-up superseded it.
 //
 // The fix the maintainer chose: tell the worker WHAT DIED. The router snapshots the running children
-// just before it interrupts, then this module waits for the tailer to stop listing them — the note names
-// only what frizz has SEEN end, never what it presumed — and enqueues one wake through the ordinary
-// outbox (scheduler SOURCE 10, `interrupt-ended:<instant>`), which is quiet-window exempt and
-// deliverable into the busy turn the interrupt just opened.
-import type { SessionTelemetry, SubAgentView } from "./tailer.ts"
+// just before it interrupts, then this module waits for the tailer to retire them — the note names
+// only a child the tailer reports KILLED, never one it presumed dead and never one that simply
+// finished in the same window — and enqueues one wake through the ordinary outbox (scheduler SOURCE
+// 10, `interrupt-ended:<instant>`), which is quiet-window exempt and deliverable into the busy turn the
+// interrupt just opened.
+//
+// SINCE ff71234e (same day) THE SDK QUERY DECLARES `perTaskStopAffordance`, and an interrupt through a
+// daemon forked on that build spares the children: this note then never fires, which is the point of
+// gating on what the tailer saw. It still covers a daemon forked BEFORE that build (a detached daemon
+// outlives a frizz upgrade by hours) and any runtime that regresses to killing them.
+import type { RetiredSubAgentView, SessionTelemetry, SubAgentView } from "./tailer.ts"
 import type { Storage } from "./storage.ts"
 import { enqueueInterruptEndedWake } from "./scheduler.ts"
 
@@ -38,15 +44,17 @@ export interface InterruptEndedDeps {
   now?: () => number
   /** How often the tailer is re-read while the children are still listed. */
   pollMs?: number
-  /** How long to keep looking before giving up on a child the tailer still shows running — it survived,
-   *  or the tailer is slower than this; either way it is not reported, which is the pre-2026-09-24
+  /** How long to keep looking before giving up on a child the tailer has not retired — it survived, or
+   *  the tailer is slower than this; either way it is not reported, which is the pre-2026-09-24
    *  behaviour and never a false claim. */
   maxWaitMs?: number
   log?: (line: string) => void
 }
 
 /**
- * Wait for the tailer to confirm which of `before` ended, then enqueue the note naming exactly those.
+ * Wait for the tailer to retire the children in `before`, then enqueue the note naming exactly the ones
+ * it retired as KILLED. A child retired `completed` or `failed` finished on its own — its report is on
+ * its way to the worker by the ordinary path — and is not the interrupt's doing.
  * Resolves when the note is queued or the wait runs out. Never throws: a failure here must not
  * surface on the operator's send, which succeeded before this started.
  */
@@ -61,16 +69,18 @@ export async function noteSubAgentsEndedByInterrupt(
   const startedAt = now()
   try {
     for (;;) {
-      const stillRunning = new Set(runningSubAgentsOf(deps.tailer.get(input.slug)).map((a) => a.id))
-      const gone = input.before.filter((a) => !stillRunning.has(a.id))
-      const settled = gone.length === input.before.length || now() - startedAt >= maxWaitMs
+      const retired = new Map<string, RetiredSubAgentView>()
+      for (const r of deps.tailer.get(input.slug)?.retiredSubAgents ?? []) retired.set(r.id, r)
+      const ended = input.before.filter((a) => retired.has(a.id))
+      const killed = ended.filter((a) => retired.get(a.id)?.status === "killed")
+      const settled = ended.length === input.before.length || now() - startedAt >= maxWaitMs
       if (settled) {
-        if (gone.length > 0) {
+        if (killed.length > 0) {
           enqueueInterruptEndedWake(deps.storage, {
             slug: input.slug, sessionId: input.sessionId, interruptedAtMs: input.interruptedAtMs,
-            agents: gone.map((a) => ({ ...(a.taskId ? { taskId: a.taskId } : {}), label: a.label })), nowMs: now(),
+            agents: killed.map((a) => ({ ...(a.taskId ? { taskId: a.taskId } : {}), label: a.label })), nowMs: now(),
           })
-          deps.log?.(`interrupt: queued a note to ${input.slug} — ${gone.length} of ${input.before.length} background sub-agent(s) ended`)
+          deps.log?.(`interrupt: queued a note to ${input.slug} — ${killed.length} of ${input.before.length} background sub-agent(s) were killed`)
         }
         return
       }

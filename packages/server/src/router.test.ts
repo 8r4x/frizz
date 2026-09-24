@@ -1837,10 +1837,11 @@ test("projectAdd: the home directory itself is refused, and nothing is written",
 // nothing — so the worker goes on believing the child is live and parks on its id (nub thread
 // `looks-like-my-github-account-was`, 2026-09-24, twice). The router snapshots the running children
 // before the frame goes out and, once the tailer stops listing them, queues ONE note naming them.
-test("interrupt and send queues a note naming the sub-agents the tailer then sees end", async () => {
+test("interrupt and send queues a note naming the sub-agents the tailer then sees killed", async () => {
   let interrupted = false
   const running = { subAgents: [{ id: "toolu_child", taskId: "abc9b9b5f0da4c677", label: "Implementing four Keyward daemon changes", state: "running", startedAt: "2026-09-24T03:00:00.000Z" }] }
-  const tailer = { ...noopTailer, get: () => ({ turn: "in-flight", ...(interrupted ? { subAgents: [] } : running) }) as never }
+  const killed = { subAgents: [], retiredSubAgents: [{ id: "toolu_child", taskId: "abc9b9b5f0da4c677", label: "Implementing four Keyward daemon changes", status: "killed" }] }
+  const tailer = { ...noopTailer, get: () => ({ turn: "in-flight", ...(interrupted ? killed : running) }) as never }
   const h = harness(tailer)
   const slug = "interrupt-kills"
   h.storage.upsertSession(row(slug))

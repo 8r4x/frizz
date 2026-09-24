@@ -421,6 +421,10 @@ export interface SessionTelemetry extends NormalizedTail {
   // deliberately not on the board's wire, because no surface draws a finished shell; the scheduler's
   // watcher pass is the only consumer. See retiredShellViews for what it is for.
   retiredShells?: RetiredShellView[]
+  // Sub-agents that have ENDED, same ring and same reason: no surface draws one, and the only consumer
+  // is interrupt-ended.ts, which must name a child the interrupt KILLED and never one that simply
+  // finished in the same 30s — so the outcome rides along with the id.
+  retiredSubAgents?: RetiredSubAgentView[]
   pendingAsk?: PendingAskData // a pending native AskUserQuestion the session is frozen on (else absent)
   // The last assistant message carries an unanswered ```question fence AND the thread still speaks the
   // fence (dispatched before QUESTION_FENCE_RETIRED_AT — see `get`). Always false for a new-contract thread.
@@ -502,6 +506,14 @@ export interface RetiredShellView {
   status: "completed" | "failed" | "killed"
   /** When its terminal record landed. Absent on an older tail state, which reads as "cannot tell" and
    *  therefore never fires a wake — the safe direction. */
+  finishedAt?: string
+}
+
+export interface RetiredSubAgentView {
+  id: string // the dispatch tool_use id
+  taskId?: string // the runtime agent id the worker was shown
+  label: string
+  status: "completed" | "failed" | "killed"
   finishedAt?: string
 }
 
@@ -2936,6 +2948,12 @@ export function createTailer(deps: TailerDeps): Tailer {
   // terminal <task-notification>. Matching against it needs no prior sighting, so the race disappears —
   // and it keeps the property seen-then-gone existed to protect, more strongly: a target naming no real
   // shell matches no retirement either, so a typo still never fires.
+  function retiredSubAgentViews(state: TailState): RetiredSubAgentView[] {
+    const out: RetiredSubAgentView[] = []
+    for (const r of state.retiredSubAgents.values()) out.push({ id: r.toolUseId, taskId: r.taskId, label: r.label, status: r.status, finishedAt: r.finishedAt })
+    return out
+  }
+
   function retiredShellViews(state: TailState): RetiredShellView[] {
     const out: RetiredShellView[] = []
     for (const r of state.retiredShells.values()) out.push({ id: r.toolUseId, taskId: r.taskId, label: r.label, status: r.status, finishedAt: r.finishedAt })
@@ -5047,7 +5065,7 @@ export function createTailer(deps: TailerDeps): Tailer {
       // thread has no row and reads as legacy, which is what `questionFencesLive` does with unknown.
       const pendingQuestion = s.lastAssistantHasQuestion && questionFencesLive(row?.spawned_at)
       const nowMs = now()
-      return { turn: s.turn, permPrompt: s.permPrompt, permPolicy: s.permPolicy, permDenies: s.permDenies, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: s.lastAssistantAt, lastAssistant: s.lastAssistant, aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), droppedReports: [...s.queuedReports.values()], bgShells: [...bgShellViews(s), ...codexBgShellViews(s)], retiredShells: retiredShellViews(s), pendingAsk: s.pendingAsk, pendingQuestion, lastAssistantAllDone: s.lastAssistantAllDone, lastUserAt: s.lastUserAt, lastUserText: s.lastUserText, firstUserText: s.firstUserText, lastFence: s.lastFence, noTranscript: s.noTranscript, authFault: s.authFault, apiFault: s.apiFault, providerError: s.providerError, limitFault: s.limitFault, contextTokens: s.contextTokens, contextWindow: s.contextWindow, lastCompactionAt: s.lastCompactionAt }
+      return { turn: s.turn, permPrompt: s.permPrompt, permPolicy: s.permPolicy, permDenies: s.permDenies, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: s.lastAssistantAt, lastAssistant: s.lastAssistant, aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), droppedReports: [...s.queuedReports.values()], bgShells: [...bgShellViews(s), ...codexBgShellViews(s)], retiredShells: retiredShellViews(s), retiredSubAgents: retiredSubAgentViews(s), pendingAsk: s.pendingAsk, pendingQuestion, lastAssistantAllDone: s.lastAssistantAllDone, lastUserAt: s.lastUserAt, lastUserText: s.lastUserText, firstUserText: s.firstUserText, lastFence: s.lastFence, noTranscript: s.noTranscript, authFault: s.authFault, apiFault: s.apiFault, providerError: s.providerError, limitFault: s.limitFault, contextTokens: s.contextTokens, contextWindow: s.contextWindow, lastCompactionAt: s.lastCompactionAt }
     },
     // The CURRENT fresh foreign session ids (mtime within FOREIGN_FRESH_MS, capped), mtime-desc. Kept
     // as the last scan's result — recomputed at most every FOREIGN_SCAN_EVERY ticks.
