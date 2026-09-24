@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node
 import { createInterface } from "node:readline/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { frizzPaths } from "@frizz/server/frizz-paths";
 import { claimNameIsValid, generateAnonymousClaimName, isAnonymousClaimName, normalizeClaimName } from "@frizz/shared";
 import { loadOrCreateClaimIdentity } from "./identity.ts";
 import { githubCli, type GithubIdentity } from "./github-identity.ts";
@@ -156,8 +157,19 @@ export async function reconcileCloudConfig(
   return establishCloudConfig(label, port, home, origin, github);
 }
 
+/**
+ * Where the saved setup lives: `cloud.json` under the data root frizz-paths.ts resolves, beside the
+ * registry and `server.lock` — NOT a literal `~/.frizz`.
+ *
+ * It was the literal until 2026-09-23, and on a machine that had never had a `~/.frizz` (every fresh
+ * macOS, Windows or XDG install since the roots split) the first remote-access setup CREATED one.
+ * frizz-paths.ts reads that directory's existence as "legacy install" and routes every root there
+ * from the next launch on, so the board came back with none of its projects — the same trap the claim
+ * identity fell into and was pulled out of on 2026-08-28 (identity.ts). A machine that already has
+ * `~/.frizz` resolves to the same file as before.
+ */
 export function cloudConfigPath(home = homedir()): string {
-  return join(home, ".frizz", "cloud.json");
+  return join(frizzPaths({ home }).data, "cloud.json");
 }
 
 export function readCloudConfig(home = homedir()): CloudConfig | null {
@@ -189,10 +201,11 @@ export function readCloudConfig(home = homedir()): CloudConfig | null {
  *
  * SEPARATE FROM cloud.json, which is ordinary config and world-readable on machines that already have
  * one. This file is a credential, so it gets 0600 — and keeping the two apart means an existing
- * config file cannot silently become a secret when a user claims a name.
+ * config file cannot silently become a secret when a user claims a name. It sits in the state root
+ * beside the claim identity key, for the reason given on `cloudConfigPath`.
  */
 export function tunnelTokenPath(home = homedir()): string {
-  return join(home, ".frizz", "tunnel-token");
+  return join(frizzPaths({ home }).state, "tunnel-token");
 }
 
 export function readTunnelToken(home = homedir()): string | null {

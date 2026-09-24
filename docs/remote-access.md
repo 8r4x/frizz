@@ -113,7 +113,7 @@ A machine nobody watches still mints links on demand — sign in over SSH and as
 ssh you@box npx frizz --link
 ```
 
-The link prints as a QR and a URL, is single-use, and expires in five minutes. The setup itself is made once from an interactive terminal; the saved choice (`~/.frizz/cloud.json`) is what a headless launch serves.
+The link prints as a QR and a URL, is single-use, and expires in five minutes. The setup itself is made once from an interactive terminal; the saved choice (`cloud.json`, next to Frizz's registry — `~/Library/Application Support/Frizz` on macOS, `~/.frizz` on an install that already has one) is what a headless launch serves.
 
 ## SSH port forwarding
 

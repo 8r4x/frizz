@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { once } from "node:events";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { frizzPaths } from "@frizz/server/frizz-paths";
 import {
   cloudConfigPath,
   establishCloudConfig,
@@ -89,12 +90,44 @@ test("the config round-trips, so the second run of --cloud asks nothing", () => 
   }
 });
 
+test("saving the setup on a machine with no ~/.frizz does not create one", () => {
+  // frizz-paths.ts reads an existing `~/.frizz` as "legacy install, route every root here". Until
+  // 2026-09-23 the first remote-access setup on a fresh install wrote `~/.frizz/cloud.json`, and the
+  // next launch resolved the registry, the projects and the database under that new directory instead
+  // of the roots that held them — an empty board, with the setup it just saved. The claim identity had
+  // the same bug and the same fix (identity.ts, 2026-08-28).
+  const home = tempHome();
+  try {
+    const paths = frizzPaths({ home });
+    assert.equal(paths.legacy, false, "a temp home starts out as a fresh install");
+    writeCloudConfig({ hostname: "colin.frizz.sh", tunnel: "colin" }, home);
+    assert.equal(existsSync(join(home, ".frizz")), false, "the literal directory must not appear");
+    assert.equal(cloudConfigPath(home), join(paths.data, "cloud.json"));
+    assert.equal(tunnelTokenPath(home), join(paths.state, "tunnel-token"));
+    assert.equal(frizzPaths({ home }).legacy, false, "the install is still resolved the same way");
+    assert.deepEqual(readCloudConfig(home), { hostname: "colin.frizz.sh", tunnel: "colin" });
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("a machine that already has ~/.frizz keeps its setup exactly where it was", () => {
+  const home = tempHome();
+  try {
+    mkdirSync(join(home, ".frizz"), { recursive: true });
+    assert.equal(cloudConfigPath(home), join(home, ".frizz", "cloud.json"));
+    assert.equal(tunnelTokenPath(home), join(home, ".frizz", "tunnel-token"));
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test("a corrupt or half-written config reads as absent rather than throwing", () => {
   // The failure mode this avoids is a launcher that cannot start at all because a JSON file got
   // truncated — falling back to the prompt is always recoverable.
   const home = tempHome();
   try {
-    mkdirSync(join(home, ".frizz"), { recursive: true });
+    mkdirSync(dirname(cloudConfigPath(home)), { recursive: true });
     for (const bad of ["", "{", "null", '{"hostname":"x.dev"}', '{"tunnel":"t"}', '{"hostname":"","tunnel":"t"}']) {
       writeFileSync(cloudConfigPath(home), bad);
       assert.equal(readCloudConfig(home), null, JSON.stringify(bad));

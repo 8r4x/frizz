@@ -152,7 +152,7 @@ export const FIRST_ARTIFACT_LAUNCH_LOCK_TIMEOUT_MS = 120_000;
  * "Forbidden", then "Cloudflare error 1033" once cloudflared went too, and nothing in the readout said
  * why — the successor genuinely did not know it was ever meant to be public.
  *
- * How the board is reached travels in the saved setup (~/.frizz/cloud.json), which the successor
+ * How the board is reached travels in the saved setup (`cloud.json` in the data root), which the successor
  * reads for itself — so nothing about it needs to survive in argv any more.
  */
 export function durableReexecArgs(options: { entry: string; port: number }): string[] {

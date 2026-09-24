@@ -1,7 +1,7 @@
 /**
  * How a board is reached from outside, as one object both launchers drive.
  *
- * The saved setup (`~/.frizz/cloud.json`) is the whole configuration: a plain `npx frizz` serves
+ * The saved setup (`cloud.json` in the data root, see `cloudConfigPath`) is the whole configuration: a plain `npx frizz` serves
  * whatever it says, and the R pane changes it on the running board. This controller owns the three
  * things that have to move together when it changes — the transport (a relay socket or a cloudflared
  * child, or nothing for a setup the operator runs), the public origin the supervisor gates, and the
