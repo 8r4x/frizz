@@ -24,6 +24,11 @@ import {
   zoneClaimLabel,
 } from "./cloud.ts";
 
+// Every case below hands cloud.ts a throwaway home, and frizz-paths.ts resolves the paths under it —
+// unless a SET XDG variable outranks it, which it does by design. On an XDG-configured machine that
+// would point the writes at the operator's real `$XDG_DATA_HOME/frizz`, where the cleanup never looks.
+for (const name of ["XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"]) delete process.env[name];
+
 // Claiming a NAME binds it to a GitHub account, which establishCloudConfig reads from the `gh` CLI.
 // The claim tests hand in this stand-in instead, so the path runs on a machine with no `gh` at all
 // (the Windows suite has none, and these four were skipped there until 2026-08-25) and no test ever

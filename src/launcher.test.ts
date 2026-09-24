@@ -58,6 +58,7 @@ import {
   type Workspace,
   cleanupSandbox,
   prepareSandbox,
+  SANDBOX_DROPPED_XDG_ROOTS,
 } from "./launcher.ts";
 import { claimIdentityPath } from "./identity.ts";
 import { DEFAULT_PORT, DEFAULT_DEV_PORT } from "@frizz/shared";
@@ -2499,6 +2500,34 @@ test("--sandbox never creates ~/.frizz on a real home that has none", () => {
   } finally {
     process.chdir(cwd);
     rmSync(sandbox.home, { recursive: true, force: true });
+    rmSync(real, { recursive: true, force: true });
+  }
+});
+
+// The other way a sandbox can reach the real install: a set XDG variable wins over the home in
+// frizz-paths.ts, so an inherited `$XDG_DATA_HOME` would put the sandbox's registry, identity key and
+// saved remote setup straight into the operator's real roots, where the exit cleanup never looks.
+test("--sandbox does not inherit the operator's XDG roots", () => {
+  const real = mkdtempSync(join(tmpdir(), "frizz-xdghome-"));
+  const xdg = join(real, "xdg");
+  const env: NodeJS.ProcessEnv = {
+    XDG_DATA_HOME: join(xdg, "data"),
+    XDG_STATE_HOME: join(xdg, "state"),
+    XDG_CACHE_HOME: join(xdg, "cache"),
+    XDG_CONFIG_HOME: join(xdg, "config"),
+  };
+  const cwd = process.cwd();
+  const sandbox = prepareSandbox(env, real);
+  try {
+    for (const name of SANDBOX_DROPPED_XDG_ROOTS) assert.equal(env[name], undefined, name);
+    assert.equal(env.XDG_CONFIG_HOME, join(xdg, "config"), "a root frizz-paths.ts never reads is left alone");
+    // With the roots gone, every home-scoped path is contained by the sandbox home on a linux resolve.
+    const paths = frizzPaths({ home: sandbox.home, platform: "linux", env });
+    for (const root of [paths.data, paths.state, paths.cache]) assert.ok(root.startsWith(sandbox.home), root);
+    assert.equal(existsSync(xdg), false, "nothing was written under the real XDG roots");
+  } finally {
+    process.chdir(cwd);
+    cleanupSandbox(sandbox.home);
     rmSync(real, { recursive: true, force: true });
   }
 });

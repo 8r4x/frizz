@@ -305,12 +305,21 @@ export function boardAddress(url: string): string {
  * throwaway repository to be the project, and the cwd moved into it. The caller deletes the home on
  * exit; the state root, logs and the minted project id all live under it.
  */
+/** The XDG roots frizz-paths.ts honors, and therefore the ones a throwaway home must not inherit. */
+export const SANDBOX_DROPPED_XDG_ROOTS = ["XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"] as const;
+
 export function prepareSandbox(env: NodeJS.ProcessEnv = process.env, realHome: string = homedir()): { home: string; project: string } {
   const home = mkdtempSync(join(tmpdir(), "frizz-sandbox-"));
   shareCredentials(realHome, home);
   // POSIX homedir() reads $HOME and Windows reads USERPROFILE, both at call time — this is the whole lever.
   env.HOME = home;
   env.USERPROFILE = home;
+  // A SET XDG variable outranks the home in frizz-paths.ts, by design: a developer who configured XDG
+  // asked for it. Inherited into a sandbox it defeats the whole point — `registryPath(home)`,
+  // `claimIdentityPath(home)`, `cloudConfigPath(home)` all resolve straight back into the operator's
+  // real `$XDG_DATA_HOME/frizz`, and the cleanup on exit only removes the throwaway home (raised on
+  // PR #43, 2026-09-23). A sandbox is a home that has never run Frizz, so it gets the platform defaults.
+  for (const name of SANDBOX_DROPPED_XDG_ROOTS) delete env[name];
   const project = join(home, "sandbox");
   mkdirSync(project, { recursive: true });
   writeFileSync(join(project, "README.md"), "# frizz sandbox\n\nA throwaway project; everything here is deleted when the sandbox exits.\n");

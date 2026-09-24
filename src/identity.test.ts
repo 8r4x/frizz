@@ -6,6 +6,10 @@ import { join } from "node:path";
 import { signClaim, verifyClaim } from "@frizz/shared";
 import { claimIdentityFingerprint, claimIdentityPath, loadOrCreateClaimIdentity } from "./identity.ts";
 
+// A SET XDG variable outranks the throwaway home in frizz-paths.ts, so without this an XDG-configured
+// machine would mint and chmod keys in the operator's real `$XDG_STATE_HOME/frizz` (same as cloud.test.ts).
+for (const name of ["XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"]) delete process.env[name];
+
 function sandbox() {
   return mkdtempSync(join(tmpdir(), "frizz-identity-"));
 }
