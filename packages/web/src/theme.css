@@ -47,6 +47,7 @@
   --color-muted-85: var(--frizz-muted-85);
   --color-muted-90: var(--frizz-muted-90);
   --color-muted-95: var(--frizz-muted-95);
+  --color-edition: var(--frizz-edition);
   --color-danger-faint: var(--frizz-danger-faint);
   --color-danger-soft: var(--frizz-danger-soft);
   --color-danger: var(--frizz-danger);
@@ -209,6 +210,8 @@
   --frizz-muted-85: color-mix(in oklab, var(--frizz-muted) 85%, transparent);
   --frizz-muted-90: color-mix(in oklab, var(--frizz-muted) 90%, transparent);
   --frizz-muted-95: color-mix(in oklab, var(--frizz-muted) 95%, transparent);
+  /* The version after a model family in the profile picker ("Opus 5.5"): one step dimmer than the word. */
+  --frizz-edition: color-mix(in oklab, var(--frizz-muted) 55%, transparent);
   --frizz-danger-faint: var(--color-red-200);
   --frizz-danger-soft: var(--color-red-300);
   --frizz-danger: var(--color-red-400);
@@ -374,6 +377,9 @@
   --frizz-muted-85: #595959;
   --frizz-muted-90: #595959;
   --frizz-muted-95: #595959;
+  /* Light flattens the muted steps for contrast, so the version gets its own ink: the lightest gray that
+     still clears WCAG AA on the white menu surface (#767676 on #fff is 4.54:1). */
+  --frizz-edition: #767676;
   --frizz-danger-faint: #a40e26;
   --frizz-danger-soft: #a40e26;
   --frizz-danger: #b6232d;
@@ -540,6 +546,7 @@
     --frizz-muted-85: #595959;
     --frizz-muted-90: #595959;
     --frizz-muted-95: #595959;
+    --frizz-edition: #767676;
     --frizz-danger-faint: #a40e26;
     --frizz-danger-soft: #a40e26;
     --frizz-danger: #b6232d;

@@ -32,7 +32,12 @@ function effortLabel(effort: string): string {
 function ModelLabel({ label, edition }: { label: string; edition?: string }) {
   const suffix = edition ? ` ${edition}` : ""
   if (!suffix || !label.endsWith(suffix)) return <>{label}</>
-  return <>{label.slice(0, -suffix.length)} <span className="profile-grid-edition text-muted-55">{edition}</span></>
+  return <>{label.slice(0, -suffix.length)} <span className="profile-grid-edition text-edition">{edition}</span></>
+}
+
+// "Opus 5.5" must never break between the family and its version when a sentence wraps.
+function unbroken(label: string): string {
+  return label.replace(/ /g, "\u00a0")
 }
 
 /** A running Claude thread on an older edition of its family than the pinned runtime now resolves. */
@@ -383,10 +388,12 @@ export function ProfileGridSelector({
               {/* `w-0 min-w-full`: the effort grid sets the menu's width and this row fills it, wrapping its
                   sentence rather than widening the menu to fit it on one line. */}
               <div data-profile-grid-upgrade="" className="flex w-0 min-w-full items-center gap-2 px-1.5 py-0.5">
-                <span className="min-w-0 flex-1 text-muted">
+                {/* `text-balance`: the sentence wraps at the menu's width, and unbalanced it left one word
+                    alone on its second line. */}
+                <span className="min-w-0 flex-1 text-balance text-muted">
                   {upgrade.staged
-                    ? `This thread ran ${upgrade.running} · its next turn starts on ${upgrade.latest}`
-                    : `This thread runs ${upgrade.running} · ${upgrade.latest} after its next compaction`}
+                    ? `This thread ran ${unbroken(upgrade.running)} · its next turn starts on ${unbroken(upgrade.latest)}`
+                    : `This thread runs ${unbroken(upgrade.running)} · ${unbroken(upgrade.latest)} after its next compaction`}
                 </span>
                 {!upgrade.staged && (
                   <RadixMenu.Item
@@ -399,7 +406,7 @@ export function ProfileGridSelector({
                     }}
                     title={upgrade.blockedReason
                       ?? `Restart this thread's worker on ${upgrade.latest}. The conversation resumes from disk on the next turn; the prompt cache is re-read once.`}
-                    className={`flex h-6 shrink-0 cursor-pointer select-none items-center rounded border border-border bg-panel px-1.5 text-fg outline-none transition-colors data-[highlighted]:bg-panel-2 data-[highlighted]:outline data-[highlighted]:outline-1 data-[highlighted]:outline-offset-1 data-[highlighted]:outline-fg/55 data-[disabled]:cursor-not-allowed data-[disabled]:opacity-45 ${typography}`}
+                    className={`flex h-6 shrink-0 cursor-pointer select-none items-center rounded border border-border bg-transparent px-1.5 text-fg outline-none transition-colors data-[highlighted]:bg-panel-2 data-[highlighted]:outline data-[highlighted]:outline-1 data-[highlighted]:outline-offset-1 data-[highlighted]:outline-fg/55 data-[disabled]:cursor-not-allowed data-[disabled]:opacity-45 ${typography}`}
                   >
                     Upgrade now
                   </RadixMenu.Item>
