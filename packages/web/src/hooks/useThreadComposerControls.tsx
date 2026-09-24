@@ -173,7 +173,6 @@ export function useThreadComposerControls(slug: string): { busy: boolean; footer
             runningModelLabel={thread.runningModelLabel}
             upgrade={thread.modelUpgrade && thread.runningModelLabel
               ? {
-                  running: thread.runningModelLabel,
                   latest: thread.modelUpgrade.label,
                   staged: thread.modelUpgrade.staged,
                   blockedReason: upgradeBlocked,

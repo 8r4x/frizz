@@ -44,7 +44,6 @@ function Fixture() {
   const [upgraded, setUpgraded] = useState(false)
   const upgrade: ProfileGridUpgrade | undefined = view === "thread" && state !== "current"
     ? {
-        running: "Opus 5",
         latest: "Opus 5.5",
         staged: state === "staged" || upgraded,
         blockedReason: state === "blocked" ? "Wait for the current turn to finish" : null,

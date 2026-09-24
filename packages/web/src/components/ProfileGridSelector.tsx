@@ -40,10 +40,9 @@ function unbroken(label: string): string {
   return label.replace(/ /g, "\u00a0")
 }
 
-/** A running Claude thread on an older edition of its family than the pinned runtime now resolves. */
+/** A running Claude thread on an older edition of its family than the pinned runtime now resolves. The
+ *  edition it runs is the trigger's own readout (`runningModelLabel`), so the row names only the target. */
 export interface ProfileGridUpgrade {
-  /** "Opus 5" — what the worker runs. */
-  running: string
   /** "Opus 5.5" — what the family resolves to now. */
   latest: string
   /** No live worker holds the old edition: the next turn starts on `latest` with nothing to do. */
@@ -392,8 +391,8 @@ export function ProfileGridSelector({
                     alone on its second line. */}
                 <span className="min-w-0 flex-1 text-balance text-muted">
                   {upgrade.staged
-                    ? `This thread ran ${unbroken(upgrade.running)} · its next turn starts on ${unbroken(upgrade.latest)}`
-                    : `This thread runs ${unbroken(upgrade.running)} · ${unbroken(upgrade.latest)} after its next compaction`}
+                    ? `This thread will upgrade to ${unbroken(upgrade.latest)} on its next turn`
+                    : `This thread will auto-upgrade to ${unbroken(upgrade.latest)} after its next compaction`}
                 </span>
                 {!upgrade.staged && (
                   <RadixMenu.Item
