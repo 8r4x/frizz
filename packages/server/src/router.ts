@@ -49,6 +49,7 @@ import {
   TranscriptMessage,
   TranscriptPage,
   TranscriptEarlierInput,
+  ClaudeModel,
   CodexModel,
   QuotaSnapshot,
   AuthSnapshot,
@@ -137,6 +138,7 @@ import { runThreadUpdate } from "./frizz.ts"
 import { repairThreadFile } from "./repair.ts"
 import { reopenArchivedThreadForFollowUp, resumeThread, wakeParkedThreadForFollowUp } from "./resume.ts"
 import { appendDelivery, cancelDelivery, deliverOutstandingDeliveries, deliveryItem, hasDelivery, retireOutstandingDeliveries } from "./delivery-ledger.ts"
+import { noteSubAgentsEndedByInterrupt, runningSubAgentsOf } from "./interrupt-ended.ts"
 import {
   readEarlierThreadTranscriptPage,
   readLatestThreadTranscriptPage,
@@ -153,6 +155,8 @@ import { ghInstalled, ghAuthed, ghRepo, gitGithubRemote, listItems, hydrateIssue
 import { createGithubHovercardService } from "./github-hovercard.ts"
 import { slugify, resolveSlug, resolveLegacyThreadFile, loadWorkerPrompt, scratchpadOrientation, frizzConfigBlock, coldResumePermission } from "./dispatch.ts"
 import { readCodexModels } from "./backend/codex-models.ts"
+import { readClaudeModels } from "./backend/claude-models.ts"
+import { log as frizzLog } from "./logging.ts"
 import { codexSandbox } from "./backend/codex.ts"
 import type { CodexSandboxMode } from "./backend/codex-app-server.ts"
 import { readQuota } from "./quota.ts"
@@ -1966,7 +1970,18 @@ export function createRouter(ctx: AppContext) {
           //
           // Measured live (_live_broker_interrupt_send.mts) against a real 90s tool call in flight:
           // 94.4s without it, seconds with it, and the session takes ordinary follow-ups afterwards.
+          //
+          // THE INTERRUPT ALSO ENDS EVERY BACKGROUND SUB-AGENT, and the runtime tells the worker nothing
+          // (interrupt-ended.ts). Snapshot the running children BEFORE the frame goes out, so the note can
+          // name exactly the ones the tailer then sees end — fire-and-forget, after the send succeeded.
+          const childrenBefore = input.interrupt === true ? runningSubAgentsOf(ctx.tailer.get(input.slug)) : []
           const preempted = input.interrupt === true && bridge.interruptTurn({ threadSlug: input.slug, sessionId: row.session_id })
+          if (preempted) {
+            void noteSubAgentsEndedByInterrupt(
+              { tailer: ctx.tailer, storage: ctx.storage, log: frizzLog },
+              { slug: input.slug, sessionId: row.session_id, before: childrenBefore, interruptedAtMs: Date.now() },
+            )
+          }
           if (input.deliveryId) {
             appendDelivery(ctx.storage, input.slug, {
               id: input.deliveryId,
@@ -2111,9 +2126,16 @@ export function createRouter(ctx: AppContext) {
         if (!bridge) throw new Error("Claude session broker is unavailable; cannot interrupt this turn")
         // false = no live daemon to interrupt. Not an error and not a lost message: the send is still
         // queued and gets read the ordinary way, so the refusal says "no faster", never "gone".
+        // Same snapshot-then-note as followUp's interrupt: this preempts the same turn and kills the
+        // same children (interrupt-ended.ts).
+        const childrenBefore = runningSubAgentsOf(ctx.tailer.get(input.slug))
         if (!bridge.interruptTurn({ threadSlug: input.slug, sessionId: row.session_id })) {
           return { interrupted: false, reason: "Nothing to interrupt — this thread has no turn running" }
         }
+        void noteSubAgentsEndedByInterrupt(
+          { tailer: ctx.tailer, storage: ctx.storage, log: frizzLog },
+          { slug: input.slug, sessionId: row.session_id, before: childrenBefore, interruptedAtMs: Date.now() },
+        )
         // The next turn opens on the queue, so those messages are read rather than waiting — say so now
         // instead of leaving them gray until their delivery records reach disk, which is the entire wait
         // this button exists to end. The ledger is not JSONL bytes, so the frame has to be emitted here.
@@ -2205,7 +2227,7 @@ export function createRouter(ctx: AppContext) {
       handler: async ({ input }) => {
         const row = ctx.storage.getSession(input.slug)
         if (!row) throw new Error(`thread ${input.slug} is not editable`)
-        return threadProfileOptions(row.backend)
+        return threadProfileOptions(row.backend, row.backend === "claude" ? await readClaudeModels({ claudeBin: ctx.claudeBin, cwd: ctx.project.dir }) : undefined)
       },
     }),
 
@@ -3351,6 +3373,13 @@ export function createRouter(ctx: AppContext) {
     codexModels: query({
       output: z.array(CodexModel),
       handler: async () => readCodexModels(),
+    }),
+
+    // The Claude aliases with the EDITION the pinned runtime resolves each to ("Opus 5.5"), asked of the
+    // runtime itself once per server life; the bare family words while it answers (claude-models.ts).
+    claudeModels: query({
+      output: z.array(ClaudeModel),
+      handler: async () => readClaudeModels({ claudeBin: ctx.claudeBin, cwd: ctx.project.dir, log: (message) => frizzLog.warn("server", message) }),
     }),
 
     // The ACP agents Frizz knows how to launch, with `available` for the ones on this machine's PATH.

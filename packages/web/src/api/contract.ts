@@ -66,6 +66,7 @@ import type {
   GithubBatchInput,
   GithubBatchResult,
   GithubRefPreviewResult,
+  ClaudeModel,
   CodexModel,
   AcpAgent,
   AcpAgentModels,
@@ -277,6 +278,9 @@ export interface Api {
   // ~/.codex/models_cache.json (never a hand-maintained list). The model picker's Codex section and its
   // effort dropdown are driven by this; a tiny client fallback covers the loading/no-cache state.
   codexModels(): Promise<CodexModel[]>
+  // The Claude aliases with the edition the pinned runtime resolves each to ("Opus 5.5"). The picker's
+  // Claude rows take their labels from this; the bare family words cover loading and an older server.
+  claudeModels(): Promise<ClaudeModel[]>
   // The ACP agents Frizz can launch, with `available` for the ones on the server's PATH. The composer
   // lists the available ones as `acp:<id>` models (plans/acp-backend.md).
   acpAgents(): Promise<AcpAgent[]>
@@ -430,6 +434,7 @@ export const PROCEDURES = {
   renameThread: "mutation",
   aiRenameThread: "mutation",
   codexModels: "query",
+  claudeModels: "query",
   acpAgents: "query",
   acpAgentModels: "query",
   quota: "query",

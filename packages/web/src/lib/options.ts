@@ -1,4 +1,4 @@
-import { ACP_MODEL_PREFIX, PermissionMode, type Backend, type CodexModel } from "@frizz/shared"
+import { ACP_MODEL_PREFIX, PermissionMode, type Backend, type ClaudeModel, type CodexModel } from "@frizz/shared"
 import type { SelectOption, SelectGroup } from "../components/ui/Select.tsx"
 
 // Shared option sets for the permission / model / effort selects, used by both the New-thread
@@ -64,13 +64,27 @@ export const PERMISSION_COLOR: Record<(typeof PERMISSION_MODES)[number], string>
 // id ⇒ backend "codex". "" = the CLI default (claude). The dependent permission/effort controls then
 // present the chosen backend's axis (Claude permission-mode vs Codex sandbox; the codex effort set).
 
-// Claude Code models — the `claude --model` aliases.
+// Claude Code models — the `claude --model` aliases, with the bare family as the DEGRADED label. The
+// label the operator should read is the EDITION the pinned runtime resolves the alias to ("Opus 5.5",
+// "Fable 5.1"), which the server's claudeModels() RPC reads off the runtime itself; claudeModelOptions
+// below overlays it (maintainer 2026-09-24: "if we have the full resolved version of the model … put
+// that in the model and effort selector … We already do this for GPT"). The VALUE stays the alias:
+// dispatching on `opus` is what tracks a new Opus when the pin moves.
 export const CLAUDE_MODELS: SelectOption[] = [
   { value: "fable", label: "Fable" },
   { value: "opus", label: "Opus" },
   { value: "sonnet", label: "Sonnet" },
   { value: "haiku", label: "Haiku" },
 ]
+
+// The Claude rows with the runtime-resolved edition labels overlaid; an alias the list does not name
+// (loading, an older server, a probe that failed) keeps its family word.
+export function claudeModelOptions(claudeModels: readonly ClaudeModel[] = []): SelectOption[] {
+  return CLAUDE_MODELS.map((option) => {
+    const resolved = claudeModels.find((model) => model.alias === option.value)
+    return resolved ? { ...option, label: resolved.label, title: `${resolved.label} — ${resolved.resolvedModel ?? option.value}` } : option
+  })
+}
 
 // Codex (OpenAI) models are NO LONGER hand-listed here — they + their PER-MODEL effort sets come from
 // the server's codexModels() RPC, which reads the authoritative ~/.codex/models_cache.json (the fix for
@@ -117,9 +131,9 @@ function codexModelOptions(codexModels: readonly CodexModel[]): SelectOption[] {
 // The model dropdown groups (Claude Code + Codex), with the Codex section driven by the RPC list.
 // `withDefault` prepends the ungrouped "Default" (claude CLI default) row used by Settings; the composer
 // readout always shows a concrete model, so it omits it.
-export function modelGroups(codexModels: readonly CodexModel[], opts: { withDefault: boolean }): SelectGroup[] {
+export function modelGroups(codexModels: readonly CodexModel[], opts: { withDefault: boolean }, claudeModels: readonly ClaudeModel[] = []): SelectGroup[] {
   const groups: SelectGroup[] = [
-    { label: "Claude Code", options: CLAUDE_MODELS },
+    { label: "Claude Code", options: claudeModelOptions(claudeModels) },
     { label: "Codex", options: codexModelOptions(codexModels) },
   ]
   return opts.withDefault ? [{ label: "", options: [{ value: "", label: "Default" }] }, ...groups] : groups

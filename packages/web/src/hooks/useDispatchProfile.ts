@@ -1,6 +1,6 @@
 import { useMemo } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import type { AcpAgent, CodexModel, SetDispatchPreferenceInput } from "@frizz/shared"
+import type { AcpAgent, ClaudeModel, CodexModel, SetDispatchPreferenceInput } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { showToast } from "../store.ts"
 import {
@@ -18,6 +18,10 @@ export function useDispatchProfile(): {
   // before then can classify a saved Codex model as Claude merely because the catalogue is cold.
   resolved: ResolvedDispatchPreferences | undefined
   codexList: readonly CodexModel[]
+  // The Claude aliases with the edition the pinned runtime resolves each to ("Opus 5.5") — labels
+  // only. Empty while the runtime answers or on a server too old to ask, which is why readiness never
+  // waits on it: the rows fall back to their family words, and the profile itself is keyed on the alias.
+  claudeList: readonly ClaudeModel[]
   // The ACP agents the server knows, `available` for the ones on its PATH. Empty on a server too old
   // to answer, which is why neither readiness nor `loadError` waits on this query.
   acpList: readonly AcpAgent[]
@@ -30,6 +34,8 @@ export function useDispatchProfile(): {
   // hand-maintained list).
   const codexModels = useQuery({ queryKey: ["codexModels"], queryFn: () => rpc.codexModels() })
   const codexList = codexModels.data ?? []
+  const claudeModels = useQuery({ queryKey: ["claudeModels"], queryFn: () => rpc.claudeModels(), retry: false })
+  const claudeList = claudeModels.data ?? []
   const acpAgents = useQuery({ queryKey: ["acpAgents"], queryFn: () => rpc.acpAgents() })
   const acpList = acpAgents.data ?? []
 
@@ -60,6 +66,7 @@ export function useDispatchProfile(): {
   return {
     resolved,
     codexList,
+    claudeList,
     acpList,
     loadError: preferences.isError || codexModels.isError,
     saveProfile: preference.mutate,

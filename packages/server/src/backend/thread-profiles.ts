@@ -1,4 +1,4 @@
-import type { Backend, ThreadProfileOption } from "@frizz/shared"
+import type { Backend, ClaudeModel, ThreadProfileOption } from "@frizz/shared"
 import { readCodexModels } from "./codex-models.ts"
 import { CLAUDE_ULTRACODE, claudeModelSupportsUltracode } from "./claude-effort.ts"
 
@@ -54,8 +54,20 @@ export function claudeModelFromLimitName(name: string): string | undefined {
   return CLAUDE_THREAD_PROFILES.find(({ model }) => slug === model || slug.startsWith(`${model}-`) || model.startsWith(`${slug}-`))?.model
 }
 
-export function threadProfileOptions(backend: unknown): { backend: Backend; options: ThreadProfileOption[] } {
-  if (backend === "claude") return { backend, options: CLAUDE_THREAD_PROFILES.map((option) => ({ ...option, efforts: [...option.efforts] })) }
+// `claudeModels` is the runtime-resolved catalogue (claude-models.ts): each Claude row takes its
+// EDITION label from it ("Opus 5.5") so a running thread's selector reads the same words as the
+// composer's; without it (a caller with no runtime on hand) the rows keep their bare family labels.
+export function threadProfileOptions(backend: unknown, claudeModels?: readonly ClaudeModel[]): { backend: Backend; options: ThreadProfileOption[] } {
+  if (backend === "claude") {
+    return {
+      backend,
+      options: CLAUDE_THREAD_PROFILES.map((option) => ({
+        ...option,
+        label: claudeModels?.find((model) => model.alias === option.model)?.label ?? option.label,
+        efforts: [...option.efforts],
+      })),
+    }
+  }
   if (backend === "codex") {
     return {
       backend,

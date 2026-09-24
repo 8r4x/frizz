@@ -4,6 +4,7 @@ import {
   acpModelSlug,
   type AcpAgent,
   type Backend,
+  type ClaudeModel,
   type CodexModel,
   type DispatchPreferences,
   type SetDispatchPreferenceInput,
@@ -12,6 +13,7 @@ import type { SelectGroup, SelectOption } from "../components/ui/Select.tsx"
 import type { ProfileGridGroup } from "./profileGrid.ts"
 import {
   CLAUDE_MODELS,
+  claudeModelOptions,
   claudeEfforts,
   claudeEffortOptions,
   codexEffortOptions,
@@ -59,7 +61,9 @@ export function applyDispatchPreferenceUpdate(
   }
 }
 
-export function dispatchProfileGroups(codexModels: readonly CodexModel[], acpAgents: readonly AcpAgent[] = []): ProfileGridGroup[] {
+// `claudeModels` is the runtime-resolved Claude catalogue (the claudeModels RPC): the Claude rows take
+// their edition labels from it ("Opus 5.5"), exactly as the Codex rows take theirs from the codex cache.
+export function dispatchProfileGroups(codexModels: readonly CodexModel[], acpAgents: readonly AcpAgent[] = [], claudeModels: readonly ClaudeModel[] = []): ProfileGridGroup[] {
   // Only the agents actually on the server's PATH get a row: the catalogue lists eight, and a grid of
   // "not installed" rows would bury the two the operator has. A SAVED agent that has since gone
   // missing surfaces through resolveDispatchPreferences's `modelAvailable`, not through a row here.
@@ -74,7 +78,7 @@ export function dispatchProfileGroups(codexModels: readonly CodexModel[], acpAge
     {
       id: "claude",
       label: "Claude Code",
-      options: CLAUDE_MODELS.map((option) => ({
+      options: claudeModelOptions(claudeModels).map((option) => ({
         model: option.value,
         label: option.label,
         defaultEffort: "high",
@@ -156,8 +160,9 @@ export function dispatchModelGroups(
   codexModels: readonly CodexModel[],
   backend: Backend,
   selectedModel: string,
+  claudeModels: readonly ClaudeModel[] = [],
 ): SelectGroup[] {
-  const groups = modelGroups(codexModels, { withDefault: false })
+  const groups = modelGroups(codexModels, { withDefault: false }, claudeModels)
   if (!selectedModel || groups.some((group) => group.options.some((option) => option.value === selectedModel))) return groups
   const unavailable: SelectGroup = {
     label: backend === "codex" ? "Saved Codex model" : backend === "acp" ? "Saved ACP agent" : "Saved Claude model",

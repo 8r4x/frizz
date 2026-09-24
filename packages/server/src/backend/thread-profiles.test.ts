@@ -97,3 +97,17 @@ test("a limit message names a model in the PROVIDER's spelling, matched by token
   assert.equal(claudeModelFromLimitName(""), undefined)
   assert.equal(claudeModelFromLimitName("  "), undefined)
 })
+
+test("a running Claude thread's profile rows take their edition labels from the resolved catalogue", () => {
+  const { options } = threadProfileOptions("claude", [
+    { alias: "opus", label: "Opus 5.5", resolvedModel: "claude-opus-5-5" },
+    { alias: "haiku", label: "Haiku 4.5", resolvedModel: "claude-haiku-4-5-20251001" },
+  ])
+  assert.deepEqual(options.map((option) => [option.model, option.label]), [
+    ["fable", "Fable"],
+    ["opus", "Opus 5.5"],
+    ["sonnet", "Sonnet"],
+    ["haiku", "Haiku 4.5"],
+  ])
+  assert.deepEqual(threadProfileOptions("claude").options.map((option) => option.label), ["Fable", "Opus", "Sonnet", "Haiku"])
+})

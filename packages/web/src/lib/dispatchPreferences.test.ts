@@ -144,3 +144,32 @@ test("an acp profile naming a model resolves the agent for the grid and the mode
   assert.equal(missing.modelAvailable, false)
   assert.equal(missing.pickerModel, "acp:cursor")
 })
+
+// The Claude rows read the EDITION the pinned runtime resolves each alias to ("Opus 5.5") — the same
+// treatment the Codex rows get from the codex cache — while the VALUE stays the alias the profile is
+// keyed on. An alias the runtime list does not name keeps its family word, which is also the whole
+// loading / older-server state.
+test("the Claude rows take their edition labels from the runtime-resolved catalogue, keyed on the alias", () => {
+  const claudeModels = [
+    { alias: "fable", label: "Fable 5.1", resolvedModel: "claude-fable-5-1" },
+    { alias: "opus", label: "Opus 5.5", resolvedModel: "claude-opus-5-5" },
+    { alias: "sonnet", label: "Sonnet 5", resolvedModel: "claude-sonnet-5" },
+  ]
+  const claude = dispatchProfileGroups(models, [], claudeModels).find((group) => group.id === "claude")!
+  assert.deepEqual(claude.options.map((option) => [option.model, option.label]), [
+    ["fable", "Fable 5.1"],
+    ["opus", "Opus 5.5"],
+    ["sonnet", "Sonnet 5"],
+    ["haiku", "Haiku"],
+  ])
+  // Without the list (loading, an older server) every row keeps its family word.
+  assert.deepEqual(
+    dispatchProfileGroups(models).find((group) => group.id === "claude")!.options.map((option) => option.label),
+    ["Fable", "Opus", "Sonnet", "Haiku"],
+  )
+  // The dropdown form overlays the same labels, and a saved alias still resolves as available.
+  const groups = dispatchModelGroups(models, "claude", "opus", claudeModels)
+  assert.equal(groups[0]!.label, "Claude Code")
+  assert.equal(groups[0]!.options.find((option) => option.value === "opus")?.label, "Opus 5.5")
+  assert.equal(resolveDispatchPreferences({ ...preferences, claude: { model: "opus", effort: "high", permissionMode: "acceptEdits" } }, models).modelAvailable, true)
+})

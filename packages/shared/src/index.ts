@@ -128,6 +128,20 @@ export const CodexModel = z.object({
 })
 export type CodexModel = z.infer<typeof CodexModel>
 
+// One selectable Claude Code model, as the pinned Claude runtime RESOLVES it (the claudeModels RPC).
+// `alias` is the `claude --model` word Frizz dispatches with and keys every preference on ("opus");
+// `label` is the resolved edition the operator should read in the picker ("Opus 5.5"), derived from
+// the runtime's own `supportedModels()` so the picker names the model the alias will actually run —
+// the same reason the Codex column reads "GPT-6 Astra" and not "gpt". `resolvedModel` is the canonical
+// wire id behind the alias ("claude-opus-5-5"); absent on the degraded fallback, where `label` is the
+// bare family.
+export const ClaudeModel = z.object({
+  alias: z.string(),
+  label: z.string(),
+  resolvedModel: z.string().optional(),
+})
+export type ClaudeModel = z.infer<typeof ClaudeModel>
+
 // An Agent Client Protocol agent Frizz can launch (server/backend/acp-agents.ts). `available` means
 // its executable was found on the server's PATH; the composer lists only those, as `acp:<id>` models.
 export const AcpAgent = z.object({
@@ -1333,6 +1347,41 @@ export function parseShellDoneWake(text: string): ShellDoneWake | null {
   if (!m) return null
   const outcome = m[1] === "FAILED" ? "failed" : m[1] === "was STOPPED" ? "stopped" : "finished"
   return { ...(m[2] ? { taskId: m[2] } : {}), label: m[3], outcome }
+}
+
+// ---- SUB-AGENTS ENDED BY AN INTERRUPT (router followUp `interrupt` / deliverQueuedNow) -----------
+// "Interrupt and send" preempts the worker's turn through the SDK's `query.interrupt()`, and that
+// abort takes every BACKGROUND sub-agent with it: each child's sidecar flips to `stoppedByUser` at the
+// interrupt instant and its transcript ends on `[Request interrupted by user]`. The worker is told
+// nothing by the runtime. Observed on the nub thread `looks-like-my-github-account-was` (2026-09-24):
+// the same daemon sub-agent was killed by two successive interrupts (01:06:21Z, 03:11:32Z), and the
+// worker — still believing it live — parked on `agents: [abc9b9b5f0da4c677]` and was bumped NOT RUNNING
+// twice; the bump itself never reached it, because each next follow-up superseded the pending bump.
+// The maintainer chose this over a confirm in the composer: the worker is told what died, so it
+// re-dispatches or takes the work over instead of waiting on a child that will never return.
+export interface InterruptEndedSubAgent {
+  /** The runtime agent id the model was shown — the handle it would write in an `agents:` line. */
+  taskId?: string
+  label: string
+}
+
+const INTERRUPT_ENDED_LEAD = "⚠️ The human's last follow-up was sent with INTERRUPT, which aborted your turn — and the runtime ends every background sub-agent with the turn. These did not return:"
+
+export function interruptEndedSubAgentsMessage(agents: readonly InterruptEndedSubAgent[]): string {
+  const lines = agents.map((a) => `- ${a.taskId ? `\`${a.taskId}\` — ` : ""}${a.label}`)
+  return [
+    INTERRUPT_ENDED_LEAD,
+    "",
+    ...lines,
+    "",
+    "None of them will report back, and an `agents:` line naming one is refused as NOT RUNNING. Check what each left behind (commits, edited files, a half-finished step), then re-dispatch it or take its work over yourself before you rest.",
+  ].join("\n")
+}
+
+/** Is this delivered wake the interrupt note above? A text match, honest for the same reason it is for
+ *  `SIGNOFF_NUDGE_MARKER`: frizz writes the lead and nothing else does. */
+export function isInterruptEndedWake(text: string): boolean {
+  return text.trimStart().startsWith(INTERRUPT_ENDED_LEAD)
 }
 
 // ---- THE BUILT-IN SIGN-OFF NUDGE (scheduler SOURCE 9) --------------------------------------------

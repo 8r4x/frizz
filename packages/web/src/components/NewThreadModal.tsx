@@ -28,7 +28,7 @@ export function DispatchForm({
   onDispatched?: () => void
 }) {
   // The one durable new-thread profile, shared with the GitHub picker's own selector.
-  const { resolved, codexList, acpList, loadError: profileLoadError, saveProfile } = useDispatchProfile()
+  const { resolved, codexList, claudeList, acpList, loadError: profileLoadError, saveProfile } = useDispatchProfile()
   // A settings write still in flight — a compaction window picked in the model picker a moment ago —
   // must land before a dispatch that would read it.
   const savingSettings = useIsMutating({ mutationKey: [...SETTINGS_WRITE_KEY] }) > 0
@@ -166,7 +166,7 @@ export function DispatchForm({
         />
       )
     }
-    const profileGroups = dispatchProfileGroups(codexList, acpList)
+    const profileGroups = dispatchProfileGroups(codexList, acpList, claudeList)
     const acpAgent = resolved.acpAgentId ? acpList.find((agent) => agent.id === resolved.acpAgentId) : undefined
     return (
       // gap-x-1.5 between the two pills, the same measured gap the thread composer's strip uses
@@ -204,7 +204,7 @@ export function DispatchForm({
         )}
       </div>
     )
-  }, [resolved, codexList, acpList, profileLoadError, saveProfile])
+  }, [resolved, codexList, claudeList, acpList, profileLoadError, saveProfile])
 
   return (
     <div className="w-full flex flex-col gap-3">
