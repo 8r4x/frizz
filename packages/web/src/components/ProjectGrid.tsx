@@ -12,10 +12,10 @@
 import * as RadixDialog from "@radix-ui/react-dialog"
 import * as RadixDropdown from "@radix-ui/react-dropdown-menu"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { useEffect, useState, type ReactNode } from "react"
+import { useEffect, useRef, useState, type ReactNode } from "react"
 import { Ellipsis, ImagePlus, Loader2 } from "lucide-react"
 import { Link, useNavigate } from "react-router"
-import type { ProjectCard } from "@frizz/shared"
+import { slugify, type ProjectCard } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { relativeAge } from "../lib/activityTime.ts"
 import { projectHref } from "../lib/base-path.ts"
@@ -37,19 +37,28 @@ function shortPath(path: string, home: string | undefined): string {
   return home && path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path
 }
 
+// `px-3 py-2.5`, not `px-4 py-3`: the grid runs three across, so a card is ~290px wide and its
+// three lines are the whole point — the padding is what was left to give (2026-09-19, "make it a
+// little denser"). The two menu triggers below are placed from this inset; change it and re-derive them.
 const CARD_BASE =
-  "flex flex-col gap-1 rounded-lg border px-4 py-3 outline-none transition-colors focus-visible:ring-1 focus-visible:ring-fg/60"
+  "flex flex-col gap-1 rounded-lg border px-3 py-2.5 outline-none transition-colors focus-visible:ring-1 focus-visible:ring-focus-ink-60"
 
 // On a phone the same rows go FULL WIDTH: no card border, no radius, no grid gutter — a hairline
 // between rows instead, and the whole row is the target. The grid above the breakpoint is untouched.
-const MOBILE_ROW = "max-[700px]:rounded-none max-[700px]:border-x-0 max-[700px]:border-t-0 max-[700px]:border-b-border/70 max-[700px]:bg-transparent max-[700px]:py-3.5"
+// The row keeps the 16px inset the desktop card gave up: a full-bleed row wants a page margin, not a
+// card's, and the trigger offsets below were measured against it. `pl-4`, not `px-4`: a media-query
+// utility outranks the link's own `pr-9`, so `px-4` here would shrink the strip the overflow trigger
+// sits on to 16px and the truncated path would run into the ellipsis (seen at 390px, 2026-09-19).
+// The row's strip is 40: the same 28px box, 7 from the edge, plus 5.
+const MOBILE_ROW = "max-[700px]:rounded-none max-[700px]:border-x-0 max-[700px]:border-t-0 max-[700px]:border-b-border/70 max-[700px]:bg-transparent max-[700px]:pl-4 max-[700px]:pr-10 max-[700px]:py-3.5"
 
 /** The card's icon is the rail's square at card size, and the one place to change it. */
-const CARD_ICON = 38
+const CARD_ICON = 34
 
 function Card({ project, home }: { project: ProjectCard; home: string | undefined }) {
   const opened = relativeAge(project.lastOpenedAt)
   const [confirmingDelete, setConfirmingDelete] = useState(false)
+  const [renaming, setRenaming] = useState(false)
   return (
     // A relatively-positioned WRAPPER, not a bordered card of its own: the icon menu's trigger has to
     // sit OUTSIDE the <a> (a button nested in a link is invalid, and clicking it would navigate), so
@@ -60,12 +69,12 @@ function Card({ project, home }: { project: ProjectCard; home: string | undefine
     <div className="group/card relative">
       <Link
         to={projectHref(project.slug)}
-        // `pr-10` overrides CARD_BASE's `px-4` on the right only, and it is reserved UNCONDITIONALLY
+        // `pr-9` overrides CARD_BASE's `px-3` on the right only, and it is reserved UNCONDITIONALLY
         // rather than on hover: the overflow trigger sits over that strip, and three truncating lines
-        // that reflow the moment the pointer arrives read as the card flinching away from it. 40 is the
-        // trigger's own 36px footprint (28px box, 8px from the edge) plus 4px, so the truncated text
+        // that reflow the moment the pointer arrives read as the card flinching away from it. 36 is the
+        // trigger's own 32px footprint (28px box, 4px from the edge) plus 4px, so the truncated text
         // never runs up against a box it cannot see.
-        className={`${CARD_BASE} ${MOBILE_ROW} flex-row items-center gap-3 border-border bg-panel pr-10 group-hover/card:border-border-strong group-hover/card:bg-panel-2 ${
+        className={`${CARD_BASE} ${MOBILE_ROW} flex-row items-center gap-3 border-border bg-panel pr-9 group-hover/card:border-border-strong group-hover/card:bg-panel-2 ${
           project.stale ? "opacity-60" : ""
         }`}
       >
@@ -74,13 +83,13 @@ function Card({ project, home }: { project: ProjectCard; home: string | undefine
         </span>
         {/* min-w-0 is what makes truncate real: a flex item will not shrink below its content
             without it, so a long name would push its slug straight through the card border. */}
-        <span className="flex min-w-0 flex-1 flex-col gap-1">
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="flex min-w-0 items-baseline gap-2">
             <span className="min-w-0 truncate text-[13px] font-medium text-fg">{project.name}</span>
             {/* Shown only when it is not simply the name: a directory called "app" under "pullfrog"
                 lives at /pullfrog-app and that is worth saying, while "nub" would just repeat itself. */}
             {project.slug !== project.name ? (
-              <span className="max-w-[45%] shrink-0 truncate font-mono text-[11px] text-muted/70">
+              <span className="max-w-[45%] shrink-0 truncate font-mono text-[11px] text-muted-70">
                 /{project.slug}
               </span>
             ) : null}
@@ -88,16 +97,16 @@ function Card({ project, home }: { project: ProjectCard; home: string | undefine
           <span className="truncate text-[11px] text-muted" title={project.path}>
             {shortPath(project.path, home)}
           </span>
-          <span className="truncate text-[11px] text-muted/70">
+          <span className="truncate text-[11px] text-muted-70">
             {project.stale ? "Directory is missing" : opened ? `Opened ${opened}` : "Never opened"}
           </span>
         </span>
       </Link>
       {/* THE ICON IS THE CONTROL. The trigger is the square's own footprint — same size, same corner
           radius, laid exactly over it. The offsets are the link's frame, which this sits outside of:
-          17 is its 1px border plus `px-4`, and the square is centred in the link, so `top-1/2` plus the
+          13 is its 1px border plus `px-3`, and the square is centred in the link, so `top-1/2` plus the
           translate centres this on it. The phone row (MOBILE_ROW) drops the side and top borders and
-          keeps the bottom one, so there it is 16, and the centre moves up half the missing top border
+          pads 16 of its own, so there it is 16, and the centre moves up half the missing top border
           — measured 2026-08-24: 1px left and 0.5px low without these. It draws nothing until the
           pointer is over the square, when a scrim and an image glyph say "this changes the picture" —
           the scrim at 75%, because at 60% a monogram's letters and a logo's strokes still showed
@@ -112,7 +121,7 @@ function Card({ project, home }: { project: ProjectCard; home: string | undefine
           type="button"
           aria-label={`Change the icon for ${project.name}`}
           style={{ width: CARD_ICON, height: CARD_ICON }}
-          className="absolute left-[17px] top-1/2 flex -translate-y-1/2 items-center justify-center rounded-[30%] bg-black/75 text-fg opacity-0 outline-none transition-opacity hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-fg/60 data-[state=open]:opacity-100 max-[700px]:left-4 max-[700px]:top-[calc(50%-0.5px)]"
+          className="icon-hover-outline absolute left-[13px] top-1/2 flex -translate-y-1/2 items-center justify-center rounded-[30%] bg-black/75 text-on-overlay opacity-0 outline-none transition-opacity hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-focus-ink-60 data-[state=open]:opacity-100 max-[700px]:left-4 max-[700px]:top-[calc(50%-0.5px)]"
         >
           <ImagePlus size={16} strokeWidth={1.75} />
         </button>
@@ -120,23 +129,27 @@ function Card({ project, home }: { project: ProjectCard; home: string | undefine
       {/* THE OVERFLOW MENU — everything you can do to a project that is not "change its picture", which
           has its own control on the square. It sits OUTSIDE the <a> for the same reason that one does:
           a button nested in a link is invalid, and clicking it would navigate.
-          THE OFFSET IS INK, NOT BOX. The card's left inset is 17px — its 1px border plus `px-4` — and
+          THE OFFSET IS INK, NOT BOX. The card's left inset is 13px — its 1px border plus `px-3` — and
           the square is a filled tile whose ink IS its box, so that is what the eye reads there. The
           ellipsis paints only 10 of the 15px glyph it draws at, centred in a 28px hit area, which is
-          9px of dead space a side (measured 2026-08-26). 8 + 9 = the same 17, so the two ends of the
-          card balance; `right-[5px]` had put it at 14 and the mark read as crowding the border. The
-          phone row (MOBILE_ROW) drops the side borders, so its inset is 16 and this is 7.
+          9px of dead space a side (measured 2026-08-26). 4 + 9 = the same 13, so the two ends of the
+          card balance; at the old 17px inset this was `right-[4px]`, and `right-[5px]` had put the
+          mark at 14 where it read as crowding the border. The phone row (MOBILE_ROW) drops the side
+          borders and pads 16, so there it is 7.
           It is revealed by the CARD's hover rather than its own, because a control nobody can see until
           they happen to cross nine pixels of empty box is a control nobody finds. */}
-      <ProjectMenu onDelete={() => setConfirmingDelete(true)}>
+      <ProjectMenu onRename={() => setRenaming(true)} onDelete={() => setConfirmingDelete(true)}>
         <button
           type="button"
           aria-label={`More actions for ${project.name}`}
-          className="absolute right-[8px] top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-muted opacity-0 outline-none transition-opacity hover:bg-panel-2 hover:text-fg focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-fg/60 group-hover/card:opacity-100 data-[state=open]:opacity-100 max-[700px]:right-[7px] max-[700px]:opacity-100"
+          className="icon-hover-outline absolute right-[8px] top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-muted opacity-0 outline-none transition-opacity hover:bg-panel-2 hover:text-fg focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-focus-ink-60 group-hover/card:opacity-100 data-[state=open]:opacity-100 max-[700px]:right-[7px] max-[700px]:opacity-100"
         >
           <Ellipsis size={15} />
         </button>
       </ProjectMenu>
+      {renaming ? (
+        <RenameProjectDialog project={project} home={home} onClose={() => setRenaming(false)} />
+      ) : null}
       {confirmingDelete ? (
         <DeleteProjectDialog project={project} home={home} onClose={() => setConfirmingDelete(false)} />
       ) : null}
@@ -145,21 +158,23 @@ function Card({ project, home }: { project: ProjectCard; home: string | undefine
 }
 
 /**
- * A project's own menu. One item today, and the place the next one goes.
+ * A project's own menu: rename, and delete.
  *
  * Deliberately NOT folded into the icon menu: that menu's trigger is an image glyph laid over the
  * project's square and labelled "change the icon", and hanging a delete off it would make the one
  * irreversible action in this page reachable from a control that says it changes a picture.
  *
- * The item does NOT name the project, even though naming it would read better: a name here is a
+ * The items do NOT name the project, even though naming it would read better: a name here is a
  * directory basename of any length, and this content has a min width and no max, so a long one would
- * stretch the menu past the card it is anchored to. The card is the subject and the confirmation names
- * it in full, so nothing is lost by leaving it out.
+ * stretch the menu past the card it is anchored to. The card is the subject and each dialog names it
+ * in full, so nothing is lost by leaving it out.
  */
 function ProjectMenu({
+  onRename,
   onDelete,
   children,
 }: {
+  onRename: () => void
   onDelete: () => void
   children: ReactNode
 }) {
@@ -170,10 +185,16 @@ function ProjectMenu({
         <RadixDropdown.Content
           align="end"
           sideOffset={6}
-          className="z-[220] min-w-[170px] rounded-lg border border-border bg-panel p-1 shadow-xl shadow-black/40"
+          className="z-[220] min-w-[170px] rounded-lg border border-border bg-panel p-1 shadow-xl shadow-shadow-ink/40"
         >
           <RadixDropdown.Item
-            className="cursor-default rounded px-2 py-1.5 text-[12.5px] text-red-400 outline-none data-[highlighted]:bg-red-500/10 data-[highlighted]:text-red-300"
+            className="cursor-default rounded px-2 py-1.5 text-[12.5px] text-fg outline-none data-[highlighted]:bg-panel-2"
+            onSelect={onRename}
+          >
+            Rename…
+          </RadixDropdown.Item>
+          <RadixDropdown.Item
+            className="cursor-default rounded px-2 py-1.5 text-[12.5px] text-danger outline-none data-[highlighted]:bg-danger-fill/10 data-[highlighted]:text-danger-soft"
             onSelect={onDelete}
           >
             Delete project…
@@ -181,6 +202,135 @@ function ProjectMenu({
         </RadixDropdown.Content>
       </RadixDropdown.Portal>
     </RadixDropdown.Root>
+  )
+}
+
+/** The last path segment, on either separator: the registry stores native paths and Windows uses `\\`. */
+function folderName(path: string): string {
+  return path.split(/[\\/]/u).filter(Boolean).pop() ?? path
+}
+
+/**
+ * Rename a project.
+ *
+ * ONE FIELD, AND IT RENAMES TWO THINGS: the name on the card and the slug in the URL, because a project
+ * whose card says one thing and whose address says another is what this dialog exists to fix (a
+ * checkout renamed in the terminal keeps its old slug — `deriveSlug` never re-derives, by design — so
+ * `porg` was still answering on `/project/hypergres`). The URL it will get is shown before saving.
+ *
+ * THE FOLDER IS NOT TOUCHED BY DEFAULT. The checkbox appears only when the folder is already named
+ * after the project, so the offer reads "keep these in step" and never "move your directory": a folder
+ * called something else was named deliberately, and this is not the place to second-guess it.
+ */
+function RenameProjectDialog({
+  project,
+  home,
+  onClose,
+}: {
+  project: ProjectCard
+  home: string | undefined
+  onClose: () => void
+}) {
+  const [name, setName] = useState(project.name)
+  const [renameDirectory, setRenameDirectory] = useState(false)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const queryClient = useQueryClient()
+  const rename = useMutation({
+    mutationFn: () => rpc.projectRename({ id: project.id, name: name.trim(), renameDirectory }),
+    onSuccess: (updated) => {
+      void queryClient.invalidateQueries({ queryKey: ["projectsList"] })
+      showToast(`Renamed ${project.name} to ${updated.name}`)
+      onClose()
+    },
+  })
+  const error = rename.error instanceof Error ? rename.error.message : rename.error ? String(rename.error) : null
+  const trimmed = name.trim()
+  const folder = folderName(project.path)
+  const parent = project.path.slice(0, project.path.length - folder.length)
+  // Offered only when the folder already tracks the name AND the new name would leave it behind.
+  const offerFolder = folder === project.name && trimmed.length > 0 && trimmed !== folder
+  const slug = slugify(trimmed)
+
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => { if (!open && !rename.isPending) onClose() }}
+      title={`Rename ${project.name}`}
+      className="w-[440px] max-w-[92vw]"
+      // The field, selected, so typing replaces the name — the header's Close button is what Radix
+      // would focus otherwise, and a rename dialog that opens with nothing to type into is a click short.
+      onOpenAutoFocus={(event) => {
+        event.preventDefault()
+        inputRef.current?.focus()
+        inputRef.current?.select()
+      }}
+      footer={
+        <>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={rename.isPending}
+            className="button-outline rounded-md px-3 py-1.5 text-[12px] text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg disabled:opacity-45"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            form="rename-project"
+            disabled={rename.isPending || trimmed.length === 0}
+            className="flex items-center gap-1.5 rounded-md border border-accent-fill bg-accent-fill px-3 py-1.5 text-[12.5px] font-medium text-on-accent outline-none hover:brightness-110 focus-visible:ring-1 focus-visible:ring-focus-accent-60 disabled:opacity-50"
+          >
+            {rename.isPending && <Loader2 size={12} className="animate-spin" />}
+            {offerFolder && renameDirectory ? "Rename project and folder" : "Rename project"}
+          </button>
+        </>
+      }
+    >
+      <form
+        id="rename-project"
+        onSubmit={(event) => {
+          event.preventDefault()
+          if (!rename.isPending && trimmed.length > 0) rename.mutate()
+        }}
+        className="flex flex-col gap-3 p-4 text-[12.5px] leading-relaxed text-muted"
+      >
+        <input
+          ref={inputRef}
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+          spellCheck={false}
+          aria-label="Project name"
+          className={`w-full rounded-md border bg-bg px-2.5 py-2 text-[12.5px] text-fg outline-none placeholder:text-muted-50 focus-visible:ring-1 focus-visible:ring-focus-accent-60 ${
+            error ? "border-danger-fill/60" : "border-border-strong"
+          }`}
+        />
+        <p>
+          Its address becomes{" "}
+          <span className="font-mono text-[11.5px] text-fg/80">/project/{slug}</span>
+          {slug !== project.slug ? <> — links to <span className="font-mono text-[11.5px]">/project/{project.slug}</span> stop working.</> : "."}
+        </p>
+        {offerFolder ? (
+          <label className="flex cursor-pointer items-start gap-2 rounded-md border border-border bg-bg/30 px-2.5 py-2 text-fg/85">
+            <input
+              type="checkbox"
+              checked={renameDirectory}
+              onChange={(event) => setRenameDirectory(event.target.checked)}
+              // Same cap-band correction as the delete dialog's checkbox — see the readings there.
+              className="mt-[3px] accent-[var(--color-accent)]"
+            />
+            <span className="flex flex-col gap-0.5">
+              <span>Also rename the folder</span>
+              <span className="text-[11.5px] text-muted-80">
+                {renameDirectory
+                  ? <><span className="font-mono text-[11px]">{shortPath(project.path, home)}</span> becomes <span className="font-mono text-[11px]">{shortPath(parent + trimmed, home)}</span>. Running workers keep going.</>
+                  : "Left off, the folder keeps its name and only what Frizz calls it changes."}
+              </span>
+            </span>
+          </label>
+        ) : null}
+        {error ? <p className="text-[11.5px] text-danger">{error}</p> : null}
+      </form>
+    </Dialog>
   )
 }
 
@@ -231,7 +381,7 @@ function DeleteProjectDialog({
             type="button"
             onClick={onClose}
             disabled={remove.isPending}
-            className="rounded-md px-3 py-1.5 text-[12px] text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg disabled:opacity-45"
+            className="button-outline rounded-md px-3 py-1.5 text-[12px] text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg disabled:opacity-45"
           >
             Cancel
           </button>
@@ -239,7 +389,7 @@ function DeleteProjectDialog({
             type="button"
             onClick={() => remove.mutate()}
             disabled={remove.isPending}
-            className="flex items-center gap-1.5 rounded-md bg-red-500/90 px-3 py-1.5 text-[12.5px] font-medium text-white outline-none transition-opacity hover:opacity-90 disabled:opacity-60"
+            className="button-outline flex items-center gap-1.5 rounded-md bg-danger-button/90 px-3 py-1.5 text-[12.5px] font-medium text-white outline-none transition-opacity hover:opacity-90 disabled:opacity-60"
           >
             {remove.isPending && <Loader2 size={12} className="animate-spin" />}
             {deleteData ? "Delete project and threads" : "Delete project"}
@@ -267,14 +417,14 @@ function DeleteProjectDialog({
           />
           <span className="flex flex-col gap-0.5">
             <span>Also delete its threads and history</span>
-            <span className="text-[11.5px] text-muted/80">
+            <span className="text-[11.5px] text-muted-80">
               {deleteData
                 ? "Everything Frizz has stored for this project, and any workers still running are stopped. This cannot be undone."
                 : "Left off, its threads are kept — adding the folder again brings the board back."}
             </span>
           </span>
         </label>
-        {error ? <p className="text-[11.5px] text-red-400">{error}</p> : null}
+        {error ? <p className="text-[11.5px] text-danger">{error}</p> : null}
       </div>
     </Dialog>
   )
@@ -305,10 +455,10 @@ function PhantomCard({
         hero ? "min-h-[118px]" : "min-h-[74px]"
       }`}
     >
-      <span className="text-[17px] leading-none text-muted/70">+</span>
+      <span className="text-[17px] leading-none text-muted-70">+</span>
       <span className="text-[12.5px]">{pending ? "Choosing a folder…" : "Add a project"}</span>
       {hero ? (
-        <span className="text-[11px] text-muted/70">Point Frizz at a folder on this machine</span>
+        <span className="text-[11px] text-muted-70">Point Frizz at a folder on this machine</span>
       ) : null}
     </button>
   )
@@ -341,11 +491,11 @@ function AddProjectDialog({
   return (
     <RadixDialog.Root open onOpenChange={(open) => { if (!open && !add.isPending) onClose() }}>
       <RadixDialog.Portal>
-        <RadixDialog.Overlay className="fixed inset-0 z-[210] bg-black/30 backdrop-blur-md backdrop-saturate-150" />
+        <RadixDialog.Overlay className="fixed inset-0 z-[210] bg-scrim-30 backdrop-blur-md backdrop-saturate-150" />
         <RadixDialog.Content
           aria-modal="true"
           aria-describedby={undefined}
-          className="fixed left-1/2 top-1/2 z-[210] w-[460px] max-w-[90vw] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-panel p-5 shadow-2xl shadow-black/50 outline-none"
+          className="fixed left-1/2 top-1/2 z-[210] w-[460px] max-w-[90vw] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-panel p-5 shadow-2xl shadow-shadow-ink/50 outline-none"
         >
           <RadixDialog.Title className="mb-1 text-[14px] font-medium">
             {proposed ? "Add this folder as a project?" : "Add a project"}
@@ -369,24 +519,24 @@ function AddProjectDialog({
               onChange={(event) => setPath(event.target.value)}
               placeholder="~/code/my-project"
               spellCheck={false}
-              className={`w-full rounded-md border bg-bg px-2.5 py-2 font-mono text-[12px] text-fg outline-none placeholder:text-muted/50 focus-visible:ring-1 focus-visible:ring-fg/60 ${
-                error ? "border-red-500/60" : "border-border-strong"
+              className={`w-full rounded-md border bg-bg px-2.5 py-2 font-mono text-[12px] text-fg outline-none placeholder:text-muted-50 focus-visible:ring-1 focus-visible:ring-focus-ink-60 ${
+                error ? "border-danger-fill/60" : "border-border-strong"
               }`}
             />
-            {error ? <p className="mt-1.5 text-[11.5px] text-red-400">{error}</p> : null}
+            {error ? <p className="mt-1.5 text-[11.5px] text-danger">{error}</p> : null}
             <div className="mt-4 flex justify-end gap-2">
               <button
                 type="button"
                 onClick={onClose}
                 disabled={add.isPending}
-                className="rounded-md border border-border-strong bg-elevated px-3 py-1.5 text-[12.5px] text-fg outline-none hover:bg-panel-2 focus-visible:ring-1 focus-visible:ring-fg/60 disabled:opacity-50"
+                className="rounded-md border border-border-strong bg-elevated px-3 py-1.5 text-[12.5px] text-fg outline-none hover:bg-panel-2 focus-visible:ring-1 focus-visible:ring-focus-ink-60 disabled:opacity-50"
               >
                 {proposed ? "Not now" : "Cancel"}
               </button>
               <button
                 type="submit"
                 disabled={add.isPending || path.trim().length === 0}
-                className="rounded-md border border-accent bg-accent px-3 py-1.5 text-[12.5px] font-medium text-bg outline-none hover:brightness-110 focus-visible:ring-1 focus-visible:ring-fg/60 disabled:opacity-50"
+                className="rounded-md border border-accent bg-accent-fill px-3 py-1.5 text-[12.5px] font-medium text-on-accent outline-none hover:brightness-110 focus-visible:ring-1 focus-visible:ring-focus-ink-60 disabled:opacity-50"
               >
                 {add.isPending ? "Adding…" : proposed ? "Add it" : "Add project"}
               </button>
@@ -451,7 +601,7 @@ export function ProjectGrid() {
     // still letting the page scroll from its real top.
     <div className="flex min-h-dvh w-full flex-col px-6 py-14 max-[700px]:px-0 max-[700px]:py-10">
       <div className="m-auto flex w-full flex-col items-center">
-      <div className="mb-8 flex flex-col items-center gap-2.5 text-center">
+      <div className="mb-6 flex flex-col items-center gap-2.5 text-center">
         <img src="/favicon.svg" width={MARK_PX} height={MARK_PX} alt="" className="rounded-[17px]" />
         <h1 className="text-[19px] font-semibold tracking-[-0.01em] text-fg">
           {empty ? "Welcome to Frizz" : "Select a project"}
@@ -470,9 +620,15 @@ export function ProjectGrid() {
         <p className="text-[13px] text-muted">Loading…</p>
       ) : (
         <>
+          {/* THREE ACROSS WHEN THE WINDOW ALLOWS IT, FEWER WHEN IT DOES NOT. `auto-fill` fits as many
+              272px tracks as the width holds and stretches them, and the 900px cap is what makes three
+              the ceiling: a fourth track would need 1112. So the grid is one column under the phone
+              breakpoint, two from there to 832px of content width, and three above — the page pads
+              24 a side and the rail reserves 57, so three columns arrive at a 937px window. It was two
+              across at 720 until 2026-09-19 (maintainer: "three columns when possible"). */}
           <div
-            className={`grid w-full gap-2.5 max-[700px]:gap-0 ${
-              empty ? "max-w-[360px] grid-cols-1" : "max-w-[720px] grid-cols-1 sm:grid-cols-2"
+            className={`grid w-full gap-2 max-[700px]:gap-0 max-[700px]:grid-cols-1 ${
+              empty ? "max-w-[360px] grid-cols-1" : "max-w-[900px] grid-cols-[repeat(auto-fill,minmax(272px,1fr))]"
             }`}
           >
             {data.map((project) => (
@@ -481,7 +637,7 @@ export function ProjectGrid() {
             <PhantomCard hero={empty} pending={pick.isPending} onClick={() => pick.mutate()} />
           </div>
           {empty ? (
-            <p className="mt-6 text-[11.5px] text-muted/70">
+            <p className="mt-6 text-[11.5px] text-muted-70">
               Or run{" "}
               <code className="rounded border border-border bg-panel px-1.5 py-0.5 font-mono text-muted">
                 frizz

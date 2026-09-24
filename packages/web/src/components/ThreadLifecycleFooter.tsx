@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { Check, Hourglass, Loader2 } from "lucide-react"
+import { AlarmClock, Check, Loader2 } from "lucide-react"
 import type { CompletionHold, ThreadView } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { showToast } from "../store.ts"
@@ -9,7 +9,7 @@ import { futureSnoozedUntil } from "../groups.ts"
 import { formatAgo } from "../lib/durationLabels.ts"
 import { formatSnoozeWake } from "../lib/snooze.ts"
 import { CHILD_ARROW, CHILD_ARROW_CLASS } from "../lib/childOps.ts"
-import { INK_TRIM_HOURGLASS, STRIP_INK_GAP } from "../lib/iconRhythm.ts"
+import { INK_TRIM_ALARM, STRIP_INK_GAP } from "../lib/iconRhythm.ts"
 import { SnoozeButton } from "./SnoozeButton.tsx"
 import { ContextMeter } from "./ContextMeter.tsx"
 import { Tooltip } from "./Tooltip.tsx"
@@ -149,11 +149,13 @@ function PendingSnooze({ thread }: { thread: ThreadView }) {
     : `Snoozed until ${formatSnoozeWake(until)}`
   return (
     <Tooltip label={detail} side="top" multiline={!!prompt}>
-      {/* `INK_TRIM_HOURGLASS` because this glyph is the strip's most inset mark — lucide's `Hourglass`
-          paints 8px of its 12px box, so with `px-0.5` it carries 4px of dead space a side and would
-          otherwise sit 8px further from its neighbours than the strip's other marks do. */}
-      <span data-pending-snooze aria-label={detail} className={`flex items-center px-0.5 text-muted/60 ${INK_TRIM_HOURGLASS}`}>
-        <Hourglass size={12} />
+      {/* `INK_TRIM_ALARM` collapses the box onto the ink, like every mark in this strip — lucide's
+          `AlarmClock` paints 9.5px of its 12px box across (its bells and feet reach out further than the
+          hourglass's caps), so with `px-0.5` it carries ~3px of dead space a side. The hourglass it
+          replaced (2026-09-19; the human's own snooze is the alarm clock everywhere now) painted 7
+          across and needed a 4px trim. The readings are in iconRhythm.ts. */}
+      <span data-pending-snooze aria-label={detail} className={`flex items-center px-0.5 text-muted-60 ${INK_TRIM_ALARM}`}>
+        <AlarmClock size={12} />
       </span>
     </Tooltip>
   )
@@ -268,7 +270,7 @@ export function StateButton({
         aria-label="Mark as done"
         title="Mark as done"
         onMouseDown={(event) => event.preventDefault()}
-        className={`flex items-center gap-1 font-medium outline-none transition-colors focus-visible:ring-1 focus-visible:ring-fg/60 disabled:opacity-45 ${className}`}
+        className={`flex items-center gap-1 font-medium outline-none transition-colors focus-visible:ring-1 focus-visible:ring-focus-ink-60 disabled:opacity-45 ${className}`}
       >
         <Check size={12} className={iconClassName} />
         Mark as done
@@ -288,7 +290,7 @@ export function StateButton({
               type="button"
               disabled={pending}
               onClick={() => setConfirmOpen(false)}
-              className="rounded-md px-3 py-1.5 text-[12px] text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg disabled:opacity-45"
+              className="button-outline rounded-md px-3 py-1.5 text-[12px] text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg disabled:opacity-45"
             >
               Cancel
             </button>
@@ -296,7 +298,7 @@ export function StateButton({
               type="button"
               disabled={pending}
               onClick={() => complete(true, false)}
-              className="flex items-center gap-1.5 rounded-md bg-fg px-3 py-1.5 text-[12px] font-medium text-bg outline-none transition-opacity hover:opacity-90 disabled:opacity-45"
+              className="button-outline flex items-center gap-1.5 rounded-md bg-fg px-3 py-1.5 text-[12px] font-medium text-bg outline-none transition-opacity hover:opacity-90 disabled:opacity-45"
             >
               {pending && <Loader2 size={12} className="animate-spin" />}
               {hold?.cutOff ? "Mark done anyway" : "End session & mark done"}
@@ -331,10 +333,10 @@ function CompletionHoldBody({ hold }: { hold: CompletionHold | undefined }) {
                 <span aria-hidden className={CHILD_ARROW_CLASS}>{CHILD_ARROW}</span>
                 <span className="min-w-0 truncate text-fg/80">{item.label}</span>
                 {/* Stale is why we ask rather than proof of life: say so instead of implying either. */}
-                {item.stale && <span className="shrink-0 text-[11px] text-muted/60">no recent output</span>}
+                {item.stale && <span className="shrink-0 text-[11px] text-muted-60">no recent output</span>}
               </li>
             ))}
-            {group.overflow > 0 && <li className="pl-[15px] text-muted/60">+{group.overflow} more</li>}
+            {group.overflow > 0 && <li className="pl-[15px] text-muted-60">+{group.overflow} more</li>}
           </ul>
         </div>
       ))}

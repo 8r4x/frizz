@@ -542,7 +542,8 @@ export function resolveProjectIcon(
 /** Rename is the escape hatch for every derivation rule above, so it exists from day one. */
 export function renameProject(
   id: string,
-  update: { slug?: string; name?: string; archived?: boolean },
+  /** `name: null` clears the display override, so the card follows the directory's basename again. */
+  update: { slug?: string; name?: string | null; archived?: boolean },
   home = homedir(),
 ): RegistryEntry | undefined {
   const registry = readRegistry(home)
@@ -556,10 +557,41 @@ export function renameProject(
     }
     entry.slug = slug
   }
-  if (update.name !== undefined) entry.name = update.name
+  if (update.name === null) delete entry.name
+  else if (update.name !== undefined) entry.name = update.name
   if (update.archived !== undefined) entry.archived = update.archived
   writeRegistry(registry, home)
   return entry
+}
+
+/**
+ * Rename a project's DIRECTORY to a sibling basename, and re-register it there.
+ *
+ * The one first-party way to change the folder itself. The id travels with the tree, so this is the
+ * "moved" case `registerProject` already reconciles — the difference is that Frizz did the move and
+ * knows about it at once, rather than learning at the next `frizz` run. Off by default in the rename
+ * dialog: a folder is the operator's, and renaming Frizz's card must never rename it uninvited.
+ *
+ * A basename only — no separators, no `.`/`..` — so this can rename a folder and cannot move one
+ * somewhere else. The target must not exist: `rename(2)` onto a directory either fails or, on some
+ * platforms, replaces an empty one, and neither is what "rename" means here.
+ */
+export function moveProjectDirectory(id: string, newBasename: string, home = homedir()): RegistryEntry {
+  const entry = findById(id, home)
+  if (!entry) throw new Error("No such project.")
+  const name = newBasename.trim()
+  if (!name || name === "." || name === ".." || /[\\/\0]/u.test(name)) {
+    throw new Error("A folder name cannot contain a slash.")
+  }
+  if (!existsSync(entry.path)) throw new Error(`The folder is missing: ${entry.path}`)
+  const target = join(dirname(entry.path), name)
+  if (target === entry.path) return entry
+  if (existsSync(target)) throw new Error(`Something already exists at ${target}`)
+  renameSync(entry.path, target)
+  const moved = registerProject({ dir: target, id }, home)
+  // The old path is gone, so this can only be "moved"; anything else means the registry changed under
+  // us between the read above and the rename, and the folder is already where the operator asked.
+  return moved.entry ?? entry
 }
 
 export function forgetProject(id: string, home = homedir()): boolean {

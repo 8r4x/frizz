@@ -14,6 +14,7 @@
  */
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
+import { brotliCompressSync } from "node:zlib";
 import { once } from "node:events";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -143,6 +144,13 @@ try {
       setTimeout(() => res.end(), 150);
       return;
     }
+    if (req.url?.startsWith("/compressed")) {
+      // What the real board does with index.html and every asset: brotli, declared in the header.
+      const body = brotliCompressSync(Buffer.from("BOARD-COMPRESSED"));
+      res.writeHead(200, { "content-type": "text/plain", "content-encoding": "br", "content-length": String(body.byteLength) });
+      res.end(body);
+      return;
+    }
     res.writeHead(200, { "content-type": "text/plain", "content-length": "13", "x-board": "yes" });
     res.end("BOARD-REACHED");
   });
@@ -182,6 +190,14 @@ try {
   check("a visitor reaches the board THROUGH the relay", true, `HTTP ${served.status}`);
   check("the body is the board's own", (await served.text()) === "BOARD-REACHED");
   check("the board's headers survive the hop", served.headers.get("x-board") === "yes");
+
+  // A body the board ALREADY ENCODED. Workers compress a constructed Response to match its
+  // content-encoding header unless told the body already is, so a brotli page went out brotli twice
+  // and a phone rendered the inner layer as text. `fetch` undoes exactly one layer, which is what a
+  // browser does, so a doubly-encoded body fails this check rather than passing by accident.
+  const compressed = await fetch(at("ada", "/compressed"), { headers: { "accept-encoding": "br" } });
+  const inflated = await compressed.text().catch((error) => `<${error.message}>`);
+  check("a brotli body the board encoded arrives encoded ONCE", inflated === "BOARD-COMPRESSED", JSON.stringify(inflated.slice(0, 40)));
 
   // The seam that a request/response relay would fail: an SSE body has to arrive as it is produced.
   const stream = await fetch(at("ada", "/events"));

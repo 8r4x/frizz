@@ -2,13 +2,13 @@ import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 
 import { useQueryClient } from "@tanstack/react-query"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { useSnapshot } from "valtio"
-import { Check, ChevronRight, CircleDashed, Ellipsis, Github, Hourglass, Loader2, Pin, PinOff, RotateCcw, Timer } from "lucide-react"
+import { AlarmClock, Check, ChevronRight, CircleDashed, Ellipsis, Github, Hourglass, Loader2, Pin, PinOff, RotateCcw, Timer } from "lucide-react"
 import type { BoardSnapshot, ThreadView } from "@frizz/shared"
 import { store, openThread, scrollToQueueCard, queueCardTargetY, pushSubAgentDrawer, showToast, QUEUE_CARD_VIEWPORT_TOP } from "../store.ts"
 import { rpc } from "../api/rpc.ts"
 import { useBoard, asThreads } from "../hooks.ts"
 import { prefs } from "../lib/prefs.ts"
-import { sectionThreads, externalThreads, orderByInteraction, partitionActive, needsAction, displayTitle, titleIsProvisional, isPinned, isSnoozed, parkedAwaitingHint, sessionIndicatorKind, offersRetry, futureSnoozedUntil, lastActiveLabelAt, waitNamesPr } from "../groups.ts"
+import { sectionThreads, externalThreads, orderByInteraction, partitionActive, needsAction, displayTitle, titleIsProvisional, isPinned, isSnoozed, parkedAwaitingHint, sessionIndicatorKind, offersRetry, futureSnoozedUntil, lastActiveLabelAt, waitNamesPr, prChecksRunning, restingOnSubAgents } from "../groups.ts"
 import { ageSpan, relativeAge, limitResumeClock } from "../lib/activityTime.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { BoxSpinner, STATUS_BOX } from "./BoxSpinner.tsx"
@@ -66,7 +66,7 @@ import type { ReactElement, ReactNode, RefObject } from "react"
 // matches the row's pt-1) so it never exceeds the row height. Bare glyphs — the group draws no box
 // around them (its backing is the rail's own base colour under the row's hover wash; see the strip in
 // ThreadRow), and only the one under the pointer paints its own square.
-// OPAQUE PAINT, TRANSLUCENT BOX — `text-muted opacity-70`, never `text-muted/70`. The unpin is a lucide
+// OPAQUE PAINT, TRANSLUCENT BOX — `text-muted opacity-70`, never `text-muted-70`. The unpin is a lucide
 // glyph FILLED and STROKED in currentColor, and an SVG paints the stroke over the fill: with an alpha
 // colour the ring lands at ~0.8 alpha where it overlaps the 0.7 fill, so the pin read as a darker
 // outline around a lighter middle (maintainer 2026-09-11: "slightly dimmer in the middle. It looks
@@ -174,7 +174,7 @@ export function Sidebar() {
   // local: Element.scrollIntoView could scroll the main document and steal the reader's position.
   useLayoutEffect(() => {
     const rail = railRef.current
-    if (!rail || !activeId || window.matchMedia("(max-width: 800px)").matches) return
+    if (!rail || !activeId || window.matchMedia?.("(max-width: 800px)").matches) return
     const item = rail.querySelector<HTMLElement>(`[data-sidebar-item="${CSS.escape(activeId)}"]`)
     if (!item) return
     const railBox = rail.getBoundingClientRect()
@@ -233,13 +233,17 @@ export function Sidebar() {
         </div>
         <div ref={railRef} data-sidebar-rail className="min-h-0 min-w-0 overflow-y-auto overflow-x-hidden max-[800px]:overflow-y-visible">
           {/* PINNED — the human's shelf, at the very top, above the cue (maintainer 2026-09-02, variant
-              A of the pin mockups: unlabeled, each row wearing the small solid pin where the cue's rest
-              time would sit). These rows are OUT of the band system entirely — sectionThreads diverts
-              them before any band claims them, so a pinned thread stays here spinning, resting, snoozed
-              or Done alike — and the band is ordered by the pin instants, oldest first, never by
-              activity: it is an arrangement the human made, and nothing the threads do may shuffle it. */}
+              A of the pin mockups: each row wearing the small solid pin where the cue's rest time would
+              sit). These rows are OUT of the band system entirely — sectionThreads diverts them before
+              any band claims them, so a pinned thread stays here spinning, resting, snoozed or Done
+              alike — and the band is ordered by the pin instants, oldest first, never by activity: it
+              is an arrangement the human made, and nothing the threads do may shuffle it.
+              LABELED since 2026-09-19, like every band below it, and NOT collapsible (maintainer: the
+              Pinned, Queue and Running labels "should not be collapsible") — the header is the static
+              form of SectionHeader, so it lines up with the collapsible Snoozed/Done headers. */}
           {sections.pinned.length > 0 && (
             <section aria-label="Pinned">
+              <SectionHeader label="Pinned" count={sections.pinned.length} />
               {sections.pinned.map((t) => (
                 <div key={t.id}>
                   <ThreadRow t={t} active={activeId === t.id} onQueueNavigate={navigateToQueueCard} />
@@ -253,14 +257,19 @@ export function Sidebar() {
             </section>
           )}
           {/* RESTED + ACTIVE — always shown, NEVER collapsible (you can't hide your queue or your live
-              work), no label. Two rule-separated bands (see groups.ts orderActive/partitionActive):
+              work). Two rule-separated bands (see groups.ts orderActive/partitionActive), each under a
+              static label since 2026-09-19 (maintainer: "sidebar labels for pinned, queue, and running
+              … should not be collapsible"). The labels use the maintainer's own words for the bands —
+              QUEUE for the cue, RUNNING for the spinning rows — rather than the code's Rested/Active
+              keys, because the label is copy the human reads, and "the queue" is what they call it.
               RESTED — the cue — sits FIRST, right under the prompt box (maintainer 2026-08-08), in the
               EXACT queue order, so the rail's top row is opposite the queue's top card and scrolling
               the queue walks the scroll marker straight down this rail. ACTIVE — live work that isn't
               waiting on you — runs BELOW the rule (an Active row has no queue card — the maintainer's
               ask: they don't render in the queue), so it stays glanceable without pushing the cue down.
               Only the cue's rows carry the rest-time column: it dates a HANDOFF, and a row that is
-              still spinning has not made one. */}
+              still spinning has not made one. An empty band draws no label, the same as Snoozed and
+              Done: a "Queue 0" header over nothing is a count nobody needs. */}
           {activeThreads.length > 0 ? (
             (() => {
               const { running, rested } = partitionActive(activeThreads)
@@ -272,8 +281,10 @@ export function Sidebar() {
               )
               return (
                 <>
+                  {rested.length > 0 && <SectionHeader label="Queue" count={rested.length} />}
                   {rested.map(renderRow(true))}
                   {running.length > 0 && rested.length > 0 && <hr className="my-3 border-border/50" />}
+                  {running.length > 0 && <SectionHeader label="Running" count={running.length} />}
                   {running.map(renderRow(false))}
                 </>
               )
@@ -287,7 +298,7 @@ export function Sidebar() {
             // renders only when BOTH are empty. Saying "no active threads" over a hidden queue would be
             // the same conflation the vocabulary above exists to stop. Suppressed under a pinned band —
             // the pinned rows ARE open threads, so the claim would be visibly false one band up.
-            <div className="py-1 pl-5 pr-1.5 text-[11.5px] text-muted/50">No open threads</div>
+            <div className="py-1 pl-5 pr-1.5 text-[11.5px] text-muted-50">No open threads</div>
           ) : null}
           {/* HELD — every deliberate clock/hourglass/timed wait, visibly de-emphasized and labeled so
               it cannot read as active work. COLLAPSIBLE, and collapsed by default (maintainer
@@ -364,9 +375,9 @@ export function Sidebar() {
 }
 
 // A section header: an optional collapse caret, the label, and the count. ONE source of truth for
-// every band header (Snoozed, Done) so they can never visually drift apart again. Every band in
-// the real rail is collapsible; omitting onToggle renders a static div with a caret-width spacer, so
-// a header without a toggle (the QA fixtures' Active/Snoozed bands) still aligns with the rest.
+// every band header so they can never visually drift apart again. Snoozed, Done and External are
+// collapsible; Pinned, Queue and Running (since 2026-09-19) omit onToggle and render as a static div
+// with a caret-width spacer, so a non-collapsible label still aligns with the collapsible ones.
 export function SectionHeader({ label, count, collapsed, onToggle }: { label: string; count: number; collapsed?: boolean; onToggle?: () => void }) {
   const inner = (
     <>
@@ -379,10 +390,10 @@ export function SectionHeader({ label, count, collapsed, onToggle }: { label: st
       <span>{label}</span>
       {/* Count rides right next to its label (not floated to the far edge) — it's meaningful data,
           not a margin ornament; raised contrast so it actually reads. */}
-      <span className="ml-1.5 tabular-nums text-muted/60">{count}</span>
+      <span className="ml-1.5 tabular-nums text-muted-60">{count}</span>
     </>
   )
-  const cls = "flex w-full items-center gap-1 px-1.5 py-1 text-[11px] uppercase tracking-wide text-muted/70"
+  const cls = "flex w-full items-center gap-1 px-1.5 py-1 text-[11px] uppercase tracking-wide text-muted-70"
   return onToggle ? (
     <button onClick={onToggle} className={`${cls} transition-colors hover:text-fg`}>
       {inner}
@@ -596,7 +607,7 @@ export const ThreadRow = memo(function ThreadRow({
   return (
     <div
       data-sidebar-item={t.id}
-      className={`group relative flex min-w-0 items-start rounded-md transition-[color,opacity] after:pointer-events-none after:absolute after:inset-0 after:rounded-md after:bg-white/[0.04] after:opacity-0 after:transition-opacity hover:after:opacity-100 ${legacy ? "opacity-80" : dim ? "opacity-65 hover:opacity-90 focus-within:opacity-90" : ""}`}
+      className={`group relative flex min-w-0 items-start rounded-md transition-[color,opacity] after:pointer-events-none after:absolute after:inset-0 after:rounded-md after:bg-hover after:opacity-0 after:transition-opacity hover:after:opacity-100 ${legacy ? "opacity-80" : dim ? "sidebar-row-dim" : ""}`}
     >
       {/* The reading position owns a real, in-row rail rather than borrowing the status-icon column.
           The marker spans the row's complete visual height, including wrapped titles and subtitles,
@@ -633,7 +644,7 @@ export const ThreadRow = memo(function ThreadRow({
               8px is ~2 word spaces at 13px, which reads as the title running into its own timestamp.
               12px is a gutter, and it costs the title 4px it does not miss. */}
           <span className="flex min-w-0 items-baseline gap-3">
-            <span className={`min-w-0 flex-1 break-words text-[13px] leading-[19px] ${dimLabel ? "text-fg/50" : dim ? "text-fg/75" : "text-fg/90"}`}>
+            <span className={`min-w-0 flex-1 break-words text-[13px] leading-[19px] ${dimLabel ? "text-provisional" : dim ? "text-fg/75" : "text-fg/90"}`}>
               <TitleWithTrailers title={displayTitle(t)}>
                 {!legacy && <ProviderMark backend={t.backend} model={t.model} className="ml-1" />}
                 {/* MEASURED 2026-08-19, the first time this tag ever rendered (it was written for a
@@ -650,7 +661,7 @@ export const ThreadRow = memo(function ThreadRow({
                     RE-MEASURE rather than re-guess if the type scale or the pill's size moves. */}
                 {foreign && (
                   <span
-                    className="petite-caps ml-1.5 inline-block rounded border border-border/60 px-1 align-[2px] text-[9.5px] leading-[14px] text-muted/55"
+                    className="petite-caps ml-1.5 inline-block rounded border border-border/60 px-1 align-[2px] text-[9.5px] leading-[14px] text-muted-55"
                     title="Read-only — running in an external terminal"
                   >
                     terminal
@@ -674,7 +685,7 @@ export const ThreadRow = memo(function ThreadRow({
       {/* The Mark-as verb survives ONLY on legacy rows (a .frizz verb). Session lifecycle controls
           live in the thread footer. */}
       {legacy && (
-        <div className="absolute right-1 top-1 hidden group-hover:flex items-stretch rounded-md bg-panel shadow-sm shadow-black/30">
+        <div className="absolute right-1 top-1 hidden group-hover:flex items-stretch rounded-md bg-panel shadow-sm shadow-shadow-ink/30">
           <MarkAsButton slug={t.id} size="sm" />
         </div>
       )}
@@ -754,7 +765,7 @@ function RestedAge({ t, yieldsToRetry }: { t: ThreadView; yieldsToRetry?: boolea
       aria-label={`Rested ${relativeAge(at, now) ?? span}`}
       // shrink-0 + tabular-nums: the column must not compress under a long title, and the digits must
       // not jitter horizontally when the clock ticks. The title takes the remaining width and wraps.
-      className={`shrink-0 tabular-nums text-[10.5px] leading-[19px] text-muted/55 ${
+      className={`shrink-0 tabular-nums text-[10.5px] leading-[19px] text-muted-55 ${
         yieldsToRetry ? "transition-opacity group-hover:opacity-0 group-focus-within:opacity-0" : ""
       }`}
     >
@@ -811,7 +822,7 @@ function RowRetryButton({ slug }: { slug: string }) {
 //     `right-1.5` on the same row, so both right edges land on the same x.
 //   VERTICAL — `self-start` pins this box to the flex line's cross-start, which is the button's `pt-1`
 //     content top; the strip's `top-1` is that same offset from the row. Neither reading depends on the
-//     font's metrics, so nothing here needs re-fitting when the font setting flips.
+//     font's metrics, so nothing here needs re-fitting when the type scale moves.
 // It replaced a hand-placed `relative top-[calc(5.5px - 0.5cap)]` that sat an 11px mark on the title's
 // CAP band (0.01px residual in both fonts) — a better vertical in isolation, but its ink centre landed
 // 4.00px RIGHT of the unpin's and 0.09px (sans) / 0.66px (mono) above it, so the glyph jumped every
@@ -830,7 +841,7 @@ function PinnedMark() {
     <span
       aria-hidden
       data-rail-pin-mark
-      // `text-muted opacity-55`, not `text-muted/55`: the mark is filled AND stroked, and an alpha colour
+      // `text-muted opacity-55`, not `text-muted-55`: the mark is filled AND stroked, and an alpha colour
       // compounds where the stroke overlaps the fill — see ROW_ACTION_CLASS. The hover hide is the same
       // opacity axis, and the variant wins over the bare 55.
       className="-ml-1 flex h-[19px] w-[19px] shrink-0 items-center justify-center self-start text-muted opacity-55 transition-opacity group-hover:opacity-0 group-focus-within:opacity-0"
@@ -997,11 +1008,17 @@ export function ThreadIndicator({ t, legacy }: { t: ThreadView; legacy?: boolean
 // the SAME rounded-rect outer box with a glyph inside, so the rail reads like a to-do list.
 //   [ ] idle        — at rest, nothing pending (empty box)
 //   [/] in progress — the rounded-RECT spinner (a segment travels the box perimeter): this thread's own
-//                     turn, or a live SUB-AGENT whose return will re-invoke it. Both are real motion.
+//                     turn. SINCE 2026-09-20 THE SPINNER IS ALSO THE FRAME for every row something will
+//                     wake, and the mark inside says what (maintainer: "everything in the running rail
+//                     should always have this spinner animation going"): empty for an own turn, the
+//                     ellipsis for a parent at rest with a live SUB-AGENT out (restingOnSubAgents — the
+//                     children spin on their own rows), the blue dot below for a shell, the octocat for
+//                     a PR whose checks are running (prChecksRunning).
 //   [•] background  — at rest with only a detached background SHELL still running (never a sub-agent —
-//                     maintainer 2026-08-01). Nothing is coming back, so nothing spins; the pulsing blue
-//                     dot says "alive, not moving". The row holds its place in the running band — and
-//                     keeps this same dot once the human snoozes its card into the Snoozed band, because
+//                     maintainer 2026-08-01): a SOLID blue dot inside the spinner. It was a pulsing dot in
+//                     a static box until 2026-09-20; the motion moved to the frame and the dot went solid
+//                     ("a solid, non-pulsing blue dot"). The row holds its place in the running band — and
+//                     keeps this same mark once the human snoozes its card into the Snoozed band, because
 //                     the shell is the fact and the park is only how the row is presented (see shellDot).
 //   [?] needs input — a question / native ask / permission prompt (accent box + "?")
 //   [!] stalled     — the agent's PROCESS EXITED with the work unfinished (accent box + "!"), whether
@@ -1009,8 +1026,10 @@ export function ThreadIndicator({ t, legacy }: { t: ThreadView; legacy?: boolean
 //                     way, because the next action is the same: Retry. Exactly the rows that carry the
 //                     inline Retry verb (offersRetry === this kind — one decision, two surfaces).
 //   [⧗] on the clock — awaiting a TIMER (muted hourglass), in the queue or parked in Snoozed alike; the
-//                     Snoozed band's other parks wear the same hourglass (a user snooze) or the mark of
-//                     what they wait on (the octocat for a PR, the dot for a shell). See hourglassMark.
+//                     Snoozed band's other parks wear the mark of what they wait on (the octocat for a
+//                     PR, the dot for a shell). See hourglassMark.
+//   [⏰] snoozed     — the human's OWN wall-clock park (muted alarm clock): the one wait the operator
+//                     set rather than the worker, and the one that rings for THEM. See alarmMark.
 //   [✓] done        — a ```done fence at rest, OR an archived thread (muted check — NOTHING else)
 //   […] at rest     — an ordinary rest with no concrete ask, INCLUDING a queued thread whose own
 //                     dispatched sub-agents are still running (they spin on their own child rows)
@@ -1021,7 +1040,7 @@ export function ThreadIndicator({ t, legacy }: { t: ThreadView; legacy?: boolean
 export function sessionIndicatorFor(t: ThreadView): { node: ReactElement; tip: string | null } {
   const base = sessionStateIndicatorFor(t)
   // The tooltip is now the ONLY place a snooze is legible on the rail (the subtitle no longer names it),
-  // so it has to say so on every parked row — not just the ones the park actually quiets. The hourglass
+  // so it has to say so on every parked row — not just the ones the park actually quiets. The alarm-clock
   // arm below already tells that story for a Snoozed row. These are the rows a snooze does NOT silence:
   // one whose own turn is running, and one still waiting on a sub-agent it dispatched. Each keeps its
   // live glyph — MOTION is a fact about the process that a park does not change — and gains a second
@@ -1029,7 +1048,7 @@ export function sessionIndicatorFor(t: ThreadView): { node: ReactElement; tip: s
   // A CONCRETE ASK USED TO BE THE THIRD such row, and it was the one case where the rail lied: the
   // server dequeues a user-snoozed thread before it ever reaches its ask gates (deriveNeedsYou), so the
   // [?] pointed at a card that did not exist on any surface (2026-08-31 — see sessionIndicatorKind). It
-  // takes the hourglass now, and that arm names the ask the park is holding.
+  // takes the alarm clock now, and that arm names the ask the park is holding.
   if (sessionIndicatorKind(t) === "snoozed") return base
   const snoozedUntil = futureSnoozedUntil(t)
   const parked = snoozedUntil ? formatUserSnooze(snoozedUntil, t.snoozePrompt) : null
@@ -1067,11 +1086,15 @@ function stackParked(tip: string | null, parked: string): string {
 // sub-agent pulses elsewhere: a LIVE sub-agent makes isSnoozed false outright (hasLiveSubAgents), so
 // the arm is reachable only on a park the server honoured for something else in the same fence.
 //
-// AND IT KEEPS ITS PULSE IN THE SNOOZED BAND. The band's own dim (opacity-65 on the row) is what says
-// "parked" — the same ruling .frizz-rail-dot already states for its own animation, that only TONE may
-// move because the geometry is what identifies the mark. A static twin would be a second mark to keep
-// in sync for a distinction the band already draws, and the shell really is still running.
-const shellDot = <StatusBox><span aria-hidden className="frizz-rail-dot" data-running-indicator="thread-background" /></StatusBox>
+// SINCE 2026-09-20 THE DOT SITS INSIDE THE SPINNER AND NO LONGER PULSES. The maintainer's rule for the
+// Running band is that every row spins and the mark inside says what is alive ("an empty square if the
+// thread is actively running … a blue dot if there's a background shell, a solid, non-pulsing blue
+// dot"). The motion moved from the dot to the frame: the spinner says "something will wake this", the
+// solid dot says "it is a shell". The pulse was the dot's way of saying alive-not-moving while the box
+// stood still; with the box tracing, a pulsing dot inside it would be two animations for one fact.
+// It keeps this same frame in the Snoozed band — the band's own dim (opacity-65 on the row) is what
+// says "parked", and the shell really is still running.
+const shellDot = <BoxSpinner><span aria-hidden className="frizz-rail-dot" data-running-indicator="thread-background" /></BoxSpinner>
 
 // THE OCTOCAT IS THE ONE MARK IN THIS FAMILY WHOSE INK IS NOT CENTRED IN ITS OWN VIEWBOX, so it is the
 // one that needs a correction rather than just an odd size. `items-center justify-center` centres the
@@ -1107,15 +1130,19 @@ const PR_MARK_NUDGE = PR_MARK_SIZE / 24
 // is shared: the PR is the fact, and which band the row happens to sit in is only how it is presented
 // (maintainer 2026-09-04: "the GitHub icon should show up anytime that an agent is awaiting a PR").
 //
-const githubMark = (
-  <StatusBox>
-    <Github size={PR_MARK_SIZE} className="text-muted/70" style={{ transform: `translateX(${PR_MARK_NUDGE}px)` }} />
-  </StatusBox>
-)
+// The glyph alone, so the same octocat can sit inside the static box (settled checks) and inside the
+// spinner (checks running) — one glyph, two frames; see the `pr` arm.
+const githubGlyph = <Github size={PR_MARK_SIZE} className="text-muted-70" style={{ transform: `translateX(${PR_MARK_NUDGE}px)` }} />
+const githubMark = <StatusBox>{githubGlyph}</StatusBox>
+
+// The at-rest ellipsis, alone, for the same reason: the bare-rest arm draws it in the static box, and
+// since 2026-09-20 the `working` arm draws it inside the spinner for a parent resting on its sub-agents.
+const ellipsisGlyph = <Ellipsis size={11} className="text-muted-70" />
 
 // THE ONE MARK FOR "THIS THREAD IS PARKED ON THE CLOCK" — the muted hourglass, drawn by every arm whose
-// row is waiting for an instant rather than a process: a user snooze, a park with no fence to read, and
-// since 2026-09-07 a wait on a TIMER in whichever band it sits. A timer park QUEUES (board.deriveNeedsYou
+// row is waiting for an instant the WORKER set: a park with no fence to read, and since 2026-09-07 a
+// wait on a TIMER in whichever band it sits. (A user snooze wore it too until 2026-09-19; it is the
+// alarm clock below now.) A timer park QUEUES (board.deriveNeedsYou
 // keeps it a visible handoff), so most timer waits live below the rule in the Rested band, and there the
 // row wore the shell's blue dot — groups.restingOnLiveBackgroundWork counted an armed timer as motion —
 // while the SAME wait parked in Snoozed drew lucide's Clock. Three readings of one fact (maintainer:
@@ -1123,7 +1150,18 @@ const githubMark = (
 // not with the flashing blue dot"). The clock is gone with it: the rail already had a word for "on the
 // clock", and the limit kill's accent hourglass is this same glyph in the attention colour, so the
 // family stays one glyph in two tones rather than two glyphs for one idea.
-const hourglassMark = <StatusBox><Hourglass size={9} className="text-muted/70" /></StatusBox>
+const hourglassMark = <StatusBox><Hourglass size={9} className="text-muted-70" /></StatusBox>
+
+// THE ONE MARK FOR "THE HUMAN SNOOZED THIS" — the muted alarm clock, on the row whose park the OPERATOR
+// set on a wall clock (futureSnoozedUntil), whether it re-surfaces the card or resumes the worker with a
+// prompt. Until 2026-09-19 it wore the hourglass above, which made the operator's own park read as one
+// more of the worker's timer waits (maintainer: "something that's snoozed … switch it over to some kind of
+// icon that's like Zs, or an alarm clock"). An alarm is the snooze metaphor everyone already carries, and
+// lucide has no Zs. Size 9, like the hourglass: the box's content is 13px, so only an ODD size centres
+// on a whole pixel, and 11 would put the clock's bells and feet — which reach its viewBox edge — over
+// the 0.62 extent ceiling the family holds to. The verify script has the readings
+// (scripts/verify-rail-status-glyphs.mjs, the `user-snoozed` slot).
+const alarmMark = <StatusBox><AlarmClock size={9} className="text-muted/70" /></StatusBox>
 
 /** "fires in 34m" for the SOONEST armed timer — the resting card's TimerRow words, so the rail's hover
  *  and the card never count down in two vocabularies. A due-but-undelivered timer (the scheduler's tick
@@ -1141,16 +1179,23 @@ function timerWake(t: Pick<ThreadView, "watches">, nowMs = Date.now()): string |
 
 function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: string | null } {
   const kind = sessionIndicatorKind(t)
-  if (kind === "archived") return { node: <StatusBox><Check size={10} strokeWidth={3} className="text-muted/75" /></StatusBox>, tip: "Done" }
+  if (kind === "archived") return { node: <StatusBox><Check size={10} strokeWidth={3} className="text-muted-75" /></StatusBox>, tip: "Done" }
   if (kind === "needs-input") {
     // Muted "?", same gray as every other glyph — a needs-you thread already carries maximum emphasis
     // by sitting in the ⚖ queue, so the rail indicator adds NO extra color (maintainer 2026-07-10).
     return { node: <StatusBox><Glyph ch="?" muted /></StatusBox>, tip: "Needs your input" }
   }
-  if (kind === "working") return { node: <BoxSpinner />, tip: "Working" }
+  if (kind === "working") {
+    // A PARENT AT REST WITH ITS SUB-AGENTS OUT spins with the ellipsis inside (2026-09-20): the spinner
+    // says a child's return will re-invoke it, the ellipsis says the parent itself has stopped. Same
+    // kind, same band — only the mark inside changes — because the motion is real either way and the
+    // kind is what offersRetry and the band read. A thread whose own turn is running keeps the empty box.
+    if (restingOnSubAgents(t)) return { node: <BoxSpinner>{ellipsisGlyph}</BoxSpinner>, tip: "At rest — waiting on its sub-agents" }
+    return { node: <BoxSpinner />, tip: "Working" }
+  }
   // The thread has stopped and nothing is going to wake it — only a detached shell it launched is still
-  // running — so the box stops tracing and the row simply stays alive in the running band. The mark is
-  // `shellDot`, shared with the parked arm below; see its note for why one dot serves both.
+  // running — so the row simply stays alive. The mark is `shellDot` (the solid blue dot inside the
+  // spinner), shared with the parked arm below; see its note for why one mark serves both.
   if (kind === "background") {
     // The fence, when there is one, names the shell itself (and any PR riding beside it), so the lead
     // drops to a bare "At rest" rather than saying "a background shell" twice in one sentence.
@@ -1160,7 +1205,7 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
       tip: popover(t, fenced ? "At rest" : "At rest — a background shell is still running"),
     }
   }
-  if (kind === "done") return { node: <StatusBox><Check size={10} strokeWidth={3} className="text-muted/75" /></StatusBox>, tip: "Done" }
+  if (kind === "done") return { node: <StatusBox><Check size={10} strokeWidth={3} className="text-muted-75" /></StatusBox>, tip: "Done" }
   if (kind === "stalled") {
     // ONE mark for "the process is gone". The server's `crashed` bit (exited AND turn-in-flight/live
     // background work) no longer gates the mark — it only picks the wording, so the tooltip still tells
@@ -1194,7 +1239,16 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
   // where MOST PR waits actually live, and until 2026-09-04 every one of them wore either the shell's
   // blue dot (checks still running) or the bare-rest ellipsis (checks settled). The tooltip is the
   // fence's own clause, which names the ref — "waiting on acme/app#391" — so the hover reaches the PR.
-  if (kind === "pr") return { node: githubMark, tip: popover(t, "At rest") }
+  // WHILE CHECKS RUN THE OCTOCAT SPINS (2026-09-20). CI running is the one PR reading that is motion with
+  // a known end — the server already holds such a thread in the Running band for exactly that reason
+  // (board.heldByRunningChecks, maintainer 2026-08-14) — so the row wears the spinner around GitHub's
+  // mark there, and drops back to the static octocat in the queue once the checks settle and the wait
+  // is for a person. prChecksRunning refuses a gated PR, so a maintainer's approval gate never spins.
+  if (kind === "pr") {
+    return prChecksRunning(t)
+      ? { node: <BoxSpinner>{githubGlyph}</BoxSpinner>, tip: popover(t, "At rest — checks are running") }
+      : { node: githubMark, tip: popover(t, "At rest") }
+  }
   // AWAITING A TIMER, IN THE QUEUE — the same hourglass the Snoozed arm draws, on the rows that never
   // park. A timer park queues (board.deriveNeedsYou), so this is where MOST timer waits actually live,
   // and until 2026-09-07 every one of them wore the shell's blue dot (groups.awaitingTimerWatch carries
@@ -1211,7 +1265,7 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
     const github = githubMark
     // A snoozed row whose fence names a PR (`prs:` since the 2026-08-24 YAML cutover; `pr:` and `pr-watch:`
     // before it, both retired) is snoozed FOR A PR, and the rail says so with GitHub's mark instead of the
-    // hourglass. The hourglass means "parked on the clock", and for a watch the clock is only the
+    // clock. The alarm clock means "the human parked this until an instant", and for a watch the clock is only the
     // backstop: the scheduler polls the PR and CLEARS the park the moment new activity lands
     // (scheduler.ts, the clear-snooze-on-PR-wake), so what actually wakes this row is GitHub. A PR wait
     // never parks itself — parkedAwaitingHint excludes it so a watch stays a visible queue handoff — so
@@ -1225,7 +1279,7 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
     // It reads the REGISTERED watch as well as the fence, so a row parked on a watch it never fenced
     // stops wearing the clock — the fence-only reading was why the mark looked like a property of the
     // Snoozed band rather than of the wait.
-    const parkMark = waitNamesPr(t) ? github : hourglass
+    const parkMark = waitNamesPr(t) ? github : alarmMark
     // A snoozed row carries its whole "what it is waiting for" story HERE, in the popover — the rail row itself
     // is a title and nothing else. The two time-based holds are ONE concept — a snooze (park until a wall-clock instant) — sharing the same
     // parkMark + single-line layout. They differ only in WHO resolves the park at the deadline, which
@@ -1302,7 +1356,7 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
   // glyph says "at rest" and the popover says what it thinks it is waiting for, which is the one thing
   // the rail cannot show and the operator most wants on hover (maintainer 2026-08-16).
   return {
-    node: <StatusBox><Ellipsis size={11} className="text-muted/70" /></StatusBox>,
+    node: <StatusBox>{ellipsisGlyph}</StatusBox>,
     tip: popover(t, "At rest"),
   }
 }
@@ -1330,7 +1384,7 @@ function Glyph({ ch, muted }: { ch: string; muted?: boolean }) {
       // than its em box — the correction is the BROWSER's, holds in both of this app's fonts, and lives
       // with its readings in styles.css. It replaced `translateY(0.09em)`, a constant fitted on a fixture
       // that silently rendered mono while the app runs sans, which left both marks ~1.4px low on screen.
-      className={`frizz-rail-glyph font-bold leading-none ${muted ? "text-muted/70" : "text-accent"}`}
+      className={`frizz-rail-glyph font-bold leading-none ${muted ? "text-muted-70" : "text-accent"}`}
       style={{ fontSize: 10 }}
     >
       {ch}
@@ -1345,8 +1399,8 @@ function legacyIndicatorFor(t: ThreadView): { node: ReactElement; tip: string | 
   if (t.runtime === "turn-idle" && liveSub && !t.humanBlocked) return { node: <Spinner />, tip: "Working" }
   if (needsAction(t)) return { node: <BlueDot />, tip: "Needs your input" }
   if (t.status === "needs-human") return { node: <YellowDot />, tip: "Awaiting you — open to read & reply" }
-  if (t.status === "blocked" && t.mechanism === "timer") return { node: <Timer size={INDICATOR + 1} className="text-muted/70" />, tip: "Waiting on a timer" }
-  if (t.status === "blocked" && t.mechanism === "threads") return { node: <CircleDashed size={INDICATOR + 1} className="text-muted/70" />, tip: "Waiting on other work" }
+  if (t.status === "blocked" && t.mechanism === "timer") return { node: <Timer size={INDICATOR + 1} className="text-muted-70" />, tip: "Waiting on a timer" }
+  if (t.status === "blocked" && t.mechanism === "threads") return { node: <CircleDashed size={INDICATOR + 1} className="text-muted-70" />, tip: "Waiting on other work" }
   return { node: <FaintDot />, tip: null }
 }
 
@@ -1367,19 +1421,19 @@ function Spinner() {
 function AccentDot() {
   return (
     <span
-      className="block rounded-full bg-accent shadow-[0_0_5px_rgba(232,185,35,0.45)]"
+      className="block rounded-full bg-accent shadow-[0_0_5px_color-mix(in_srgb,var(--color-accent)_45%,transparent)]"
       style={{ width: ATTENTION, height: ATTENTION }}
     />
   )
 }
 
 function BlueDot() {
-  return <span className="block rounded-full bg-sky-400" style={{ width: INDICATOR, height: INDICATOR }} />
+  return <span className="block rounded-full bg-planning" style={{ width: INDICATOR, height: INDICATOR }} />
 }
 
 // Awaiting-you without a queue card (legacy session-less needs-human): the status palette's yellow.
 function YellowDot() {
-  return <span className="block rounded-full bg-yellow-400" style={{ width: INDICATOR, height: INDICATOR }} />
+  return <span className="block rounded-full bg-needs-human" style={{ width: INDICATOR, height: INDICATOR }} />
 }
 
 function FaintDot() {

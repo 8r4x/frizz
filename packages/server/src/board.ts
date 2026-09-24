@@ -611,26 +611,30 @@ export function hasDeclaredWait(
 // reason a thread leaves the queue; nor does a PR with no checks at all (`none`), which would otherwise
 // wait forever for CI that is never coming. Only a live `running` reading holds, and only while the PR
 // is still open.
-function heldByRunningChecks(
-  tele: SessionTelemetry | undefined,
-  github: GithubStatusBook,
-  registered: ReadonlySet<string>,
-): boolean {
-  if (tele?.lastFence?.kind !== "awaiting") return false
-  const refs: string[] = []
-  for (const hint of tele.lastFence.hints) {
-    if (hint.kind !== "pr") continue
-    const ref = parsePrRef(hint.value)
-    // DECLARED AND REGISTERED, both. The declaration is what says the thread is waiting; the
-    // registration is what will actually wake it. A line with no watcher behind it is neither.
-    // A PR watcher is keyed by its REF (`owner/repo#N`), not by a minted id — so the ref IS the
-    // reference, and it is checkable precisely because the registration is what it is checked against.
-    if (ref && registered.has(githubStatusKey(ref))) refs.push(githubStatusKey(ref))
-  }
-  if (refs.length === 0) return false
-  return refs.every((key) => {
+//
+// THE REGISTERED WATCH IS THE SIGNAL, NOT THE FENCE (2026-09-20). Until then this read `prs:` hints only
+// and required each to be registered too, so a worker that called `mcp__frizz__watch_pr` and rested
+// WITHOUT a fence — the shape the worker contract steers toward ("Register FIRST: this line states the
+// wait, it does not create one") — was queued while its checks ran, while the rail's own mark
+// (groups.prChecksRunning) read the registered rows and called the same thread live. One thread, two
+// stories. Every armed GitHub watch on the thread is a declared wait now; the fence adds nothing the
+// registry does not already say, and a `prs:` line with no watcher behind it never held (the old rule
+// required the registration too), so nothing that held before stops holding.
+//
+// A GATED PR DOES NOT HOLD. Workflows at GitHub's "Approve and run" gate read `checks: "running"` —
+// correctly, nothing has settled — but nothing is moving either, and nothing will until a maintainer
+// presses the button. The poller wakes the worker with that fact (`kind: "ci", verdict: "gated"`) so it
+// can go and ask; holding the thread in the Running band meanwhile would hide, behind a spinner, the
+// one PR wait that never resolves on its own. `running === 0 && gated > 0` is the shape: at least one
+// live check run keeps the hold, because a run that is going will finish and requeue the thread.
+function heldByRunningChecks(github: GithubStatusBook, registered: ReadonlySet<string>): boolean {
+  if (registered.size === 0) return false
+  // ALL of them: an issue watch (never in the PR book) or a settled PR beside a running one means the
+  // human has something to look at, so the thread queues.
+  return [...registered].every((key) => {
     const status = github[key]
-    return status?.checks === "running" && status.state === "open"
+    if (!status || status.checks !== "running" || status.state !== "open") return false
+    return !(status.running === 0 && (status.gated ?? 0) > 0)
   })
 }
 
@@ -993,7 +997,7 @@ export function deriveNeedsYou(
   // queue the same thread on the strength of the watcher being armed at all. Rides `excuseLiveOwnWork`
   // for the reason that flag exists: the CARD must still state the wait (deriveAwaitingBackground opts
   // out), or the drawer blanks at rest and reads as "the agent died".
-  if (excuseLiveOwnWork && runtime !== "exited" && heldByRunningChecks(tele, github, registeredPrWatches)) return false
+  if (excuseLiveOwnWork && runtime !== "exited" && heldByRunningChecks(github, registeredPrWatches)) return false
   // A TIMER PARK TAKES THE SAME SNOOZE (2026-08-25). It queues like a PR park — a visible handoff, never
   // an auto-park — and since 2026-08-24 it cards like one too, with the resting card's event-Snooze as
   // its one control. But it is not "live own work" (nothing of the thread's is running; the clock is),
@@ -1397,9 +1401,10 @@ function sessionThreadView(
     createdAt: new Date(w.created_at).toISOString(),
   }))
   // BOTH KINDS, by ref. Every reader of this set asks "is there a registration behind this declared
-  // wait" (hasParkedPrWatch) or "is CI running on every declared PR" (heldByRunningChecks, which reads
-  // `prs:` hints only and looks each up in the PR book — an issue ref is never in that book, and never a
-  // `prs:` hint, so it cannot hold a thread or release one).
+  // wait" (hasParkedPrWatch) or "is CI running on every registered PR" (heldByRunningChecks, which since
+  // 2026-09-20 reads this set directly and looks each up in the PR book — an issue ref is never in that
+  // book, so an issue watch cannot hold a thread, and beside a running PR it releases one: the human has
+  // an issue to look at).
   const registeredPrWatches = new Set(armedPrWatches.map((w) => w.target))
   // This thread's ARMED TIMERS — what a `timers:` declaration is checked against, and rows on the
   // resting card's table beside the PRs and shells (maintainer 2026-08-24). Same per-thread lookup,

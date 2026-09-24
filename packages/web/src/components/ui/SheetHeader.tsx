@@ -37,7 +37,7 @@ export function SheetHeader({
           </span>
           {meta}
         </div>
-        {subtitle && <span className="truncate text-[10px] text-muted/60">{subtitle}</span>}
+        {subtitle && <span className="truncate text-[10px] text-muted-60">{subtitle}</span>}
       </div>
       {actions}
       <button
@@ -45,7 +45,7 @@ export function SheetHeader({
         aria-label="Close"
         onClick={onClose}
         {...(initialFocus ? { "data-dialog-initial-focus": "" } : {})}
-        className="rounded-md p-1.5 text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg"
+        className="icon-hover-outline rounded-md p-1.5 text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg"
       >
         <X size={15} />
       </button>

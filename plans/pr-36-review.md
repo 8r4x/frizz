@@ -2,6 +2,8 @@
 
 Reviewed 2026-09-16. This is an investigation record, not current product documentation.
 
+**Superseded September 19:** the maintainer approved the light-gray outline treatment. The implementation removes the Mono preference, adds subtle button outlines and neutralizes the light palette. See the [implementation audit and screenshots](pr-36-implementation-audit.md) for the current disposition and verification.
+
 ## Recommendation
 
 **Request visual changes before merging.** Light mode is useful and its architecture is appropriate. The latest head fixes the two text-contrast findings below, but the light palette still mixes several cool grays, pale-blue sent messages and gold selection. Simplify the large surfaces to a restrained neutral hierarchy before treating the design as ready. The earlier recommendation focused too narrowly on contrast compliance.

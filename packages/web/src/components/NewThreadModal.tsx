@@ -7,6 +7,7 @@ import { showToast, store } from "../store.ts"
 import { Composer } from "./Composer.tsx"
 import { GithubTrigger, useGithubTriggerVisible } from "./GithubTrigger.tsx"
 import { ProfileGridSelector } from "./ProfileGridSelector.tsx"
+import { SETTINGS_WRITE_KEY } from "../hooks/useSettingsAutosave.tsx"
 import { AcpModelSelect } from "./AcpModelSelect.tsx"
 import { LogoutConfirmModal, SignInModal } from "./SignInModal.tsx"
 import { dispatchProfileGroups } from "../lib/dispatchPreferences.ts"
@@ -28,7 +29,9 @@ export function DispatchForm({
 }) {
   // The one durable new-thread profile, shared with the GitHub picker's own selector.
   const { resolved, codexList, acpList, loadError: profileLoadError, saveProfile } = useDispatchProfile()
-  const savingContext = useIsMutating({ mutationKey: ["contextWindowSet"] }) > 0
+  // A settings write still in flight — a compaction window picked in the model picker a moment ago —
+  // must land before a dispatch that would read it.
+  const savingSettings = useIsMutating({ mutationKey: [...SETTINGS_WRITE_KEY] }) > 0
   // Gate the leftAction slot itself, not just the icon: Composer reserves rail space whenever the
   // prop is set, so a hidden GithubTrigger must mean NO prop — not a null-rendering element.
   const githubTriggerVisible = useGithubTriggerVisible()
@@ -92,7 +95,7 @@ export function DispatchForm({
   }
 
   function submit() {
-    if (!prompt.trim() || !resolved || savingContext) return
+    if (!prompt.trim() || !resolved || savingSettings) return
     // `/login` and `/logout` are frizz-owned aliases for the typed provider account actions — they
     // invoke the sign-in / sign-out flow for the SELECTED backend and never become prompt text.
     const alias = parseAccountAlias(prompt)
@@ -122,7 +125,8 @@ export function DispatchForm({
       prompt: prompt.trim(),
       // No permissionMode: the server stamps every created worker itself (workerDispatchPermission —
       // the non-interactive floor, raised to bypass only when Settings asks). Dispatch offers no
-      // per-thread permission choice; the Settings "Permissions" control (under Claude) owns the default.
+      // per-thread permission choice; the "Permissions" control behind the Claude Code gear in the model
+      // picker (AgentSettingsPopover) owns the default.
       model: resolved.model,
       backend: resolved.backend,
       // An ACP profile resolves to effort "" (no effort axis); the RPC's enum takes that as ABSENT.
@@ -170,7 +174,7 @@ export function DispatchForm({
       <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-0.5">
         <ProfileGridSelector
           groups={profileGroups}
-          contextWindows
+          agentSettings
           // `pickerModel`, not `model`: an ACP row is keyed on the bare agent slug; the model inside
           // the agent is the dropdown's, below.
           value={{ provider: resolved.backend, model: resolved.pickerModel, effort: resolved.effort }}
@@ -213,12 +217,12 @@ export function DispatchForm({
         placeholder="Describe the task…"
         minHeight={96}
         maxHeight={340}
-        busy={dispatch.isPending || savingContext}
+        busy={dispatch.isPending || savingSettings}
         footer={footer}
         leftAction={githubTriggerVisible ? <GithubTrigger /> : undefined}
       />
       {dispatch.isError && (
-        <span className="px-0.5 text-[11px] text-red-400 truncate">{(dispatch.error as Error).message}</span>
+        <span className="px-0.5 text-[11px] text-danger truncate">{(dispatch.error as Error).message}</span>
       )}
       {pendingDispatch && (
         <div data-pending-dispatch role="status" className="rounded-lg border border-border bg-panel-2 px-3 py-2.5">
@@ -266,7 +270,7 @@ export function NewThreadDialog({ onClose }: { onClose: () => void }) {
       <RadixDialog.Portal>
         {/* Frosted glass: heavy blur + saturation over a light black wash, so the board reads as a
             texture behind the dialog rather than going fully dark. */}
-        <RadixDialog.Overlay className="fixed inset-0 z-50 bg-black/30 backdrop-blur-md backdrop-saturate-150" />
+        <RadixDialog.Overlay className="fixed inset-0 z-50 bg-scrim-30 backdrop-blur-md backdrop-saturate-150" />
         <RadixDialog.Content
           ref={contentRef}
           aria-modal="true"
@@ -284,7 +288,7 @@ export function NewThreadDialog({ onClose }: { onClose: () => void }) {
           // TOP-ANCHORED ON A PHONE. Vertically centred, this dialog sits at ~420pt on a 844pt screen —
           // which is under the keyboard the moment its textarea takes focus, and the composer is the
           // entire point of the dialog. Above the phone breakpoint nothing changes.
-          className="fixed left-1/2 top-1/2 z-50 w-[640px] max-w-[86vw] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-panel p-5 shadow-2xl shadow-black/50 outline-none max-[700px]:top-[calc(env(safe-area-inset-top)+56px)] max-[700px]:w-[calc(100vw-24px)] max-[700px]:max-w-none max-[700px]:translate-y-0"
+          className="fixed left-1/2 top-1/2 z-50 w-[640px] max-w-[86vw] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-panel p-5 shadow-2xl shadow-shadow-ink/50 outline-none max-[700px]:top-[calc(env(safe-area-inset-top)+56px)] max-[700px]:w-[calc(100vw-24px)] max-[700px]:max-w-none max-[700px]:translate-y-0"
         >
           <RadixDialog.Title className="mb-1 text-[14px] font-medium">New thread</RadixDialog.Title>
           <DispatchForm autoFocus onDispatched={onClose} />
@@ -301,7 +305,7 @@ export function Overlay({ children, onClose }: { children: ReactNode; onClose: (
     // tier so the centered picker sits ABOVE the sidebar/prompt box (z-[100] on desktop) rather than
     // behind it.
     <div
-      className="fixed inset-0 z-[200] flex items-center justify-center bg-black/30 backdrop-blur-md backdrop-saturate-150"
+      className="fixed inset-0 z-[200] flex items-center justify-center bg-scrim-30 backdrop-blur-md backdrop-saturate-150"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose()
       }}

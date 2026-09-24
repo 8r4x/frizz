@@ -350,8 +350,56 @@ test("claude quota: a 429 backs off — no CLI hammering, last good reading serv
   )
   assert.equal(q.status, "ok")
   assert.equal(q.windows[0]?.usedPercent, 20)
-  assert.equal(q.detail, "Could not refresh · last updated 4m ago")
+  // A refusal is not a failure: no `retry-after` header → the 5m default, and the copy says when.
+  assert.equal(q.detail, "Next refresh in 5m · last updated 4m ago")
   assert.equal(cliCalls, 0)
+}))
+
+test("claude quota: a 429's retry-after is honored by every caller until it passes, then cleared by a success", () => withCache(async (cacheDir) => {
+  let fetches = 0
+  let status = 429
+  const fetchImpl = (async () => {
+    fetches++
+    return status === 429
+      ? new Response("", { status: 429, headers: { "retry-after": "139" } })
+      : new Response(JSON.stringify(endpointBody), { status: 200 })
+  }) as unknown as typeof fetch
+  const deps = { cacheDir, readToken: async () => "tok-live", fetchImpl, execUsage: async () => { throw new Error("CLI must not run") } }
+  await readClaudeQuota("claude-test", { cacheDir, readToken: noToken, now: () => 0, execUsage: async () => usageEnvelope })
+
+  // The recheck that learns the deadline: 3m in, the endpoint answers 429 + retry-after 139s.
+  const refused = await readClaudeQuota("claude-test", { ...deps, now: () => 3 * 60_000 }, { force: true })
+  assert.equal(refused.detail, "Next refresh in 3m · last updated 3m ago")
+  assert.equal(fetches, 1)
+
+  // Inside the window nothing asks again — not a forced recheck, not the heartbeat, not a stale read.
+  const again = await readClaudeQuota("claude-test", { ...deps, now: () => 4 * 60_000 }, { force: true })
+  assert.equal(again.detail, "Next refresh in 2m · last updated 4m ago")
+  await refreshClaudeQuotaInBackground("claude-test", { ...deps, now: () => 4 * 60_000 })
+  assert.equal((await readClaudeQuota("claude-test", { ...deps, now: () => 5 * 60_000 })).detail, undefined)
+  await claudeQuotaRefreshSettled()
+  assert.equal(fetches, 1)
+
+  // Past it, the heartbeat refreshes; the success clears the deadline, so a recheck is live again.
+  status = 200
+  await refreshClaudeQuotaInBackground("claude-test", { ...deps, now: () => 3 * 60_000 + 140_000 })
+  await claudeQuotaRefreshSettled()
+  assert.equal(fetches, 2)
+  const fresh = await readClaudeQuota("claude-test", { ...deps, now: () => 6 * 60_000 }, { force: true })
+  assert.equal(fresh.detail, undefined)
+  assert.equal(fresh.windows[0]?.usedPercent, 30)
+  assert.equal(fetches, 3)
+}))
+
+test("claude quota: the heartbeat leaves a reading inside its TTL alone", () => withCache(async (cacheDir) => {
+  let fetches = 0
+  const fetchImpl = (async () => { fetches++; return new Response(JSON.stringify(endpointBody), { status: 200 }) }) as unknown as typeof fetch
+  const deps = { cacheDir, readToken: async () => "tok-live", fetchImpl }
+  await refreshClaudeQuotaInBackground("claude-test", { ...deps, now: () => 0 })
+  await claudeQuotaRefreshSettled()
+  await refreshClaudeQuotaInBackground("claude-test", { ...deps, now: () => 30_000 })
+  await claudeQuotaRefreshSettled()
+  assert.equal(fetches, 1)
 }))
 
 test("claude quota: healthy result is shared, while force performs a real recheck", () => withCache(async (cacheDir) => {
@@ -382,12 +430,12 @@ test("claude quota: the proactive heartbeat warms the shared cache off the endpo
   assert.equal(warmed.status, "ok")
   assert.equal(warmed.windows[0]?.usedPercent, 30)
 
-  // The value moves; a heartbeat past the 60s TTL rewrites the cache so the next read is fresh — all
+  // The value moves; a heartbeat past the 2m TTL rewrites the cache so the next read is fresh — all
   // from the endpoint, never spawning the CLI.
   percent = 85
-  await refreshClaudeQuotaInBackground("claude-test", { ...deps, now: () => 61_000 })
+  await refreshClaudeQuotaInBackground("claude-test", { ...deps, now: () => 121_000 })
   await claudeQuotaRefreshSettled()
-  const refreshed = await readClaudeQuota("claude-test", { ...deps, now: () => 61_000 })
+  const refreshed = await readClaudeQuota("claude-test", { ...deps, now: () => 121_000 })
   assert.equal(refreshed.windows[0]?.usedPercent, 85)
   assert.equal(cliCalls, 0)
 }))

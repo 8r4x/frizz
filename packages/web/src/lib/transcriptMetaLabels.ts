@@ -27,7 +27,7 @@ export const TRANSCRIPT_META_LABEL_CLASS = "text-[14px] leading-5 text-muted"
 //   CAP BAND's centre, `0.5cap` above the baseline — the string-independent reference, because a
 //   descender moves the string's own ink box by >1px. So the shift is exactly `0.5em - 0.5cap`, and
 //   `1cap` is the BROWSER's cap height for whatever font actually resolved. Nothing to re-measure when
-//   the font setting flips, the type scale changes, or a stack gains a fallback.
+//   the type scale changes or the font stack gains a fallback.
 //
 //   The negative TOP margin is what stops that from disturbing the column: a 1em box whose bottom sits
 //   on the baseline reaches higher above it than the text's own ascent does, so it grew the row and
@@ -50,7 +50,7 @@ export const TRANSCRIPT_META_LABEL_CLASS = "text-[14px] leading-5 text-muted"
 // for both would over-collapse the open state by ~1.8px, well above the instrument's ±0.75px noise floor.
 // Both trims are pure viewBox geometry, so unlike the vertical they are font-independent.
 const TRANSCRIPT_META_CHEVRON_BASE =
-  "size-[1em] shrink-0 self-baseline -mt-[calc(1em_-_1cap)] translate-y-[calc(0.5em_-_0.5cap)] text-muted/70 transition-transform group-hover:text-fg"
+  "size-[1em] shrink-0 self-baseline -mt-[calc(1em_-_1cap)] translate-y-[calc(0.5em_-_0.5cap)] text-muted-70 transition-transform group-hover:text-fg"
 
 export function transcriptMetaChevronClass(open: boolean): string {
   return `${TRANSCRIPT_META_CHEVRON_BASE} ${open ? "-mx-[0.208em] rotate-90" : "-mx-[0.333em]"}`

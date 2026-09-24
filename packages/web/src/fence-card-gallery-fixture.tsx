@@ -23,6 +23,9 @@ import "./styles.css"
 const nativeFetch = window.fetch.bind(window)
 window.fetch = async (input, init) => {
   const url = new URL(typeof input === "string" ? input : input.toString(), window.location.origin)
+  if (url.pathname === '/_frizz/rpc/resolveLocalPaths') {
+    return new Response(JSON.stringify({ result: { resolved: [] } }), { headers: { "content-type": "application/json" } })
+  }
   if (url.pathname.startsWith("/_frizz/rpc/")) {
     return new Response(JSON.stringify({ result: {} }), { headers: { "content-type": "application/json" } })
   }

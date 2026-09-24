@@ -54,47 +54,68 @@ const registered = {
   parts: [],
 } as unknown as TranscriptMessage
 
+// A registered question that SPANS LINES — a procedure ending in a public key on its own line, restated
+// verbatim on the wire (2026-09-23). The row runs five lines; it has to reach this card, not the raw
+// bubble the single-line row pattern used to drop it into.
+const multiline = {
+  sourceId: "u4",
+  role: "user",
+  text: questionAnswerMessage([{
+    questionId: "qst_c",
+    question: "Keyward now holds its own key in this Mac's Secure Enclave. Add it to GitHub: open https://github.com/settings/keys, click New SSH key, paste this line, click Add SSH key:\n\n`ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBH/idBwmDYVRkXSw6FEJUI9fXiSQ3/v/aWLfBuRPf2giAdnyxd4AEtQxhpkLgY+Nsgj5wTI0FcBFGsPTmUXVLm4= colinhacks@keyward`\n\nIs the key added?",
+    chosen: ["Yes, added"],
+  }]),
+  tools: [],
+  parts: [],
+} as unknown as TranscriptMessage
+
 function Fixture() {
   return (
     <div className="mx-auto my-8 flex w-[min(560px,calc(100%-32px))] flex-col gap-6">
       <div>
-        <div className="mb-2 text-[11px] uppercase tracking-wide text-muted/70">Answers card (thread width)</div>
+        <div className="mb-2 text-[11px] uppercase tracking-wide text-muted-70">Answers card (thread width)</div>
         <div className="flex flex-col rounded-lg border border-border bg-panel p-4">
           <Message m={m} paired={paired} />
         </div>
       </div>
       <div>
-        <div className="mb-2 text-[11px] uppercase tracking-wide text-muted/70">Answers card (dense / queue width)</div>
+        <div className="mb-2 text-[11px] uppercase tracking-wide text-muted-70">Answers card (dense / queue width)</div>
         <div className="flex w-[380px] flex-col rounded-lg border border-border bg-panel p-4">
           <Message m={m} paired={paired} dense />
         </div>
       </div>
       <div>
-        <div className="mb-2 text-[11px] uppercase tracking-wide text-muted/70">Buried-ask answers (thread width)</div>
+        <div className="mb-2 text-[11px] uppercase tracking-wide text-muted-70">Buried-ask answers (thread width)</div>
         <div className="flex flex-col rounded-lg border border-border bg-panel p-4">
           <Message m={buried} />
         </div>
       </div>
       <div>
-        <div className="mb-2 text-[11px] uppercase tracking-wide text-muted/70">Registered-question answers, with a follow-up and a dismissal</div>
+        <div className="mb-2 text-[11px] uppercase tracking-wide text-muted-70">Registered-question answers, with a follow-up and a dismissal</div>
         <div className="flex flex-col rounded-lg border border-border bg-panel p-4">
           <Message m={registered} />
         </div>
       </div>
+      <div data-fixture="multiline">
+        <div className="mb-2 text-[11px] uppercase tracking-wide text-muted-70">Registered-question answer whose question spans lines</div>
+        <div className="flex flex-col rounded-lg border border-border bg-panel p-4">
+          <Message m={multiline} />
+        </div>
+      </div>
       <div>
-        <div className="mb-2 text-[11px] uppercase tracking-wide text-muted/70">…the same one IN FLIGHT (the seconds before the worker has it)</div>
+        <div className="mb-2 text-[11px] uppercase tracking-wide text-muted-70">…the same one IN FLIGHT (the seconds before the worker has it)</div>
         <div className="flex flex-col rounded-lg border border-border bg-panel p-4">
           <Message m={{ ...registered, queued: true } as unknown as TranscriptMessage} />
         </div>
       </div>
       <div>
-        <div className="mb-2 text-[11px] uppercase tracking-wide text-muted/70">Buried-ask answers (dense / queue width)</div>
+        <div className="mb-2 text-[11px] uppercase tracking-wide text-muted-70">Buried-ask answers (dense / queue width)</div>
         <div className="flex w-[380px] flex-col rounded-lg border border-border bg-panel p-4">
           <Message m={buried} dense />
         </div>
       </div>
       <div>
-        <div className="mb-2 text-[11px] uppercase tracking-wide text-muted/70">Before — the same text as a raw bubble</div>
+        <div className="mb-2 text-[11px] uppercase tracking-wide text-muted-70">Before — the same text as a raw bubble</div>
         <div className="flex flex-col rounded-lg border border-border bg-panel p-4">
           <Message m={buried} paired={null} />
         </div>

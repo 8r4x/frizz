@@ -98,12 +98,12 @@ export function RestartOverlay({
       <div className="pointer-events-none fixed inset-x-0 top-6 z-[300] flex justify-center px-4">
         <div
           role="alert"
-          className="pointer-events-auto w-[min(26rem,calc(100vw-2rem))] rounded-2xl border border-red-500/45 bg-elevated p-5 text-left shadow-2xl shadow-black/60"
+          className="pointer-events-auto w-[min(26rem,calc(100vw-2rem))] rounded-2xl border border-danger-fill/45 bg-elevated p-5 text-left shadow-2xl shadow-shadow-ink/60"
         >
           {/* The same header row as RestartFailureNotice (RestartFrizzButton.tsx) — mark, title,
               dismiss — so the two failure surfaces read as one design and share its measured rhythm. */}
           <div className="flex items-center gap-2.5">
-            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-red-500/15 text-red-300">
+            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-danger-fill/15 text-danger-soft">
               <AlertTriangle aria-hidden="true" size={14} strokeWidth={2.25} />
             </span>
             <h2 className="text-[13px] font-semibold tracking-[-0.01em] text-fg">{STALLED_HEADING}</h2>
@@ -111,7 +111,7 @@ export function RestartOverlay({
               type="button"
               aria-label="Dismiss"
               onClick={() => setDismissed(true)}
-              className="-mr-1 ml-auto flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-border-strong"
+              className="icon-hover-outline -mr-1 ml-auto flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-border-strong"
             >
               <X aria-hidden="true" size={14} strokeWidth={2.25} />
             </button>
@@ -134,12 +134,12 @@ export function RestartOverlay({
       // z-[300] beats the shared Radix Dialog (z-[200]) so a dialog already open when a
       // supervisor-initiated restart begins is covered, not tied. A heavier black wash than the
       // frosted dialogs (black/55 vs /30) reads as a genuine block; the scrim captures pointer events.
-      className="fixed inset-0 z-[300] flex items-center justify-center bg-black/55 px-4 backdrop-blur-md backdrop-saturate-150"
+      className="fixed inset-0 z-[300] flex items-center justify-center bg-scrim-55 px-4 backdrop-blur-md backdrop-saturate-150"
     >
       <div
         ref={cardRef}
         tabIndex={-1}
-        className="w-[min(26rem,calc(100vw-2rem))] rounded-2xl border border-border-strong bg-elevated p-6 text-center shadow-2xl shadow-black/60 outline-none"
+        className="w-[min(26rem,calc(100vw-2rem))] rounded-2xl border border-border-strong bg-elevated p-6 text-center shadow-2xl shadow-shadow-ink/60 outline-none"
       >
         <span className="mx-auto flex h-11 w-11 items-center justify-center rounded-full bg-fg/10 text-fg">
           <RefreshCw size={20} strokeWidth={2.25} className="animate-spin" aria-hidden="true" />
@@ -148,7 +148,7 @@ export function RestartOverlay({
         <p className="mt-2 text-[12.5px] leading-relaxed text-muted">{RESTART_BODY}</p>
         {/* Only the supervisor's changing status line is a live region, so a screen reader isn't
             re-read the whole dialog each poll; alertdialog already announces the rest once on open. */}
-        {detail && <p aria-live="polite" className="mt-2 text-[11.5px] leading-relaxed text-muted/80">{detail}</p>}
+        {detail && <p aria-live="polite" className="mt-2 text-[11.5px] leading-relaxed text-muted-80">{detail}</p>}
       </div>
     </div>
   )

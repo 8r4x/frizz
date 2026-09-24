@@ -114,11 +114,11 @@ export function SignInModal({
   return (
     <RadixDialog.Root open onOpenChange={(open) => { if (!open) { abandonAttempt(); onClose() } }}>
       <RadixDialog.Portal>
-        <RadixDialog.Overlay className="fixed inset-0 z-[210] bg-black/30 backdrop-blur-md backdrop-saturate-150" />
+        <RadixDialog.Overlay className="fixed inset-0 z-[210] bg-scrim-30 backdrop-blur-md backdrop-saturate-150" />
         <RadixDialog.Content
           aria-modal="true"
           aria-describedby={undefined}
-          className={`fixed left-1/2 top-1/2 z-[210] ${attempt ? "w-[680px]" : "w-[440px]"} max-w-[92vw] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-panel p-5 shadow-2xl shadow-black/50 outline-none`}
+          className={`fixed left-1/2 top-1/2 z-[210] ${attempt ? "w-[680px]" : "w-[440px]"} max-w-[92vw] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-panel p-5 shadow-2xl shadow-shadow-ink/50 outline-none`}
         >
           <RadixDialog.Title className="mb-1 text-[14px] font-medium">Signed out of {label}</RadixDialog.Title>
 
@@ -130,7 +130,7 @@ export function SignInModal({
               </p>
               {/* The restricted account terminal: a global provider sign-in session, NOT a thread —
                   it inherits no project prompt and accepts no other command. */}
-              <div className="mb-4 h-[340px] overflow-hidden rounded-lg border border-border bg-[#0d0e10]">
+              <div className="mb-4 h-[340px] overflow-hidden rounded-lg border border-border bg-bg">
                 <Suspense fallback={<div className="flex h-full items-center justify-center text-[12px] text-muted">Opening terminal…</div>}>
                   <TerminalPane slug={attempt} />
                 </Suspense>
@@ -139,7 +139,7 @@ export function SignInModal({
                 <button
                   type="button"
                   onClick={() => { abandonAttempt(); setAttempt(null) }}
-                  className="rounded-md px-3 py-1.5 text-[12.5px] text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg"
+                  className="button-outline rounded-md px-3 py-1.5 text-[12.5px] text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg"
                 >
                   Cancel sign-in
                 </button>
@@ -158,9 +158,9 @@ export function SignInModal({
                   type="button"
                   aria-label="Copy command"
                   onClick={copyCommand}
-                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted outline-none transition-colors hover:bg-panel hover:text-fg"
+                  className="icon-hover-outline flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted outline-none transition-colors hover:bg-panel hover:text-fg"
                 >
-                  {copied ? <Check size={14} strokeWidth={2} className="text-green-400" /> : <Copy size={14} strokeWidth={1.8} />}
+                  {copied ? <Check size={14} strokeWidth={2} className="text-success" /> : <Copy size={14} strokeWidth={1.8} />}
                 </button>
               </div>
 
@@ -168,7 +168,7 @@ export function SignInModal({
                 <button
                   type="button"
                   onClick={onClose}
-                  className="rounded-md px-3 py-1.5 text-[12.5px] text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg"
+                  className="button-outline rounded-md px-3 py-1.5 text-[12.5px] text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg"
                 >
                   Cancel
                 </button>
@@ -185,7 +185,7 @@ export function SignInModal({
                   type="button"
                   onClick={() => start.mutate()}
                   disabled={start.isPending}
-                  className="flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[12.5px] font-medium text-white outline-none transition-opacity hover:opacity-90 disabled:opacity-60"
+                  className="button-outline flex items-center gap-1.5 rounded-md bg-accent-fill px-3 py-1.5 text-[12.5px] font-medium text-accent-fg outline-none transition-opacity hover:opacity-90 disabled:opacity-60"
                 >
                   {start.isPending && <Loader2 size={13} className="animate-spin" />}
                   Sign in here
@@ -228,11 +228,11 @@ export function LogoutConfirmModal({ backend, onClose }: { backend: AccountBacke
   return (
     <RadixDialog.Root open onOpenChange={(open) => { if (!open && !logout.isPending) onClose() }}>
       <RadixDialog.Portal>
-        <RadixDialog.Overlay className="fixed inset-0 z-[210] bg-black/30 backdrop-blur-md backdrop-saturate-150" />
+        <RadixDialog.Overlay className="fixed inset-0 z-[210] bg-scrim-30 backdrop-blur-md backdrop-saturate-150" />
         <RadixDialog.Content
           aria-modal="true"
           aria-describedby={undefined}
-          className="fixed left-1/2 top-1/2 z-[210] w-[420px] max-w-[86vw] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-panel p-5 shadow-2xl shadow-black/50 outline-none"
+          className="fixed left-1/2 top-1/2 z-[210] w-[420px] max-w-[86vw] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-panel p-5 shadow-2xl shadow-shadow-ink/50 outline-none"
         >
           <RadixDialog.Title className="mb-1 text-[14px] font-medium">Sign out of {label}?</RadixDialog.Title>
           <p className="mb-4 text-[12.5px] leading-relaxed text-muted">
@@ -244,7 +244,7 @@ export function LogoutConfirmModal({ backend, onClose }: { backend: AccountBacke
               type="button"
               onClick={onClose}
               disabled={logout.isPending}
-              className="rounded-md px-3 py-1.5 text-[12.5px] text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg disabled:opacity-60"
+              className="button-outline rounded-md px-3 py-1.5 text-[12.5px] text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg disabled:opacity-60"
             >
               Cancel
             </button>
@@ -252,7 +252,7 @@ export function LogoutConfirmModal({ backend, onClose }: { backend: AccountBacke
               type="button"
               onClick={() => logout.mutate()}
               disabled={logout.isPending}
-              className="flex items-center gap-1.5 rounded-md bg-red-500/90 px-3 py-1.5 text-[12.5px] font-medium text-white outline-none transition-opacity hover:opacity-90 disabled:opacity-60"
+              className="button-outline flex items-center gap-1.5 rounded-md bg-danger-button/90 px-3 py-1.5 text-[12.5px] font-medium text-white outline-none transition-opacity hover:opacity-90 disabled:opacity-60"
             >
               {logout.isPending && <Loader2 size={13} className="animate-spin" />}
               Sign out

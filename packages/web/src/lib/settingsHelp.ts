@@ -1,0 +1,14 @@
+// The one-line explanations behind every settings "?" — shared by the Settings drawer and by the
+// popovers that carry a setting into the place it applies (the model picker's agent settings, the
+// GitHub picker's prompt). One table, so a setting reads the same wherever it is surfaced.
+export const SETTINGS_HELP = {
+  permissionMode: "The permission mode new Claude Code threads launch with. Auto runs safe actions and asks you to approve the risky ones in the thread. Bypass launches the worker with --dangerously-skip-permissions: it never asks, so nothing waits on you and nothing is checked either. Takes effect on the next thread you dispatch; to change a thread that already exists, use the picker beside its model in the prompt box. Codex threads always run with full workspace access and are unaffected.",
+  promptCacheTtl: "Which prompt-cache tier a new Claude thread writes to. A 1-hour entry costs twice the input price to write, a 5-minute entry 1.25 times; the hour only pays off when the thread's cache actually survives that long. Measured 2026-09-03: cache writes were half of a day's spend and the entries were lost every 15 to 30 minutes regardless, so 5 minutes was the cheaper tier. Automatic leaves the choice to Claude Code, which picks 1 hour on a subscription. Takes effect on the next thread you dispatch and on a thread that resumes after its worker exited.",
+  appearance: "Applies to this browser across all projects. System follows the device appearance.",
+  localFileOpener: "Chooses how vetted local artifact links open. Markdown files open in Frizz's own reader (which carries an Open action that uses this setting), and image clicks always use the OS default viewer.",
+  density: "How much of a diff shows before you ask for it, in this browser. Compact collapses every diff to its header row (click one to open it); Comfortable shows them in full. Applies immediately.",
+  queueOrder: "Orders the Needs-you queue and the sidebar's rested threads by when each was last active. Oldest first (FIFO, default) surfaces the longest-waiting item first so you cycle through everything; Newest first (LIFO) keeps the most recently active on top. Applies immediately in this browser.",
+  notifications: "Shows a desktop notification when work needs attention while this window is hidden.",
+  projectRail: "Shows a permanent column of every project on this machine down the left edge. Off by default: Frizz's home is one board, and a standing list of the others is an easy way to leave the thread you were in. With it off, the home crumb in the status bar is the way back to the projects page.",
+  githubPrompt: "The prompt for every item dispatched from the GitHub picker, issues and PRs alike. The default has the worker read the whole thread, classify it, and branch — reproduce + fix-plan for a bug, a plan for a feature, an adversarial review for a PR.",
+} as const

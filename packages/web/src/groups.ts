@@ -616,9 +616,37 @@ function restingOnLiveBackgroundWork(t: ThreadView): boolean {
   // resolved ABOVE this predicate in sessionIndicatorKind — and this one is back to what its name says:
   // a shell that is still running, or CI that is. A settled watcher — passing, failing, no checks at all,
   // closed, or never polled — is not motion, and falls through to the at-rest ellipsis.
+  return prChecksRunning(t)
+}
+
+/** IS CI RUNNING ON A PULL REQUEST THIS THREAD WATCHES? The one reading of a PR wait that is MOTION —
+ *  something is happening somewhere, and its finish is a wake frizz delivers — as opposed to the settled
+ *  readings (green, red, no checks, merged, closed, never polled), which are a handoff sitting on a
+ *  human. It picks the rail's mark for the `pr` kind: the octocat inside the spinner while checks run,
+ *  the static octocat once they settle (maintainer 2026-09-20: a PR wait "should just stay in the running
+ *  rail if it's actively waiting on checks"). Exported for the Sidebar arm and pinned by its tests.
+ *
+ *  GATED CI IS NOT RUNNING. Workflows held at GitHub's "Approve and run" gate read `checks: "running"`
+ *  (nothing has settled), but nothing is moving either: a maintainer has to press a button. The PR row's
+ *  own checks glyph already refuses to spin for that shape (AwaitingBackgroundCard ChecksGlyph), and the
+ *  rail follows it — a spinner over a gate would promise motion for as long as nobody notices. */
+export function prChecksRunning(t: Pick<ThreadView, "watches">): boolean {
   return (t.watches ?? []).some(
-    (w) => w.kind === "github" && w.state === "armed" && w.github?.checks === "running" && w.github.state === "open",
+    (w) =>
+      w.kind === "github" && w.state === "armed" && w.github?.checks === "running" && w.github.state === "open" &&
+      !(w.github.running === 0 && (w.github.gated ?? 0) > 0),
   )
+}
+
+/** A PARENT THAT HAS RESTED WHILE ITS SUB-AGENTS ARE STILL OUT — its own turn is over (turn-idle) and a
+ *  direct child is running. The thread still resolves to `working` (the child's return re-invokes it, so
+ *  the motion is real and the row keeps its place in the Running band), but since 2026-09-20 the mark
+ *  inside the spinner is the ELLIPSIS rather than an empty box: the parent itself is at rest, and the
+ *  children carry their own spinners on their own indented rows (maintainer 2026-09-19: "the three
+ *  ellipses for the top-level parent agent with the spinner, and then the sub-agents can have their own
+ *  spinners"). A parent whose OWN turn is running keeps the empty spinner even with children out. */
+export function restingOnSubAgents(t: ThreadView): boolean {
+  return t.runtime === "turn-idle" && hasLiveSubAgents(t)
 }
 
 /** AWAITING A PULL REQUEST — the one wait whose subject is not on this machine at all, and since

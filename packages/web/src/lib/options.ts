@@ -54,8 +54,8 @@ export const CLAUDE_DISPATCH_PERMISSION_OPTIONS: SelectOption[] = (["auto", "byp
 export const PERMISSION_COLOR: Record<(typeof PERMISSION_MODES)[number], string> = {
   auto: "text-accent",
   default: "text-muted",
-  acceptEdits: "text-purple-400",
-  plan: "text-cyan-400",
+  acceptEdits: "text-permission-edit",
+  plan: "text-permission-plan",
   bypassPermissions: "text-muted",
 }
 
@@ -77,11 +77,16 @@ export const CLAUDE_MODELS: SelectOption[] = [
 // two live breakages: a bare `gpt-5.6` that codex 400s, and a single effort list that's wrong per-model
 // — 5.6 goes to max/ultra, 5.5 stops at xhigh). This is only the DEGRADED fallback for the loading /
 // no-cache state — a compact mirror, NOT a second catalogue to maintain. Ordered by codex's own
-// priority: gpt-6-astra is priority 1 in the codex-cli 0.153.2 catalogue (its default effort is `low`
-// there, mirrored verbatim), then the 5.6 trio; a codex spawn 400s on a bare `gpt-5.6`, hence the -sol id.
+// priority and re-read verbatim from the codex-cli 0.155.1 catalogue on 2026-09-22: the GPT-6 trio
+// (astra 1, sol 2, luna 3) leads the 5.6 trio, and the DEFAULT EFFORTS moved with it — astra is
+// `medium` now where the 0.153.2 catalogue said `low`, and gpt-5.6-sol is `low` where it said
+// `medium`. Mirror them; never assume a generation shares one default. A codex spawn 400s on a bare
+// `gpt-5.6`, hence the -sol id.
 export const CODEX_MODELS_FALLBACK: CodexModel[] = [
-  { slug: "gpt-6-astra", displayName: "GPT-6 Astra", defaultEffort: "low", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"] },
-  { slug: "gpt-5.6-sol", displayName: "GPT-5.6 Sol", defaultEffort: "medium", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"] },
+  { slug: "gpt-6-astra", displayName: "GPT-6 Astra", defaultEffort: "medium", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"] },
+  { slug: "gpt-6-sol", displayName: "GPT-6 Sol", defaultEffort: "medium", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"] },
+  { slug: "gpt-6-luna", displayName: "GPT-6 Luna", defaultEffort: "medium", efforts: ["low", "medium", "high", "xhigh", "max"] },
+  { slug: "gpt-5.6-sol", displayName: "GPT-5.6 Sol", defaultEffort: "low", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"] },
   { slug: "gpt-5.6-terra", displayName: "GPT-5.6 Terra", defaultEffort: "medium", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"] },
   { slug: "gpt-5.6-luna", displayName: "GPT-5.6 Luna", defaultEffort: "medium", efforts: ["low", "medium", "high", "xhigh", "max"] },
   { slug: "gpt-5.5", displayName: "GPT-5.5", defaultEffort: "medium", efforts: ["low", "medium", "high", "xhigh"] },

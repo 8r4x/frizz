@@ -17,9 +17,9 @@ import {
   type ProfileGridSelection,
   profileGridSelections,
 } from "../lib/profileGrid.ts"
-import { registerOpenSelect } from "../lib/selectOverlay.ts"
+import { dismissOpenSelect, registerOpenSelect } from "../lib/selectOverlay.ts"
 import { OPAQUE_PORTAL_SURFACE_Z, OPAQUE_SURFACE_BASE } from "../lib/overlaySurface.ts"
-import { ContextWindowControl } from "./ContextWindowControl.tsx"
+import { AgentSettingsPopover } from "./AgentSettingsPopover.tsx"
 
 function effortLabel(effort: string): string {
   if (effort === "xhigh") return "X-high"
@@ -40,7 +40,7 @@ export function ProfileGridSelector({
   side = "bottom",
   menuZClass = OPAQUE_PORTAL_SURFACE_Z,
   className = "",
-  contextWindows = false,
+  agentSettings = false,
 }: {
   groups: readonly ProfileGridGroup[]
   value?: Partial<ProfileGridSelection>
@@ -58,13 +58,15 @@ export function ProfileGridSelector({
   // the trigger lives inside, e.g. OPAQUE_PORTAL_SURFACE_ABOVE_DIALOG_Z inside the z-[200] Overlay.
   menuZClass?: string
   className?: string
-  // Project defaults for NEW workers, never a promise to resize a running thread's context.
-  contextWindows?: boolean
+  // A gear on each runtime's band opening that runtime's settings for NEW workers in this project
+  // (AgentSettingsPopover) — never a promise to retune a running thread. The dispatch surfaces set it;
+  // a live thread's own picker does not.
+  agentSettings?: boolean
 }) {
   const [open, setOpen] = useState(false)
-  const [contextGroup, setContextGroup] = useState<string | null>(null)
-  const contextGroupRef = useRef(contextGroup)
-  contextGroupRef.current = contextGroup
+  const [settingsGroup, setSettingsGroup] = useState<string | null>(null)
+  const settingsGroupRef = useRef(settingsGroup)
+  settingsGroupRef.current = settingsGroup
   const openRef = useRef(open)
   const disabledRef = useRef(disabled)
   const unregisterOpenRef = useRef<(() => void) | undefined>(undefined)
@@ -90,16 +92,19 @@ export function ProfileGridSelector({
   disabledRef.current = disabled
 
   function closeFromRegistry() {
-    setContextGroup(null)
+    setSettingsGroup(null)
     openRef.current = false
     unregisterOpenRef.current = undefined
     setOpen(false)
   }
 
+  // Escape peels ONE layer: the agent-settings panel if it is open, else the menu. A Select open
+  // INSIDE that panel registered itself after this menu did, so `dismissOpenSelect` closes it and
+  // nothing else — the keydown handler below checks the registry before touching a layer of its own.
   function dismissTopLayer() {
-    if (contextGroupRef.current) {
-      contextGroupRef.current = null
-      setContextGroup(null)
+    if (settingsGroupRef.current) {
+      settingsGroupRef.current = null
+      setSettingsGroup(null)
       unregisterOpenRef.current = registerOpenSelect(dismissTopLayer)
     } else closeFromRegistry()
   }
@@ -110,6 +115,9 @@ export function ProfileGridSelector({
       event.preventDefault()
       event.stopPropagation()
       event.stopImmediatePropagation()
+      // The registry holds whichever layer opened LAST — this menu's own entry (its dismiss is
+      // dismissTopLayer) or a Select inside the settings panel. Either way one press, one layer.
+      if (dismissOpenSelect()) return
       unregisterOpenRef.current?.()
       dismissTopLayer()
     }
@@ -158,7 +166,7 @@ export function ProfileGridSelector({
         openRef.current = next
         setOpen(next)
         if (next) unregisterOpenRef.current = registerOpenSelect(dismissTopLayer)
-        else setContextGroup(null)
+        else setSettingsGroup(null)
       }}
     >
       <RadixMenu.Trigger asChild disabled={disabled}>
@@ -170,12 +178,13 @@ export function ProfileGridSelector({
           title={title}
           data-profile-known={known ? "true" : "false"}
           data-profile-pending={pendingLabel ? "true" : undefined}
-          className={`profile-grid-trigger group inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-md border border-border/50 bg-transparent px-2 py-1 text-left text-muted outline-none data-[state=open]:border-border data-[state=open]:bg-panel-2 ${triggerInteraction} ${className} ${typography}`}
+          className={`profile-grid-trigger group inline-flex min-w-0 max-w-full items-center gap-[3px] rounded-md border border-border/50 bg-transparent px-2 py-1 text-left text-muted outline-none data-[state=open]:border-border data-[state=open]:bg-panel-2 ${triggerInteraction} ${className} ${typography}`}
         >
-          <span className={`profile-grid-value relative -top-px min-w-0 flex-1 truncate text-left ${typography}`}>
+          {/* Sans cap-band residual is 0.23px without a text nudge; 3px box gap paints 6.69px of ink. */}
+          <span className={`profile-grid-value min-w-0 flex-1 truncate text-left ${typography}`}>
             {profileGridDisplayLabel(groups, value, placeholder)}
           </span>
-          {pendingLabel && <Loader2 aria-hidden="true" size={compact ? 10 : 11} className="shrink-0 animate-spin text-muted/65" />}
+          {pendingLabel && <Loader2 aria-hidden="true" size={compact ? 10 : 11} className="shrink-0 animate-spin text-muted-65" />}
           <ChevronDown aria-hidden="true" size={compact ? 11 : 13} className="shrink-0 text-fg/65 transition-transform group-data-[state=open]:rotate-180" />
         </button>
       </RadixMenu.Trigger>
@@ -187,8 +196,12 @@ export function ProfileGridSelector({
           sideOffset={5}
           collisionPadding={8}
           onEscapeKeyDown={(event) => event.stopPropagation()}
+          // While the agent-settings panel is open it owns every outside interaction: it is modal, so
+          // this menu's layer has its pointer events disabled anyway, and a focus wander into a Select
+          // the panel opened must not read as leaving the menu.
           onInteractOutside={(event) => {
-            if (event.target instanceof Element && event.target.closest("[data-context-window-menu]")) event.preventDefault()
+            if (settingsGroupRef.current) event.preventDefault()
+            else if (event.target instanceof Element && event.target.closest("[data-agent-settings-menu]")) event.preventDefault()
           }}
           className={`profile-grid-menu ${menuZClass} ${OPAQUE_SURFACE_BASE} max-h-[min(360px,var(--radix-dropdown-menu-content-available-height))] max-w-[calc(100vw-1rem)] overflow-auto rounded-lg p-1.5 ${typography}`}
         >
@@ -196,14 +209,14 @@ export function ProfileGridSelector({
             <RadixMenu.Group key={group.id}>
               {group.label && (
                 <div className="profile-grid-header sticky left-0 flex items-baseline justify-between gap-4 px-1.5 pb-1 pt-1 first:pt-0.5">
-                  <RadixMenu.Label className="text-left font-medium tracking-[0.07em] text-muted/55">
+                  <RadixMenu.Label className="text-left font-medium tracking-[0.07em] text-muted-55">
                     {group.label}
                   </RadixMenu.Label>
-                  {contextWindows && (group.id === "claude" || group.id === "codex") && (
-                    <ContextWindowControl
+                  {agentSettings && (group.id === "claude" || group.id === "codex") && (
+                    <AgentSettingsPopover
                       backend={group.id}
-                      open={contextGroup === group.id}
-                      onOpenChange={(next) => setContextGroup(next ? group.id : null)}
+                      open={settingsGroup === group.id}
+                      onOpenChange={(next) => setSettingsGroup(next ? group.id : null)}
                     />
                   )}
                 </div>
@@ -333,7 +346,7 @@ export function ProfileGridSelector({
             </RadixMenu.Group>
           ))}
           {selections.length === 0 && (
-            <div className="px-2 py-1.5 text-muted/60">No profiles available</div>
+            <div className="px-2 py-1.5 text-muted-60">No profiles available</div>
           )}
         </RadixMenu.Content>
       </RadixMenu.Portal>

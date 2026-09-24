@@ -17,15 +17,16 @@ import { subscribeTranscript, unsubscribeTranscript } from "./socket.ts"
 //    pushes only when the JSONL advances).
 //  • Beyond budget, or in SSE fallback → refetch on the thread's lastActivityAt edge (one HTTP pull
 //    exactly when this thread actually moved, delivered over the board channel).
-//  • A slug the socket refused as payload-too-large is kept fresh the same way as a beyond-budget slug:
-//    one paged HTTP pull per activity edge. The paged read is bounded whatever the thread's size, so it
-//    cannot be what overflowed, and an edge refetch is one request per real change — not a loop. (Until
-//    2026-09-16 this fallback was left entirely manual, and a /full page on a thread past the frame cap
-//    sat frozen — optimistic bubbles "queued" forever — until a hard reload.) Re-SUBSCRIBING stays manual
-//    (the banner's "Retry live"): that is the action that would re-trip the overflow every edge.
-//  • A slug the socket refused for read budget is left alone entirely — the banner's manual retry is the
-//    contract; the rejection names a retry-after, and auto-refetching against it would be the churn the
-//    budget exists to shed.
+//  • A slug the socket refused — payload-too-large OR read budget — is kept fresh the same way as a
+//    beyond-budget slug: one paged HTTP pull per activity edge. The paged read is bounded whatever the
+//    thread's size, so it cannot be what overflowed; it does not draw on the socket's read budget; and an
+//    edge refetch is one request per real change — not a loop. (Until 2026-09-16 both fallbacks were left
+//    entirely manual, and a /full page on a refused thread sat frozen — optimistic bubbles "queued"
+//    forever, a rest card for a thread mid-turn — until a hard reload; the banner that offered the manual
+//    retry sits at the top of the transcript, scrolled out of sight on exactly the page that needs it.)
+//    Re-SUBSCRIBING is api/socket.ts's business: it retries a read-budget refusal after the server's own
+//    retry-after and clears every latch on a fresh live generation, and it leaves an overflow to the
+//    banner's "Retry live", because that is the one retry that would re-trip on every edge.
 //
 // Budget: the server caps 32 subscriptions per connection and 16 transcript reads/sec per origin. We keep
 // headroom under both: at most MAX_LIVE subscriptions (most-recently-observed win), and new subscriptions
@@ -112,7 +113,7 @@ function scheduleDrip(): void {
 
 // Board moved: any observed-but-not-subscribed slug whose lastActivityAt advanced gets ONE pull refetch.
 // Subscribed slugs are covered by the push (strictly more sensitive — it fires on byte-advance, not just
-// activity); a slug the push refused as oversized pulls here instead, and a read-budget pause stays manual.
+// activity); a slug the push refused — oversized or over budget — pulls here instead.
 function onBoardChange(): void {
   if (!client) return
   for (const [slug, t] of tracked) {
@@ -122,7 +123,6 @@ function onBoardChange(): void {
     t.lastActivityAt = activity
     const fallback = store.socketTranscriptFallbacks[slug]
     if (t.live && store.socketTranscripts && !fallback) continue // push channel owns freshness for this slug
-    if (fallback && fallback.kind !== "payload-too-large") continue // read-budget pause — the banner's retry is manual
     void client.refetchQueries({ queryKey: ["transcript", slug], exact: true, type: "active" })
   }
 }

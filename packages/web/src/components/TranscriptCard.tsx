@@ -96,9 +96,9 @@ export type CardTone = "neutral" | "attention" | "caution" | "risk" | "danger"
 const CARD_TONES: Record<CardTone, { border: string; head: string }> = {
   neutral: { border: "border-border-strong", head: "text-fg" },
   attention: { border: "border-accent/45", head: "text-accent" },
-  caution: { border: "border-border-strong", head: "text-amber-400" },
-  risk: { border: "border-border-strong", head: "text-red-400" },
-  danger: { border: "border-red-500/45", head: "text-red-400" },
+  caution: { border: "border-border-strong", head: "text-attention" },
+  risk: { border: "border-border-strong", head: "text-danger" },
+  danger: { border: "border-danger-fill/45", head: "text-danger" },
 }
 
 // The 14px corner glyph is optically centred on the TITLE'S CAP BLOCK, not on its line box — same
@@ -203,6 +203,7 @@ export function TranscriptCard({
   aside,
   children,
   className = "",
+  surface = "inset",
   ...rest
 }: {
   tone?: CardTone
@@ -220,10 +221,11 @@ export function TranscriptCard({
   // rather than as a card missing its body.
   children?: ReactNode
   className?: string
+  surface?: "inset" | "question"
 } & Omit<ComponentPropsWithoutRef<"div">, "children" | "className">) {
   const { border, head } = CARD_TONES[tone]
   return (
-    <div {...rest} className={`min-w-0 ${BLOCK_RADIUS} border ${border} bg-panel-2 p-4 ${className}`}>
+    <div {...rest} className={`min-w-0 ${BLOCK_RADIUS} border ${surface === "question" ? "border-question-border bg-question" : `${border} bg-panel-2`} p-4 ${className}`}>
       <CardHead icon={icon} label={label} head={head} aside={aside} />
       {children != null && <CardContent>{children}</CardContent>}
     </div>
@@ -252,7 +254,7 @@ export function CardActions({ children, className = "" }: { children: ReactNode;
 
 // The explainer that sits beside a card's action. Exported so every card spells its caption the same
 // way instead of re-deriving the muted scale and the flex behavior at each call site.
-export const CARD_ACTION_EXPLAINER = "min-w-0 flex-1 text-[11px] leading-snug text-muted/70"
+export const CARD_ACTION_EXPLAINER = "min-w-0 flex-1 text-[11px] leading-snug text-muted-70"
 
 // A LINK inside a card — the app's link language, straight off `.md-body a` in styles.css: accent,
 // underlined, 2px offset. A link has to LOOK like one at rest; `text-fg` with a hover-only underline
@@ -277,4 +279,4 @@ export const CARD_PRIMARY_BUTTON = "bg-fg px-2.5 py-1 text-bg hover:opacity-90"
 export const CARD_ACTION_RADIUS = "rounded-md"
 // The same verb with the icon+label layout every card action uses. Cards differ only in what they pass
 // beyond this (shrink-0, a disabled treatment), never in the fill.
-export const CARD_PRIMARY_ACTION = `flex shrink-0 items-center gap-1 ${CARD_ACTION_RADIUS} text-[11px] font-medium outline-none transition-colors focus-visible:ring-1 focus-visible:ring-fg/60 ${CARD_PRIMARY_BUTTON}`
+export const CARD_PRIMARY_ACTION = `flex shrink-0 items-center gap-1 ${CARD_ACTION_RADIUS} text-[11px] font-medium outline-none transition-colors focus-visible:ring-1 focus-visible:ring-focus-ink-60 ${CARD_PRIMARY_BUTTON}`

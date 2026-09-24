@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { BoardSnapshot, CodexModel, DispatchPreferences, GithubItem } from "@frizz/shared"
 import { GithubPickerModal } from "./components/GithubPickerModal.tsx"
 import { Toaster } from "./components/Toaster.tsx"
+import { TooltipProvider } from "./components/Tooltip.tsx"
 import { store } from "./store.ts"
 import "./styles.css"
 
@@ -56,11 +57,17 @@ const preferences: DispatchPreferences = {
 } as DispatchPreferences
 
 const dispatched: unknown[] = []
+// The project settings the header gear edits (GithubPromptPopover): every settingsSet is recorded so
+// a test can prove a typing burst writes ONCE, and `?settingsDelay=N` holds each write for N ms to
+// drive the dispatch gate.
+let settings: Record<string, unknown> = { permissionMode: "bypassPermissions", notifications: true }
+const settingsWrites: Record<string, unknown>[] = []
+const settingsDelay = Number(new URLSearchParams(location.search).get("settingsDelay") ?? 0)
 
 declare global {
-  interface Window { githubPickerRangeFixture?: { dispatched: unknown[] } }
+  interface Window { githubPickerRangeFixture?: { dispatched: unknown[]; settingsWrites: Record<string, unknown>[] } }
 }
-window.githubPickerRangeFixture = { dispatched }
+window.githubPickerRangeFixture = { dispatched, settingsWrites }
 
 const nativeFetch = window.fetch.bind(window)
 window.fetch = async (input, init) => {
@@ -79,6 +86,15 @@ window.fetch = async (input, init) => {
   if (url.pathname === "/_frizz/rpc/codexModels") return json(codexModels)
   if (url.pathname === "/_frizz/rpc/acpAgents") return json([])
   if (url.pathname === "/_frizz/rpc/dispatchPreferencesGet") return json(preferences)
+  if (url.pathname === "/_frizz/rpc/settingsGet") return json(settings)
+  if (url.pathname === "/_frizz/rpc/githubPromptDefaults") return json({ prompt: "Triage {repo}#{n}: {title}\n{url}\n\nRead the whole thread and say what you actually checked." })
+  if (url.pathname === "/_frizz/rpc/settingsSet") {
+    const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>
+    if (settingsDelay > 0) await new Promise((resolve) => window.setTimeout(resolve, settingsDelay))
+    settings = body
+    settingsWrites.push(body)
+    return json(settings)
+  }
   if (url.pathname === "/_frizz/rpc/githubDispatchBatch") {
     // Isolated seam: the fixture never starts a worker. It records the payload so a test can assert
     // that what dispatches is exactly what the human watched themselves check.
@@ -98,8 +114,10 @@ const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false,
 
 createRoot(document.getElementById("root")!).render(
   <QueryClientProvider client={queryClient}>
-    <GithubPickerModal onClose={() => {}} />
-    {/* Mounted so any toast the picker raises is observable, exactly as it is in the app. */}
-    <Toaster />
+    <TooltipProvider>
+      <GithubPickerModal onClose={() => {}} />
+      {/* Mounted so any toast the picker raises is observable, exactly as it is in the app. */}
+      <Toaster />
+    </TooltipProvider>
   </QueryClientProvider>,
 )

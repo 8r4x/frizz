@@ -46,6 +46,9 @@ test("rollback profiles reconstruct a launchable pair for a never-recorded effor
 
 test("observed model normalization accepts only the current provider's identities", () => {
   assert.equal(normalizeObservedThreadModel("claude", "claude-opus-4-6"), "opus")
+  // A model whose version carries a MINOR part — Claude Code 2.1.280 bills `opus` as claude-opus-5-5 —
+  // still collapses to the family the picker offers. The catalogue keys on the family, never a version.
+  assert.equal(normalizeObservedThreadModel("claude", "claude-opus-5-5"), "opus")
   assert.equal(normalizeObservedThreadModel("claude", "gpt-5.5"), undefined)
   assert.equal(normalizeObservedThreadModel("codex", "sonnet"), undefined)
 })
@@ -58,6 +61,9 @@ test("observed model normalization accepts only the current provider's identitie
 test("an observed 1M model collapses to the bare picker alias", () => {
   assert.equal(normalizeObservedThreadModel("claude", "claude-opus-5[1m]"), "opus")
   assert.equal(normalizeObservedThreadModel("claude", "claude-sonnet-5[1m]"), "sonnet")
+  // Measured on the provisioned 2.1.280: the pair frizz actually launches (`opus[1m]` + `--fallback-model
+  // opus`) comes back as `claude-opus-5-5[1m]` — a minor version AND the suffix in one observed value.
+  assert.equal(normalizeObservedThreadModel("claude", "claude-opus-5-5[1m]"), "opus")
   assert.equal(normalizeObservedThreadModel("claude", "opus[1m]"), "opus")
   // The bare id is unaffected — an account already on 1M reports no suffix at all.
   assert.equal(normalizeObservedThreadModel("claude", "claude-opus-5"), "opus")
@@ -82,6 +88,7 @@ test("a limit message names a model in the PROVIDER's spelling, matched by token
   // version the message carries has to be tolerated rather than matched literally.
   assert.equal(claudeModelFromLimitName("Fable 5"), "fable")
   assert.equal(claudeModelFromLimitName("Opus 4.6"), "opus")
+  assert.equal(claudeModelFromLimitName("Opus 5.5"), "opus")
   assert.equal(claudeModelFromLimitName("Haiku 4.5"), "haiku")
   assert.equal(claudeModelFromLimitName("sonnet"), "sonnet")
   // …and it fails closed rather than reaching for the nearest rung: a name the catalogue cannot place

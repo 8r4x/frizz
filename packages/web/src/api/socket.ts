@@ -324,6 +324,7 @@ function handle(msg: SocketServerMsg): boolean {
         scope: msg.scope,
         retryAfterMs: msg.retryAfterMs,
       }
+      scheduleBudgetRetry(msg.slug, msg.retryAfterMs)
       return false
     case "hb":
       return true // lastMsg already bumped
@@ -334,10 +335,40 @@ function send(msg: SocketClientMsg): void {
   if (protocolReady && ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg))
 }
 
+// A reconnect replays every held subscription in batches of REPLAY_BATCH per REPLAY_MS — the same drip
+// api/transcript-live.ts uses for first subscriptions, for the same reason: the server budgets on-demand
+// transcript reads per origin (16 per second, app-socket.ts), every tab on this origin shares that
+// budget, and a board holding two dozen queue cards replayed in one burst asks for two dozen reads in one
+// check-phase batch. The overflow came back as resource-limited, which the client then treated as a
+// permanent pause. Dripping keeps the replay under the budget; the latch reset below handles the rest.
+const REPLAY_BATCH = 6
+const REPLAY_MS = 700
+let replayTimer: ReturnType<typeof setTimeout> | null = null
+
 function resubscribe(): void {
-  for (const slug of subs.keys()) {
-    if (!store.socketTranscriptFallbacks[slug]) send({ t: "sub", topic: "transcript", slug })
+  // A fresh live generation is fresh server state: whatever refused a subscription before this keyframe
+  // (a frame over the cap, a read budget spent) is not known to hold now, and the server-side subscription
+  // that was dropped with the refusal has to be re-asked for anyway. Clear every latch and let the replay
+  // retry; a refusal that still stands simply re-latches, with its banner. Without this a tab that hit one
+  // refusal in its lifetime stayed paused across every reconnect — including a server upgrade that had
+  // fixed the very overflow it was paused on (maintainer 2026-09-18: "the problem definitely still
+  // exists"; it did not, in a fresh tab).
+  for (const slug of Object.keys(store.socketTranscriptFallbacks)) delete store.socketTranscriptFallbacks[slug]
+  for (const slug of budgetRetryTimers.keys()) cancelBudgetRetry(slug)
+  budgetRetries.clear()
+  if (replayTimer) {
+    clearTimeout(replayTimer)
+    replayTimer = null
   }
+  const pending = [...subs.keys()]
+  const replayBatch = (): void => {
+    replayTimer = null
+    for (const slug of pending.splice(0, REPLAY_BATCH)) {
+      if (subs.has(slug) && !store.socketTranscriptFallbacks[slug]) send({ t: "sub", topic: "transcript", slug })
+    }
+    if (pending.length) replayTimer = setTimeout(replayBatch, REPLAY_MS)
+  }
+  replayBatch()
   for (const path of fileSubs.keys()) {
     send({ t: "sub", topic: "file", path })
     // A reconnect may have slept through a change; one re-read per open file closes that gap. Not on
@@ -391,8 +422,41 @@ export function unsubscribeFile(path: string): void {
 // resumes push; another typed rejection restores the stable warning without reconnecting the board socket.
 export function retryTranscriptSocket(slug: string): void {
   if (!store.socketTranscriptFallbacks[slug]) return
+  cancelBudgetRetry(slug)
   delete store.socketTranscriptFallbacks[slug]
   if (subs.has(slug)) send({ t: "sub", topic: "transcript", slug })
+}
+
+// A read-budget refusal is TRANSIENT by its own definition — the server names the retry-after — so the
+// client retries on its own after that much (plus a little spread, so the tabs that were refused together
+// do not all ask again in the same millisecond), up to MAX_BUDGET_RETRIES times per slug per live
+// generation. Past that it is the banner's manual "Retry live", as it always was. An overflow is not
+// retried here: its refusal is a property of the thread, and re-asking every edge would only re-trip it.
+const MAX_BUDGET_RETRIES = 5
+const BUDGET_RETRY_SPREAD_MS = 400
+const budgetRetryTimers = new Map<string, ReturnType<typeof setTimeout>>()
+const budgetRetries = new Map<string, number>()
+
+function scheduleBudgetRetry(slug: string, retryAfterMs: number): void {
+  const attempts = budgetRetries.get(slug) ?? 0
+  if (attempts >= MAX_BUDGET_RETRIES) return
+  cancelBudgetRetry(slug)
+  const delay = Math.max(1, retryAfterMs) + Math.random() * BUDGET_RETRY_SPREAD_MS
+  budgetRetryTimers.set(slug, setTimeout(() => {
+    budgetRetryTimers.delete(slug)
+    budgetRetries.set(slug, attempts + 1)
+    const fallback = store.socketTranscriptFallbacks[slug]
+    if (!fallback || fallback.kind !== "read-budget") return
+    delete store.socketTranscriptFallbacks[slug]
+    if (subs.has(slug)) send({ t: "sub", topic: "transcript", slug })
+  }, delay))
+}
+
+function cancelBudgetRetry(slug: string): void {
+  const timer = budgetRetryTimers.get(slug)
+  if (!timer) return
+  clearTimeout(timer)
+  budgetRetryTimers.delete(slug)
 }
 
 /**

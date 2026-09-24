@@ -12,4 +12,4 @@
  *  It lives here rather than in HeaderActions.tsx because those two buttons are imported BY that file;
  *  taking the constant from it would close an import cycle. */
 export const HEADER_ICON_CLASS =
-  "flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg disabled:hover:bg-transparent disabled:hover:text-muted disabled:opacity-40"
+  "icon-hover-outline flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg disabled:hover:bg-transparent disabled:hover:text-muted disabled:opacity-40"

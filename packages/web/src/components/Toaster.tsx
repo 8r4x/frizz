@@ -41,7 +41,7 @@ export function Toaster() {
         // passed it a supervisor's raw build log — the text has to wrap inside a strip-sized box
         // instead. `break-words` covers the other half of that failure: a long unbroken token (an
         // absolute path, a URL) would otherwise push straight past the cap.
-        className={`flex max-w-[min(30rem,calc(100vw-2rem))] items-center gap-2.5 break-words rounded-lg border border-border-strong bg-elevated px-4 py-2 text-[13px] font-medium text-fg shadow-xl shadow-black/40 transition-all duration-200 ease-out ${
+        className={`flex max-w-[min(30rem,calc(100vw-2rem))] items-center gap-2.5 break-words rounded-lg border border-border-strong bg-elevated px-4 py-2 text-[13px] font-medium text-fg shadow-xl shadow-shadow-ink/40 transition-all duration-200 ease-out ${
           visible ? "translate-y-0 opacity-100" : "translate-y-8 opacity-0"
         }`}
       >

@@ -87,6 +87,23 @@ export async function handshakeAccepted(
   )
 }
 
+/**
+ * How the board's answer is handed to the visitor.
+ *
+ * THE BODY IS PASSED THROUGH AS THE BOARD ENCODED IT. Workers treat a `content-encoding` header on a
+ * constructed Response as an instruction: in the default "automatic" mode the runtime compresses the
+ * body to match it. The board already did — index.html and every asset arrive here brotli-encoded,
+ * because Cloudflare advertises `accept-encoding: gzip, br` to the board whatever the phone asked for
+ * — so the edge compressed them a second time, the browser undid one layer, and a phone that scanned
+ * the access link rendered raw brotli as text (2026-09-20). "manual" says the body is already what the
+ * header claims. It is set only when the board declared an encoding, so a plain body keeps the edge's
+ * own compression for a client that accepts it.
+ */
+export function visitorResponseInit(status: number, headers: Array<[string, string]>): ResponseInit {
+  const encoded = headers.some(([name, value]) => name.toLowerCase() === "content-encoding" && value.trim().toLowerCase() !== "identity")
+  return encoded ? { status, headers, encodeBody: "manual" } : { status, headers }
+}
+
 /** The owning pubkey the registrar recorded for a name, or null if the name is unclaimed. */
 export async function ownerPubkeyFor(env: RelayEnv, name: string): Promise<string | null> {
   const raw = await env.CLAIMS.get(`claim:${name}`)
@@ -278,7 +295,7 @@ export class Board {
       if (response.body !== null) {
         void writer.write(response.body).then(() => writer.close().catch(() => {}))
       }
-      return new Response(readable, { status: response.status, headers: response.headers })
+      return new Response(readable, visitorResponseInit(response.status, response.headers))
     } catch (error) {
       void writer.close().catch(() => {})
       return new Response(`The board did not answer: ${error instanceof Error ? error.message : error}`, {

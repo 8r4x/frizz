@@ -67,62 +67,28 @@
  *  bare glyphs start to read as one mark; above ~14px the two pills come apart. */
 export const STRIP_INK_GAP = "gap-3"
 
-/** `PendingSnooze` — lucide `Hourglass` at 12px (ink 8px, so 2px inset a side) inside `px-0.5`.
+/** `PendingSnooze` — lucide `AlarmClock` at 12px (ink 9.5px across, so 1.25px inset a side) inside `px-0.5`.
+ *
+ *  It was the `Hourglass` until 2026-09-19 (ink 7px across, 2.5px inset, `-mx-1`); the human's own
+ *  snooze wears the alarm clock on every surface now. The clock's bells and feet reach further out than
+ *  the hourglass's caps, so the trim is nearly just the padding. Measured on the rail fixture at dsf 8
+ *  (scripts/verify-rail-status-glyphs.mjs, the `user-snoozed` slot): the clock inks 0.79 of its box
+ *  across against the hourglass's 0.58, and the ratio is the glyph's, whatever the size.
  *
  *  There is deliberately no constant for `ContextMeter`: its `em`-sized ring reaches its own svg edge
  *  (0.3px a side), which is under the floor where a correction smears the mark rather than moving it.
  *  It is measured, not missed. */
-export const INK_TRIM_HOURGLASS = "-mx-1"
+export const INK_TRIM_ALARM = "-mx-[3px]"
 
-/** `RecurringPromptControl` (the Goal control) — Tabler's `target-arrow` at 12px inside `px-0.5`.
- *
- *  THE SWAP THE PREVIOUS NOTE PREDICTED. It said a mark swap forces a re-measure only when the new
- *  glyph's ink sits differently inside the viewBox, "because the next swap will be to something that
- *  does" — and on 2026-08-13 it was. lucide's `Target` painted a full-bleed circle out to the 24-unit
- *  bound (0.5px of inset a side inside the 12px box, hence the old -2.5px). Tabler's arcs stop at r=9
- *  and its dart stops at 21, so the ink starts a full unit further in: 3.0px of dead space on the left
- *  and 2.88px on the right, measured, once `px-0.5` is counted.
- *
- *  SYMMETRIC at 3px, because the glyph is: those two readings differ by 0.12px, which is far under the
- *  floor where a correction smears a mark instead of moving it. The strip then read 12.00px and 11.87px
- *  to the hourglass on its left and the armed-watchers eye on its right, against its 12px target.
- *
- *  THAT EYE IS GONE (2026-08-14 — it duplicated the rows under the prompt box; see
- *  ThreadLifecycleFooter), so the Goal is now the LAST mark in the cluster and only its left-hand gap is
- *  still drawn. The 3px stands unchanged: it is a property of this glyph's own dead space, measured on
- *  the mark rather than fitted to a neighbour, which is exactly why losing the neighbour costs nothing.
- *
- *  RE-MEASURE, DON'T RE-GUESS, if the mark changes again: `nub scripts/ink-gaps.mjs
- *  http://localhost:<vite>/icon-rhythm-fixture.html "[data-pending-snooze],[data-recurring-prompt]"`. */
-export const INK_TRIM_GOAL = "-mx-[3px]"
 
-/** THE COMPOSER RAIL is the same rule solved for absolute offsets instead of a flex gap, so it cannot
- *  use `STRIP_INK_GAP`. Its three buttons are 28px squares pinned from the box's right edge, and the
- *  send button is a FILLED square — its ink IS its box, while the paperclip paints 13px of its 28 and
- *  the GitHub mark 12.75. On the old even 36px pitch that drew 22.25px of ink between the paperclip
- *  and the GitHub mark against 15.75px between the GitHub mark and send ("the attachment icon and the
- *  GitHub icon feel further apart than the GitHub icon and the up arrow" — same maintainer, same day).
- *
- *  Offsets are therefore derived from ink, right to left, at a 14.75px gap — the distance the rail
- *  already kept beside the send button, so the one mark the eye is anchored on does not move. All
- *  measured from the box's right edge:
- *
- *      send             right-2        box [8, 36]    ink [8, 36]      → 14.75px to the rail action
- *      rail action      right-[43px]   box [43, 71]   ink [50.75, 63.5] → 14.25px to the paperclip
- *      paperclip        right-[71px]   box [71, 99]   ink [77.75, 90.75]
- *      paperclip alone  right-[44px]   box [44, 72]   ink [50.75, 63.75] → 14.75px to send
- *
- *  THE PAPERCLIP NEEDS ITS OWN OFFSET FOR THE SAME SLOT, which is the whole doctrine in one detail: it
- *  takes the rail-action position when no rail action is rendered, and it paints 1px less dead space on
- *  that side than the GitHub mark does, so parking it at the GitHub mark's offset drew 13.75px instead
- *  of 14.75. Same slot, same box, different glyph, different number — there is no shared "one 28px
- *  button every 36px" pitch that can be right for both. */
+/** Bare composer icons carry dead space; the filled Send button paints its full box.
+ *  These offsets leave ~14.5px between resting ink edges (not uniform box gaps).
+ *  Hover outlines do not participate in the resting rhythm. */
 export const RAIL_SEND_OFFSET = "right-2"
 export const RAIL_ACTION_OFFSET = "right-[43px]"
 export const RAIL_PAPERCLIP_OFFSET = "right-[71px]"
 export const RAIL_PAPERCLIP_PLAIN_OFFSET = "right-[44px]"
 
-/** What the prose, chip and footer rows must reserve so text keeps its 8px clearance off the leftmost
- *  rail button: the paperclip's box edge (99px with a rail action, 72px without) plus 8. */
+/** Reserve the leftmost button's edge (99px with GitHub, 72px without), plus 8px for prose. */
 export const RAIL_RESERVE_WITH_ACTION = "pr-[6.6875rem]"
 export const RAIL_RESERVE_PLAIN = "pr-20"

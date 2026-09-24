@@ -52,11 +52,28 @@ const BASE_STYLE = `
 :root{
   color-scheme:dark;
   --bg:#0d0e10;--panel:#131519;--panel-2:#181b20;
-  --border:#26282d;--border-strong:#33363c;
+  --border:#26282d;--border-strong:#33363c;--control-border:#26282d;--control-strong:#33363c;
   --fg:#e6e7e9;--muted:#8b8f96;--accent:#e8b923;--danger:#fca5a5;
+  --focus-border:color-mix(in srgb,var(--accent) 55%,transparent);--focus-ring:color-mix(in srgb,var(--accent) 22%,transparent);
   --sans:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
   --mono:ui-monospace,"JetBrains Mono","SF Mono","Cascadia Mono",Menlo,Consolas,monospace;
   --ease:cubic-bezier(0,0,.2,1);
+}
+:root[data-theme=light]{
+  color-scheme:light;
+  --bg:#f7f7f7;--panel:#fff;--panel-2:#fafafa;
+  --border:#dedede;--border-strong:#cecece;--control-border:#858585;--control-strong:#7d7d7d;
+  --fg:#292929;--muted:#606060;--accent:#416896;--danger:#cf222e;
+  --focus-border:#416896;--focus-ring:#416896;
+}
+@media(prefers-color-scheme:light){
+  :root:not([data-theme]){
+    color-scheme:light;
+    --bg:#f7f7f7;--panel:#fff;--panel-2:#fafafa;
+    --border:#dedede;--border-strong:#cecece;--control-border:#858585;--control-strong:#7d7d7d;
+    --fg:#292929;--muted:#606060;--accent:#416896;--danger:#cf222e;
+    --focus-border:#416896;--focus-ring:#416896;
+  }
 }
 html,body{background:var(--bg)}
 body{
@@ -65,7 +82,6 @@ body{
   color:var(--fg);font-family:var(--sans);font-size:12.5px;line-height:1.55;
   -webkit-font-smoothing:antialiased;
 }
-html[data-font=mono] body{font-family:var(--mono)}
 main{width:100%;max-width:28rem;padding:18px;border:1px solid var(--border-strong);border-radius:12px;background:var(--panel-2)}
 h1{margin:0;display:flex;align-items:baseline;gap:7px;font-size:14px;font-weight:600;letter-spacing:-.01em;line-height:1.4}
 p{margin:0;text-wrap:pretty}
@@ -82,13 +98,13 @@ const RECOVERY_STYLE = `
 /* ErrorBoundary's ACTION_CLASS, one size up for a page that is alone in a viewport. */
 .btn{
   appearance:none;display:inline-flex;align-items:center;
-  border:1px solid var(--border);border-radius:6px;background:transparent;
+  border:1px solid var(--control-border);border-radius:6px;background:transparent;
   padding:5px 10px;font:inherit;font-size:11.5px;color:color-mix(in srgb,var(--fg) 90%,transparent);
   cursor:pointer;text-decoration:none;
   transition:background-color 120ms var(--ease),border-color 120ms var(--ease),color 120ms var(--ease);
 }
-.btn:hover{background:var(--panel);border-color:var(--border-strong);color:var(--fg)}
-.btn:focus-visible{outline:none;border-color:color-mix(in srgb,var(--accent) 55%,transparent);box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 22%,transparent)}
+.btn:hover{background:var(--panel);border-color:var(--control-strong);color:var(--fg)}
+.btn:focus-visible{outline:none;border-color:var(--focus-border);box-shadow:0 0 0 2px var(--focus-ring)}
 .btn:disabled{opacity:.5;pointer-events:none}
 /* min-height holds the slot open while it is LIVE, so a changing status line never nudges the card;
    :empty collapses it when there is nothing live to say, so a halted card has no trailing gutter. */
@@ -108,8 +124,7 @@ const RECOVERY_STYLE = `
    Alignment is an INK problem. A baseline-aligned flex item with no text of its own contributes its
    BORDER-BOX BOTTOM as the baseline, so the dot's ink centre lands 3px above it while the cap band's
    centre sits 0.5cap above it. \`cap\` is the resolved font's own cap height, so the correction holds
-   in BOTH board fonts and at any size, with nothing to re-measure when the type scale moves or the
-   font setting flips. The em spelling is the fallback for a browser without the unit (.35em ~= 0.5 x a
+   at any size, with nothing to re-measure when the type scale moves. The em spelling is the fallback for a browser without the unit (.35em ~= 0.5 x a
    0.7em cap) and is overwritten wherever \`cap\` parses. */
 .dot{
   width:6px;height:6px;flex:0 0 auto;border-radius:9999px;background:var(--accent);
@@ -141,11 +156,7 @@ const RECOVERY_STYLE = `
 }
 `.trim()
 
-// The board applies the operator's font choice from localStorage before first paint (see
-// packages/web/index.html). This page renders while the bundle that owns that setting is unreachable,
-// so it reads the same key for itself — otherwise a restart flips a sans board to mono for two seconds.
-// Branded pages only: the key names the product.
-const FONT_SCRIPT = `try{document.documentElement.dataset.font=localStorage.getItem("frizz-font")==="mono"?"mono":"sans"}catch{}`
+const THEME_SCRIPT = `var p;try{p=localStorage.getItem("frizz-theme")}catch{}var d=false;try{d=matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches}catch{}var t=p==="dark"||p==="light"?p:d?"dark":"light";document.documentElement.dataset.theme=t;document.documentElement.style.colorScheme=t;document.querySelector('meta[name="theme-color"]').content=t==="dark"?"#0d0e10":"#f7f7f7"`
 
 /**
  * THE RECOVERY PAGE POLLS, and the comment this replaces said it deliberately did not: "a broken child
@@ -267,15 +278,17 @@ function documentShell(options: {
   style?: string
   script?: string
   bodyAttributes?: string
-  /** Carry the operator's font choice over from the board. Names the product, so branded pages only. */
-  font?: boolean
+  /** Carry the browser appearance preference on branded pages only. */
+  appearance?: boolean
 }): string {
   return `<!doctype html><html lang="en" data-font="sans"><head><meta charset="utf-8">`
     + `<title>${options.title}</title>`
     + `<meta name="viewport" content="width=device-width,initial-scale=1">`
-    + `<meta name="color-scheme" content="dark"><meta name="theme-color" content="#0d0e10">`
+    + (options.appearance
+      ? `<meta name="color-scheme" content="dark light"><meta name="theme-color" content="#0d0e10">`
+      : `<meta name="color-scheme" content="dark light"><meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0d0e10"><meta name="theme-color" media="(prefers-color-scheme: light)" content="#f7f7f7">`)
     + `<style>${options.style ? `${BASE_STYLE}\n${options.style}` : BASE_STYLE}</style>`
-    + (options.font ? `<script>${FONT_SCRIPT}</script>` : "")
+    + (options.appearance ? `<script>${THEME_SCRIPT}</script>` : "")
     + `</head>`
     + `<body${options.bodyAttributes ? ` ${options.bodyAttributes}` : ""}><main>${options.body}</main>`
     + (options.script ? `<script>${options.script}</script>` : "")
@@ -313,7 +326,7 @@ export function recoveryPage(url: string, variant: RecoveryVariant = "starting")
   return documentShell({
     title: copy.title,
     style: RECOVERY_STYLE,
-    font: true,
+    appearance: true,
     bodyAttributes: `data-target="${target}"`,
     body: `<h1><span class="dot" id="dot" aria-hidden="true"></span>`
       + `<span id="heading">${copy.heading}</span></h1>`
@@ -360,7 +373,7 @@ export function unlistedHostPage(name: string): string {
   const shown = escapeHtml(name)
   return documentShell({
     title: "Not served by this name",
-    font: true,
+    appearance: true,
     body: `<h1>Not served by this name</h1>`
       + `<p class="detail">Frizz does not answer to <code>${shown}</code>. A name a browser has to resolve is how DNS rebinding makes another site's page count as this board, so an exposed board accepts only its own hostname and the names its operator lists.</p>`
       + `<p class="note">Open the board by its IP address, or relaunch with <code>--allowed-host ${shown}</code> (or <code>FRIZZ_ALLOWED_HOSTS=${shown}</code>) to accept this one.</p>`,

@@ -37,7 +37,7 @@ export interface BlockInteractive {
 // bg + a muted label (NOT yellow — that's the focus motif). The label tracks the kind — "Question" for
 // a plain ask, "Select multiple" for `multi` — with no corner glyph (see KindIcon below for why it was
 // dropped). A `danger` block (the destructive gate — force-merge, deletion, rollback) layers the app's
-// red risk language (the same text-red-400 family the bypass permission mode uses) with a warning glyph.
+// red risk language (the same text-danger family the bypass permission mode uses) with a warning glyph.
 // The context renders as markdown; the convention-parsed trailing options render as choice chips (radio
 // feel for single-select, toggleable checkboxes for `multi`) and the "Recommendation:" line as a muted
 // note. When `interactive` is present (the live message), chips are clickable and a freetext textarea
@@ -130,7 +130,7 @@ export function QuestionBlockCard({
   // and stay narrow — force-merge, deletion, history rewrite, prod rollback — so these should almost
   // never appear; what changed is how loudly one of them shouts.
   return (
-    <TranscriptCard tone={isDanger ? "risk" : "neutral"} icon={KindIcon} label={kindLabel} aside={aside}>
+    <TranscriptCard tone={isDanger ? "risk" : "neutral"} surface="question" icon={KindIcon} label={kindLabel} aside={aside}>
       {/* FULL-strength, against the card's stepped-down description colour: this card's body is not a
           description of the title, it IS the ask, and the question must never read dimmer than the
           word "Question" above it. The colour rides a WRAPPER because `.card-md .md-body` inherits
@@ -273,8 +273,8 @@ export function QuestionBlockCard({
               // with no chip chosen (a chosen chip beats the text, so text beside one is an unselected
               // draft and the box goes quiet, exactly like an unselected chip). Focus always shows the
               // accent border — the selection moves here the moment the box is entered.
-              className={`col-span-full w-full resize-none overflow-hidden rounded-md border px-3 py-1.5 text-[12px] leading-snug text-fg/90 outline-none placeholder:text-muted/80 transition-colors ${
-                freetext.trim() && (isMulti || chosen === null) ? "border-accent bg-accent/10" : "border-border bg-transparent hover:bg-panel-2 focus:border-accent"
+              className={`col-span-full w-full resize-none overflow-hidden rounded-md border px-3 py-1.5 text-[12px] leading-snug text-fg/90 outline-none placeholder:text-muted-80 transition-colors ${
+                freetext.trim() && (isMulti || chosen === null) ? "border-selection-border bg-selection" : "border-border bg-transparent hover:bg-panel-2 focus:border-accent"
               }`}
             />
           )}
@@ -292,16 +292,16 @@ export function QuestionBlockCard({
           note is what keeps the read-only card honest: the chips above are dim and unclickable, and
           without a word saying so the card reads as merely waiting. */}
       {settled && settled.chosenIdxs.length === 0 && !settled.text && (
-        <div className="mt-2 text-[11px] text-muted/70">Not answered</div>
+        <div className="mt-2 text-[11px] text-muted-70">Not answered</div>
       )}
       {/* A "Note: …" footnote the worker wrote AFTER the options — rendered below the chips (muted) so
           the choices stay answerable instead of swallowing them (the old parser dropped the chips). */}
       {parsed.trailingMd && (
-        <LinkedHtml className={`mt-2 md-body text-[12px] text-muted/70${wrap ? ` ${QUEUE_WRAP}` : ""}`} html={trailingHtml} />
+        <LinkedHtml className={`mt-2 md-body text-[12px] text-muted-70${wrap ? ` ${QUEUE_WRAP}` : ""}`} html={trailingHtml} />
       )}
       {/* The caption fallback survives ONLY when the recommendation didn't match an option. */}
       {parsed.recommendation && recIdx === null && (
-        <LinkedHtml className="md-inline mt-1.5 text-[11px] text-muted/70" html={recHtml} />
+        <LinkedHtml className="md-inline mt-1.5 text-[11px] text-muted-70" html={recHtml} />
       )}
     </TranscriptCard>
   )
@@ -400,13 +400,13 @@ function Chip({
       }}
       className={`relative flex items-start gap-2 rounded-md border px-3 py-1.5 text-[12px] leading-snug transition-colors ${
         selected
-          ? "border-accent bg-accent/10 text-fg"
+          ? "border-selection-border bg-selection text-fg"
           : settledPick
             // pl-[11px]: the 2px left rule is 1px thicker than the siblings' 1px border, so the text
             // starts 1px right of theirs on the shared px-3 — measured 14px vs 13px inset. 11+2 = 12+1.
             ? "border-border-strong border-l-2 border-l-accent/40 bg-bg/50 pl-[11px] text-fg"
             : disabled
-              ? "border-border text-muted/80"
+              ? "border-border text-muted-80"
               // hover lands on `elevated`, one step above the card's own panel-2 fill — hovering to
               // panel-2 was invisible once every card standardized on that fill.
               : "border-border text-fg/90 hover:bg-elevated hover:border-border-strong"
@@ -424,7 +424,7 @@ function Chip({
         <span
           aria-hidden
           className={`mt-px flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[3px] border ${
-            selected ? "border-accent bg-accent text-bg" : settledPick ? "border-border-strong text-fg" : "border-border-strong"
+            selected ? "border-accent bg-accent-fill text-on-accent" : settledPick ? "border-control-strong text-fg" : "border-control-strong"
           }`}
         >
           {(selected || settledPick) && <Check size={10} strokeWidth={3} />}
@@ -438,15 +438,11 @@ function Chip({
             take effect. */}
         <div id={labelId}>
           {recommended && (
-            // Optically centred on the option text's CAP BLOCK, not on its line box. Measured on the
-            // rendered page: the pill's ink centre sat 1.88px (sans) / 1.80px (mono) BELOW the label's,
-            // because a 9.5px pill inside a 12px line resolves a shorter line box and lands its baseline
-            // 1px low. Unlike the icon nudge this is font-INDEPENDENT — both sides scale with the same
-            // font — so it is a constant, and 2px lands on a whole device pixel at 2× DPR. `translate`
-            // (not a margin) so the float's exclusion area, and therefore the text wrap, is untouched.
-            // `pointer-events-none`: the transform makes the badge a stacking context that paints above
-            // the stretched button, and a click on the badge must still pick the option.
-            <span className="pointer-events-none float-right ml-2 mt-px -translate-y-[2px] rounded-full border border-border-strong px-1.5 py-px text-[9.5px] uppercase tracking-wide text-muted">
+            // Keep the pill inside the first answer line, not taller than it. In system sans,
+            // leading-none gives a 13.5px pill; its border/text centers are within 0.2px of the
+            // answer's cap band at desktop and phone widths (verify-control-chrome.mjs).
+            // The float still lets wrapped answers reclaim the full width below it.
+            <span className="pointer-events-none float-right ml-2 mt-px rounded-full border border-border-strong px-1.5 py-px text-[9.5px] leading-none uppercase tracking-wide text-muted">
               Recommended
             </span>
           )}

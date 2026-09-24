@@ -1,7 +1,24 @@
 @import "tailwindcss";
+@import "./theme.css";
 
-/* Dark, dense orchestration surface. Yellow accent = "awaiting you".
-   Mono-forward type system (Cursor/Linear-flavored), 13px base. */
+/* Inset edges leave hit areas and layout unchanged, and compose with Tailwind focus rings. */
+@utility button-outline {
+  @apply inset-ring inset-ring-button-border;
+}
+
+/* Bare icon actions stay quiet at rest in both palettes. Keyboard focus gets the same edge. */
+@utility icon-hover-outline {
+  @media (hover: hover) {
+    &:enabled:hover {
+      @apply button-outline;
+    }
+  }
+  &:enabled:focus-visible {
+    @apply button-outline;
+  }
+}
+
+/* Dense orchestration surface; system sans-serif, 13px base. */
 @theme {
   /* WHERE /full BECOMES TWO COLUMNS — the `split:` variant, used only by StandaloneThreadPage.
      Below it the page is ONE thread column at the drawer's own width; at and above it the 50/50 rule
@@ -17,28 +34,14 @@
      while a file click still fell back to the overlay drawer. */
   --breakpoint-split: 1200px;
 
-  --color-bg: #0d0e10;
-  --color-panel: #131519;
-  --color-panel-2: #181b20;
-  --color-elevated: #1c1f25;
-  --color-border: #26282d;
-  --color-border-strong: #33363c;
-  --color-fg: #e6e7e9;
   /* User chat bubble fill — a tick less white than --color-fg so the human's words read as a warm
      off-white card rather than a stark white block, while text (text-bg) stays high-contrast. */
-  --color-user-bubble: #d5d7da;
-  --color-muted: #8b8f96;
-  --color-accent: #e8b923;
-  --color-live: #4ac97e;
   /* A parked PR watcher's mark. Fitted to the accent-yellow/shell-blue pair in OKLCH rather than picked
      — see the .frizz-live-dot--github rule below for the numbers and for why it is violet and not the
      green that fits the same numbers. */
-  --color-watch: #b47feb;
-  --color-idle: #6b7280;
   /* Live-work indicators split by runtime concern: a background SHELL/Monitor pulses blue, a
      sub-agent pulses the accent-yellow. The blue is a clear azure, kept distinct from --color-live
      green and the accent gold so the two live states never blur. */
-  --color-shell: #4a9eff;
 
   /* CODE TOKEN COLOURS — one palette, every code surface in the app.
 
@@ -53,15 +56,6 @@
      tuned set rather than a hand-picked one, and it survives this app's darker background (#0d0e10 vs
      dark-dimmed's own #22272e) with room to spare. Both engines map onto these vars and neither one
      may hard-code a colour: `.hljs-*` below, `ftk-*` in lib/diff/diff.css. */
-  --code-kw: #f47067; /* keywords, doctags, template tags */
-  --code-op: var(--code-kw); /* operators track keywords, as the diff has always drawn them */
-  --code-fn: #dcbdfb; /* function/class names at their definition or call */
-  --code-num: #6cb6ff; /* numbers, literals, attributes, plain variables */
-  --code-str: #96d0ff; /* strings, regexps */
-  --code-type: #f69d50; /* built-ins, declared types, symbols */
-  --code-com: #768390; /* comments and quotes */
-  --code-tag: #8ddb8c; /* markup element and selector names */
-  --code-punct: #adbac7; /* brackets, separators — dark-dimmed's own base text tone */
 
   --font-mono: ui-monospace, "JetBrains Mono", "Fira Code", "SF Mono", "Cascadia Mono", Consolas,
     Menlo, "DejaVu Sans Mono", monospace;
@@ -164,26 +158,18 @@ body {
   margin: 0;
   background: var(--color-bg);
   color: var(--color-fg);
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: 13px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Font experiment: html[data-font="sans"] (set by src/lib/font.ts from Settings.font) swaps the
-   prose/UI-chrome type to a sans stack. Literal code MUST stay mono, so re-assert it below. An
-   element that sets font-family directly (mono code, xterm's own stack) always beats this inherited
-   body switch, so the terminal is unaffected; the .font-mono-keep utility lets any surface opt a
-   subtree back to mono (tool lines / slugs live in files this agent doesn't own — apply it there to
-   pin them mono under sans). */
-html[data-font="sans"] body {
-  font-family: var(--font-sans);
-}
-html[data-font="sans"] .md-body code,
-html[data-font="sans"] .md-inline code,
-html[data-font="sans"] .md-body pre,
-html[data-font="sans"] .font-mono-keep {
+/* Code remains monospace; application prose and controls inherit the sans-serif body. */
+.md-body code,
+.md-inline code,
+.md-body pre,
+.font-mono-keep {
   font-family: var(--font-mono);
 }
 
@@ -202,24 +188,14 @@ html[data-font="sans"] .font-mono-keep {
    Applied by ThreadComposerBox (and SubAgentSheet's steer footer) to a wrapper around the column,
    which stays `empty:hidden` — with no live ops the composer's own 12px must survive intact. */
 :root {
-  --ops-column-optical-inset: -6.25px;
-}
-html[data-font="sans"] {
   --ops-column-optical-inset: -4.25px;
 }
 .ops-column-optical-inset {
   margin-bottom: var(--ops-column-optical-inset);
 }
 
-/* Optical centring for a small lucide icon beside a short label — see lib/iconAlign.ts for the
-   measurements and why `items-center` alone leaves the icon reading low. The amount is FONT-DEPENDENT,
-   which is why it lives here beside the font switch rather than as a Tailwind constant: the mono stack
-   needs -1.7px, while system-ui already sits where its ink is and needs nothing. Applying mono's value
-   under sans is what made every card eyebrow read 1.5px high. */
+/* System sans-serif already centres small label icons optically: measured nudge 0px. */
 :root {
-  --icon-label-nudge: -1.7px;
-}
-html[data-font="sans"] {
   --icon-label-nudge: 0px;
 }
 .icon-label-nudge {
@@ -233,43 +209,24 @@ html[data-font="sans"] {
    lower in its font box and wanted 3px + 1.36 → 4.4px. Residuals re-measured at ≤0.1px after.
    `translate`, not a margin, so the offset can never grow the title row. */
 :root {
-  --card-icon-offset: 2.9px;
-}
-html[data-font="sans"] {
   --card-icon-offset: 4.4px;
 }
 .card-icon-offset {
   translate: 0 var(--card-icon-offset);
 }
-/* The AI-rename REFRESH mark beside a thread title (AiRenameButton) — a 12px lucide `RotateCw` in a
-   24px hover square, optically centred on the 15px semibold title it belongs to. Third instance of the
-   same font-dependence as --icon-label-nudge and --card-icon-offset above, measured the same way
-   (svg ink centre against the title's cap band, on icon-rhythm-fixture.html, both settings): the mark
-   read 0.40px HIGH under system-ui and 2.10px LOW under the mono stack — over five times apart and of
-   opposite sign, so no single constant can serve both, which is exactly why this lives beside the font
-   switch. Residuals re-measured at ≤0.05px after. `translate`, not a margin, so the offset can never
-   grow the title row.
-
-   MEASURE THE BASELINE WITH A ZERO-SIZE INLINE PROBE inside the title's own box, never by deriving it
-   from the div's rect and the font's ascent/descent — that route reported 0.72/1.29 here, off by ~0.4px
-   in sans and ~0.8px in mono, which is most of the correction. */
+/* AI-rename refresh mark: measured 0.40px high against the 15px sans title cap band.
+   Translate without growing the title row; re-measure after changing its font or size. */
 :root {
-  --title-refresh-offset: -2.1px;
-}
-html[data-font="sans"] {
   --title-refresh-offset: 0.4px;
 }
 .title-refresh-offset {
   translate: 0 var(--title-refresh-offset);
 }
 /* Markdown prose rendered INSIDE a .frizz-bash card (the SendMessage peer-message body) is PROSE, not
-   code — so it must read in the app's prose font (mono by default, sans under the font experiment),
+   code — so it must read in the app's sans-serif prose font,
    matching the surrounding assistant messages. Re-assert the body-font rule here so the mono that
    .frizz-bash forces onto its code/command bodies doesn't bleed into this one prose body. */
 .frizz-bash .md-body {
-  font-family: var(--font-mono);
-}
-html[data-font="sans"] .frizz-bash .md-body {
   font-family: var(--font-sans);
 }
 
@@ -376,21 +333,20 @@ html[data-font="sans"] .frizz-bash .md-body {
    2026-08-13: "the vertical alignment of these labels with the status indicator dots… they're not
    looking so hot").
 
-   MEASURED IN BOTH FONTS, because this app ships in two (html[data-font], applied before first paint)
+   Historical measurements before the Mono option was removed
    and a constant fitted in one is only ever right in one. Canvas cap-band reference, 11.5px rows, ops
    strip, live and quiet dots alike — the dot's centre minus the label's cap-band centre:
 
      mono   -1.29px   → wants a lift of 0.112em (1.29 / 11.5)
      sans   +0.32px   → sub-pixel, wants nothing
 
-   So the lift is scoped to mono and sans is left alone: below ~0.3px you are under the device grid and
+   Sans is left alone: below ~0.3px you are under the device grid and
    a nudge only blurs the mark. Applying the mono constant to both put sans 1.61px HIGH, which is worse
    than the error it was fixing. Residual after correcting: -0.01px mono, +0.32px sans.
 
    The readings live here rather than at the call site so the next reader knows to RE-MEASURE rather than
    re-guess — and if the row's type scale or its line-height moves, both numbers are stale together. */
-.frizz-op-dot-slot { transform: translateY(var(--op-dot-nudge, -0.112em)); }
-html[data-font="sans"] .frizz-op-dot-slot { --op-dot-nudge: 0em; }
+.frizz-op-dot-slot { transform: translateY(0); }
 /* THE KIND TAG'S COLUMN — one fixed track behind every `AGENT` / `SHELL` / `WATCH` / `File` / `Link` tag
    on the ops strip (ChildOpRow's sheet density and ThreadLinks, both via CHILD_KIND_TAG_CLASS), so every
    label on the strip starts at the same x. Each row is its own flex line, so nothing shares a track
@@ -408,8 +364,7 @@ html[data-font="sans"] .frizz-op-dot-slot { --op-dot-nudge: 0em; }
    Mono keeps exactly the column its five-letter tags always had; sans takes its widest tag plus a quarter
    pixel, which also closes the ~2px AGENT-vs-SHELL raggedness that column carried there. Re-measure both
    if the tag's size or any tag's word changes. */
-.frizz-kind-tag { width: var(--kind-tag-w, 2.25em); }
-html[data-font="sans"] .frizz-kind-tag { --kind-tag-w: 3.4em; }
+.frizz-kind-tag { width: 3.4em; }
 /* THE RAIL's rest-with-live-work mark — a pulsing dot centred in the sidebar's 15px StatusBox. Same
    hue, same cadence and the same meaning as `.frizz-live-dot` above, but it is a mark INSIDE the
    checkbox family's box, so it takes THAT family's geometry rather than the transcript's. Two
@@ -429,8 +384,7 @@ html[data-font="sans"] .frizz-kind-tag { --kind-tag-w: 3.4em; }
 /* THE RAIL'S TEXT MARKS — the "?" and the "!" — centred by the BROWSER rather than by a fitted constant.
    A "?" or a "!" paints exactly its cap band: ink runs from the cap height down to the alphabetic
    baseline, with nothing above or below. `text-box: trim-both cap alphabetic` makes the span's LAYOUT box
-   that band, so the flex row's `items-center` centres the ink itself — in either font, at any size, with
-   nothing to re-measure when the setting flips.
+   that band, so the flex row's `items-center` centres the ink itself at any size.
    IT REPLACES A NUDGE FITTED IN THE WRONG FONT. `translateY(0.09em)` shipped 2026-08-31, measured on
    rail-status-glyphs-fixture, which set no `data-font` and therefore rendered MONO while the maintainer's
    window runs SANS. Readings from scripts/verify-rail-status-glyphs.mjs, positive = ink sits ABOVE centre:
@@ -461,17 +415,12 @@ html[data-font="sans"] .frizz-kind-tag { --kind-tag-w: 3.4em; }
   height: 5px;
   border-radius: 9999px;
   background: var(--color-shell);
-  animation: frizz-rail-dot-pulse 1.25s ease-in-out infinite;
-}
-/* Brightness alone — the geometry is what says "this is the same kind of mark", so only tone may move
-   (the same ruling the quiet shell dot's breathe follows). */
-@keyframes frizz-rail-dot-pulse {
-  50% { opacity: 0.45; }
-}
-@media (prefers-reduced-motion: reduce) {
-  /* No ring substitution needed: this dot is solid at full opacity already, and the box around it is
-     what carries the "there is a mark here" reading. */
-  .frizz-rail-dot { animation: none; opacity: 1; }
+  /* SOLID SINCE 2026-09-20 — no pulse. The dot pulsed at 1.25s (tone only, 50% → 0.45) while the box
+     around it stood still, which was how a shell-only rest said "alive, not moving". The motion now
+     lives on the FRAME: the rail draws this dot inside the BoxSpinner (Sidebar.tsx shellDot), and the
+     maintainer's rule is a "solid, non-pulsing blue dot" inside the spinner — two animations on one
+     15px mark would fight. The transcript's live-shell dot (.frizz-live-dot--shell) keeps its own pulse;
+     that surface has no spinner around it. */
 }
 /* The armed heartbeat's pulse. Slower than the shell dot's 1.25s and shallower — this mark says "frizz
    will nudge this in a few minutes", not "something is happening right now", and a mark that beats as
@@ -617,11 +566,11 @@ a[href] {
   height: var(--sbw);
 }
 ::-webkit-scrollbar-thumb {
-  background: #2c2f35;
+  background: var(--color-scrollbar);
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #3a3d44;
+  background: var(--color-scrollbar-hover);
 }
 ::-webkit-scrollbar-track {
   background: transparent;
@@ -629,6 +578,26 @@ a[href] {
 .scrollbar-none {
   scrollbar-width: none; /* Firefox */
 }
+
+/* The new selector's 1em chevron shares the cap band in either UI font. The uncorrected
+   mono glyph sat 0.94px below it; baseline + cap avoids a font-specific fitted offset. */
+.appearance-select {
+  align-items: baseline;
+  border-color: var(--color-control-border);
+}
+.appearance-select .select-caret {
+  width: 1em;
+  height: 1em;
+  translate: 0 calc(0.5em - 0.5cap);
+}
+.appearance-select:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+.mobile-tab-inactive { opacity: var(--inactive-mark-opacity); }
+.sidebar-row-dim { opacity: var(--sidebar-dim-opacity); }
+.sidebar-row-dim:hover, .sidebar-row-dim:focus-within { opacity: var(--row-dim-hover-opacity); }
+.mobile-row-dim { opacity: var(--mobile-dim-opacity); }
 .scrollbar-none::-webkit-scrollbar {
   display: none; /* WebKit/Blink */
 }
@@ -649,7 +618,7 @@ a[href] {
 }
 
 ::selection {
-  background: rgba(232, 185, 35, 0.22);
+  background: color-mix(in srgb, var(--color-accent) 22%, transparent);
   color: inherit;
 }
 
@@ -1014,10 +983,10 @@ a[href] {
 /* Inline code is MONO inside a sans (or mono) prose run. Mono has a smaller x-height, so at the old
    0.9em it read visibly smaller than the surrounding copy. 0.95em optically matches the sans body:
    the mono glyphs land at the same apparent size as the prose around them. (Applies in both the
-   default mono-prose mode and html[data-font="sans"] — code stays mono in both.) */
+   sans-serif prose mode — code stays mono.) */
 /* Inline code chip — shared by block prose (.md-body) and inline-only runs (.md-inline: answer chips,
    the recommendation caption). Same font pinning as everything else: inherits mono from the body by
-   default, re-pinned to mono under the sans experiment (see html[data-font="sans"] .md-*inline* code). */
+   default, explicitly monospace on .md-inline code. */
 .md-body code,
 .md-inline code {
   font-size: 0.95em;
@@ -1238,7 +1207,7 @@ a[href] {
    (`.md-body .hljs` below, `.frizz-bash-body` in diff.css), because unclassified code should read as
    that surface's own foreground rather than pull a second grey into the card. */
 .md-body .hljs {
-  color: #d5d8dc;
+  color: var(--code-base);
 }
 .hljs .hljs-comment,
 .hljs .hljs-code,
@@ -1313,19 +1282,19 @@ a[href] {
    match the rendered Edit diff's own add/del rows (lib/diff/diff.css) so a diff pasted into prose and
    a diff frizz rendered itself do not read as two different things. */
 .hljs .hljs-addition {
-  color: #b4f1b4;
-  background: rgba(87, 171, 90, 0.15);
+  color: var(--code-add);
+  background: var(--code-add-bg);
 }
 .hljs .hljs-deletion {
-  color: #ffd8d3;
-  background: rgba(229, 83, 75, 0.15);
+  color: var(--code-del);
+  background: var(--code-del-bg);
 }
 /* The `cat -n` line numbers a Read excerpt carries. They are not source and must never compete with
    it: the same tone the rendered diff gives its own gutter, and unselectable-looking but still
    SELECTABLE, because copying the excerpt has always yielded the numbers and quietly changing that
    would break anyone who pastes a line reference out of a card. */
 .frizz-code-gutter {
-  color: #4b4f57;
+  color: var(--code-gutter);
 }
 .md-body blockquote {
   border-left: 2px solid var(--color-border-strong);
@@ -1399,7 +1368,7 @@ a[href] {
 @layer components {
   /* Text inputs. Quiet border, no ring — a soft accent border on focus is the whole affordance. */
   .input {
-    @apply w-full rounded-md border border-border bg-bg px-2.5 py-1.5 text-[13px] outline-none transition-colors focus:border-accent/60 placeholder:text-muted;
+    @apply w-full rounded-md border border-border bg-bg px-2.5 py-1.5 text-[13px] outline-none transition-colors focus:border-input-focus placeholder:text-muted;
   }
   .btn-ghost {
     @apply px-2.5 py-1.5 rounded-md text-[12px] text-muted transition-colors hover:text-fg hover:bg-panel-2 outline-none;

@@ -1,6 +1,7 @@
 import { useState } from "react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { createRoot } from "react-dom/client"
+import { BrowserRouter } from "react-router"
 import type { ThreadView } from "@frizz/shared"
 import "./styles.css"
 
@@ -21,12 +22,8 @@ import "./styles.css"
 // The gate mocks below are the price of that: three of the controls hide themselves unless the
 // server answers, and a fixture missing half the strip measures a rhythm the app never draws.
 
-// THIS APP RENDERS IN TWO FONTS and a fixture that leaves `data-font` unset silently draws the MONO
-// :root default (styles.css), so every constant measured on it is right in one setting and wrong in the
-// other — the exact way a chevron measured at a 0.00px residual still rode visibly high in the
-// maintainer's sans window (2026-08-05). Default to `sans`, which is the maintainer's own setting, and
-// take the other reading with `--before="document.documentElement.dataset.font='mono'"`.
-document.documentElement.dataset.font = (new URL(location.href).searchParams.get("font") ?? "sans")
+// Match the application's sans UI; only code and terminal output use monospace.
+document.documentElement.dataset.font = "sans"
 
 const nativeFetch = window.fetch.bind(window)
 window.fetch = async (input, init) => {
@@ -90,7 +87,7 @@ const thread = {
   // Drives PendingSnooze's hourglass. Far enough out that it stays in the future for any run.
   snoozedUntil: new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString(),
   // NO `watches`, and that is not an omission. This carried one to draw ArmedWatches' eye — the Goal
-  // mark's right-hand neighbour, and half of the pair INK_TRIM_GOAL was fitted against. That readout was
+  // mark's right-hand neighbour. That readout was
   // removed on 2026-08-14 (it duplicated the rows under the prompt box), so the Goal is the last mark in
   // the cluster and there is no right-hand gap left to measure. Seeding a watcher here would now paint
   // nothing and quietly imply the fixture still covers a gap it cannot.
@@ -107,7 +104,7 @@ function Fixture() {
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <main className="min-h-screen bg-bg p-8">
-          <div className="flex w-[720px] flex-col gap-8">
+          <div className="flex w-full max-w-[720px] flex-col gap-8">
             {/* The HEADER strip, in the queue card's shape — the title row (whose hover reveals the
                 rename refresh) on the left, the shared action icons on the right. `group/thread-title`
                 is what the refresh mark listens to; the fixture forces it visible instead, because a
@@ -174,4 +171,4 @@ function Fixture() {
   )
 }
 
-createRoot(document.getElementById("root")!).render(<Fixture />)
+createRoot(document.getElementById("root")!).render(<BrowserRouter><Fixture /></BrowserRouter>)

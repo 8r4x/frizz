@@ -249,9 +249,9 @@ function RailLink({
           }`}
         />
         <span
-          className={`rounded-[30%] transition-[transform,opacity,box-shadow] duration-150 group-focus-visible:ring-1 group-focus-visible:ring-fg/60 ${
+          className={`rounded-[30%] transition-[transform,opacity,box-shadow] duration-150 group-focus-visible:ring-1 group-focus-visible:ring-focus-ink-60 ${
             held
-              ? "scale-[1.12] opacity-100 shadow-lg shadow-black/50"
+              ? "scale-[1.12] opacity-100 shadow-lg shadow-shadow-ink/50"
               : `group-hover:scale-[1.06] ${current ? "" : "opacity-75 group-hover:opacity-100"}`
           } ${project.stale ? "grayscale" : ""}`}
         >
@@ -274,12 +274,12 @@ function RailLink({
             // Proportional figures, not tabular: a badge centres ONE number, it aligns no column, and a
             // tabular "1" carries a fixed cell's worth of side-bearing that put the ink of "12" 1.02px
             // left of the pill's centre. Measured 2026-08-24 at 10px/600 in the sans UI font.
-            className="pointer-events-none absolute -bottom-[5px] right-[3px] flex h-[16px] min-w-[16px] items-center justify-center rounded-full border-[1.5px] border-bg bg-accent px-[3.5px] text-[10px] font-semibold leading-none proportional-nums text-bg"
+            className="pointer-events-none absolute -bottom-[5px] right-[3px] flex h-[16px] min-w-[16px] items-center justify-center rounded-full border-[1.5px] border-bg bg-accent-fill px-[3.5px] text-[10px] font-semibold leading-none proportional-nums text-on-accent"
           >
             {/* The cap band, not the line box — the same fix the monogram above uses, for the same reason:
                 `items-center` centred the digits' LINE BOX and their ink rode 0.4–0.5px low in the sans
                 UI font (measured 2026-08-24). Trimming the box to baseline→cap height makes the box the
-                ink, so the browser centres it per font with nothing to re-measure when the setting flips. */}
+                ink, so the browser centres it with nothing to re-measure when the type scale moves. */}
             <span style={{ textBox: "trim-both cap alphabetic" } as CSSProperties}>{count}</span>
           </span>
         ) : null}
@@ -367,7 +367,7 @@ export function ProjectIconMenu({
           <RadixDropdown.Content
             align="start"
             sideOffset={6}
-            className="z-[220] min-w-[190px] rounded-lg border border-border bg-panel p-1 shadow-xl shadow-black/40"
+            className="z-[220] min-w-[190px] rounded-lg border border-border bg-panel p-1 shadow-xl shadow-shadow-ink/40"
           >
             <RadixDropdown.Item className={item} onSelect={() => pick.mutate()}>
               {set.isPending ? "Uploading…" : "Choose an icon…"}
@@ -602,7 +602,7 @@ export function ProjectRail() {
           to="/"
           aria-label="All projects"
           aria-current={current ? undefined : "page"}
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted/70 outline-none transition-colors hover:bg-elevated hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted-70 outline-none transition-colors hover:bg-elevated hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60"
         >
           <House size={17} />
         </Link>
@@ -646,7 +646,7 @@ export function ProjectRail() {
           // slot in the same list rather than a control bolted under it. Dotted and not dashed: at 40px
           // a dashed border resolves into four long strokes that read as a frame, where dots read as
           // "nothing here yet" — which is what it is.
-          className="mt-3 flex h-10 w-10 shrink-0 items-center justify-center rounded-[30%] border-[1.5px] border-dotted border-border-strong text-muted/80 outline-none transition-colors hover:border-accent hover:text-fg focus-visible:ring-1 focus-visible:ring-fg/60 disabled:opacity-50"
+          className="mt-3 flex h-10 w-10 shrink-0 items-center justify-center rounded-[30%] border-[1.5px] border-dotted border-border-strong text-muted-80 outline-none transition-colors hover:border-accent hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60 disabled:opacity-50"
         >
           <Plus size={16} />
         </button>

@@ -800,13 +800,14 @@ test("child updates wait for advancing candidate boot progress, but bound stalls
       setInterval(() => {}, 1000)
       if (process.env.FRIZZ_STABLE_ARTIFACT === "old") ready()
       else {
+        let foreignStep = 0
         const publish = () => {
-          progress("runtimes: downloading")
           if (${JSON.stringify(mode)} === "foreign") {
+            // Never publish the candidate's real PID first: the supervisor can observe that
+            // intermediate file before a rewrite and correctly count it as genuine progress.
             const file = bootProgressPath(target.stateDir)
-            const value = JSON.parse(readFileSync(file, "utf8"))
-            writeFileSync(file, JSON.stringify({ ...value, pid: process.ppid }))
-          }
+            writeFileSync(file, JSON.stringify({ pid: process.ppid, step: ++foreignStep, phase: "runtimes: downloading", at: new Date().toISOString() }))
+          } else progress("runtimes: downloading")
         }
         publish()
         if (${JSON.stringify(mode)} !== "stalled") setInterval(publish, 50)

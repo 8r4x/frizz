@@ -1,4 +1,4 @@
-import { ANSWER_FOLLOW_UP_MARKER, BURIED_ANSWERS_HEADER } from "@frizz/shared"
+import { ANSWER_CONTINUATION_INDENT, ANSWER_FOLLOW_UP_MARKER, BURIED_ANSWERS_HEADER } from "@frizz/shared"
 import { splitQuestionBlocks, parseQuestionBlock, type MessageSegment } from "./questionBlocks.ts"
 
 // Detect + parse OUR OWN composed-answer format, so a user message that is a multi-block answer renders
@@ -50,6 +50,14 @@ export interface PairedAnswer extends ParsedAnswer {
 
 const MARKER = /^(\d+)\.\s+(.*)$/
 
+// Fold a continuation line into the row above it, minus the indent the writer put on it (see
+// indentAnswerContinuation). A continuation written before the indent existed carries none, and loses
+// nothing here — only a line that starts with exactly that indent is trimmed.
+function continueAnswer(row: { answer: string }, line: string): void {
+  const text = line.startsWith(ANSWER_CONTINUATION_INDENT) ? line.slice(ANSWER_CONTINUATION_INDENT.length) : line
+  row.answer = row.answer ? `${row.answer}\n${text}` : text
+}
+
 export function parseAnswersMessage(text: string): ParsedAnswer[] | null {
   if (!text) return null
   // CR/CRLF → LF first: a terminal-injected follow-up arrives carriage-return-separated, which would
@@ -68,9 +76,7 @@ export function parseAnswersMessage(text: string): ParsedAnswer[] | null {
     if (m) {
       out.push({ n: Number(m[1]), answer: m[2] })
     } else if (out.length > 0) {
-      // A continuation line of the current answer (an answer that itself spans lines) — keep the break.
-      const last = out[out.length - 1]
-      last.answer = last.answer ? `${last.answer}\n${line}` : line
+      continueAnswer(out[out.length - 1], line) // an answer that itself spans lines — keep the break
     } else if (line.trim()) {
       // Non-empty, non-numbered content before ANY numbered answer → not our clean format; bail.
       return null
@@ -87,7 +93,10 @@ const BURIED_HEADER = BURIED_ANSWERS_HEADER
 // sits OUTSIDE the quotes deliberately: inside them it would read as part of the question the worker
 // asked. Built from the shared token rather than written out — no web source may spell either down-right
 // arrow (subAgentArrow.test.ts), and this parser must read exactly what the server wrote.
-const BURIED_ROW = new RegExp(`^(\\d+)\\.\\s+(${ANSWER_FOLLOW_UP_MARKER}\\s+)?[“"](.*?)[”"]\\s+→\\s+(.*)$`)
+const BURIED_ROW_START = new RegExp(`^(\\d+)\\.\\s+(${ANSWER_FOLLOW_UP_MARKER}\\s+)?[“"]`)
+// The end of a row's quoted question: the FIRST closing quote followed by the arrow. First, so an answer
+// carrying its own arrow (`A. draft → review → merge`) keeps everything after the quote.
+const BURIED_QUESTION_CLOSE = /[”"]\s+→\s+/
 
 // Parse composeAnswerWire's SELF-DESCRIBING form — the one it emits when any answer in the batch targets
 // a BURIED ask (a question the agent scrolled past by continuing to work), where a bare "N." would be
@@ -112,24 +121,51 @@ export function parseBuriedAnswersMessage(text: string): PairedAnswer[] | null {
   i++
 
   const out: PairedAnswer[] = []
+  // A row whose quoted question has not closed yet. THE QUESTION CAN SPAN LINES: a worker's registered
+  // question is stored and restated VERBATIM (questionAnswerMessage), and a question that walks the human
+  // through a procedure carries paragraphs — one that ended in an SSH public key on its own line (2026-09-23)
+  // made the row span five lines, the single-line row pattern missed it, and the whole answer fell through
+  // to frizz's notification card as a broken numbered list, the human's own reply dangling under it as a
+  // paragraph of its own. So a row opens at `N. “` and its question runs to the first `” → `, wherever
+  // that lands; only the ANSWER half continues line by line as before.
+  let open: { n: number; followUp: boolean; lines: string[] } | null = null
+  const close = (o: NonNullable<typeof open>, question: string, answer: string): void => {
+    const row: PairedAnswer = { n: o.n, answer }
+    const q = question.trim()
+    if (q) row.question = q
+    if (o.followUp) row.followUp = true
+    out.push(row)
+  }
   for (; i < lines.length; i++) {
     const line = lines[i]
-    const m = line.match(BURIED_ROW)
-    if (m) {
-      const question = m[3].trim()
-      const row: PairedAnswer = { n: Number(m[1]), answer: m[4] }
-      if (question) row.question = question
-      if (m[2]) row.followUp = true
-      out.push(row)
+    if (open) {
+      // A second row opening before the first closed its quote is checked FIRST: that line carries its
+      // own quote-arrow, which would otherwise close the dangling row around the wrong question.
+      if (BURIED_ROW_START.test(line)) return null // not our format
+      const c = line.match(BURIED_QUESTION_CLOSE)
+      if (c) {
+        close(open, [...open.lines, line.slice(0, c.index)].join("\n"), line.slice(c.index! + c[0].length))
+        open = null
+      } else {
+        open.lines.push(line)
+      }
+      continue
+    }
+    const s = line.match(BURIED_ROW_START)
+    if (s) {
+      const rest = line.slice(s[0].length)
+      const o = { n: Number(s[1]), followUp: Boolean(s[2]), lines: [] as string[] }
+      const c = rest.match(BURIED_QUESTION_CLOSE)
+      if (c) close(o, rest.slice(0, c.index), rest.slice(c.index! + c[0].length))
+      else open = { ...o, lines: [rest] }
     } else if (out.length > 0) {
-      const last = out[out.length - 1] // a multi-line answer's continuation — keep the break
-      last.answer = last.answer ? `${last.answer}\n${line}` : line
+      continueAnswer(out[out.length - 1], line) // a multi-line answer's continuation — keep the break
     } else if (line.trim()) {
       return null // non-empty, non-row content before ANY row → not our format
     }
   }
 
-  if (out.length === 0) return null
+  if (open || out.length === 0) return null // a question that never closed is not a row
   for (const a of out) a.answer = a.answer.replace(/\s+$/, "")
   return out
 }

@@ -30,8 +30,8 @@ const USER_AGENT = "claude-code/2.0.0" // gates by product, not exact version
 const ENDPOINT_TIMEOUT_MS = 5000
 // A healthy reading is trusted for two minutes. The endpoint is one cheap ~200ms GET, and a proactive
 // server-side heartbeat (refreshClaudeQuotaInBackground, wired in context.ts) already keeps this cache
-// warm on a 2-minute cadence, so a lazy read reflects a value at most ~2 minutes old instead of the multi-
-// minute lag a 3-minute TTL served while the fleet burned quota fast. FAIL keeps its tight 10s retry.
+// warm, so a lazy read reflects a value about as recent as the endpoint's rate limit allows (see
+// RATE_LIMIT_DEFAULT_BACKOFF_MS — in practice ~5 minutes, not these 2). FAIL keeps its tight 10s retry.
 const OK_TTL_MS = 2 * 60_000
 const FAIL_TTL_MS = 10_000
 const STALE_MAX_AGE_MS = 24 * 60 * 60_000
@@ -44,6 +44,16 @@ const CLI_TIMEOUT_MS = 30_000
 const LOCK_STALE_MS = 40_000
 const LOCK_WAIT_MS = 15_000
 const LOCK_POLL_MS = 50
+// THE ENDPOINT RATE-LIMITS PER ACCESS TOKEN, HARD: measured 2026-09-19, one success bought a 429 with
+// `retry-after` counting down a fixed ~5-minute window, and every Claude Code session on the machine
+// shares that token's budget (upstream: anthropics/claude-code#31637). A caller that ignores the header
+// spends most of its requests on refusals — a 2-minute heartbeat landed one success in three, and every
+// popover recheck inside the window failed, which is why "Could not refresh" was the popover's usual
+// reading. So the refusal's deadline is PERSISTED beside the reading (`retryAt`) and nothing — heartbeat,
+// stale-read kick, forced recheck — calls the endpoint before it. Upstream also reports 429s carrying
+// `retry-after: 0` or no header at all; those get this default. The cap bounds an absurd header.
+const RATE_LIMIT_DEFAULT_BACKOFF_MS = 5 * 60_000
+const RATE_LIMIT_MAX_BACKOFF_MS = 60 * 60_000
 
 function claudeConfigDir(): string {
   const override = process.env.CLAUDE_CONFIG_DIR
@@ -174,6 +184,19 @@ export function parseClaudeUsage(body: unknown, planType?: string): ProviderQuot
 
 type UsageExec = (claudeBin: string) => Promise<string>
 
+/** The endpoint refused with 429/529. `retryAt` (ms) is when it said another request may succeed. */
+class UsageRateLimited extends Error {
+  constructor(status: number, readonly retryAt: number) {
+    super(`Usage endpoint ${status}`)
+  }
+}
+
+function retryAtFrom(res: Response, now: number): number {
+  const seconds = Number(res.headers.get("retry-after"))
+  const backoff = Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : RATE_LIMIT_DEFAULT_BACKOFF_MS
+  return now + Math.min(backoff, RATE_LIMIT_MAX_BACKOFF_MS)
+}
+
 export interface ClaudeQuotaDeps {
   now?: () => number
   execUsage?: UsageExec
@@ -185,6 +208,8 @@ export interface ClaudeQuotaDeps {
 interface SharedQuota {
   at: number
   quota: ProviderQuota
+  /** Set by a 429: no caller touches the endpoint before this instant (ms). A success clears it. */
+  retryAt?: number
 }
 
 function cachePaths(cacheDir: string, configDir: string) {
@@ -284,11 +309,11 @@ async function refreshQuota(claudeBin: string, deps: ClaudeQuotaDeps, now: numbe
       } else if (res.status === 429 || res.status === 529) {
         // The endpoint asked us to back off. The CLI would just hit the same wall from inside a whole
         // spawned process — fail this refresh and let the cached reading ride.
-        throw new Error(`Usage endpoint ${res.status}`)
+        throw new UsageRateLimited(res.status, retryAtFrom(res, now))
       }
       // 401/403 (stale token the CLI can refresh), 5xx, or a malformed body → try the CLI below.
     } catch (err) {
-      if (err instanceof Error && /^Usage endpoint (429|529)$/.test(err.message)) throw err
+      if (err instanceof UsageRateLimited) throw err
       // Network/timeout failures fall through to the CLI, which retries with its own transport.
     }
   }
@@ -409,17 +434,41 @@ async function tryAcquireLock(path: string): Promise<(() => Promise<void>) | und
   return undefined
 }
 
+const UNAVAILABLE = { status: "unavailable", windows: [], detail: "Claude Code usage unavailable" } satisfies ProviderQuota
+
+function rateLimited(shared: SharedQuota | undefined, now: number): shared is SharedQuota & { retryAt: number } {
+  return shared?.retryAt !== undefined && now < shared.retryAt
+}
+
+// What a caller gets INSTEAD of a request while the endpoint's refusal stands. This is not a failure —
+// the reading is as fresh as the provider allows — so it says when the next one is due rather than
+// "Could not refresh". House duration grammar (`3m`), minutes floored at 1 so it never reads `0m`.
+function serveRateLimited(shared: SharedQuota & { retryAt: number }, now: number): ProviderQuota {
+  if (shared.quota.status !== "ok" || now - shared.at >= STALE_MAX_AGE_MS) return UNAVAILABLE
+  const minutes = (ms: number, round: (n: number) => number) => Math.max(1, round(ms / 60_000))
+  return {
+    ...shared.quota,
+    detail: `Next refresh in ${minutes(shared.retryAt - now, Math.ceil)}m · last updated ${minutes(now - shared.at, Math.round)}m ago`,
+  }
+}
+
 // In-process guard so overlapping polls from one server start at most one background refresh.
 const backgroundRefreshes = new Map<string, Promise<void>>()
 
 function refreshSharedInBackground(paths: { data: string; lock: string }, claudeBin: string, deps: ClaudeQuotaDeps, now: number): void {
   if (backgroundRefreshes.has(paths.data)) return
   const task = (async () => {
+    if (rateLimited(await readShared(paths.data), now)) return
     const release = await tryAcquireLock(paths.lock)
     if (!release) return
     try {
       const quota = await refreshQuota(claudeBin, deps, now)
       await writeShared(paths.data, { at: now, quota })
+    } catch (err) {
+      if (!(err instanceof UsageRateLimited)) throw err
+      // Keep the reading and its age; record only the deadline, so the next tick does not ask again.
+      const current = await readShared(paths.data)
+      await writeShared(paths.data, { ...(current ?? { at: now, quota: UNAVAILABLE }), retryAt: err.retryAt })
     } finally {
       await release().catch(() => {})
     }
@@ -437,11 +486,12 @@ export async function claudeQuotaRefreshSettled(): Promise<void> {
 // polling. The freshness of the sidebar chip (and the scheduler's weekly-reset check) used to be a
 // side effect of someone READING the cache: with a 3-minute stale-while-revalidate TTL and a 60s
 // browser poll, the displayed reading could lag 3–4 minutes — long enough to blow past a limit during
-// a fast fleet burn without the chip ever warning. A server-side heartbeat calling this every two minutes
-// keeps the cache genuinely warm so every read is recent.
+// a fast fleet burn without the chip ever warning. A server-side heartbeat ticking this every 30s
+// keeps the cache as warm as the endpoint allows: a tick is a no-op while the reading is inside its
+// TTL or the endpoint's `retryAt` has not passed.
 //
 // It uses the SAME non-blocking background path a stale read kicks — endpoint-first, one in-flight
-// refresh per process, cross-process lock so N Frizz windows make ~one request every two minutes per account,
+// refresh per process, cross-process lock so N Frizz processes make one request per window per account,
 // and the CLI fallback only for the 401/403 token-refresh case it already owned. It NEVER blocks the
 // caller and swallows every failure (the last known-good reading rides until the next success).
 export async function refreshClaudeQuotaInBackground(claudeBin = "claude", deps: ClaudeQuotaDeps = {}): Promise<void> {
@@ -453,7 +503,12 @@ export async function refreshClaudeQuotaInBackground(claudeBin = "claude", deps:
   } catch {
     return // No shared cache dir → nothing to warm; a lazy read still has its own no-cache fallback.
   }
-  refreshSharedInBackground(cachePaths(cacheDir, configDir), claudeBin, deps, now)
+  const paths = cachePaths(cacheDir, configDir)
+  // The heartbeat ticks faster than the TTL so a refresh lands soon after the endpoint's `retryAt`
+  // rather than up to a whole interval late; a reading still inside its TTL needs nothing.
+  const current = await readShared(paths.data)
+  if (current?.quota.status === "ok" && now - current.at < OK_TTL_MS) return
+  refreshSharedInBackground(paths, claudeBin, deps, now)
 }
 
 // The healthy cache is shared under ~/.frizz so three project windows make one Claude Code request,
@@ -490,32 +545,41 @@ export async function readClaudeQuota(
   if (!options.force && initial?.quota.status === "ok" && now - initial.at < STALE_MAX_AGE_MS) {
     refreshSharedInBackground(paths, claudeBin, deps, now)
     const ageMs = now - initial.at
+    if (ageMs >= 10 * 60_000 && rateLimited(initial, now)) return serveRateLimited(initial, now)
     // Freshly-expired data is normal churn; only label the reading once it is meaningfully old.
     if (ageMs < 10 * 60_000) return initial.quota
     return { ...initial.quota, detail: `Refreshing · last updated ${Math.round(ageMs / 60_000)}m ago` }
   }
 
+  // A forced recheck inside the refusal window cannot succeed; asking anyway only buys another 429.
+  if (rateLimited(initial, now)) return serveRateLimited(initial, now)
+
   let release: (() => Promise<void>) | undefined
   try {
     release = await acquireLock(paths.lock)
     const afterLock = await readShared(paths.data)
+    if (rateLimited(afterLock, now)) return serveRateLimited(afterLock, now)
     // Another Frizz process may have completed the requested refresh while this process waited.
     if (afterLock && afterLock.at !== initial?.at && now - afterLock.at < OK_TTL_MS) return afterLock.quota
 
     const quota = await refreshQuota(claudeBin, deps, now)
     await writeShared(paths.data, { at: now, quota }).catch(() => {})
     return quota
-  } catch {
+  } catch (err) {
     const fallback = await readShared(paths.data)
+    if (err instanceof UsageRateLimited) {
+      const refused = { ...(fallback ?? { at: now, quota: UNAVAILABLE }), retryAt: err.retryAt }
+      await writeShared(paths.data, refused).catch(() => {})
+      return serveRateLimited(refused, now)
+    }
     if (fallback?.quota.status === "ok" && now - fallback.at < STALE_MAX_AGE_MS) {
       return {
         ...fallback.quota,
         detail: `Could not refresh · last updated ${Math.max(1, Math.round((now - fallback.at) / 60_000))}m ago`,
       }
     }
-    const unavailable = { status: "unavailable", windows: [], detail: "Claude Code usage unavailable" } satisfies ProviderQuota
-    await writeShared(paths.data, { at: now, quota: unavailable }).catch(() => {})
-    return unavailable
+    await writeShared(paths.data, { at: now, quota: UNAVAILABLE }).catch(() => {})
+    return UNAVAILABLE
   } finally {
     await release?.().catch(() => {})
   }

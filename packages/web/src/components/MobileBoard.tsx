@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useSnapshot } from "valtio"
-import { Check, ChevronLeft, ChevronRight, Clock, Ellipsis, Hourglass, Plus, Settings as SettingsIcon } from "lucide-react"
+import { AlarmClock, Check, ChevronLeft, ChevronRight, Clock, Ellipsis, Hourglass, Plus, Settings as SettingsIcon } from "lucide-react"
 import type { ThreadView } from "@frizz/shared"
 import { openThread, pushSubAgentDrawer, store, type ConnectionState } from "../store.ts"
 import { asThreads, useBoard } from "../hooks.ts"
 import { prefs } from "../lib/prefs.ts"
 import {
   displayTitle,
+  futureSnoozedUntil,
   lastActiveLabelAt,
   needsAction,
   sectionThreads,
@@ -75,7 +76,7 @@ function StatusBox({ children, tone = "border-muted/45", size = 18 }: { children
 function PlayMark({ size = 18 }: { size?: number }) {
   return (
     <StatusBox size={size}>
-      <svg width={Math.round(size * 0.52)} height={Math.round(size * 0.52)} viewBox="0 0 10 10" aria-hidden className="translate-x-[8%] text-muted/85">
+      <svg width={Math.round(size * 0.52)} height={Math.round(size * 0.52)} viewBox="0 0 10 10" aria-hidden className="translate-x-[8%] text-muted-85">
         <path d="M2.5 1.4 8.2 5 2.5 8.6Z" fill="currentColor" />
       </svg>
     </StatusBox>
@@ -94,7 +95,7 @@ function AskMark({ size = 18 }: { size?: number }) {
 function DoneMark({ size = 18 }: { size?: number }) {
   return (
     <StatusBox size={size} tone="border-muted/40">
-      <Check size={Math.round((size * 10) / 15)} strokeWidth={3} className="text-muted/85" />
+      <Check size={Math.round((size * 10) / 15)} strokeWidth={3} className="text-muted-85" />
     </StatusBox>
   )
 }
@@ -102,13 +103,26 @@ function DoneMark({ size = 18 }: { size?: number }) {
 function HourglassMark({ size = 18 }: { size?: number }) {
   return (
     <StatusBox size={size}>
-      <Hourglass size={Math.round((size * 10) / 15)} className="text-muted/75" />
+      <Hourglass size={Math.round((size * 10) / 15)} className="text-muted-75" />
+    </StatusBox>
+  )
+}
+
+/** The human's own wall-clock park: the rail's muted alarm clock (Sidebar.tsx alarmMark), drawn here at
+ *  the phone's box size — the hourglass's own 10/15 ratio, since the two are one weight family on the
+ *  rail (verify-rail-status-glyphs.mjs: 0.55 of the box each). Only `userSnoozed` rows take it — the
+ *  `snoozed` kind also covers a worker's fenced park and the resting card's event-snooze, which stay on
+ *  the hourglass and the dim. */
+function AlarmMark({ size = 18 }: { size?: number }) {
+  return (
+    <StatusBox size={size}>
+      <AlarmClock size={Math.round((size * 10) / 15)} className="text-muted/75" />
     </StatusBox>
   )
 }
 
 /** One kind → one mark. The kinds are the rail's; only the drawing is the phone's. */
-function ThreadMark({ kind }: { kind: SessionIndicatorKind }) {
+function ThreadMark({ kind, userSnoozed }: { kind: SessionIndicatorKind; userSnoozed?: boolean }) {
   if (kind === "needs-input") return <AskMark />
   if (kind === "stalled") {
     return (
@@ -127,8 +141,10 @@ function ThreadMark({ kind }: { kind: SessionIndicatorKind }) {
       </StatusBox>
     )
   }
-  // Parked on the clock — a Snoozed park, or a queued wait on a TIMER (2026-09-07; it read as `background`
-  // and drew the play mark before). The row's dim, not the mark, is what separates the two.
+  // The human's own snooze rings for them: the alarm clock (2026-09-19; it shared the hourglass before).
+  if (kind === "snoozed" && userSnoozed) return <AlarmMark />
+  // Parked on the clock — a worker's Snoozed park, or a queued wait on a TIMER (2026-09-07; it read as
+  // `background` and drew the play mark before). The row's dim, not the mark, is what separates the two.
   if (kind === "snoozed" || kind === "timer") return <HourglassMark />
   if (kind === "done" || kind === "archived") return <DoneMark />
   // Awaiting a PR: the rail draws GitHub's octocat; the phone has no mark for it yet and stays at rest.
@@ -280,7 +296,7 @@ function MobileThreadRow({
   const gloss = t.lastFence?.kind === "awaiting" ? hintGloss(t.lastFence.hints) : null
   const subs = visibleChildOps(t.subAgents ?? [], "rail")
   return (
-    <div className={kind === "snoozed" ? "opacity-60" : undefined}>
+    <div className={kind === "snoozed" ? "mobile-row-dim" : undefined}>
       <SwipeRow
         open={openSwipe}
         onOpenChange={onOpenSwipe}
@@ -321,10 +337,10 @@ function MobileThreadRow({
       <button
         data-mobile-thread-row={t.id}
         onClick={() => openThread(t.id)}
-        className="flex w-full items-start gap-3 px-4 pb-2.5 pt-2.5 text-left active:bg-white/[0.04]"
+        className="flex w-full items-start gap-3 px-4 pb-2.5 pt-2.5 text-left active:bg-hover"
       >
         <span className="flex h-[21px] shrink-0 items-center justify-center">
-          <ThreadMark kind={kind} />
+          <ThreadMark kind={kind} userSnoozed={futureSnoozedUntil(t) !== undefined} />
         </span>
         <span className="flex min-w-0 flex-1 flex-col gap-[3px]">
           <span className="flex min-w-0 items-baseline gap-3">
@@ -333,12 +349,12 @@ function MobileThreadRow({
               <ProviderMark backend={t.backend} model={t.model} className="ml-1.5" />
             </span>
             {age ? (
-              <span className="shrink-0 text-[11.5px] leading-[21px] tabular-nums text-muted/60">{age}</span>
+              <span className="shrink-0 text-[11.5px] leading-[21px] tabular-nums text-muted-60">{age}</span>
             ) : null}
           </span>
           {gloss ? <span className="min-w-0 truncate text-[13px] leading-[18px] text-muted">{gloss}</span> : null}
           {t.activity ? (
-            <span className="min-w-0 truncate text-[13px] leading-[18px] text-muted/85">{t.activity}</span>
+            <span className="min-w-0 truncate text-[13px] leading-[18px] text-muted-85">{t.activity}</span>
           ) : null}
         </span>
       </button>
@@ -397,21 +413,21 @@ function TabButton({
       onClick={onClick}
       className="flex flex-1 flex-col items-center justify-center gap-[3px] pt-[3px]"
     >
-      <span className={`relative ${active ? "opacity-100" : "opacity-55"}`}>
+      <span className={`relative ${active ? "opacity-100" : "mobile-tab-inactive"}`}>
         {icon}
         {count > 0 ? (
           // The badge is the ASK count in accent when there is one, and the band count in muted
           // otherwise. Yellow means "this many want you" here exactly as it does everywhere else.
           <span
             className={`absolute -right-[11px] -top-[7px] flex h-[16px] min-w-[16px] items-center justify-center rounded-full border-[1.5px] border-bg px-[3.5px] text-[10px] font-semibold tabular-nums ${
-              asks ? "bg-accent text-bg" : "bg-elevated text-muted"
+              asks ? "bg-accent-fill text-on-accent" : "bg-elevated text-muted"
             }`}
           >
             {count}
           </span>
         ) : null}
       </span>
-      <span className={`text-[10px] leading-[12px] tracking-[-0.005em] ${active ? "text-fg" : "text-muted/70"}`}>
+      <span className={`text-[10px] leading-[12px] tracking-[-0.005em] ${active ? "text-fg" : "text-muted-70"}`}>
         {label}
       </span>
     </button>
@@ -429,7 +445,7 @@ function TabButton({
 const CONNECTION_WORD = {
   open: { cls: "bg-live", word: "connected" },
   connecting: { cls: "bg-accent", word: "connecting…" },
-  closed: { cls: "bg-red-500", word: "disconnected" },
+  closed: { cls: "bg-danger-fill", word: "disconnected" },
 } as const
 
 function MoreSheet({ connection, onClose }: { connection: ConnectionState; onClose: () => void }) {
@@ -441,9 +457,9 @@ function MoreSheet({ connection, onClose }: { connection: ConnectionState; onClo
   }, [])
   return (
     <div data-mobile-more-sheet className="fixed inset-0 z-[70] flex flex-col justify-end">
-      <button aria-label="Close" onClick={onClose} className={`absolute inset-0 bg-black/50 transition-opacity duration-200 ${shown ? "opacity-100" : "opacity-0"}`} />
+      <button aria-label="Close" onClick={onClose} className={`absolute inset-0 bg-scrim-50 transition-opacity duration-200 ${shown ? "opacity-100" : "opacity-0"}`} />
       <div
-        className={`relative flex max-h-[80%] flex-col overflow-hidden rounded-t-[14px] border-t border-border-strong bg-panel pb-[calc(24px+env(safe-area-inset-bottom))] shadow-[0_-20px_60px_-10px_rgba(0,0,0,0.8)] transition-transform duration-200 ease-out motion-reduce:transition-none ${
+        className={`relative flex max-h-[80%] flex-col overflow-hidden rounded-t-[14px] border-t border-border-strong bg-panel pb-[calc(24px+env(safe-area-inset-bottom))] shadow-[0_-20px_60px_-10px_var(--sheet-shadow)] transition-transform duration-200 ease-out motion-reduce:transition-none ${
           shown ? "translate-y-0" : "translate-y-full"
         }`}
       >
@@ -463,11 +479,11 @@ function MoreSheet({ connection, onClose }: { connection: ConnectionState; onClo
                 store.showSettings = true
                 onClose()
               }}
-              className="flex min-h-[48px] w-full items-center gap-3 px-4 text-left active:bg-white/[0.04]"
+              className="flex min-h-[48px] w-full items-center gap-3 px-4 text-left active:bg-hover"
             >
-              <SettingsIcon size={16} className="shrink-0 text-muted/70" />
+              <SettingsIcon size={16} className="shrink-0 text-muted-70" />
               <span className="min-w-0 flex-1 text-[16px] leading-[21px] text-fg">Settings</span>
-              <ChevronRight size={17} className="shrink-0 text-muted/45" />
+              <ChevronRight size={17} className="shrink-0 text-muted-45" />
             </button>
           </div>
         </div>
@@ -537,7 +553,7 @@ export function MobileBoard() {
             aria-label="Board actions"
             data-mobile-more
             onClick={() => setMoreOpen(true)}
-            className="ml-auto flex size-[44px] items-center justify-center rounded-full text-fg/85 active:bg-white/[0.06]"
+            className="icon-hover-outline ml-auto flex size-[44px] items-center justify-center rounded-full text-fg/85 active:bg-hover-strong"
           >
             <Ellipsis size={20} />
           </button>
@@ -584,7 +600,7 @@ export function MobileBoard() {
         onClick={() => (store.showNewThread = true)}
         // NOT the accent: a permanent yellow circle would out-shout every ask in the list under it, and
         // the accent means exactly one thing in this product. This is the app's own primary-button fill.
-        className="fixed bottom-[calc(65px+env(safe-area-inset-bottom))] right-4 z-30 flex size-[56px] items-center justify-center rounded-full bg-fg text-bg shadow-lg shadow-black/50 active:opacity-85"
+        className="button-outline fixed bottom-[calc(65px+env(safe-area-inset-bottom))] right-4 z-30 flex size-[56px] items-center justify-center rounded-full bg-fg text-bg shadow-lg shadow-shadow-ink/50 active:opacity-85"
       >
         <Plus size={24} strokeWidth={2.2} />
       </button>

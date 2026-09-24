@@ -1067,7 +1067,14 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
       const entry = findProjectBySegment(split.slug)
       if (!entry) return undefined
       const existing = tenants.appFor(entry.id)
-      if (existing) return { surfaces: existing, url: split.rest }
+      // The open app is only the answer while it was built at the path the registry NOW records: a
+      // renamed checkout is re-registered at its new path by the next `frizz` run or grid add, and the
+      // tenant that opened at the old one has to be reopened there (tenants.activate does that). The
+      // launching project is exempt — its context is owned by the boot phases, not the map, and it is
+      // the one directory this process is standing in.
+      if (existing && (entry.id === project.id || tenants.get(entry.id)?.project.dir === entry.path)) {
+        return { surfaces: existing, url: split.rest }
+      }
       if (!(await tenants.activate(projectFromRegistryEntry(entry)))) return undefined
       const built = tenants.appFor(entry.id)
       return built ? { surfaces: built, url: split.rest } : undefined

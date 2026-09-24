@@ -41,7 +41,9 @@ const FRIZZ_SENDS: Record<string, readonly string[]> = {
   // `sandbox` + `approvalPolicy` ride every resume so a sandbox the operator changed while the thread
   // was detached actually takes effect. They go TOGETHER on purpose: on a cold resume the app-server
   // couples them, and passing one alone resets the other to the config.toml default.
-  "thread/resume": ["threadId", "excludeTurns", "approvalsReviewer", "sandbox", "approvalPolicy"],
+  // `cwd` rides a resume whose recorded cwd no longer exists (a project directory rename) — see
+  // resumeCwdOverride in codex-app-server.ts.
+  "thread/resume": ["threadId", "excludeTurns", "approvalsReviewer", "sandbox", "approvalPolicy", "cwd"],
   "turn/start": ["threadId", "clientUserMessageId", "input", "model", "effort"],
   "turn/steer": ["threadId", "clientUserMessageId", "expectedTurnId", "input"],
   "turn/interrupt": ["threadId", "turnId"],

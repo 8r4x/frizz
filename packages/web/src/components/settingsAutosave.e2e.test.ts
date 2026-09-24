@@ -21,7 +21,7 @@ async function launch(query = "") {
   page.on("console", (m) => { if (m.type() === "error" && !/404|favicon/i.test(m.text())) errors.push(m.text()) })
   page.on("pageerror", (e) => errors.push(String(e)))
   await page.goto(`${baseUrl}/settings-formatting-fixture.html${query}`, { waitUntil: "networkidle0" })
-  await page.waitForSelector("textarea")
+  await page.waitForSelector('button[aria-label="Local file link opener"]')
   return { browser, page, errors }
 }
 
@@ -36,16 +36,16 @@ test("the drawer offers no Save or Cancel — a toggle writes on the click", { s
     )
     assert.ok(!buttons.some((label) => /^(Save|Saving…|Cancel)$/.test(label)), `no Save/Cancel button: ${buttons.join("|")}`)
 
-    // Font: Mono. One discrete intent, so it must be on the wire without a debounce to wait out.
+    // Project sidebar: On. One discrete intent, so it must be on the wire without a debounce to wait out.
     await page.evaluate(() => {
-      const mono = [...document.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Mono")!
-      mono.click()
+      const on = [...document.querySelectorAll("button")].find((b) => b.textContent?.trim() === "On")!
+      on.click()
     })
     await page.waitForFunction(() => (window as unknown as { __settingsWrites: Write[] }).__settingsWrites.length === 1, { timeout: 2000 })
 
     const writes = await readWrites(page)
     assert.equal(writes.length, 1, "exactly one write for one click")
-    assert.equal(writes[0]!.body.font, "mono")
+    assert.equal(writes[0]!.body.projectRail, true)
     // The whole object goes over, not a patch — anything dropped here is a setting silently reset.
     assert.equal(writes[0]!.body.permissionMode, "auto")
     assert.equal(writes[0]!.body.notifications, true)
@@ -59,33 +59,6 @@ test("the drawer offers no Save or Cancel — a toggle writes on the click", { s
   }
 })
 
-test("typing debounces to ONE write, and it carries the last keystroke", { skip: !baseUrl, timeout: 60_000 }, async () => {
-  const { browser, page, errors } = await launch()
-  try {
-    await page.focus("textarea")
-    await page.evaluate(() => {
-      const box = document.querySelector("textarea")!
-      box.setSelectionRange(0, box.value.length)
-    })
-    // 12 keystrokes at ~40ms apart: well inside the 500ms window, so a per-keystroke save would show
-    // up here as a dozen writes.
-    await page.keyboard.type("Investigate", { delay: 40 })
-    const mid = await readWrites(page)
-    assert.equal(mid.length, 0, `nothing written while typing continues, got ${mid.length}`)
-
-    await page.waitForFunction(() => (window as unknown as { __settingsWrites: Write[] }).__settingsWrites.length === 1, { timeout: 3000 })
-    // Give a stray extra write time to arrive before declaring one to be one.
-    await new Promise((r) => setTimeout(r, 600))
-
-    const writes = await readWrites(page)
-    assert.equal(writes.length, 1, `one write for a burst of typing, got ${writes.length}`)
-    assert.equal(writes[0]!.body.githubPrompt, "Investigate", "the write carries the final text")
-    assert.deepEqual(errors, [])
-  } finally {
-    await browser.close()
-  }
-})
-
 // Removing the Save button removed the operator's own retry. A mutation refused mid-update is
 // certified side-effect-free (`retryable` in the envelope), so the drawer has to replay it — otherwise
 // restarting Frizz while Settings is open silently discards whatever was changed in that window.
@@ -93,7 +66,7 @@ test("a replayable refusal is replayed until it lands, and says so meanwhile", {
   const { browser, page, errors } = await launch("?retryableFailures=1")
   try {
     await page.evaluate(() => {
-      [...document.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Mono")!.click()
+      [...document.querySelectorAll("button")].find((b) => b.textContent?.trim() === "On")!.click()
     })
     await page.waitForFunction(() => (window as unknown as { __settingsWrites: Write[] }).__settingsWrites.length === 1, { timeout: 2000 })
     // While the retry is pending the header owns up to it rather than implying the change was stored.
@@ -103,7 +76,7 @@ test("a replayable refusal is replayed until it lands, and says so meanwhile", {
     const writes = await readWrites(page)
     assert.equal(writes[0]!.ok, false, "the first attempt was refused")
     assert.equal(writes[1]!.ok, true, "the replay landed")
-    assert.equal(writes[1]!.body.font, "mono", "the replay carries the same value, not a reverted one")
+    assert.equal(writes[1]!.body.projectRail, true, "the replay carries the same value, not a reverted one")
     await page.waitForFunction(() => /Saved/.test(document.querySelector("header")?.textContent ?? ""), { timeout: 2000 })
     assert.deepEqual(errors, [])
   } finally {
@@ -111,58 +84,15 @@ test("a replayable refusal is replayed until it lands, and says so meanwhile", {
   }
 })
 
-test("closing the drawer flushes a pending keystroke instead of dropping it", { skip: !baseUrl, timeout: 60_000 }, async () => {
+// The drawer has no free-text field any more: the triage prompt — the one DEBOUNCED input — moved to
+// the GitHub picker's own settings popover on 2026-09-19, and its one-write-per-burst, flush-on-close
+// and reset-to-unset behaviours are pinned there (githubPromptPopover.e2e.test.ts). What is left here
+// is what the drawer still does: discrete controls that write on the click, and the replay above.
+test("the drawer carries no prompt editor and no tab strip", { skip: !baseUrl, timeout: 60_000 }, async () => {
   const { browser, page, errors } = await launch()
   try {
-    await page.focus("textarea")
-    await page.evaluate(() => {
-      const box = document.querySelector("textarea")!
-      box.setSelectionRange(0, box.value.length)
-    })
-    await page.keyboard.type("Audit", { delay: 10 })
-    // Immediately — inside the debounce window, with the write still pending.
-    assert.equal((await readWrites(page)).length, 0)
-    await page.evaluate(() => document.querySelector<HTMLButtonElement>('header button[aria-label="Close"]')!.click())
-
-    await page.waitForFunction(() => (window as unknown as { __settingsWrites: Write[] }).__settingsWrites.length === 1, { timeout: 2000 })
-    const writes = await readWrites(page)
-    assert.equal(writes[0]!.body.githubPrompt, "Audit", "the half-typed value survived the close")
-    assert.deepEqual(errors, [])
-  } finally {
-    await browser.close()
-  }
-})
-
-// The GitHub picker's issue and PR prompts merged into ONE field on 2026-08-15. Two things are worth
-// pinning here rather than in a unit test, because both are properties of the RENDERED drawer: that
-// there is exactly one editor (a stray second one would mean a per-kind field survived the merge), and
-// that "Reset to default" clears the override to undefined — the wire value that means "use the server
-// default", as opposed to a copy of the default text frozen into the user's settings.
-test("one prompt editor, and Reset clears the override rather than freezing the default text", { skip: !baseUrl, timeout: 60_000 }, async () => {
-  const { browser, page, errors } = await launch()
-  try {
-    assert.equal(await page.evaluate(() => document.querySelectorAll("textarea").length), 1, "one editor, not one per kind")
-
-    const labels = () => page.evaluate(() => [...document.querySelectorAll("button")].map((b) => (b.textContent ?? "").trim()))
-    assert.ok(!(await labels()).includes("Reset to default"), "no Reset while the box shows the shipped default")
-
-    await page.focus("textarea")
-    await page.evaluate(() => {
-      const box = document.querySelector("textarea")!
-      box.setSelectionRange(0, box.value.length)
-    })
-    await page.keyboard.type("mine", { delay: 30 })
-    await page.waitForFunction(() => (window as unknown as { __settingsWrites: Write[] }).__settingsWrites.length === 1, { timeout: 5000 })
-    assert.equal((await readWrites(page))[0]!.body.githubPrompt, "mine")
-
-    await page.evaluate(() => {
-      [...document.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Reset to default")!.click()
-    })
-    await page.waitForFunction(() => (window as unknown as { __settingsWrites: Write[] }).__settingsWrites.length === 2, { timeout: 5000 })
-    const writes = await readWrites(page)
-    assert.equal(writes[1]!.body.githubPrompt, undefined, "cleared to unset, which is what the server reads as 'default'")
-    assert.ok(!("githubIssuePrompt" in writes[1]!.body), "the merged-away key never reappears on the wire")
-    assert.ok(!("githubPrPrompt" in writes[1]!.body))
+    assert.equal(await page.evaluate(() => document.querySelectorAll("textarea").length), 0)
+    assert.equal(await page.evaluate(() => document.querySelectorAll('[role="tab"]').length), 0)
     assert.deepEqual(errors, [])
   } finally {
     await browser.close()

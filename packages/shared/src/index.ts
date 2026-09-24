@@ -628,19 +628,21 @@ export const AWAITING_HINT_VALUE_MAX = 200
  *  worker's full prose below it and a row per awaited thing under that, so a title that restates either
  *  is the doubling this card has been trimmed for twice.
  *
- *  40 IS MEASURED, NOT CHOSEN. The heading renders at 16px/600 in whichever font the reader has set, and
- *  it WRAPS rather than truncating — so the cap has to fit the NARROWEST card on ONE line or a long park
- *  grows a two-line heading. Measured in a real browser on the queue card at its 368px content box
- *  (awaiting-bg-fixture, 500px viewport): MONO is the binding font at 8.40px per character against sans's
- *  7.21px, and in mono even an all-wide-glyph 40 ("WmWm…") draws 351.88px and still fits. 44 does not —
- *  a 43-character heading measured 369.47px in mono and wrapped to two line boxes.
+ *  THE CAP IS DEFENSIVE, NOT A FIT. It was 40 from 2026-08-26 to 2026-09-19, measured so the heading
+ *  drew on ONE line at the queue card's narrowest (368px content box) in the then-wider mono font — and
+ *  that cut real headings mid-thought: "Spread ask and soundness issue on…" was the whole title a reader
+ *  got of a park on two TypeScript issues (maintainer 2026-09-19: "We are truncating this title way too
+ *  aggressively. It should wrap if need be."). The heading WRAPS (TranscriptCard's head, plus
+ *  `overflow-wrap:anywhere` on this one because a worker can write an unbreakable token), so the cap
+ *  only has to stop a paragraph from becoming a heading: 120 is about two and a half lines at that
+ *  narrowest width in sans (7.21px per character), which is still a heading and never a handoff.
  *
  *  Longer is TRIMMED on a word boundary rather than refused: a worker that overruns still meant something
  *  specific, and "Waiting on the three-platform CI run…" says more than falling back to "Awaiting".
  *
  *  Sentence case, like every other piece of copy in the app (CLAUDE.md), and the trim never invents
  *  capitalisation. */
-export const AWAITING_TITLE_MAX = 40
+export const AWAITING_TITLE_MAX = 120
 
 /** The title as it will RENDER: collapsed to one line, cap-trimmed on a word boundary. Applied at PARSE
  *  time so the stored hint is already what the card draws — every consumer then agrees by construction,
@@ -2306,6 +2308,19 @@ export const BURIED_ANSWERS_HEADER = "Answers to earlier questions:"
  *  the browser's parser reads it, so a literal on either side is a chance to drift. */
 export const ANSWER_FOLLOW_UP_MARKER = "⤷"
 
+/** A MULTI-LINE ANSWER'S CONTINUATION LINES ARE INDENTED on the wire — two spaces, the markdown list
+ *  continuation — and the chat's parsers strip exactly that indent back off. The rows are numbered
+ *  `N. …` lines and the human's typed text goes in RAW, so a typed answer that is itself a numbered
+ *  list ("Do these:\n1. run x\n2. run y") used to FORGE two extra rows: the parser read every `N. `
+ *  line as a row and the card drew three answers for one question (found 2026-09-23, sweeping after
+ *  a multi-line QUESTION broke the same grammar). An indented line can never open a row, so the
+ *  indent is what keeps the human's own text from being read as the wire's structure. Both writers —
+ *  the browser's composeAnswerWire and questionAnswerMessage below — go through this, and a
+ *  continuation written before the indent existed still parses: the parsers only strip an indent
+ *  that is there. */
+export const ANSWER_CONTINUATION_INDENT = "  "
+export const indentAnswerContinuation = (text: string): string => text.replace(/\n/g, `\n${ANSWER_CONTINUATION_INDENT}`)
+
 /** What a DISMISSED question carries in place of an answer. One row like any other (see below), so it
  *  reads to the human as what it is — a question sent on with nothing chosen — while still telling the
  *  worker what to do with it. */
@@ -2350,7 +2365,7 @@ export function questionAnswerMessage(answers: readonly QuestionAnswer[], dismis
   const rows: string[] = []
   const push = (a: QuestionAnswer, followUp: boolean): void => {
     const said = [a.chosen.join(", "), a.text].filter(Boolean).join(" — ")
-    rows.push(`${followUp ? `${ANSWER_FOLLOW_UP_MARKER} ` : ""}“${a.question}” → ${said || "(no answer)"}`)
+    rows.push(`${followUp ? `${ANSWER_FOLLOW_UP_MARKER} ` : ""}“${a.question}” → ${indentAnswerContinuation(said || "(no answer)")}`)
     for (const child of a.followUps ?? []) push(child, true)
   }
   for (const a of answers) push(a, false)
@@ -2928,13 +2943,13 @@ export const Settings = z.object({
    * to, not furniture you sit beside. Hidden, the way back is a breadcrumb in the status bar, which
    * costs a click exactly when you meant to switch and nothing when you did not.
    *
-   * Machine-level, like the font: which chrome you want is a property of the person, not the repo.
+   * Machine-level: which chrome you want is a property of the person, not the repo.
    */
   projectRail: z.boolean(),
-  // UI type family. `mono` (default) is the mono-forward system; `sans` swaps prose/UI chrome to a
-  // sans stack while code / tool lines / the terminal stay mono. Optional so an old settings blob
-  // parses; defaultSettings pins "mono".
-  font: z.enum(["mono", "sans"]).optional(),
+  // There is no `font` key any more. The interface rendered in one of two type families as a machine
+  // setting until 2026-09-19 (maintainer: "let's drop monospace as an option"); every surface is sans
+  // now, and index.html pins `data-font="sans"` on <html> directly. Settings is a non-strict object,
+  // so a stored `font` is stripped the moment an old blob parses — no migration.
   // Default action for a vetted non-image local path in agent markdown. Image clicks always use the
   // OS default viewer so screenshots retain their expected behavior.
   localFileOpener: LocalFileOpener.optional(),

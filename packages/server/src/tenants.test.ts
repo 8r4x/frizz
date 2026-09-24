@@ -54,6 +54,40 @@ test("concurrent activations of one project build exactly one context", async ()
   assert.equal(b, c)
 })
 
+// A checkout renamed in the terminal keeps its id, so the registry hands the same id in at a new path.
+// The context built at the old path would spawn every worker into a directory that is gone.
+test("activating an open project at a different dir closes it and reopens it there", async () => {
+  const stopped: string[] = []
+  const built: string[] = []
+  const tenants = createTenantMap({
+    createContext: async ({ project }) => { built.push(project!.dir); return fakeContext(stopped) },
+  })
+  const before = await tenants.activate(project("p1", "hypergres"))
+  const after = await tenants.activate(project("p1", "porg"))
+  assert.ok(before && after)
+  assert.notEqual(before, after, "a fresh context, built at the new path")
+  assert.deepEqual(built, ["/repos/hypergres", "/repos/porg"])
+  assert.equal(stopped.at(-1), "storage", "the old context was closed in the barrier's order")
+  assert.equal(tenants.active().length, 1)
+  assert.equal(tenants.active()[0].project.dir, "/repos/porg")
+  assert.equal(await tenants.activate(project("p1", "porg")), after, "and the same path is a no-op again")
+})
+
+test("concurrent activations of a moved project build exactly one new context", async () => {
+  let built = 0
+  const tenants = createTenantMap({
+    createContext: async () => {
+      built++
+      await new Promise((r) => setTimeout(r, 5))
+      return fakeContext([])
+    },
+  })
+  await tenants.activate(project("p1", "old"))
+  const [a, b] = await Promise.all([tenants.activate(project("p1", "new")), tenants.activate(project("p1", "new"))])
+  assert.equal(built, 2)
+  assert.equal(a, b)
+})
+
 test("several projects are open at once and addressed by id", async () => {
   const tenants = createTenantMap({ createContext: async () => fakeContext([]) })
   await tenants.activate(project("p1", "frizz"))

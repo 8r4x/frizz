@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
@@ -12,6 +12,7 @@ import {
   forgetProject,
   ICON_SCAN_VERSION,
   listProjects,
+  moveProjectDirectory,
   readRegistry,
   registerProject,
   renameProject,
@@ -172,6 +173,55 @@ test("the grid gets most-recent-first with dead paths marked stale", () => {
     assert.equal(listed[0]?.id, B, "most recently opened first")
     assert.equal(listed[0]?.stale, false)
     assert.equal(listed[1]?.stale, true, "the dead path is marked, not silently dropped")
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("a name override of null hands the card back to the folder's basename", () => {
+  const home = sandbox()
+  try {
+    registerProject({ dir: project(home, "work/place", A), id: A }, home)
+    assert.equal(renameProject(A, { name: "Somewhere" }, home)?.name, "Somewhere")
+    const cleared = renameProject(A, { name: null }, home)
+    assert.equal(cleared?.name, undefined)
+    assert.equal("name" in cleared!, false, "the key is gone, not set to null")
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("moveProjectDirectory renames the folder to a sibling and re-registers the id there", () => {
+  const home = sandbox()
+  try {
+    const before = project(home, "work/hypergres", A)
+    const created = registerProject({ dir: before, id: A }, home)
+    assert.equal(created.action, "created")
+    const moved = moveProjectDirectory(A, "porg", home)
+    assert.equal(moved.path, canonical(join(home, "work/porg")))
+    assert.equal(moved.slug, "hypergres", "the slug is the rename dialog's to change, not the move's")
+    assert.equal(existsSync(before), false)
+    assert.equal(existsSync(join(home, "work/porg/.frizz/.id")), true, "the id travelled with the tree")
+    assert.equal(readRegistry(home).projects.length, 1)
+    assert.equal(moveProjectDirectory(A, "porg", home).path, moved.path, "the same name is a no-op")
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("moveProjectDirectory refuses a path, an occupied target and a missing folder", () => {
+  const home = sandbox()
+  try {
+    registerProject({ dir: project(home, "work/one", A), id: A }, home)
+    project(home, "work/two")
+    assert.throws(() => moveProjectDirectory(A, "else/where", home), /slash/)
+    assert.throws(() => moveProjectDirectory(A, "..", home), /slash/)
+    assert.throws(() => moveProjectDirectory(A, "two", home), /already exists/)
+    assert.throws(() => moveProjectDirectory("nope", "x", home), /No such project/)
+    registerProject({ dir: project(home, "gone/here", B), id: B }, home)
+    rmSync(join(home, "gone/here"), { recursive: true, force: true })
+    assert.throws(() => moveProjectDirectory(B, "there", home), /missing/)
+    assert.equal(existsSync(join(home, "work/one/.frizz/.id")), true, "nothing moved")
   } finally {
     rmSync(home, { recursive: true, force: true })
   }

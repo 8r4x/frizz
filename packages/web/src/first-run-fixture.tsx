@@ -1,4 +1,5 @@
 import { createRoot } from "react-dom/client"
+import { BrowserRouter } from "react-router"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { BoardSnapshot } from "@frizz/shared"
 import { TodosView } from "./components/TodosView.tsx"
@@ -57,6 +58,7 @@ store.board = { projectDir: "/fixture/first-run", projectLabel: "colinhacks/friz
 store.drawers = []
 
 createRoot(document.getElementById("root")!).render(
+  <BrowserRouter>
   <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
     <TooltipProvider>
       {/* App's own wrapper for this branch: the workpane's readable measure, centered, with the sidebar
@@ -67,5 +69,6 @@ createRoot(document.getElementById("root")!).render(
         </div>
       </div>
     </TooltipProvider>
-  </QueryClientProvider>,
+  </QueryClientProvider>
+  </BrowserRouter>,
 )

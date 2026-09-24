@@ -45,6 +45,9 @@ function row(extra: Partial<ThreadView>) {
 // marks in the markup — they are otherwise the same 9px glyph in the same status box.
 const GITHUB = /lucide-github/
 const HOURGLASS = /lucide-hourglass/
+// The human's OWN wall-clock park (2026-09-19; it wore the hourglass before). The hourglass is the
+// worker's timer now, and the two must never be confused either way round.
+const ALARM = /lucide-alarm-clock/
 // The shell's live-work dot is not a lucide icon — it is a styled span (Sidebar.tsx shellDot), so its
 // class is the handle. Deliberately the same mark the Active band's `background` row wears.
 const SHELL_DOT = /frizz-rail-dot/
@@ -59,6 +62,7 @@ test("a PR-watching thread the human snoozed off its card wears GitHub's mark, n
   } as Partial<ThreadView>)
   assert.match(html, GITHUB, "the row says what it is waiting on: the PR")
   assert.doesNotMatch(html, HOURGLASS, "…and never both marks at once")
+  assert.doesNotMatch(html, ALARM, "…nor the human's own clock beside the PR")
 })
 
 test("a PR fence with a co-declared second item also wears GitHub's mark", () => {
@@ -88,7 +92,9 @@ test("a PR fence with a co-declared timer backstop also wears GitHub's mark", ()
 // THE HOURGLASS MEANS "PARKED ON THE CLOCK", AND THE MARK NAMES THE WAIT, NOT THE BAND. The 2026-08-15
 // grammar names LIVE THINGS, so the glyph says which SHAPE is being waited on — the shell's blue dot for
 // the thread's own background work, GitHub's octocat for a PR — and the hourglass is for the parks
-// whose subject is an instant: a user snooze, and a TIMER. What they all still share is that none may
+// whose subject is an instant the WORKER set: a TIMER. The human's own snooze is an instant too, but
+// it is THEIR park, and since 2026-09-19 it wears the alarm clock (maintainer: "something that's
+// snoozed … an icon that's like Zs, or an alarm clock"). What they all still share is that none may
 // borrow GitHub's mark, which is the confusion this file exists to prevent.
 //
 // The timer park drew lucide's Clock from 2026-08-15 until 2026-09-07, when a QUEUED wait on a timer
@@ -101,8 +107,8 @@ test("a PR fence with a co-declared timer backstop also wears GitHub's mark", ()
 // icon name.
 test("each park wears its own shape, and none of them borrows GitHub's mark", () => {
   const cases = [
-    ["a bare user snooze, no fence", { snoozedUntil: FAR_FUTURE }, HOURGLASS],
-    ["a snooze over a declared park", { snoozedUntil: FAR_FUTURE, lastFence: { kind: "awaiting", body: "", hints: [{ kind: "shell", value: "bzvtnt3ig" }] } }, HOURGLASS],
+    ["a bare user snooze, no fence", { snoozedUntil: FAR_FUTURE }, ALARM],
+    ["a snooze over a declared park", { snoozedUntil: FAR_FUTURE, lastFence: { kind: "awaiting", body: "", hints: [{ kind: "shell", value: "bzvtnt3ig" }] } }, ALARM],
     ["a park on its own background work", { lastFence: { kind: "awaiting", body: "", hints: [{ kind: "shell", value: "bzvtnt3ig" }] } }, SHELL_DOT],
     ["a park on a timer", { lastFence: { kind: "awaiting", body: "", hints: [{ kind: "timer", value: "tmr_a1b2c3" }] } }, HOURGLASS],
   ] as [string, Partial<ThreadView>, RegExp][]
@@ -110,6 +116,9 @@ test("each park wears its own shape, and none of them borrows GitHub's mark", ()
     const html = row(extra)
     assert.match(html, mark, `${name} wears its own mark`)
     assert.doesNotMatch(html, GITHUB, `…and ${name} must not claim a PR watch`)
+    // One clock each: the human's alarm and the worker's hourglass never share a row.
+    if (mark === ALARM) assert.doesNotMatch(html, HOURGLASS, `…and ${name} is the human's park, not a worker timer`)
+    if (mark === HOURGLASS) assert.doesNotMatch(html, ALARM, `…and ${name} is a worker timer, not the human's park`)
   }
 })
 
@@ -200,4 +209,5 @@ test("a REGISTERED watch with no fence at all still wears GitHub's mark", () => 
   const snoozed = row({ snoozedUntil: FAR_FUTURE, watches: armedWatch("acme/app#391") } as Partial<ThreadView>)
   assert.match(snoozed, GITHUB)
   assert.doesNotMatch(snoozed, HOURGLASS)
+  assert.doesNotMatch(snoozed, ALARM, "the PR is the subject of the wait, even under the human's park")
 })

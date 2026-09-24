@@ -219,7 +219,7 @@ export function RegisteredQuestionCard({ q, answering: given }: { q: RegisteredQ
           // PLACED BY CONSTRUCTION, not by a fitted constant. `p-1 -m-1` cancels exactly, so the
           // button's layout box is the bare 16px svg while its hit area stays 24px; at 16px lucide's X
           // paints 8px of ink centred in its box, and `card-icon-offset` centres that ink on the
-          // title's cap block in BOTH fonts, with nothing to re-measure when the setting flips.
+          // title's cap block, with nothing to re-measure when the type scale moves.
           // Hand-placed at `-my-1` with a 13px glyph first: the x rode 2.40px above where the offset
           // now puts it. (It shared the corner with the card's HelpCircle kind glyph until 2026-08-31,
           // when the glyph was dropped — a full-strength decoration beside the muted control read as
@@ -234,7 +234,7 @@ export function RegisteredQuestionCard({ q, answering: given }: { q: RegisteredQ
           // 16 box px: `-mx-2` collapses the padding AND that inset, so the layout box IS the ink box
           // — which now lands the ×'s ink flush on the card's right content edge (the p-4 inset),
           // where the dropped glyph's ink sat 1.33px shy of it.
-          className="card-icon-offset -mx-2 -my-1 flex rounded-md p-1 text-muted/70 outline-none transition-colors hover:bg-elevated hover:text-fg disabled:opacity-40"
+          className="icon-hover-outline card-icon-offset -mx-2 -my-1 flex rounded-md p-1 text-muted-70 outline-none transition-colors hover:bg-elevated hover:text-fg disabled:opacity-40"
         >
           <X size={16} />
         </button>
@@ -330,7 +330,7 @@ export function RegisteredQuestionStack({
       className={`flex min-w-0 flex-col gap-3 ${className}`}
     >
       {questions.map((q) => <RegisteredQuestionCard key={q.id} q={q} answering={a} />)}
-      {a.error && <div role="alert" className="break-words text-[11px] leading-snug text-red-300">{a.error}</div>}
+      {a.error && <div role="alert" className="break-words text-[11px] leading-snug text-danger-soft">{a.error}</div>}
       {a.sending && (
         <div role="status" aria-live="polite" className="text-[11px] leading-snug text-muted">Sending…</div>
       )}
@@ -341,7 +341,7 @@ export function RegisteredQuestionStack({
           disabled={a.staged === 0 || a.sending}
           onClick={a.submit}
           onMouseDown={(e) => e.preventDefault()}
-          className="rounded-md bg-fg px-3 py-1.5 text-[12px] font-medium text-bg outline-none transition-all hover:opacity-90 active:scale-95 disabled:opacity-30 disabled:hover:opacity-30"
+          className="button-outline rounded-md bg-fg px-3 py-1.5 text-[12px] font-medium text-bg outline-none transition-all hover:opacity-90 active:scale-95 disabled:opacity-30 disabled:hover:opacity-30"
         >
           Send answers
         </button>

@@ -198,7 +198,7 @@ export function Select({
               ? groups.map((g, gi) => (
                   <RadixMenu.Group key={g.label || `g${gi}`}>
                     {g.label && (
-                      <RadixMenu.Label className={`${selectRowPadding(indicatorPosition)} min-w-0 truncate pb-1 pt-2 text-left text-[10px] font-medium uppercase tracking-wide text-muted/60 first:pt-1`}>
+                      <RadixMenu.Label className={`${selectRowPadding(indicatorPosition)} min-w-0 truncate pb-1 pt-2 text-left text-[10px] font-medium uppercase tracking-wide text-muted-60 first:pt-1`}>
                         {g.label}
                       </RadixMenu.Label>
                     )}
