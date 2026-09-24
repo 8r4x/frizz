@@ -26,7 +26,7 @@ export function AnswersCard({ answers, queued, sourceId }: { answers: PairedAnsw
               // — so this indent is the only place the tree survives into the reading.
               <div key={i} className={a.followUp ? "ml-3 flex flex-col gap-1 border-l border-border pl-3" : "flex flex-col gap-1"}>
                 {a.question && (
-                  <div title={a.question} className="line-clamp-2 min-w-0 text-[11px] leading-snug text-muted">
+                  <div title={a.question} className="line-clamp-2 min-w-0 [overflow-wrap:anywhere] text-[11px] leading-snug text-muted">
                     {a.question}
                   </div>
                 )}
