@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from "react"
-import { BURIED_ANSWERS_HEADER } from "@frizz/shared"
+import { BURIED_ANSWERS_HEADER, indentAnswerContinuation } from "@frizz/shared"
 import { type ChatMessage } from "../hooks.ts"
 import { draftKey, draftStore, useDraftValues, useProjectDir, useThreadSessionId } from "./drafts.ts"
 import { useEagerFollowUp, type EagerFollowUpCallbacks } from "./eagerComposerSubmission.ts"
@@ -154,9 +154,11 @@ export function composeAnswerWire(input: {
 }): string {
   const { answered, live } = input
   if (answered.length > 0 && answered.every((x) => x.isLive) && live) {
-    return `Answers:\n${live.numbered.map(({ n, a }) => `${n}. ${a}`).join("\n")}`
+    // Continuation lines of a typed answer are indented so a typed numbered list cannot open a row of
+    // its own (see indentAnswerContinuation).
+    return `Answers:\n${live.numbered.map(({ n, a }) => `${n}. ${indentAnswerContinuation(a)}`).join("\n")}`
   }
-  return `${BURIED_ANSWERS_HEADER}\n${answered.map((x, k) => `${k + 1}. “${x.question}” → ${x.answer}`).join("\n")}`
+  return `${BURIED_ANSWERS_HEADER}\n${answered.map((x, k) => `${k + 1}. “${x.question}” → ${indentAnswerContinuation(x.answer)}`).join("\n")}`
 }
 
 // The ONE controller for answering ```question blocks — shared by the queue card and the thread chat

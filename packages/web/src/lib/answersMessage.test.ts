@@ -2,6 +2,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { ANSWER_FOLLOW_UP_MARKER, BURIED_ANSWERS_HEADER, DISMISSED_ANSWER, questionAnswerMessage } from "@frizz/shared"
 import { parseAnswersMessage, parseBuriedAnswersMessage, parseAnswersCard, pairAnswersMessage, pairAllAnswers, unrenderedAnswers, isAnswersMessage, type MsgLike } from "./answersMessage.ts"
+import { composeAnswerWire } from "./answering.ts"
 
 test("parses the multi-block composed-answer format into numbered rows", () => {
   const parsed = parseAnswersMessage("Answers:\n1. B. Hard-error with an install hint\n2. A. Preload it")
@@ -99,6 +100,21 @@ test("a multi-line buried answer folds its continuation lines in", () => {
   assert.equal(parsed?.length, 2)
   assert.equal(parsed?.[0].answer, "because\nof this")
   assert.equal(parsed?.[1].answer, "sure")
+})
+
+test("a typed answer that is itself a numbered list cannot forge rows — the writer indents, the reader strips", () => {
+  // 2026-09-23: "Answers:\n1. Do these:\n1. run x\n2. run y" parsed as THREE answers to one question.
+  const typed = "Do these:\n1. run x\n2. run y"
+  const live = composeAnswerWire({ answered: [{ isLive: true, question: "Q", answer: typed }], live: { numbered: [{ n: 1, a: typed }] } })
+  assert.equal(live, "Answers:\n1. Do these:\n  1. run x\n  2. run y")
+  assert.deepEqual(parseAnswersMessage(live), [{ n: 1, answer: typed }])
+  const buried = composeAnswerWire({ answered: [{ isLive: false, question: "Q?", answer: typed }] })
+  assert.deepEqual(parseBuriedAnswersMessage(buried), [{ n: 1, answer: typed, question: "Q?" }])
+  const registered = questionAnswerMessage([{ questionId: "qst_a", question: "Q?", chosen: [], text: typed }])
+  assert.deepEqual(parseBuriedAnswersMessage(registered), [{ n: 1, answer: typed, question: "Q?" }])
+  // The indent is only ever stripped where the writer put it: a continuation from before the indent
+  // existed carries none and reads exactly as it did.
+  assert.deepEqual(parseAnswersMessage("Answers:\n1. because\nof this"), [{ n: 1, answer: "because\nof this" }])
 })
 
 test("a question that spans lines still closes at its quote-arrow — the registered path restates it verbatim", () => {

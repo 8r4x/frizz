@@ -2308,6 +2308,19 @@ export const BURIED_ANSWERS_HEADER = "Answers to earlier questions:"
  *  the browser's parser reads it, so a literal on either side is a chance to drift. */
 export const ANSWER_FOLLOW_UP_MARKER = "⤷"
 
+/** A MULTI-LINE ANSWER'S CONTINUATION LINES ARE INDENTED on the wire — two spaces, the markdown list
+ *  continuation — and the chat's parsers strip exactly that indent back off. The rows are numbered
+ *  `N. …` lines and the human's typed text goes in RAW, so a typed answer that is itself a numbered
+ *  list ("Do these:\n1. run x\n2. run y") used to FORGE two extra rows: the parser read every `N. `
+ *  line as a row and the card drew three answers for one question (found 2026-09-23, sweeping after
+ *  a multi-line QUESTION broke the same grammar). An indented line can never open a row, so the
+ *  indent is what keeps the human's own text from being read as the wire's structure. Both writers —
+ *  the browser's composeAnswerWire and questionAnswerMessage below — go through this, and a
+ *  continuation written before the indent existed still parses: the parsers only strip an indent
+ *  that is there. */
+export const ANSWER_CONTINUATION_INDENT = "  "
+export const indentAnswerContinuation = (text: string): string => text.replace(/\n/g, `\n${ANSWER_CONTINUATION_INDENT}`)
+
 /** What a DISMISSED question carries in place of an answer. One row like any other (see below), so it
  *  reads to the human as what it is — a question sent on with nothing chosen — while still telling the
  *  worker what to do with it. */
@@ -2352,7 +2365,7 @@ export function questionAnswerMessage(answers: readonly QuestionAnswer[], dismis
   const rows: string[] = []
   const push = (a: QuestionAnswer, followUp: boolean): void => {
     const said = [a.chosen.join(", "), a.text].filter(Boolean).join(" — ")
-    rows.push(`${followUp ? `${ANSWER_FOLLOW_UP_MARKER} ` : ""}“${a.question}” → ${said || "(no answer)"}`)
+    rows.push(`${followUp ? `${ANSWER_FOLLOW_UP_MARKER} ` : ""}“${a.question}” → ${indentAnswerContinuation(said || "(no answer)")}`)
     for (const child of a.followUps ?? []) push(child, true)
   }
   for (const a of answers) push(a, false)

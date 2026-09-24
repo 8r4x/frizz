@@ -1,4 +1,4 @@
-import { ANSWER_FOLLOW_UP_MARKER, BURIED_ANSWERS_HEADER } from "@frizz/shared"
+import { ANSWER_CONTINUATION_INDENT, ANSWER_FOLLOW_UP_MARKER, BURIED_ANSWERS_HEADER } from "@frizz/shared"
 import { splitQuestionBlocks, parseQuestionBlock, type MessageSegment } from "./questionBlocks.ts"
 
 // Detect + parse OUR OWN composed-answer format, so a user message that is a multi-block answer renders
@@ -50,6 +50,14 @@ export interface PairedAnswer extends ParsedAnswer {
 
 const MARKER = /^(\d+)\.\s+(.*)$/
 
+// Fold a continuation line into the row above it, minus the indent the writer put on it (see
+// indentAnswerContinuation). A continuation written before the indent existed carries none, and loses
+// nothing here — only a line that starts with exactly that indent is trimmed.
+function continueAnswer(row: { answer: string }, line: string): void {
+  const text = line.startsWith(ANSWER_CONTINUATION_INDENT) ? line.slice(ANSWER_CONTINUATION_INDENT.length) : line
+  row.answer = row.answer ? `${row.answer}\n${text}` : text
+}
+
 export function parseAnswersMessage(text: string): ParsedAnswer[] | null {
   if (!text) return null
   // CR/CRLF → LF first: a terminal-injected follow-up arrives carriage-return-separated, which would
@@ -68,9 +76,7 @@ export function parseAnswersMessage(text: string): ParsedAnswer[] | null {
     if (m) {
       out.push({ n: Number(m[1]), answer: m[2] })
     } else if (out.length > 0) {
-      // A continuation line of the current answer (an answer that itself spans lines) — keep the break.
-      const last = out[out.length - 1]
-      last.answer = last.answer ? `${last.answer}\n${line}` : line
+      continueAnswer(out[out.length - 1], line) // an answer that itself spans lines — keep the break
     } else if (line.trim()) {
       // Non-empty, non-numbered content before ANY numbered answer → not our clean format; bail.
       return null
@@ -153,8 +159,7 @@ export function parseBuriedAnswersMessage(text: string): PairedAnswer[] | null {
       if (c) close(o, rest.slice(0, c.index), rest.slice(c.index! + c[0].length))
       else open = { ...o, lines: [rest] }
     } else if (out.length > 0) {
-      const last = out[out.length - 1] // a multi-line answer's continuation — keep the break
-      last.answer = last.answer ? `${last.answer}\n${line}` : line
+      continueAnswer(out[out.length - 1], line) // a multi-line answer's continuation — keep the break
     } else if (line.trim()) {
       return null // non-empty, non-row content before ANY row → not our format
     }
