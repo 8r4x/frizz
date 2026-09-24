@@ -1877,3 +1877,53 @@ test("an ordinary follow-up beside running sub-agents queues no such note", asyn
   assert.deepEqual(createWakeDeliveryStore(h.storage.scope).list(), [])
   h.storage.close()
 })
+
+// ---- THE INTERRUPT FLAG NEVER REACHES A CODEX OR ACP RUNTIME ----
+// ⌘-Enter's "interrupt and send" is a Claude-broker verb. On Codex the message STEERS the running turn
+// (the app-server owns steer-vs-start), on an ACP agent it QUEUES behind the turn (ACP has no steer),
+// and `turn/interrupt` / `session/cancel` are reserved for ending the thread. A client that sends the
+// flag anyway must get an ordinary delivery — never an interrupt that would end that turn's sub-agents
+// with it (maintainer 2026-09-24: "make sure that we don't kill subagents unnecessarily for Codex
+// either. Or any of the ACPs").
+
+test("followUp with interrupt:true on an app-server Codex row steers the turn and never interrupts it", async () => {
+  const h = harness()
+  const slug = "codex-steer-not-interrupt"
+  codexSessionRow(h.storage, slug, "app-server")
+  const delivered: string[] = []
+  ;(h.ctx as { codexAppServer?: unknown }).codexAppServer = {
+    binding: () => ({ state: "active", currentTurnId: "turn-1" }),
+    turnLiveness: () => ({ bridgeTurn: true, ownedSince: "2026-09-24T00:00:00.000Z" }),
+    followUp: async ({ text }: { text: string }) => void delivered.push(text),
+    interruptTurn: async () => { throw new Error("a Codex turn must never be interrupted for a follow-up") },
+  }
+  try {
+    await h.router.followUp.handler({ input: { slug, sessionId: `sid-${slug}`, message: "also check the tests", interrupt: true } })
+    assert.deepEqual(delivered, ["also check the tests"], "the message steers the running turn")
+  } finally {
+    h.storage.close()
+  }
+})
+
+test("followUp with interrupt:true on an ACP row queues behind the turn and never cancels it", async () => {
+  const h = harness()
+  const slug = "acp-queue-not-cancel"
+  h.storage.upsertSession({ ...row(slug), exited: 0 })
+  h.storage.setBackend(slug, "acp")
+  h.storage.setAcpAgent(slug, "gemini")
+  const delivered: string[] = []
+  ;(h.ctx as { acpBridge?: unknown }).acpBridge = {
+    followUp: async ({ text }: { text: string }) => {
+      delivered.push(text)
+      return { acpSessionId: "acp-1", state: "queued", sessionLive: true, turnActive: true, queued: 1, resumed: false }
+    },
+    interruptTurn: async () => { throw new Error("an ACP turn must never be cancelled for a follow-up") },
+  }
+  try {
+    await h.router.followUp.handler({ input: { slug, sessionId: `sid-${slug}`, message: "also check the tests", interrupt: true, deliveryId: "d-1" } })
+    assert.deepEqual(delivered, ["also check the tests"], "the message queues behind the running turn")
+    assert.equal(h.storage.getSession(slug)?.agent_session_id, "acp-1", "the bridge's session id is pinned on the row")
+  } finally {
+    h.storage.close()
+  }
+})

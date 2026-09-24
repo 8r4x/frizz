@@ -3177,8 +3177,9 @@ export const FollowUpInput = z.object({
   freshProcess: z.boolean().optional(),
   // PREEMPT the operation the worker is running right now, so this message is read at once instead of
   // when that operation finishes. The operator's "Interrupt and send" verb, and opt-in for the same
-  // reason `freshProcess` is: it costs the in-flight tool call's result and the worker's in-memory
-  // sub-agents.
+  // reason `freshProcess` is: it costs the in-flight tool call's result. (It no longer costs the
+  // worker's sub-agents: since 2026-09-24 the broker's SDK query declares `perTaskStopAffordance`,
+  // so the interrupt aborts only the turn and background agents run on.)
   //
   // It exists because delivery is ALREADY as fast as queueing can be. Measured over 14 days of this
   // project's own transcripts, Claude Code drains its queue at the first sampling boundary that
