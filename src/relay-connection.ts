@@ -266,8 +266,8 @@ export function connectRelay(options: RelayConnectionOptions): RelayConnection {
       if (settled !== undefined) { clearTimer(settled); settled = undefined; }
       clearKeepalive();
       socket = null;
-      // The relay is gone, so every terminal riding on it is too. Closing the local ends stops a pty
-      // from being held open by a session nothing can reach any more.
+      // The relay is gone, so every terminal riding on it is too. Closing the local ends stops a
+      // sign-in terminal from being held open by a session nothing can reach any more.
       for (const session of nested.values()) session.close();
       nested.clear();
       cancelRequests();

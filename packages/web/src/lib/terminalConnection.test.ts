@@ -7,7 +7,7 @@ import {
   TERMINAL_PENDING_INPUT_MAX_BYTES,
 } from "./terminalConnection.ts"
 
-test("terminalCloseKind only treats an actual attach PTY exit as a dead session", () => {
+test("terminalCloseKind only treats the sign-in CLI's exit as a dead session", () => {
   assert.equal(terminalCloseKind(1000, "pty exit 0"), "exited")
   assert.equal(terminalCloseKind(1000, "pty exit 1"), "exited")
   assert.equal(terminalCloseKind(1006, ""), "reconnect")

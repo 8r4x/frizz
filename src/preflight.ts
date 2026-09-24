@@ -1,5 +1,4 @@
 import { spawnSync } from "node:child_process";
-export { ensureNativeHelperPermissions, type NativeHelperOptions } from "../packages/server/src/native-helper.ts";
 
 export interface CommandProbe {
   (command: string): boolean;
@@ -41,9 +40,9 @@ export const SUPPORTED_NODE_LINES = [
 /**
  * Node-API version → the release lines that first ship it, from the matrix at nodejs.org/api/n-api.html.
  *
- * Kept even though the database no longer needs it: node-pty and @parcel/watcher are still native
- * addons. The test beside it re-derives the requirement from what those actually build against, so if
- * either raises its Node-API version the suite fails there instead of a user's board dying at boot.
+ * Kept even though the database no longer needs it: @parcel/watcher is still a native addon. The test
+ * beside it re-derives the requirement from what it actually builds against, so if it raises its
+ * Node-API version the suite fails there instead of a user's board dying at boot.
  */
 export const NODE_API_AVAILABILITY: Record<number, ReadonlyArray<{ major: number; minor: number }>> = {
   8: [{ major: 16, minor: 0 }],
@@ -86,7 +85,7 @@ export interface ProviderReadiness {
  * before the work starts.
  *
  * `tmux` was here too, for "terminal panes and interactive provider logins". Neither is true any more:
- * agents run in the broker/app-server over pipes, and sign-in runs on node-pty. Requiring it kept Frizz
+ * agents run in the broker/app-server over pipes, and so does sign-in. Requiring it kept Frizz
  * off Windows, where tmux has no native build, for a dependency nothing used.
  */
 // Nothing here any more. Git was the only entry, and a project is no longer defined as a Git

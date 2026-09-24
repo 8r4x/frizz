@@ -34,6 +34,9 @@ importers:
       jsqr:
         specifier: ^1.4.0
         version: 1.4.0
+      node-pty:
+        specifier: 1.2.0-beta.15
+        version: 1.2.0-beta.15
       puppeteer:
         specifier: ^25.3.0
         version: 25.3.0
@@ -106,9 +109,6 @@ importers:
       hono:
         specifier: ^4.7
         version: 4.12.27
-      node-pty:
-        specifier: 1.2.0-beta.15
-        version: 1.2.0-beta.15
       qrcode-generator:
         specifier: ^2.0.4
         version: 2.0.4
@@ -137,9 +137,6 @@ importers:
       '@parcel/watcher':
         specifier: ^2.5
         version: 2.5.6
-      node-pty:
-        specifier: 1.2.0-beta.15
-        version: 1.2.0-beta.15
 
   packages/shared:
     dependencies:

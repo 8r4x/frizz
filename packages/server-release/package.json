@@ -22,12 +22,10 @@
     "dataEpoch": 1
   },
   "dependencies": {
-    "@parcel/watcher": "^2.5",
-    "node-pty": "1.2.0-beta.15"
+    "@parcel/watcher": "^2.5"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
-      "node-pty",
       "@parcel/watcher"
     ]
   }

@@ -105,7 +105,8 @@ Invoking `nub --test` by hand is fine for one file, but it bypasses that check.
   `--session-id <uuid>`: a Claude thread runs in the session BROKER (a detached daemon holding one
   Agent SDK session, reached over a unix socket or, on Windows, a named pipe), and a Codex thread in
   the app-server. There is no multiplexer and no pane — `/term/:slug` now serves exactly one thing,
-  a provider sign-in attempt, whose pty the login utility owns and shares across every viewing tab.
+  a provider sign-in attempt, whose CLI the login utility runs over pipes and shares across every
+  viewing tab.
 - **An idle thread's daemon is HIBERNATED, and that is not a stop.** A resting worker costs ~504 MB (measured 2026-08-19: the `claude` CLI 289 MB, a chrome-devtools MCP pair 159 MB, the broker daemon 39 MB, the frizz MCP server 17 MB), and 38 idle threads held 19 GB. That browser was Frizz's own always-on mount, dropped 2026-08-26 — Frizz injects only the `frizz` MCP server now, so a thread in a project that brings no browser of its own rests nearer ~345 MB, and one whose `.mcp.json` mounts chrome-devtools is back at the measured figure. So `thread-hibernation.ts` sweeps every 5 minutes and retires the daemon of any broker thread that has rested past the 60-minute prompt-cache TTL with nothing outstanding; the next input cold-resumes it from the on-disk transcript, and above the TTL that resume costs no extra tokens because the cache is already gone. **A hibernated thread is still an ordinary Rested queue row** — same `turn-idle` runtime, same rest time, same card — because the predicate refuses any thread whose dead daemon would change what the board draws. It fails CLOSED on every unknown, and the list of refusals is the point: no telemetry, no transcript, a turn in flight, a pending approval or ask, ANY direct sub-agent (including `stale` and `rested`, unlike the Mark-as-done gate), any background shell, any undelivered send, a daemon under 5 minutes old. `FRIZZ_HIBERNATE_OFF=1` disables it; `FRIZZ_HIBERNATE_IDLE_MINUTES` moves the threshold. Codex is deliberately excluded — one app-server daemon serves every codex thread, so there is no per-thread process to reclaim.
 - **A teardown frizz CHOSE is never reported as a crash.** `attach` reports a death whenever a resume has to cold-start, because that is normally the only way frizz learns a daemon died unobserved — but a permission-mode change, a usage-limit resume and hibernation all end in exactly that cold start. `killBroker(stateDir, sessionId, reason)` leaves a one-shot `<key>.retired` mark beside the broker record, stamped with the dying daemon's `generation`; the next cold fork consumes it and suppresses the report only when the exit record's generation matches. Genuine crash detection is untouched — an unmarked teardown still reports, which is what the negative control in `claude-agent-broker-bridge.test.ts` pins.
 - **Full-snapshot SSE.** The single `/events` SSE channel pushes `{type:"board", board}` full
@@ -235,7 +236,7 @@ whole identity — there is no multiplexer and nothing else to key.
 
 ### Stable server updates
 
-The registry launcher owns the public proxy and recovery listener for its entire lifetime. It installs an exact `frizz-server` version with npm's JavaScript entry under the current Node executable, with lifecycle scripts disabled and a private prefix. No shell startup hooks, global provider upgrades or project permission changes are part of this operation. The only native permission repair targets the installed server generation's own `node-pty` spawn helper.
+The registry launcher owns the public proxy and recovery listener for its entire lifetime. It installs an exact `frizz-server` version with npm's JavaScript entry under the current Node executable, with lifecycle scripts disabled and a private prefix. No shell startup hooks, global provider upgrades or project permission changes are part of this operation. The server needs no lifecycle script on any platform: its only native addon, `@parcel/watcher`, ships each platform's binary as an optional package. Sign-in ran on node-pty until 2026-09-24, which publishes no Linux prebuild, so every Linux and WSL generation died at boot ([#42](https://github.com/colinhacks/frizz/pull/42)); it runs the provider CLI over pipes now.
 
 An update stages and validates the candidate while the old server continues serving, drains the old child, then starts the candidate. After authenticated readiness and a short stability interval, it atomically commits the active generation. Candidate failures restore the previous same-epoch selection. Frontend assets, provider daemons and worker plugin files come from that same immutable server generation; retained generations protect detached workers still using their files.
 
@@ -286,8 +287,6 @@ plugin directory. The published package does this for you.
 - ESM everywhere, `type: "module"`.
 - Comments sparse and dense: design/invariant/provenance only.
 - Tests: `node --test`, colocated `*.test.ts`, minimal + contract-shaped.
-- Known gotcha: node-pty prebuilds lose the exec bit on `spawn-helper` (npm/pnpm strip it) —
-  the server package postinstall re-chmods it. PTY code cannot run inside a sandboxed shell.
 - UI state (unread, lastReadAt, session registry, settings) lives in ONE SQLite file for the whole
   machine, `~/.frizz/ui.db`, every row tagged with its project id (`packages/server/src/frizz-db.ts`;
   one file per project under `~/.frizz/projects/<projectId>/ui.db` until 2026-08-27 — a leftover is

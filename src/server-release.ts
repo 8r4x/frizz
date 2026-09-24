@@ -135,63 +135,14 @@ export function resolveNpmCli(env: NodeJS.ProcessEnv = process.env, executable =
 export interface ServerPackageInstaller {
   install(prefix: string, spec: ServerReleaseSpec): Promise<void>;
   latestVersion(packageName: string): Promise<string>;
-  /**
-   * Make the installed tree's native addons loadable on THIS host, after `install` or for a generation
-   * an older launcher staged. Optional so a test double need not implement it; the npm adapter does.
-   */
-  ensureNativeBinaries?(prefix: string): Promise<void>;
-}
-
-/**
- * Does this node-pty directory hold an addon this host can load? Mirrors node-pty's own loader
- * (`lib/utils.js` `loadNativeModule`): a local build first, then the per-target prebuild.
- *
- * node-pty 1.1 published prebuilds for darwin and win32 ONLY. Elsewhere its `install` script compiles
- * one, and the install below never runs lifecycle scripts, so a Linux server generation had no
- * `pty.node` and every pty (the terminal, provider sign-in) died with "Failed to load native module:
- * pty.node". The pinned 1.2 beta adds glibc linux-x64 and linux-arm64 prebuilds; any other host still
- * needs the build. A musl host is not covered: node-pty's own install skips the build when the glibc
- * prebuild directory exists, and so does this check.
- */
-export function nodePtyHasNativeBinary(packageDir: string, platform: string = process.platform, arch: string = process.arch): boolean {
-  return ["build/Release", "build/Debug", `prebuilds/${platform}-${arch}`]
-    .some((directory) => existsSync(join(packageDir, directory, "pty.node")));
-}
-
-/**
- * A source build of node-pty on a slow box; the same ceiling production-update gives an npm exec that
- * may compile it. Far longer than a registry install needs, so it gets its own limit.
- */
-const NATIVE_BUILD_TIMEOUT_MS = 10 * 60_000;
-
-function nativeToolchainHint(platform: string = process.platform): string {
-  if (platform === "linux")
-    return "install a C++ toolchain (`sudo apt install -y python3 make g++` on Debian/Ubuntu/WSL, `sudo dnf install -y python3 make gcc-c++` on Fedora) and relaunch Frizz";
-  if (platform === "darwin") return "install the Xcode command line tools (`xcode-select --install`) and relaunch Frizz";
-  return "install Python 3 and the Visual Studio C++ build tools, then relaunch Frizz";
-}
-
-/**
- * npm's `allowScripts` policy gates a lifecycle script even when `--ignore-scripts=false` asks for it:
- * npm 12 skips an unapproved one and still exits 0, and npm 11 fails it under `strict-allow-scripts`.
- * `--allow-scripts` is refused in a project-scoped install, so the approval goes in the prefix's own
- * manifest, the one Frizz writes. Written here rather than at staging so a generation an older
- * launcher staged is approved before its repair too. npm 10 ignores the field.
- */
-function approveNodePtyScripts(prefix: string): void {
-  const path = join(prefix, "package.json");
-  const manifest = record(readJson(path));
-  const allowScripts = manifest.allowScripts === undefined ? {} : record(manifest.allowScripts);
-  if (allowScripts["node-pty"] === true) return;
-  writeFileSync(path, `${JSON.stringify({ ...manifest, allowScripts: { ...allowScripts, "node-pty": true } })}\n`, { mode: 0o600 });
 }
 
 export function npmServerPackageInstaller(env: NodeJS.ProcessEnv = process.env): ServerPackageInstaller {
-  const run = (args: string[], cwd?: string, timeout = 180_000): Promise<string> => new Promise((resolveOutput, reject) => {
+  const run = (args: string[], cwd?: string): Promise<string> => new Promise((resolveOutput, reject) => {
     let cli: string;
     try { cli = resolveNpmCli(env); } catch (error) { reject(error); return; }
     execFile(process.execPath, [cli, ...args], {
-      env, cwd, encoding: "utf8", windowsHide: true, timeout, killSignal: "SIGKILL", maxBuffer: 4 * 1024 * 1024,
+      env, cwd, encoding: "utf8", windowsHide: true, timeout: 180_000, killSignal: "SIGKILL", maxBuffer: 4 * 1024 * 1024,
     }, (error, stdout, stderr) => {
       if (error) {
         const tail = stderr.trim().split("\n").slice(-8).join("\n");
@@ -203,34 +154,12 @@ export function npmServerPackageInstaller(env: NodeJS.ProcessEnv = process.env):
     async install(prefix, spec) {
       assertSpec(spec);
       // Never execute dependency lifecycle scripts, read the user's project manifest, or mutate a
-      // global installation. node-pty's shipped helper is repaired inside the server generation, and
-      // a host with no node-pty prebuild gets exactly node-pty's own build (ensureNativeBinaries).
+      // global installation. Nothing in the server needs one: its only native addon, @parcel/watcher,
+      // ships every platform's binary as an optional package.
       await run([
         "install", "--prefix", prefix, "--global=false", "--ignore-scripts", "--no-audit", "--no-fund",
         "--engine-strict", "--install-strategy=hoisted", "--include=optional", "--omit=dev", "--save-exact", `${spec.package}@${spec.version}`,
       ], prefix);
-    },
-    async ensureNativeBinaries(prefix) {
-      const pty = join(prefix, "node_modules", "node-pty");
-      // No node-pty at all is a different, louder failure; and a host with a prebuild needs nothing.
-      if (!existsSync(join(pty, "package.json")) || nodePtyHasNativeBinary(pty)) return;
-      // The ONE lifecycle script this installer runs, and only when the host has no prebuild: node-pty's
-      // own `install` (check prebuilds, else node-gyp). `rebuild <name>` scopes it to that package, not
-      // the tree; `--ignore-scripts=false` beats a user npmrc that disables scripts, which would
-      // otherwise make this a silent no-op.
-      approveNodePtyScripts(prefix);
-      try {
-        await run([
-          "rebuild", "node-pty", "--prefix", prefix, "--global=false", "--ignore-scripts=false", "--no-audit", "--no-fund",
-        ], prefix, NATIVE_BUILD_TIMEOUT_MS);
-      } catch (error) {
-        throw new Error(
-          `Frizz could not build node-pty for ${process.platform}-${process.arch} (it publishes no prebuilt binary here); ` +
-            `${nativeToolchainHint()}.\n${error instanceof Error ? error.message : String(error)}`,
-        );
-      }
-      if (!nodePtyHasNativeBinary(pty))
-        throw new Error(`Frizz built node-pty but found no loadable pty.node for ${process.platform}-${process.arch}; ${nativeToolchainHint()}`);
     },
     async latestVersion(packageName) {
       if (!PACKAGE.test(packageName)) throw new Error("invalid Frizz server package name");
@@ -333,16 +262,9 @@ export class ServerReleaseStore {
       throw new Error("this Frizz server requires a newer launcher or a data migration; restart with a compatible Frizz release");
     const root = this.packageRoot(selected.id);
     // Cache eviction is recoverable, but only by reinstalling the EXACT committed release.
-    let generation: ServerGeneration;
-    if (!existsSync(root)) generation = await this.prepare(spec.version);
-    else {
-      generation = validateServerGeneration(root, spec, selected.id, this.compatibility);
-      // A generation staged by an older launcher on a host without a node-pty prebuild (all of Linux)
-      // holds no loadable pty.node, and the committed pointer would keep selecting it forever. Repair
-      // it in place: the step only ADDS the missing addon, so a worker already executing this
-      // generation's files is unaffected.
-      await this.installer.ensureNativeBinaries?.(join(this.generations, selected.id));
-    }
+    const generation = !existsSync(root)
+      ? await this.prepare(spec.version)
+      : validateServerGeneration(root, spec, selected.id, this.compatibility);
     this.markCompatibilityBeforeLaunch();
     return generation;
   }
@@ -359,8 +281,6 @@ export class ServerReleaseStore {
       // An explicit private manifest keeps npm from discovering a package in an ancestor directory.
       writeFileSync(join(staging, "package.json"), '{"private":true}\n', { mode: 0o600 });
       await this.installer.install(staging, spec);
-      // Before validation and the rename: a generation that cannot open a pty is never selectable.
-      await this.installer.ensureNativeBinaries?.(staging);
       validateServerGeneration(join(staging, "node_modules", spec.package), spec, id, this.compatibility);
       renameSync(staging, destination);
       return validateServerGeneration(this.packageRoot(id), spec, id, this.compatibility);

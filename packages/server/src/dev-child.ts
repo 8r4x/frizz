@@ -14,7 +14,6 @@ import {
 } from "./project-launch.ts"
 import { ShutdownTimeoutError } from "./shutdown.ts"
 import { log as frizzLog } from "./logging.ts"
-import { ensureNativeHelperPermissions } from "./native-helper.ts"
 
 // A control-plane child that dies must leave its reason in the run log, not only on a terminal the
 // launcher may have already repainted past. Its stdio is still inherited, so an uncaught stack would
@@ -88,7 +87,6 @@ try {
     if (!serverTarget || !serverToken) throw new Error("stable server is missing global launch ownership")
     registerProjectLaunchDelegate(serverTarget, serverToken)
   }
-  ensureNativeHelperPermissions()
   const { startServer } = await import("./index.ts")
   const project = projectFromLaunchTarget(target)
   const stableWebDist = process.env.FRIZZ_STABLE_WEB_DIST

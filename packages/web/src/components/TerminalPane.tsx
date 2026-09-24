@@ -18,7 +18,7 @@ function terminalTheme() {
 }
 
 // One xterm + WebSocket per selected thread. Remounts on slug change (keyed by
-// the parent), so mount = attach and unmount = detach. The pty is owned by the login
+// the parent), so mount = attach and unmount = detach. The CLI is owned by the login
 // utility and shared across viewers — a ws close releases only THIS viewer's hold —
 // so reattach cheaply replays the buffered screen state.
 //
@@ -206,9 +206,9 @@ export function TerminalPane({ slug }: { slug: string }) {
     // Resize ONLY when the grid actually changes. The naive version (fit + send on every
     // ResizeObserver tick) fed a repaint storm: each ~1s board push re-rendered the layout, the
     // observer fired on no-op layout passes, every fit() forced an xterm reflow, and every resize
-    // message forced the pty to reflow and repaint the whole screen ("random line-shifting
-    // repaints"). Now we debounce a beat, compute the PROPOSED grid, and touch xterm/the pty only on
-    // a real cols/rows change.
+    // message forced the pty (sign-in ran on one until 2026-09-24; the server ignores a resize now)
+    // to reflow and repaint the whole screen ("random line-shifting repaints"). Now we debounce a
+    // beat, compute the PROPOSED grid, and touch xterm only on a real cols/rows change.
     let resizeTimer: ReturnType<typeof setTimeout> | undefined
     const ro = new ResizeObserver(() => {
       clearTimeout(resizeTimer)

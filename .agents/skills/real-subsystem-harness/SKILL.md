@@ -12,8 +12,8 @@ Browser QA can't reach the broker socket, a real pty, the resume/wake path, SQLi
 scheduler. For those, write a small `nub` harness that spins the **real** resource and asserts the
 **real** function — a mock proves only that your mock matches your belief.
 
-Worked examples in this repo: `scripts/verify-login-pty.mjs` (a real node-pty behind the login transport,
-with a negative control), `scripts/win-claude-resolve-probe.mjs` (the real binary resolver, with a
+Worked examples in this repo: `scripts/verify-relay-terminal.mjs` (the real login utility and `/term`
+transport behind the real relay supervisor, with a negative control), `scripts/win-claude-resolve-probe.mjs` (the real binary resolver, with a
 differential control that proves the tool under test is actually installed), and
 `scripts/verify-orphan-reaper.mjs`.
 

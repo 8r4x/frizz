@@ -5,8 +5,8 @@
 // the same reason for it: on Windows a bare name only reaches a real `.exe`. `npm i -g @openai/codex`
 // writes THREE files into the bin dir — `codex` (a `#!/bin/sh` script), `codex.cmd` and `codex.ps1` —
 // and libuv's PATH search appends only `.com`/`.exe`, so spawn("codex") is ENOENT, spawn("codex.cmd")
-// is EINVAL (node refuses .cmd/.bat without a shell since CVE-2024-27980), and ConPTY's CreateProcessW
-// inside node-pty finds neither. Every reader that probed the bare name — the dispatch preflight's
+// is EINVAL (node refuses .cmd/.bat without a shell since CVE-2024-27980), and the ConPTY that ran
+// sign-in until 2026-09-24 found neither. Every reader that probed the bare name — the dispatch preflight's
 // `codex --version`, the quota chip's `codex app-server`, the sign-in pane's `codex login` — therefore
 // read an installed Codex as "not installed" whenever the runtime pin had fallen back to PATH
 // (Windows audit 2026-09-11, finding 8).

@@ -6,38 +6,12 @@ import { test } from "node:test";
 import {
   assertLaunchPrerequisites,
   assertRequiredExecutables,
-  ensureNativeHelperPermissions,
   MINIMUM_NODE,
   NODE_API_AVAILABILITY,
   providerReadiness,
   SUPPORTED_NODE_LINES,
   supportedNodeRange,
 } from "./preflight.ts";
-
-/** A node-pty layout whose spawn-helper carries `mode`, plus the chmod calls the repair makes. */
-function ptyInstall(mode: number, platform: NodeJS.Platform = "darwin") {
-  // Built with join(), exactly as the repair builds it. The TARGET platform is injected (these cases
-  // are about a darwin/linux install), but the separator is the HOST's: spelled as a `/` literal, the
-  // stub's `unexpected stat of …` threw on win32, the repair swallowed it, and the test read as "no
-  // chmod was made" rather than "the harness and the code disagree about how to spell a path".
-  const pkg = "/pkg/node_modules/node-pty/package.json";
-  const helper = join(dirname(pkg), "prebuilds", `${platform}-arm64`, "spawn-helper");
-  const chmods: Array<[string, number]> = [];
-  return {
-    helper,
-    chmods,
-    options: {
-      platform,
-      arch: "arm64",
-      resolvePty: () => pkg,
-      stat: (path: string) => {
-        if (path !== helper) throw new Error(`unexpected stat of ${path}`);
-        return { mode };
-      },
-      chmod: (path: string, next: number) => chmods.push([path, next]),
-    },
-  };
-}
 
 test("core launch preflight accepts a supported Node host with git", () => {
   assert.doesNotThrow(() =>
@@ -139,7 +113,7 @@ test("the Node floor tracks the releases node:sqlite actually ships in", () => {
 
 // The floor has drifted TWICE, and both times a hand-maintained number went stale against a native
 // dependency. better-sqlite3 is gone now — the database is `node:sqlite`, which has no prebuild to go
-// stale — but node-pty and @parcel/watcher are still addons, so the guard stays and is now general:
+// stale — but @parcel/watcher is still an addon, so the guard stays and is now general:
 // it re-derives the requirement from what EVERY runtime dependency actually builds against.
 //
 // The failure it exists to prevent is not a clean error. better-sqlite3 built with NAPI_VERSION=10
@@ -198,42 +172,4 @@ test("provider readiness disables only the unavailable backend and never require
       command: (name) => name === "git",
     })
   );
-});
-
-test("a registry install that skipped node-pty's post-install gets its spawn-helper made executable", () => {
-  // 0o644 is exactly what `npm i frizz` leaves behind under npm 11's allow-scripts gate; every pty
-  // spawn fails with `posix_spawnp failed.` until the bit is set.
-  const install = ptyInstall(0o100644);
-  ensureNativeHelperPermissions(install.options);
-  assert.deepEqual(install.chmods, [[install.helper, 0o100644 | 0o755]]);
-});
-
-test("an already-executable spawn-helper is left untouched", () => {
-  const install = ptyInstall(0o100755);
-  ensureNativeHelperPermissions(install.options);
-  assert.deepEqual(install.chmods, []);
-});
-
-test("the spawn-helper repair is skipped on Windows, which has no helper binary", () => {
-  const install = ptyInstall(0o100644, "win32");
-  ensureNativeHelperPermissions({
-    ...install.options,
-    stat: () => assert.fail("Windows must not probe for a spawn-helper"),
-  });
-  assert.deepEqual(install.chmods, []);
-});
-
-test("an unresolvable node-pty never breaks launch", () => {
-  const chmods: string[] = [];
-  assert.doesNotThrow(() =>
-    ensureNativeHelperPermissions({
-      platform: "linux",
-      arch: "x64",
-      resolvePty: () => {
-        throw new Error("Cannot find module 'node-pty/package.json'");
-      },
-      chmod: (path) => chmods.push(path),
-    })
-  );
-  assert.deepEqual(chmods, []);
 });

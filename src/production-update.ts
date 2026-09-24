@@ -430,8 +430,8 @@ export function keepUpdateHint(packageName: string, version: string): string {
 /**
  * How long the registry probe (`npm view`) and the install (`npm exec`) may run. Neither had a limit
  * before the audit of 2026-09-11 (finding 6): a registry that accepts the connection and stalls held
- * the probe for npm's own fetch timeout times its retries, and the install — which can compile
- * node-pty from source when no prebuilt matches — held every open tab behind the restart overlay for
+ * the probe for npm's own fetch timeout times its retries, and the install — which can compile a
+ * native dependency from source when no prebuilt matches — held every open tab behind the restart overlay for
  * as long as it took. Thirty seconds answers "is there a newer version" on any working network; ten
  * minutes covers a source build of a native dependency on a slow box and no more.
  */

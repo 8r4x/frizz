@@ -258,7 +258,7 @@ test("a terminal opened while the board is going away resolves rather than hangi
   assert.equal(await opening, null)
 })
 
-test("the visitor closing tells the board, so a pty is not left running for nobody", () => {
+test("the visitor closing tells the board, so a terminal is not left running for nobody", () => {
   const board = fakeSocket()
   const relay = new BoardSocket()
   relay.attach(board.socket)

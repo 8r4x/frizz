@@ -92,29 +92,26 @@ test("parseTermClientMsg: rejects malformed, unknown, oversized, and unsafe term
 })
 
 // The transport now serves ONLY provider sign-in attempts, so its source arrives as a LoginAttachment
-// rather than a per-viewer pty it spawned. FakePty already has the four members the transport uses;
+// rather than a per-viewer pty it spawned. FakePty already has the three members the transport uses;
 // this just presents it through the attachment shape.
 //
 // `close()` maps to kill() HERE so the existing "the transport releases its source on detach"
 // assertions keep their meaning. In production a login attachment's close() is deliberately a no-op —
-// the pty is shared and the login utility owns it (see login-utility.ts).
+// the CLI is shared and the login utility owns it (see login-utility.ts).
 function attachmentFor(fake: FakePty): LoginAttachment {
   return {
     replay: () => "",
     onData: (listener) => { const sub = fake.onData(listener); return () => sub.dispose() },
     onExit: (listener) => { const sub = fake.onExit(() => listener()); return () => sub.dispose() },
     write: (data) => fake.write(data),
-    resize: (cols, rows) => fake.resize(cols, rows),
     close: () => { fake.kill() },
   }
 }
 
 class FakePty {
   writes: string[] = []
-  resizes: [number, number][] = []
   kills = 0
   throwOnWrite = false
-  throwOnResize = false
   #data = new Set<(data: string) => void>()
   #exit = new Set<(event: { exitCode: number; signal?: number }) => void>()
 
@@ -131,11 +128,6 @@ class FakePty {
   write(data: string) {
     if (this.throwOnWrite) throw new Error("dead pty")
     this.writes.push(data)
-  }
-
-  resize(cols: number, rows: number) {
-    if (this.throwOnResize) throw new Error("dead pty")
-    this.resizes.push([cols, rows])
   }
 
   kill() {
@@ -308,8 +300,8 @@ test("terminal websocket: malformed and extra-key messages close only their view
     const valid = await openSocket(port)
     valid.send(JSON.stringify({ t: "resize", cols: 91, rows: 33 }))
     valid.send(JSON.stringify({ t: "input", d: "valid-after-attacks" }))
-    await waitFor(() => ptys[2]?.writes.length === 1 && ptys[2]?.resizes.length === 1)
-    assert.deepEqual(ptys[2].resizes, [[91, 33]])
+    // A resize is valid and accepted, and reaches nothing: the sign-in CLI writes to a pipe.
+    await waitFor(() => ptys[2]?.writes.length === 1)
     assert.deepEqual(ptys[2].writes, ["valid-after-attacks"])
     assert.equal(valid.readyState, WebSocket.OPEN)
     valid.close()
@@ -327,7 +319,6 @@ test("terminal websocket: malformed and extra-key messages close only their view
     recovery.send(JSON.stringify({ t: "resize", cols: 80, rows: 24 }))
     recovery.send(JSON.stringify({ t: "input", d: "still-healthy" }))
     await waitFor(() => ptys[4]?.writes[0] === "still-healthy")
-    assert.deepEqual(ptys[4].resizes, [[80, 24]])
     recovery.close()
   } finally {
     await terminal.close()
@@ -588,11 +579,11 @@ test("terminal websocket: an exact 1 MiB paste is accepted once and a same-windo
   }
 })
 
-test("terminal websocket: a dead PTY exception closes only its viewer and a new attach still works", async () => {
+test("terminal websocket: a dead source's exception closes only its viewer and a new attach still works", async () => {
   const ptys: FakePty[] = []
   const resolveLogin = (() => {
     const fake = new FakePty()
-    if (ptys.length === 0) fake.throwOnResize = true
+    if (ptys.length === 0) fake.throwOnWrite = true
     ptys.push(fake)
     return attachmentFor(fake)
   })
@@ -606,7 +597,7 @@ test("terminal websocket: a dead PTY exception closes only its viewer and a new 
   try {
     const doomed = await openSocket(port)
     const closed = new Promise<number>((resolve) => doomed.once("close", resolve))
-    doomed.send(JSON.stringify({ t: "resize", cols: 80, rows: 24 }))
+    doomed.send(JSON.stringify({ t: "input", d: "into-a-dead-source" }))
     assert.equal(await closed, 1011)
     await waitFor(() => ptys[0].kills === 1)
 
@@ -818,7 +809,6 @@ test("terminal websocket: control-plane boot replacement reclaims the old attach
     freshTab.send(JSON.stringify({ t: "resize", cols: 101, rows: 37 }))
     freshTab.send(JSON.stringify({ t: "input", d: "after-replacement" }))
     await waitFor(() => secondBootPtys[0]?.writes[0] === "after-replacement")
-    assert.deepEqual(secondBootPtys[0]?.resizes, [[101, 37]])
     freshTab.close()
   } finally {
     await firstBoot.close()

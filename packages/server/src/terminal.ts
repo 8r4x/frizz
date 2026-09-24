@@ -1,12 +1,11 @@
 import type { IncomingMessage } from "node:http"
 import type { Duplex } from "node:stream"
 import { WebSocket, WebSocketServer, type RawData } from "ws"
-import pty from "node-pty"
 import { ThreadSlug, type TermClientMsg, FRIZZ_ROUTE_PREFIX } from "@frizz/shared"
 import { isTrustedLocalWebSocketRequest, rejectWebSocketUpgrade } from "./local-origin.ts"
 import type { LoginAttachment } from "./login-utility.ts"
 
-// The /term/<slug> transport. It serves exactly ONE thing: a provider sign-in attempt, whose pty the
+// The /term/<slug> transport. It serves exactly ONE thing: a provider sign-in attempt, whose CLI the
 // login utility owns and shares across every viewing tab.
 //
 // It used to attach each viewer to a `tmux -L <socket> attach-session -t frizz-<slug>` so an operator
@@ -19,8 +18,9 @@ const TERM_PATH = new RegExp(`^${FRIZZ_ROUTE_PREFIX}/term/([^/?]+)$`)
 
 // Keep the raw websocket bounded before JSON parsing, and independently validate the decoded input.
 // A terminal paste may reasonably be large, but accepting ws's 100 MiB default would let one local
-// client pin the control plane. Grid dimensions are deliberately far above any real xterm viewport
-// while staying comfortably inside node-pty's useful range.
+// client pin the control plane. Grid dimensions are deliberately far above any real xterm viewport.
+// A resize is still validated, because the client sends one on every fit, but it reaches nothing: the
+// sign-in CLI writes to a pipe, which has no window size.
 export const TERMINAL_MAX_INPUT_BYTES = 1_048_576
 export const TERMINAL_MAX_MESSAGE_BYTES = TERMINAL_MAX_INPUT_BYTES + 1_024
 export const TERMINAL_MAX_COLS = 1_000
@@ -105,21 +105,20 @@ export interface TerminalServerDeps {
   terminateSocket?: (ws: WebSocket) => void
 }
 
-// The members this transport uses on its source; a login attempt's shared pty is adapted onto it.
+// The members this transport uses on its source; a login attempt's shared CLI is adapted onto it.
 export interface TerminalSource {
   onData(listener: (chunk: string) => void): { dispose(): void }
   onExit(listener: (event: { exitCode: number }) => void): { dispose(): void }
-  resize(cols: number, rows: number): void
   write(data: string): void
   /**
    * Release THIS viewer's hold. A no-op for a login attempt: there is no per-viewer process, and the
-   * shared pty belongs to the login utility while another tab may still be watching.
+   * shared CLI belongs to the login utility while another tab may still be watching.
    */
   kill(): void
 }
 
-// Present a login attempt's SHARED pty as a per-viewer source. Detaching disposes only this viewer's
-// listeners — never the pty, which another tab may still be watching and which the login utility owns.
+// Present a login attempt's SHARED CLI as a per-viewer source. Detaching disposes only this viewer's
+// listeners — never the CLI, which another tab may still be watching and which the login utility owns.
 // The replay is delivered as the first data event so a tab opened after the OAuth URL was printed
 // still sees it, without this transport needing its own scrollback.
 function adaptLoginSource(attachment: LoginAttachment): TerminalSource {
@@ -136,9 +135,8 @@ function adaptLoginSource(attachment: LoginAttachment): TerminalSource {
       const unsubscribe = attachment.onExit(() => listener({ exitCode: 0 }))
       return { dispose: unsubscribe }
     },
-    resize: (cols, rows) => attachment.resize(cols, rows),
     write: (data) => attachment.write(data),
-    // Deliberately does NOT kill the login pty: closing one tab must not abandon an OAuth flow another
+    // Deliberately does NOT kill the login CLI: closing one tab must not abandon an OAuth flow another
     // tab is still driving, and the utility owns that lifecycle (cancel / success / timeout / stop).
     kill: () => attachment.close(),
   }
@@ -226,7 +224,7 @@ export function createTerminalServer(deps: TerminalServerDeps = {}): TerminalSer
   }
 
   // noServer still emits operational errors (for example a malformed extension negotiation). Contain
-  // them to this transport; individual socket/PTY failures have their own close paths below.
+  // them to this transport; individual socket/source failures have their own close paths below.
   wss.on("error", () => {})
 
   const acceptViewer = (ws: WebSocket, slug: string, reservation: Reservation): void => {
@@ -252,7 +250,7 @@ export function createTerminalServer(deps: TerminalServerDeps = {}): TerminalSer
       try {
         ownedDataSubscription?.dispose()
       } catch {
-        // A node-pty implementation may already have removed its data listener during exit.
+        // A source may already have removed its data listener during exit.
       }
       try {
         ownedExitSubscription?.dispose()
@@ -265,8 +263,8 @@ export function createTerminalServer(deps: TerminalServerDeps = {}): TerminalSer
         try {
           ownedTerm.kill()
         } catch {
-          // The sign-in PTY may already have exited. It is never an agent worker: no agent runs on a
-          // pty, so nothing an agent depends on is reachable from here.
+          // The sign-in CLI may already have exited. It is never an agent worker, so nothing an agent
+          // depends on is reachable from here.
         }
       }
     }
@@ -323,7 +321,7 @@ export function createTerminalServer(deps: TerminalServerDeps = {}): TerminalSer
       return
     }
 
-    // /term serves exactly ONE thing now: a provider sign-in attempt, whose pty the login utility
+    // /term serves exactly ONE thing now: a provider sign-in attempt, whose CLI the login utility
     // owns and shares across viewers. An agent thread has no terminal to attach to — it runs inside a
     // detached daemon over pipes — so a slug that is not a live login attempt is simply not attachable.
     let loginAttachment: LoginAttachment | null = null
@@ -339,7 +337,7 @@ export function createTerminalServer(deps: TerminalServerDeps = {}): TerminalSer
     }
 
     try {
-      // The login utility owns the pty, not this transport: two tabs on the sign-in modal must watch
+      // The login utility owns the CLI, not this transport: two tabs on the sign-in modal must watch
       // the SAME OAuth flow rather than racing two of them against one credential store.
       term = adaptLoginSource(loginAttachment)
     } catch {
@@ -369,7 +367,7 @@ export function createTerminalServer(deps: TerminalServerDeps = {}): TerminalSer
       dataSubscription = term.onData((d) => {
         if (cleaned || ws.readyState !== WebSocket.OPEN) return
         if (ws.bufferedAmount + Buffer.byteLength(d, "utf8") > maxOutputBufferBytes) {
-          // Release the PTY and viewer reservation immediately. A short close grace lets a healthy
+          // Release the source and viewer reservation immediately. A short close grace lets a healthy
           // peer receive 1013; a wedged peer is forcibly terminated without retaining resources.
           beginClose(1013, "terminal viewer overloaded")
           return
@@ -383,6 +381,8 @@ export function createTerminalServer(deps: TerminalServerDeps = {}): TerminalSer
         }
       })
       exitSubscription = term.onExit(({ exitCode }) => {
+        // "pty exit" is a wire token, not a description: a tab an older server rendered matches this
+        // exact text to stop reconnecting, and the sign-in has run over pipes since 2026-09-24.
         if (!cleaned) beginClose(1000, `pty exit ${exitCode}`)
       })
     } catch {
@@ -408,13 +408,11 @@ export function createTerminalServer(deps: TerminalServerDeps = {}): TerminalSer
       }
       const activeTerm = term
       if (!activeTerm) return
+      if (msg.t !== "input") return // a resize: nothing on a pipe has a window size to set
       try {
-        if (msg.t === "input") activeTerm.write(msg.d)
-        else {
-          activeTerm.resize(msg.cols, msg.rows)
-        }
+        activeTerm.write(msg.d)
       } catch {
-        // A valid message can still race a dead/detached PTY. Contain that failure to this viewer;
+        // A valid message can still race a dead/detached source. Contain that failure to this viewer;
         // the Frizz control plane and every running agent worker must survive.
         beginClose(1011, "terminal unavailable")
       }
@@ -431,14 +429,14 @@ export function createTerminalServer(deps: TerminalServerDeps = {}): TerminalSer
       }
       // A terminal attach is direct keyboard authority over a live agent. Browser upgrades must carry
       // the exact same loopback Origin as Host; missing, cross-origin, forwarded, and DNS-prefix claims
-      // are denied before a PTY exists.
+      // are denied before a viewer attaches.
       if (!isTrustedLocalWebSocketRequest(req)) {
         rejectWebSocketUpgrade(socket)
         return true
       }
 
       // Reserve synchronously before websocket negotiation. This counts both established viewers and
-      // upgrades in flight, so concurrent handshakes cannot race past either cap before spawning PTYs.
+      // upgrades in flight, so concurrent handshakes cannot race past either cap before attaching.
       const reservation = reserveViewer(slug)
       if (!reservation) {
         rejectWebSocketUpgrade(socket, 429, "Too Many Requests")
@@ -492,7 +490,7 @@ export function createTerminalServer(deps: TerminalServerDeps = {}): TerminalSer
             try {
               ws.terminate()
             } catch {
-              // A failed setup owns no PTY and cannot escape the transport boundary.
+              // A failed setup owns no source and cannot escape the transport boundary.
             }
           }
         })
@@ -505,7 +503,7 @@ export function createTerminalServer(deps: TerminalServerDeps = {}): TerminalSer
       if (closePromise) return closePromise
       closing = true
       closePromise = (async () => {
-        // Reclaim all owned PTYs, reservations, listeners and timers synchronously. Socket close
+        // Reclaim all viewer sources, reservations, listeners and timers synchronously. Socket close
         // events are advisory during replacement: a bounded server drain prevents a broken peer or
         // mocked transport from keeping the old control-plane process alive indefinitely.
         for (const pending of [...pendingUpgrades]) {

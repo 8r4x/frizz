@@ -1,11 +1,11 @@
 // Windows readiness probe for the post-tmux-strip stack. Runs the REAL production functions on a real
-// Windows host: the launch preflight, the three socket-path helpers, and a live node-pty round trip
-// through the rewritten login utility (the transport that replaced tmux).
+// Windows host: the launch preflight, the three socket-path helpers, and a live round trip over pipes
+// through the login utility (the sign-in transport).
 import { createLoginUtility } from "../packages/server/src/login-utility.ts"
 import { claudeBrokerSocketPath } from "../packages/server/src/backend/claude-broker-host.ts"
 import { codexAppServerSocketPath } from "../packages/server/src/backend/codex-app-server-host.ts"
 import { nativeListenSocketPath } from "../packages/server/src/backend/codex-app-server-native.ts"
-import * as pty from "node-pty"
+import { spawn as spawnChild } from "node:child_process"
 
 let fails = 0
 const ok = (c, m) => { console.log(`${c ? "PASS" : "FAIL"}  ${m}`); if (!c) fails++ }
@@ -40,33 +40,33 @@ for (const [label, p] of [
   ok(p.startsWith("\\\\.\\pipe\\"), `${label} socket is a named pipe: ${p}`)
 }
 
-// --- 3. A REAL ConPTY round trip through the rewritten login transport ----------------------------
+// --- 3. A REAL round trip over pipes through the login transport -----------------------------------
 let spawnedPid = null
 const util = createLoginUtility({
+  // Any absolute executable satisfies the resolver; the spawn below runs cmd.exe regardless.
+  claudeBin: process.env.ComSpec ?? "C:\\Windows\\System32\\cmd.exe",
   cwd: process.env.USERPROFILE ?? "C:\\",
-  spawnPty: (_f, _a, opts) => {
-    const t = pty.spawn("cmd.exe", ["/c", "echo LOGIN-READY && pause"], opts)
-    spawnedPid = t.pid
-    return t
+  spawn: (_f, _a, opts) => {
+    const child = spawnChild("cmd.exe", ["/c", "echo LOGIN-READY && pause"], opts)
+    spawnedPid = child.pid
+    return child
   },
 })
 const { attemptId } = util.start("claude")
 await wait(1500)
-ok(spawnedPid > 0 && alive(spawnedPid), `ConPTY spawned a real process (pid ${spawnedPid})`)
+ok(spawnedPid > 0 && alive(spawnedPid), `the login utility spawned a real process (pid ${spawnedPid})`)
 const a = util.attach(attemptId)
-ok(!!a, "a viewer attaches to the ConPTY session")
+ok(!!a, "a viewer attaches to the sign-in session")
 await wait(800)
-ok(a.replay().includes("LOGIN-READY"), "ConPTY output reaches the shared replay buffer")
+ok(a.replay().includes("LOGIN-READY"), "the child's output reaches the shared replay buffer")
 const b = util.attach(attemptId)
-ok(b.replay().includes("LOGIN-READY"), "a late viewer replays what it missed over ConPTY")
-b.resize(100, 40)
-ok(true, "resize against a real ConPTY did not throw")
+ok(b.replay().includes("LOGIN-READY"), "a late viewer replays what it missed")
 b.close()
 await wait(300)
-ok(alive(spawnedPid), "one viewer closing leaves the ConPTY alive")
+ok(alive(spawnedPid), "one viewer closing leaves the child alive")
 util.stop()
 await wait(1200)
-ok(!alive(spawnedPid), "stop() reaps the real ConPTY process — no orphan on Windows")
+ok(!alive(spawnedPid), "stop() reaps the real process — no orphan on Windows")
 
 console.log(fails === 0 ? "\nALL PASS" : `\n${fails} FAILED`)
 process.exit(fails === 0 ? 0 : 1)

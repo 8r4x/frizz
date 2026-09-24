@@ -55,7 +55,7 @@ Two things that will waste your time otherwise:
 nub --test packages/relay/src/board-socket.test.ts packages/relay/src/worker.test.ts
 nub scripts/verify-relay-e2e.mjs        # the frames, on real workerd
 nub scripts/verify-relay-gate.mjs       # a relayed terminal against the REAL access gate
-nub scripts/verify-relay-terminal.mjs   # a REAL pty, through the real terminal server
+nub scripts/verify-relay-terminal.mjs   # a REAL sign-in source, through the real terminal server
 ```
 
 The unit tests drive the Durable Object's state machine against fakes, which proves each half and
@@ -68,11 +68,11 @@ A board in `verify-relay-e2e.mjs` is a toy that accepts every upgrade, so a rela
 identity passes there and would fail against the real thing. `verify-relay-gate.mjs` puts the real
 `RestartSupervisorProxy` in the path: an unauthenticated terminal is REFUSED and never reaches the
 board, and a visitor holding a redeemed session gets through. `verify-relay-terminal.mjs` then replaces
-the toy entirely, driving the real terminal server with a real pty behind the injected login source.
+the toy entirely, driving the real terminal server and the real login utility, with a shell standing in for the provider CLI.
 
 **Two measured facts worth not re-deriving.** `wrangler dev` does NOT enforce Cloudflare's 1 MiB
 WebSocket message cap, so an UNCHUNKED build passes the end-to-end reassembly check — the assertion
-that catches it is the unit test on serialized frame size. And `node-pty` delivers in 1 KiB chunks, so
+that catches it is the unit test on serialized frame size. And a pipe delivers at most 64 KiB per read, so
 a terminal alone can never approach that cap; the message that can is a board snapshot, which is why
 `ws-msg` chunks at all.
 

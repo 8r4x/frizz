@@ -19,8 +19,8 @@
 // WHY A TYPE ASSERTION HERE, RATHER THAN DERIVING `type Api` FROM `AppRouter` IN THE WEB PACKAGE
 // (the shape the old TODO proposed): the web package deliberately compiles with `"types": []` and no
 // node typings, and it does not depend on `@frizz/server`. Importing the router type into the web
-// program would drag every server source it transitively references (node:fs, better-sqlite3,
-// node-pty) into a browser typecheck, which only works by handing browser code the node globals those
+// program would drag every server source it transitively references (node:fs, node:child_process,
+// ws) into a browser typecheck, which only works by handing browser code the node globals those
 // guardrails exist to withhold. Running the comparison from the SERVER program instead costs nothing:
 // this package already typechecks the router and already has node types, `contract.ts` is pure types
 // plus one const so it compiles cleanly with no DOM lib, and `npm run typecheck` already builds this

@@ -1,24 +1,25 @@
 #!/usr/bin/env nub
 /**
- * A REAL terminal — real `terminal.ts`, real pty — driven over the relay.
+ * A REAL terminal — real `terminal.ts`, real sign-in source — driven over the relay.
  *
  * The other two relay harnesses put a TOY WebSocket server where the board should be. It accepts any
  * upgrade and echoes six bytes, which proves the transport and nothing about the conversation the
  * board actually holds. Three things are therefore believed rather than observed: that `terminal.ts`'s
  * own loopback-only gate accepts what the supervisor rewrites, that a real `/term/<slug>` URL survives
- * the hop, and that a pty's output comes back at all.
+ * the hop, and that a sign-in CLI's output comes back at all.
  *
  * A fourth is the reason this exists. The HTTP path chunks a body at 512 KiB because a Cloudflare
  * WebSocket message caps at 1 MiB; the TERMINAL path does neither, in either direction. A toy that
- * echoes what it is sent can never produce a burst large enough to find that. A real pty can.
+ * echoes what it is sent can never produce a burst large enough to find that. A real process can.
  *
- * `/term` serves exactly one thing: a provider sign-in attempt, whose pty the login utility owns. So
- * the login source is injected — the sanctioned seam — and a real pty is put behind it. Everything
- * else in the path is the real thing, and no real credential is touched.
+ * `/term` serves exactly one thing: a provider sign-in attempt, whose CLI the login utility owns. So
+ * the provider CLI is swapped for a shell — the sanctioned seam — and everything else in the path,
+ * the login utility included, is the real thing. No real credential is touched.
  */
 import { createServer, request as httpRequest } from "node:http";
 import { once } from "node:events";
-import { spawn as spawnPty } from "node-pty";
+import { spawn as spawnChild } from "node:child_process";
+import { createLoginUtility } from "../packages/server/src/login-utility.ts";
 // Not on the package's exports map, and adding one for a harness would be a change nobody asked for.
 import { createTerminalServer } from "../packages/server/src/terminal.ts";
 import { RestartSupervisorProxy } from "@frizz/server/restart-supervisor";
@@ -34,28 +35,19 @@ const check = (name, ok, detail = "") => {
   console.log(`${ok ? "  ok  " : " FAIL "} ${name}${detail ? ` — ${detail}` : ""}`);
 };
 
-/** A REAL pty, dressed as the login attachment `/term` is the transport for. */
-function realPtyLogin() {
-  const pty = spawnPty("/bin/sh", ["-i"], { name: "xterm-color", cols: 80, rows: 24, env: { ...process.env, PS1: "$ " } });
-  let replay = "";
-  const listeners = new Set();
-  const exits = new Set();
-  pty.onData((chunk) => {
-    replay += chunk;
-    for (const l of listeners) l(chunk);
+/**
+ * A REAL sign-in source: the shipped login utility, its pipes and its line discipline, with a shell
+ * standing in for the provider CLI. The shell reads the typed lines from its stdin, as `claude auth
+ * login` reads the pasted code.
+ */
+function realLogin() {
+  const utility = createLoginUtility({
+    claudeBin: "/bin/sh",
+    cwd: process.cwd(),
+    spawn: (_file, _args, options) => spawnChild("/bin/sh", [], options),
   });
-  pty.onExit(() => { for (const l of exits) l(); });
-  return {
-    pty,
-    attachment: {
-      replay: () => replay,
-      onData(listener) { listeners.add(listener); return () => listeners.delete(listener); },
-      onExit(listener) { exits.add(listener); return () => exits.delete(listener); },
-      write: (data) => pty.write(data),
-      resize: (cols, rows) => pty.resize(cols, rows),
-      close: () => { /* the utility owns the lifecycle; the harness kills it in finally */ },
-    },
-  };
+  const { attemptId } = utility.start("claude");
+  return { utility, attachment: utility.attach(attemptId) };
 }
 
 /** Open a relayed terminal and collect what comes back up the frames. */
@@ -99,7 +91,7 @@ let terminals = null;
 let child = null;
 let proxy = null;
 try {
-  login = realPtyLogin();
+  login = realLogin();
   // THE REAL TERMINAL SERVER. Only the login source is injected; its gate, slug parsing, framing,
   // rate limits and output buffering are all the shipped code.
   terminals = createTerminalServer({ resolveLogin: (slug) => (slug === SLUG ? login.attachment : null) });
@@ -121,7 +113,7 @@ try {
   const boardOrigin = `http://127.0.0.1:${PORT}`;
   check("a real terminal server sits behind the real supervisor", true, `${PUBLIC_ORIGIN} → 127.0.0.1:${childPort}`);
 
-  // A visitor with no redeemed access code must not reach a pty.
+  // A visitor with no redeemed access code must not reach a terminal.
   const uninvited = open([["host", "ada.frizz.sh"], ["origin", PUBLIC_ORIGIN]], boardOrigin);
   check("an unauthenticated visitor gets no terminal", (await uninvited.opened) === false);
   uninvited.session.close();
@@ -139,19 +131,19 @@ try {
   const cookie = redeem.map((c) => c.split(";")[0]).join("; ");
   const visitor = [["host", "ada.frizz.sh"], ["origin", PUBLIC_ORIGIN], ["cookie", cookie]];
 
-  // THE REAL THING: a real /term/<slug> URL, through the real gate, onto a real pty.
+  // THE REAL THING: a real /term/<slug> URL, through the real gate, onto a real sign-in source.
   const term = open(visitor, boardOrigin);
   check("a redeemed visitor opens a REAL terminal over the relay", (await term.opened) === true);
 
   // The board's own protocol, not an echo: resize first, then a command.
   //
-  // THE MARKER IS ASSEMBLED BY THE SHELL, and it has to be. A pty echoes every keystroke back, so a
+  // THE MARKER IS ASSEMBLED BY THE SHELL, and it has to be. The line discipline echoes every keystroke, so a
   // literal marker in the command matches its own echo and the check passes without the command ever
   // running. Splitting it across two variables means the typed line never contains the marker and only
   // the OUTPUT can.
   term.session.message(JSON.stringify({ t: "resize", cols: 100, rows: 30 }));
-  term.session.message(JSON.stringify({ t: "input", d: "A=RELAY; B=PTY-OK; echo \"$A-$B\"\n" }));
-  const sawOutput = await term.waitFor((o) => o.join("").includes("RELAY-PTY-OK"), "the command's output");
+  term.session.message(JSON.stringify({ t: "input", d: "A=RELAY; B=SHELL-OK; echo \"$A-$B\"\n" }));
+  const sawOutput = await term.waitFor((o) => o.join("").includes("RELAY-SHELL-OK"), "the command's output");
   check("a command typed through the relay runs and its output comes back", sawOutput, JSON.stringify(term.output.join("").slice(-40)));
 
   // THE BURST. A Cloudflare WebSocket message caps at 1 MiB and ws-msg is neither chunked nor checked,
@@ -169,7 +161,7 @@ try {
   );
   const frames = term.output.slice(before);
   const largest = frames.reduce((max, f) => Math.max(max, Buffer.byteLength(f, "utf8")), 0);
-  check("a 4 MiB pty burst arrives in full", sawBurst, `${delivered()} of ${BURST} bytes in ${frames.length} frames`);
+  check("a 4 MiB burst arrives in full", sawBurst, `${delivered()} of ${BURST} bytes in ${frames.length} frames`);
   check(
     "and no single frame exceeds Cloudflare's 1 MiB WebSocket message cap",
     largest > 0 && largest < 1_048_576,
@@ -179,7 +171,7 @@ try {
 } catch (error) {
   check("harness completed", false, error instanceof Error ? error.stack ?? error.message : String(error));
 } finally {
-  try { login?.pty.kill(); } catch { /* already gone */ }
+  login?.utility.stop();
   await terminals?.close().catch(() => undefined);
   await proxy?.close().catch(() => undefined);
   child?.closeAllConnections?.();

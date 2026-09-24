@@ -3436,7 +3436,7 @@ export function createRouter(ctx: AppContext) {
     }),
 
     // Slice B login utility: the sign-in modal's PRIMARY action. Starts (or re-attaches to) the one
-    // live `claude auth login` pty — login-utility.ts runs it on node-pty directly — addressed by a
+    // live `claude auth login` — login-utility.ts runs it over pipes — addressed by a
     // server-issued slug-shaped attempt id the browser then attaches to over the existing hardened
     // /term transport.
     accountLoginStart: mutation({
@@ -3451,7 +3451,7 @@ export function createRouter(ctx: AppContext) {
       handler: async ({ input }) => {
         const { state, backend } = ctx.loginUtility.status(input.attemptId)
         const auth = await readAuthSnapshot({ claudeBin: ctx.claudeBin })
-        // The login CLI finished → the pty is spent; tear it down eagerly so the OAuth bytes don't
+        // The login CLI finished → the attempt is spent; tear it down eagerly so the OAuth bytes don't
         // linger in its replay buffer. Cancel is idempotent.
         if (state === "exited") ctx.loginUtility.cancel(input.attemptId)
         // The login utility only signs into Claude and Codex; an ACP agent logs in with its own CLI.

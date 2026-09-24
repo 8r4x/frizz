@@ -1,9 +1,10 @@
 export type TerminalCloseKind = "exited" | "reconnect"
 export const TERMINAL_PENDING_INPUT_MAX_BYTES = 1_048_576
 
-// node-pty reports a pty that has exited as a clean websocket close whose reason names the PTY
-// exit. Everything else (server replacement, network loss, laptop sleep, proxy reset) is transport
-// failure and should reconnect without throwing away the xterm buffer.
+// The server reports a sign-in CLI that has exited as a clean websocket close whose reason is
+// `pty exit <code>` — a wire token kept from when the CLI ran on a pty. Everything else (server
+// replacement, network loss, laptop sleep, proxy reset) is transport failure and should reconnect
+// without throwing away the xterm buffer.
 export function terminalCloseKind(code: number, reason: string): TerminalCloseKind {
   return code === 1000 && /^pty exit\s+-?\d+$/.test(reason.trim()) ? "exited" : "reconnect"
 }
