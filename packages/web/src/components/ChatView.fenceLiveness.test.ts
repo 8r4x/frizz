@@ -132,12 +132,13 @@ test("every transcript surface cuts staleness at the same index", () => {
   assert.ok(helper, "rendersNothingIn must exist")
   assert.match(helper, /new WeakSet<ChatMessage>\(\)/, "it keys on the message object the entry holds")
   assert.match(helper, /entry\.messageIndex < awaitingCut/, "…cut at the same index the renderer uses")
-  // THE CUT IS THE LAST REST, NOT THE LAST MESSAGE, while the thread is running past it (2026-08-28).
-  // Keyed on the last assistant message, the fence the worker rested on went stale the instant its reply
-  // to the human's bump started streaming — card gone, "Agent rested" hairline left pointing at nothing.
-  // At rest the two agree and the message cut is kept, because the resting card at the tail keys on it.
-  assert.equal(source.match(/const rest = useMemo\(\(\) => \(running \? lastRest\((?:presentationMessages|messages)\) : undefined\), \[running, (?:presentationMessages|messages)\]\)/g)?.length, 2, "both columns anchor on the last rest while running")
-  assert.equal(source.match(/const awaitingCut = rest && rest\.index >= 0 \? rest\.index : lastAgentIdx/g)?.length, 2, "…and fall back to the last message otherwise")
+  // NO AWAITING CARD WHILE THE THREAD RUNS (maintainer 2026-09-24, on a screenshot of a park card above a
+  // spinning worker: "When the agent is running, an awaiting card should never be shown at all"). The cut
+  // sits past every message while running, so each fence in the window is stale; at rest it is the last
+  // assistant message, which the resting card at the tail keys on too. This replaced the 2026-08-28 rule
+  // that kept the card at the last REST while the worker ran past it (lib/restAnchor, deleted with it).
+  assert.equal(source.match(/const awaitingCut = running \? (?:presentationMessages|messages)\.length : lastAgentIdx/g)?.length, 2, "both columns cut past every message while running")
+  assert.doesNotMatch(source, /lastRest\(|restAnchor\.ts|restedAt/, "the rest anchor is gone; nothing keeps a card at a rest the worker ran past")
   assert.equal(source.match(/staleAwaiting=\{awaitingCut >= 0 && (?:row\.)?messageIndex < awaitingCut\}/g)?.length, 2, "the renderer cuts at the same index")
   assert.doesNotMatch(source, /staleAwaiting=\{lastAgentIdx/, "no surface may still cut at the last message")
   // Both transcript columns go through it; a bare `messageRendersNothing` handed to a row builder is the
@@ -162,8 +163,8 @@ test("the awaiting fence renders the resting card itself, not a second card besi
   // the worker's last word, and the tailer clears it on the very user record that bumps the thread — so a
   // card reading the thread alone lost the shell row at the bump while the PR and timer rows (rows in
   // their own registries) survived (maintainer 2026-08-28: "it hides the background shell for some
-  // reason"). `notAfter` is the rest's instant when the card is drawn at a rest the thread moved past.
-  assert.match(code, /return <AwaitingBackgroundCard thread=\{fenceThread\} fence=\{\{ body, hints \}\} notAfter=\{notAfter\} \/>/, "the resting card itself, stating this fence")
+  // reason").
+  assert.match(code, /return <AwaitingBackgroundCard thread=\{fenceThread\} fence=\{\{ body, hints \}\} \/>/, "the resting card itself, stating this fence")
   // Nothing about the awaiting card may be built HERE — a heading, a glyph, a prose call, a chip. Every
   // one of those was a place the two cards could disagree, and one of them is how each difference got in.
   assert.doesNotMatch(code, /Hourglass|Radar|TerminalSquare/, "the glyph is the card's, and it follows the card's title")
@@ -190,29 +191,10 @@ test("the resting card owns the heading, the glyph, the prose and the chips", ()
   assert.match(code, /const prose = awaitingProseBlock\(stated\?\.body\)/)
   assert.match(code, /const unrowed = unrowedWatchRefs\(work, hints\)/, "a PR the table already rows gets no chip — one PR, one place")
   // THE SNOOZE IS THE ONE THING THE RUNTIME MAY CHANGE, and it is withheld rather than re-styled: a
-  // thread running past the rest, or one already bg-snoozed, has no rest for the mutation to park.
-  assert.match(code, /const snoozable = notAfter === undefined && thread !== undefined && showsRestingCard\(thread\) && threadLifecycleAvailability\(thread\)\.snooze/)
+  // thread already bg-snoozed has no rest for the mutation to park.
+  assert.match(code, /const snoozable = thread !== undefined && showsRestingCard\(thread\) && threadLifecycleAvailability\(thread\)\.snooze/)
   // Nothing else may key on the runtime. A second `showsRestingCard` call inside this card is how a
   // heading, a glyph or a truncation rule would start varying with it again.
   assert.equal(code.match(/showsRestingCard\(/g)?.length, 1, "the runtime reaches exactly one decision, and it is the Snooze")
 })
 
-// A FENCELESS REST KEEPS ITS CARD PAST THE BUMP (2026-08-28). A worker that rests on registered rows
-// alone — a PR watcher, a timer — writes no fence, so the only card stating the wait is the resting card
-// at the tail, and that one is gated on turn-idle. The human's reply took it with the tail and left the
-// "Agent rested" hairline pointing at nothing (maintainer: "it renders the third image, which doesn't
-// show the card at all, but it does continue rendering the agent's hairline. This is nuts."). So the
-// message the worker rested on carries the same card itself while the thread runs past that rest.
-test("the message the thread rested on draws the resting card while the thread runs past it", () => {
-  // Both columns hand the rest's instant to exactly the message at the rest anchor, and nothing else.
-  assert.equal(source.match(/restedAt=\{rest && (?:row\.)?messageIndex === rest\.index \? rest\.at \?\? "" : undefined\}/g)?.length, 2, "both thread-view columns pass it")
-  const message = source.match(/export const Message = memo\(function Message\([\s\S]*?\n\}\)/)?.[0]
-  assert.ok(message, "Message must exist")
-  const code = message.replace(/^\s*\/\/.*$/gm, "")
-  // Gated on a row to draw AT THAT INSTANT, and skipped when the message's own fence card already draws
-  // the table — a skip, never a null, for the spacer reason every other skip in this list has.
-  assert.match(code, /if \(restedAt !== undefined && thread && !liveAwaitingFence\.drawn && !m\.fenceRefused && hasAwaitingWaitRows\(thread, \{ notAfter: restedAt \}\)\) \{\n\s+push\(<AwaitingBackgroundCard key="rested-on" thread=\{thread\} notAfter=\{restedAt\} \/>\)/)
-  assert.match(code, /if \(fseg\.fenceKind === "awaiting"\) liveAwaitingFence\.drawn = true/, "a drawn fence card claims the slot")
-  // …and the fence card itself is cut at the same instant.
-  assert.match(code, /notAfter=\{restedAt\}/)
-})

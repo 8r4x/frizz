@@ -79,8 +79,8 @@ test("the card carries its own snooze, and no surface has to hand it one", () =>
   assert.match(bare, /data-wait-kind="agent"/)
 })
 
-// The three exclusions, and they are about the THREAD rather than about the surface it drew on.
-test("a thread nobody can park draws no snooze — foreign, archived, or a rest already bumped past", () => {
+// The exclusions are about the THREAD rather than about the surface it drew on.
+test("a thread nobody can park draws no snooze — foreign or archived", () => {
   const rows = [agent("running")]
   // A FOREIGN session is read-only; router.snoozeAwaitingBackground refuses it, so offering the verb
   // would be an affordance that cannot work.
@@ -89,12 +89,6 @@ test("a thread nobody can park draws no snooze — foreign, archived, or a rest 
   // An ARCHIVED thread has no lifecycle verbs at all — the same rule the footer's strip applies.
   const archived = { ...thread(rows, []), state: "archived" } as Parameters<typeof AwaitingBackgroundCard>[0]["thread"]
   assert.doesNotMatch(render(archived), /Snooze/)
-  // A HISTORICAL rest: this card is drawn in the transcript at a rest the thread has been bumped past,
-  // so there is no current rest to park and the mutation would refuse it.
-  const past = renderToStaticMarkup(
-    createElement(AwaitingBackgroundCard, { thread: thread(rows, []), notAfter: "2099-01-01T00:00:00.000Z" }),
-  )
-  assert.doesNotMatch(past, /Snooze/)
 })
 
 // THE TITLE NAMES THE SHAPE, and there are two of them (maintainer 2026-08-04: 'the card that says
@@ -336,9 +330,9 @@ test("the snooze renders in a recessed footer band, flush with the card's bottom
   const withBand = render(t)
   assert.match(withBand, /-mx-4 mt-3 flex[^"]*border-t border-border bg-fg/, "the band runs edge to edge under a rule")
   assert.match(withBand, /pb-0/, "the shell yields its bottom padding to the band")
-  // No verb => no band, and the shell keeps its own padding (a historical rest).
+  // No verb => no band, and the shell keeps its own padding (an archived thread has no lifecycle verbs).
   const past = renderToStaticMarkup(
-    createElement(AwaitingBackgroundCard, { thread: t, notAfter: "2099-01-01T00:00:00.000Z" }),
+    createElement(AwaitingBackgroundCard, { thread: { ...t, state: "archived" } as typeof t }),
   )
   assert.doesNotMatch(past, /pb-0/)
 })
@@ -409,38 +403,11 @@ test("a fence's shell hint rows the shell the board no longer lists", () => {
   assert.match(render(rested), /data-wait-row="bzvtnt3ig" data-wait-kind="shell"/)
 })
 
-// THE REST'S INSTANT CUTS THE ROWS. Drawn at a rest the thread has been bumped past, the table lists
-// what the worker RESTED ON: a sub-agent its reply dispatched a minute later is mid-turn work, listed
-// under the prompt box, and not something the rest was waiting for. The fence's own hints are exempt —
-// the worker named them, so they were there.
-test("notAfter drops the work that started after the rest", () => {
-  const restedAt = "2026-07-28T10:00:00.000Z"
-  const before = { ...agent("running"), startedAt: "2026-07-28T09:59:00.000Z" }
-  const after = { ...agent("running"), id: "toolu_late", label: "Re-check the flake", startedAt: "2026-07-28T10:00:30.000Z" }
-  const lateWatch = { ...watcher(), id: "github:t:acme/app#2", target: "acme/app#2", createdAt: "2026-07-28T10:01:00.000Z" }
-  const t = {
-    ...thread([before, after], [shell("running")]),
-    watches: [watcher(), lateWatch, timerWatch()],
-  } as Parameters<typeof AwaitingWaitTable>[0]["thread"]
-  const hints = [{ kind: "shell" as const, value: "bzvtnt3ig" }]
-  const html = renderToStaticMarkup(createElement(AwaitingWaitTable, { thread: t, divider: false, hints, notAfter: restedAt }))
-  assert.match(html, /data-wait-row="toolu_a" data-wait-kind="agent"/, "dispatched before the rest: kept")
-  assert.doesNotMatch(html, /toolu_late/, "dispatched after the rest: not what the worker rested on")
-  assert.match(html, /data-wait-row="acme\/app#1"/)
-  assert.doesNotMatch(html, /acme\/app#2/, "registered after the rest: dropped too")
-  assert.match(html, /data-wait-kind="timer"/)
-  assert.match(html, /data-wait-row="bzvtnt3ig"/, "the fence's own shell is exempt")
-  // No instant → no cut, which is every other surface.
-  assert.match(renderToStaticMarkup(createElement(AwaitingWaitTable, { thread: t, divider: false, hints })), /toolu_late/)
-})
-
-// THE GATE for drawing the card at a bumped rest: a card with a heading and no rows says less than
-// nothing, and a null pushed into the message's block list still spends a spacer — so the caller asks
-// first, off the same rows the table would draw.
+// THE GATE for spending a card: a card with a heading and no rows says less than nothing, so a caller
+// asks first, off the same rows the table would draw.
 test("hasAwaitingWaitRows agrees with the table", () => {
   const rows = { ...thread([], []), watches: [watcher()] } as Parameters<typeof AwaitingWaitTable>[0]["thread"]
   assert.equal(hasAwaitingWaitRows(rows), true)
   assert.equal(hasAwaitingWaitRows({ ...thread([], [shell("running")]), watches: [] } as Parameters<typeof AwaitingWaitTable>[0]["thread"]), false, "an undeclared shell is no row")
   assert.equal(hasAwaitingWaitRows({ ...thread([], [shell("running")]), watches: [] } as Parameters<typeof AwaitingWaitTable>[0]["thread"], { hints: [{ kind: "shell", value: "vite dev" }] }), true, "…a declared one is")
-  assert.equal(hasAwaitingWaitRows(rows, { notAfter: "2026-07-28T08:00:00.000Z" }), false, "registered after the rest: nothing to draw")
 })
