@@ -9,6 +9,7 @@ import { mountRouter } from "@frizz/rpc/server"
 import { DISPATCH_TASK_BANNER_MARKER, type BoardSnapshot, type Settings, type ThreadView, type TranscriptMessage } from "@frizz/shared"
 import type { BoardManager } from "./board.ts"
 import { appendDelivery, parseDeliveryLedger, projectDeliveryLedger } from "./delivery-ledger.ts"
+import { createWakeDeliveryStore } from "./wake-store.ts"
 import { Emitter } from "./bus.ts"
 import { createClaudeBackend } from "./backend/claude.ts"
 import {
@@ -1829,4 +1830,49 @@ test("projectAdd: the home directory itself is refused, and nothing is written",
   } finally {
     rmSync(home, { recursive: true, force: true })
   }
+})
+
+// ── The interrupt's collateral: background sub-agents ─────────────────────────────────────────────
+// The SDK's interrupt aborts every background task the turn owned, and the runtime tells the worker
+// nothing — so the worker goes on believing the child is live and parks on its id (nub thread
+// `looks-like-my-github-account-was`, 2026-09-24, twice). The router snapshots the running children
+// before the frame goes out and, once the tailer stops listing them, queues ONE note naming them.
+test("interrupt and send queues a note naming the sub-agents the tailer then sees end", async () => {
+  let interrupted = false
+  const running = { subAgents: [{ id: "toolu_child", taskId: "abc9b9b5f0da4c677", label: "Implementing four Keyward daemon changes", state: "running", startedAt: "2026-09-24T03:00:00.000Z" }] }
+  const tailer = { ...noopTailer, get: () => ({ turn: "in-flight", ...(interrupted ? { subAgents: [] } : running) }) as never }
+  const h = harness(tailer)
+  const slug = "interrupt-kills"
+  h.storage.upsertSession(row(slug))
+  h.storage.setBackend(slug, "claude")
+  h.storage.setClaudeRuntime(slug, "broker")
+  ;(h.ctx as { claudeBroker?: unknown }).claudeBroker = {
+    followUp: async () => {},
+    interruptTurn: () => { interrupted = true; return true },
+  }
+  await h.router.followUp.handler({
+    input: { slug, sessionId: `sid-${slug}`, message: "it keeps focusing spontaneously", deliveryId: "d-kill", interrupt: true },
+  })
+  const rows = createWakeDeliveryStore(h.storage.scope).list()
+  assert.equal(rows.length, 1, "one note for one interrupt")
+  assert.equal(rows[0].fenceId.startsWith("interrupt-ended:"), true)
+  assert.match(rows[0].message, /`abc9b9b5f0da4c677` — Implementing four Keyward daemon changes/)
+  // And it is claimable NOW, not after the quiet window: the worker is mid-turn on the very send that
+  // killed the child, and that turn is where it decides what to wait on.
+  assert.ok(rows[0].nextAttemptAt <= Date.now())
+  h.storage.close()
+})
+
+test("an ordinary follow-up beside running sub-agents queues no such note", async () => {
+  const running = { subAgents: [{ id: "toolu_child", taskId: "abc9b9b5f0da4c677", label: "child", state: "running", startedAt: "2026-09-24T03:00:00.000Z" }] }
+  const tailer = { ...noopTailer, get: () => ({ turn: "in-flight", ...running }) as never }
+  const h = harness(tailer)
+  const slug = "no-interrupt"
+  h.storage.upsertSession(row(slug))
+  h.storage.setBackend(slug, "claude")
+  h.storage.setClaudeRuntime(slug, "broker")
+  ;(h.ctx as { claudeBroker?: unknown }).claudeBroker = { followUp: async () => {}, interruptTurn: () => true }
+  await h.router.followUp.handler({ input: { slug, sessionId: `sid-${slug}`, message: "whenever", deliveryId: "d-plain" } })
+  assert.deepEqual(createWakeDeliveryStore(h.storage.scope).list(), [])
+  h.storage.close()
 })

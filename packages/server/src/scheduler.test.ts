@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { wakeDeliveryToken } from "@frizz/shared"
 import { createStorage, type Storage, type SessionRow } from "./storage.ts"
-import { createScheduler, parsePrRef, ghPrViewArgs, evalRollup, parseGithubReviewActivities, isBotGithubActor, MID_TURN_HOLD_MAX_MS, type GithubReviewActivity, type PrRef, type PrStatus } from "./scheduler.ts"
+import { createScheduler, enqueueInterruptEndedWake, parsePrRef, ghPrViewArgs, evalRollup, parseGithubReviewActivities, isBotGithubActor, MID_TURN_HOLD_MAX_MS, type GithubReviewActivity, type PrRef, type PrStatus } from "./scheduler.ts"
 import { createGithubReviewFetcher, type GithubReviewFetchResult } from "./github-review.ts"
 import { createWakeDeliveryStore, WAKE_QUIET_WINDOW_MS } from "./wake-store.ts"
 import type { Tailer, SessionTelemetry, FenceView, TurnState, BgShellView } from "./tailer.ts"
@@ -2717,4 +2717,29 @@ test("issue-watch: the expiry wake names the issue tool, not watch_pr", async ()
   assert.match(h.resumes[0].message, /Your watcher on acme\/app#7 has expired/)
   assert.match(h.resumes[0].message, /nothing on that issue will wake/)
   assert.match(h.resumes[0].message, /mcp__frizz__watch_issue/)
+})
+
+// ---- SOURCE 10: THE INTERRUPT NOTE (interrupt-ended.ts) ----
+// The router queues it once the tailer confirms the children ended; the scheduler's only job is to hand
+// it over WITHOUT the mid-turn hold — the worker is busy precisely because the interrupt just opened a
+// turn on the human's follow-up, and that is the turn in which it would park on the dead id.
+test("interrupt note: delivered into the busy turn on the next tick, never held", async () => {
+  const h = harness()
+  h.storage.upsertSession(row("i"))
+  h.tele.set("i", tele(undefined, "in-flight"))
+  enqueueInterruptEndedWake(h.storage, {
+    slug: "i", sessionId: "sid-i", interruptedAtMs: h.clock.ms,
+    agents: [{ taskId: "abc9b9b5f0da4c677", label: "Implementing four Keyward daemon changes" }], nowMs: h.clock.ms,
+  })
+  const s = h.make()
+  await s.tick()
+  assert.equal(h.resumes.length, 1, "handed over while the thread is mid-turn")
+  assert.match(h.resumes[0].message, /sent with INTERRUPT/)
+  assert.match(h.resumes[0].message, /`abc9b9b5f0da4c677` — Implementing four Keyward daemon changes/)
+  // Bound to a fact: a later fence, rest or edit cannot supersede it.
+  h.tele.set("i", { ...tele(awaiting([{ kind: "pr", value: "acme/app#1" }])), lastUserText: h.resumes[0].message })
+  await s.tick()
+  assert.equal(h.resumes.length, 1, "and exactly once")
+  assert.equal(createWakeDeliveryStore(h.storage.scope).list()[0]?.state, "delivered")
+  h.storage.close()
 })

@@ -30,7 +30,7 @@ export const WAKE_QUIET_WINDOW_MS = 5 * 60_000
  *  delivery a worker is actually waiting on, and the human is sitting right there; a usage-limit
  *  resume (`limit:`) is the thread coming back from a wall it did not choose, and holding it would
  *  only lengthen the outage. Both still merge with anything already pending for the thread. */
-export const WAKE_QUIET_EXEMPT_HINT_PREFIXES = ["answers:", "limit:"] as const
+export const WAKE_QUIET_EXEMPT_HINT_PREFIXES = ["answers:", "limit:", "interrupt-ended:"] as const
 
 export function isQuietWindowExempt(hintKey: string): boolean {
   return WAKE_QUIET_EXEMPT_HINT_PREFIXES.some((prefix) => hintKey.startsWith(prefix))

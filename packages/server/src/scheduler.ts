@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { createHash, randomUUID } from "node:crypto"
-import { PARK_CORRECTION_NAMES_LEAD, PARK_CORRECTION_QUESTION_LEAD, PARK_CORRECTION_RETIRED_LEAD, parkExpiredWakeMessage, parkFinishedWakeMessage, prWatchExpiredWakeMessage, ownWatchExpiredWakeMessage, questionAnswerMessage, questionsCancelledWakeMessage, type QuestionAnswer, type QuestionDismissal, RETIRED_AWAITING_REPLACEMENT, retiredAwaitingKindsIn, compactionPromptMessage, limitResumeSteer, limitModelSwitchSteer, formatGithubWakeSteer, GithubWakeItem, type GithubWatchStatus, type GithubIssueStatus, prWatchWakeMessage, issueWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, liveOpsLines, wakeDeliveryToken, wakeTimeHeader, stripWakeTimeHeader, type QuotaSnapshot } from "@frizz/shared"
+import { PARK_CORRECTION_NAMES_LEAD, PARK_CORRECTION_QUESTION_LEAD, PARK_CORRECTION_RETIRED_LEAD, interruptEndedSubAgentsMessage, type InterruptEndedSubAgent, parkExpiredWakeMessage, parkFinishedWakeMessage, prWatchExpiredWakeMessage, ownWatchExpiredWakeMessage, questionAnswerMessage, questionsCancelledWakeMessage, type QuestionAnswer, type QuestionDismissal, RETIRED_AWAITING_REPLACEMENT, retiredAwaitingKindsIn, compactionPromptMessage, limitResumeSteer, limitModelSwitchSteer, formatGithubWakeSteer, GithubWakeItem, type GithubWatchStatus, type GithubIssueStatus, prWatchWakeMessage, issueWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, liveOpsLines, wakeDeliveryToken, wakeTimeHeader, stripWakeTimeHeader, type QuotaSnapshot } from "@frizz/shared"
 import { GITHUB_ISSUE_STATUS_SETTING, GITHUB_STATUS_SETTING, parkExpiresAt, parkIsHonoured, readAwaitingPark, unaccountedItems, type LiveActivity } from "./awaiting.ts"
 import type { PrWatchRow, SessionRow, Storage, ThreadQuestionRow } from "./storage.ts"
 import type { Tailer } from "./tailer.ts"
@@ -920,6 +920,34 @@ function isShellFenceId(fenceId: string): boolean {
   return fenceId.startsWith(`${SHELL_FENCE_PREFIX}:`)
 }
 
+/** The delivery namespace of an INTERRUPT that ended background sub-agents (SOURCE 10). Keyed on the
+ *  interrupt's own instant: one interrupt, one note, however many children it took with it. The router
+ *  enqueues it (followUp `interrupt` / deliverQueuedNow) once the tailer has confirmed the children are
+ *  gone; the scheduler only delivers. Bound to a FACT, like a shell completion — nothing the thread
+ *  writes can make "those sub-agents ended" untrue — and deliverable INTO the busy turn, because the
+ *  worker is mid-turn on the very follow-up that killed them and would otherwise rest on a dead id. */
+const INTERRUPT_ENDED_FENCE_PREFIX = "interrupt-ended"
+function isInterruptEndedFenceId(fenceId: string): boolean {
+  return fenceId.startsWith(`${INTERRUPT_ENDED_FENCE_PREFIX}:`)
+}
+
+export function enqueueInterruptEndedWake(
+  storage: Storage,
+  input: { slug: string; sessionId: string; interruptedAtMs: number; agents: readonly InterruptEndedSubAgent[]; nowMs?: number },
+): void {
+  if (input.agents.length === 0) return
+  const fenceId = `${INTERRUPT_ENDED_FENCE_PREFIX}:${input.interruptedAtMs}`
+  createWakeDeliveryStore(storage.scope).enqueue({
+    id: wakeDeliveryId(input.slug, input.sessionId, fenceId),
+    slug: input.slug,
+    sessionId: input.sessionId,
+    fenceId,
+    hintKey: fenceId,
+    message: interruptEndedSubAgentsMessage(input.agents),
+    reason: `an interrupt ended ${input.agents.length} background sub-agent(s)`,
+  }, input.nowMs ?? Date.now())
+}
+
 /** A registered PR watcher's delivery namespace. The id plus a monotonically-increasing REPORT number,
  *  because this watcher fires many times over one PR's life — the id alone would dedupe every wake after
  *  the first, which is exactly the bug a one-shot namespace would hide. */
@@ -1358,6 +1386,10 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     if (isShellFenceId(item.fenceId)) {
       return tele.turn === "idle" ? "current-idle" : "current-busy"
     }
+    // The interrupt note is the same shape: sub-agents that ended have ended, whatever the thread says next.
+    if (isInterruptEndedFenceId(item.fenceId)) {
+      return tele.turn === "idle" ? "current-idle" : "current-busy"
+    }
     // A REGISTERED PR WATCHER's report is bound to something that happened on GitHub, not to anything
     // this thread wrote, so no fence, rest or edit can supersede it either. Same reasoning as the shell
     // wake directly above, and the same bug if it is missing.
@@ -1517,6 +1549,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     // happens WHILE the worker is working, and a re-grounding that waits for it to stop has missed the
     // window it was written for.
     if (isHeartbeatFenceId(item.fenceId) || isTimerFenceId(item.fenceId) || isCompactFenceId(item.fenceId)) return true
+    // The interrupt note too: the worker is BUSY precisely because the interrupt just opened a turn on
+    // the human's follow-up, and that turn is where it decides to wait on the child that no longer exists.
+    if (isInterruptEndedFenceId(item.fenceId)) return true
     return nowMs - item.createdAt >= MID_TURN_HOLD_MAX_MS
   }
 

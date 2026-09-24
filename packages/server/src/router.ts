@@ -1978,7 +1978,7 @@ export function createRouter(ctx: AppContext) {
           const preempted = input.interrupt === true && bridge.interruptTurn({ threadSlug: input.slug, sessionId: row.session_id })
           if (preempted) {
             void noteSubAgentsEndedByInterrupt(
-              { tailer: ctx.tailer, storage: ctx.storage, log: frizzLog },
+              { tailer: ctx.tailer, storage: ctx.storage, log: (line) => frizzLog.info("interrupt", line) },
               { slug: input.slug, sessionId: row.session_id, before: childrenBefore, interruptedAtMs: Date.now() },
             )
           }
@@ -2133,7 +2133,7 @@ export function createRouter(ctx: AppContext) {
           return { interrupted: false, reason: "Nothing to interrupt — this thread has no turn running" }
         }
         void noteSubAgentsEndedByInterrupt(
-          { tailer: ctx.tailer, storage: ctx.storage, log: frizzLog },
+          { tailer: ctx.tailer, storage: ctx.storage, log: (line) => frizzLog.info("interrupt", line) },
           { slug: input.slug, sessionId: row.session_id, before: childrenBefore, interruptedAtMs: Date.now() },
         )
         // The next turn opens on the queue, so those messages are read rather than waiting — say so now

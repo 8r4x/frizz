@@ -48,6 +48,9 @@ test("quiet window: an answer and a limit resume are not held; the exemption is 
   assert.equal(isQuietWindowExempt("answers:abc123"), true)
   assert.equal(isQuietWindowExempt("limit:session"), true)
   assert.equal(isQuietWindowExempt("limit:model-switch"), true)
+  // The interrupt note reports children the human's own send just killed; the worker is mid-turn on
+  // that send and must hear it before it rests on a dead id (see interruptEndedSubAgentsMessage).
+  assert.equal(isQuietWindowExempt("interrupt-ended:1700000000000"), true)
   assert.equal(isQuietWindowExempt("prwatch:prw_1"), false)
   assert.equal(isQuietWindowExempt("timer:tmr_1"), false)
   const { storage, outbox } = store()
