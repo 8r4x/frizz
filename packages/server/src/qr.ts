@@ -13,17 +13,35 @@ import qrcode from "qrcode-generator"
  *
  * EXPLICIT COLOUR, NOT BARE GLYPHS. A QR needs dark modules on a light field. Drawing glyphs in the
  * terminal's default colours inverts that on a dark theme, which is most of them, and an inverted QR
- * does not scan on iOS. So each half block sets an explicit foreground (top module) and background
- * (bottom module) instead of trusting the theme. The quiet zone is drawn, not assumed — a QR flush
- * against surrounding text is unreadable even when the code itself is perfect.
+ * does not scan on iOS. So every cell sets an explicit foreground and background instead of trusting
+ * the theme. The quiet zone is drawn, not assumed — a QR flush against surrounding text is unreadable
+ * even when the code itself is perfect.
+ *
+ * NO GLYPH IN A UNIFORM CELL. A pair of dark modules used to be `▀` in dark ink on a dark background,
+ * and that is a glyph the SAME colour as the field behind it — which is exactly what a terminal's
+ * minimum-contrast setting exists to "repair" by lightening the ink, and what any font whose half block
+ * stops short of the cell edge leaves a hairline of background through. Either way every solid dark
+ * run came out striped, and a phone would not read the finder patterns (maintainer's screenshot,
+ * 2026-09-23: "the qr code is unscannable, looks like some artifacts"). The light field never
+ * striped, because a light glyph on a light background is invisible whatever happens to it. So a
+ * uniform cell is now a bare space over its colour as background, with no glyph to mistreat; only a
+ * MIXED cell draws a half block, and always as dark ink on a light background — `▀` when the top
+ * module is the dark one, `▄` when the bottom is — so the one edge the glyph draws is a real module
+ * edge, and the contrast across it is the full contrast a scanner wants.
+ *
+ * A font whose half block is a pixel narrower than its cell still leaves a hairline through the dark
+ * half of each mixed cell. A glyph-free rendering (two background-painted columns per module, one row
+ * each) avoids that entirely, and was tried on #44 — but it is four times the area of this one, 82x41
+ * cells for a typical sign-in link, which dominates a terminal. Rejected for size; the hairline is
+ * confined to mixed cells and a camera's blur absorbs it.
  */
 
-const LIGHT = "\x1b[38;5;15m"
 const LIGHT_BG = "\x1b[48;5;15m"
 const DARK = "\x1b[38;5;0m"
 const DARK_BG = "\x1b[48;5;0m"
 const RESET = "\x1b[0m"
 const UPPER_HALF = "▀"
+const LOWER_HALF = "▄"
 /** Four modules is the spec's minimum quiet zone; less and the finder patterns stop being findable. */
 const QUIET_ZONE = 4
 
@@ -73,7 +91,8 @@ export function renderQrLines(value: string, options: QrRenderOptions = {}): str
         line += top && bottom ? "#" : top ? "^" : bottom ? "v" : " "
         continue
       }
-      line += `${top ? DARK : LIGHT}${bottom ? DARK_BG : LIGHT_BG}${UPPER_HALF}`
+      if (top === bottom) line += `${top ? DARK_BG : LIGHT_BG} `
+      else line += `${DARK}${LIGHT_BG}${top ? UPPER_HALF : LOWER_HALF}`
     }
     lines.push(options.plain ? line : `${line}${RESET}`)
   }
