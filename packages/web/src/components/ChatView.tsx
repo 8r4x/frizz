@@ -88,8 +88,7 @@ import { settledAskView } from "../lib/interactionQuestion.ts"
 import { FRAMED_IMAGE, ImageFrame } from "./ImageFrame.tsx"
 // The resting card, shared with the queue (TodosView passes it the event-Snooze; these two surfaces
 // deliberately pass no action — see the module header).
-import { AwaitingBackgroundCard, AwaitingWaitTable, hasAwaitingWaitRows, issueStatusLine, showsRestingCard, watchStatusLine } from "./AwaitingBackgroundCard.tsx"
-import { lastRest } from "../lib/restAnchor.ts"
+import { AwaitingBackgroundCard, AwaitingWaitTable, issueStatusLine, showsRestingCard, watchStatusLine } from "./AwaitingBackgroundCard.tsx"
 import { SnoozeCard, showsSnoozeCard } from "./SnoozeCard.tsx"
 // Re-exported from their new homes so existing importers (TodosView, the fixtures) keep one
 // import path while the definitions live where both question producers can reach them.
@@ -241,14 +240,16 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
   // Cut over presentationMessages, not messages: the coalesced entries below carry a messageIndex into
   // THIS list, and comparing the two index spaces is how a live fence gets marked settled.
   const lastAgentIdx = useMemo(() => lastAssistantIndex(presentationMessages), [presentationMessages])
-  // WHERE THE AWAITING CARD LIVES: at the last REST, not under the last message (lib/restAnchor). While
-  // the worker is running past a rest — the human bumped it, or the shell it named woke it — the fence
-  // it rested on stays live and a fenceless rest keeps its card, until it rests again. At rest the two
-  // cuts agree, and the message one is kept because the resting card at the tail keys on lastAgentIdx —
-  // as it is when the rest anchors above the loaded window (index -1): nothing in the window is the
-  // message the worker rested on, so nothing in it holds the card either.
-  const rest = useMemo(() => (running ? lastRest(presentationMessages) : undefined), [running, presentationMessages])
-  const awaitingCut = rest && rest.index >= 0 ? rest.index : lastAgentIdx
+  // NO AWAITING CARD WHILE THE THREAD RUNS. An awaiting card states a REST — "the worker stopped here, on
+  // these waits" — and a spinning thread is not at rest on anything, so every fence in the window is
+  // stale: the cut sits past the last message. At rest the cut is the last assistant message, and the
+  // resting card at the tail keys on the same index. (From 2026-08-28 to 2026-09-24 the card was kept
+  // at the last rest while the worker ran past it, anchored on the rest event — lib/restAnchor, since
+  // deleted — because a bump had left the "Agent rested" hairline pointing at nothing. The maintainer
+  // reversed it on a screenshot of exactly that card above a spinning worker: "When the agent is
+  // running, an awaiting card should never be shown at all. It just doesn't make sense to show old
+  // awaiting cards when the agent is active.")
+  const awaitingCut = running ? presentationMessages.length : lastAgentIdx
   // Presentation-only coalescing: provider batching must not mint one loader per pure tool turn.
   // Original indices ride beside the display message so paired answers continue to
   // address server truth, never the compacted array.
@@ -518,7 +519,6 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
                     paired={paired[messageIndex]}
                     staleAwaiting={awaitingCut >= 0 && messageIndex < awaitingCut}
                     restingCardShown={messageIndex === lastAgentIdx && restingShown}
-                    restedAt={rest && messageIndex === rest.index ? rest.at ?? "" : undefined}
                     shadowedBy={shadowedByMessage.get(messageIndex)}
                     placed={placement.placed.get(messageIndex)}
                     thread={thread}
@@ -845,9 +845,8 @@ function VirtualizedThreadTranscript({
   const liveActivityLabel = liveToolActivity ? toolActivityLabel(liveToolActivity, projectDir) : undefined
   const liveRuntimeStart = running ? liveRuntimeStartedAt(coalescedActivityMessages) : undefined
   const lastAgentIdx = useMemo(() => lastAssistantIndex(messages), [messages])
-  // The rest the awaiting card belongs to — see the drawer's copy above.
-  const rest = useMemo(() => (running ? lastRest(messages) : undefined), [running, messages])
-  const awaitingCut = rest && rest.index >= 0 ? rest.index : lastAgentIdx
+  // No awaiting card while the thread runs — see the drawer's copy above.
+  const awaitingCut = running ? messages.length : lastAgentIdx
   // Redundant rest hairlines dropped exactly as in the drawer's copy above, with the same third
   // draws-nothing reason (the resting card stating the last message's fence).
   const restingShown = showsRestingCard(thread)
@@ -1435,7 +1434,6 @@ function VirtualizedThreadTranscript({
                   paired={paired[row.messageIndex]}
                   staleAwaiting={awaitingCut >= 0 && row.messageIndex < awaitingCut}
                   restingCardShown={row.messageIndex === lastAgentIdx && restingShown}
-                  restedAt={rest && row.messageIndex === rest.index ? rest.at ?? "" : undefined}
                   shadowedBy={shadowedByMessage.get(row.messageIndex)}
                   placed={placement.placed.get(row.messageIndex)}
                   thread={thread}
@@ -1725,8 +1723,8 @@ export function lastAssistantIndex(messages: readonly ChatMessage[]): number {
 // LAST message's wait (showsRestingCard), that message's fence draws nothing either — the card owns it —
 // so a fence-only last message is as empty as a settled one. Same set, one more member.
 //
-// `awaitingCut` is the index a fence goes stale BELOW — the message the thread last rested on while it is
-// running past that rest, else the last assistant message (ChatView's `awaitingCut`; lib/restAnchor).
+// `awaitingCut` is the index a fence goes stale BELOW — past every message while the thread is running,
+// else the last assistant message (ChatView's `awaitingCut`).
 export function rendersNothingIn<T extends { message: ChatMessage; messageIndex: number }>(
   entries: readonly T[],
   awaitingCut: number,
@@ -3202,14 +3200,7 @@ function UserBubble({ text, rawText, queued, deliveryUnconfirmed, deliveryId, so
 // with explicit spacers, and a card that renders null still spent one — a 14px gap dangling under the
 // prose, above the resting card (maintainer 2026-08-28, with a screenshot of the gap). Only the last
 // agent message ever carries it, so the memo boundary holds for every other row.
-// `restedAt` — THIS is the message the thread last rested on, and the thread is running past that rest
-// (lib/restAnchor): the human bumped it, or the shell it named woke it. The value is the rest's own
-// instant ("" when the event carried none). The message then holds the rest's awaiting card in the
-// transcript: its own ```awaiting fence card, with the rows cut at that instant, or — when it wrote no
-// fence and rested on registered rows alone — the resting card itself, drawn here because a rest with
-// no fence left NOTHING behind once the tail moved on (maintainer 2026-08-28: the hairline stayed and
-// the card was gone). Only that one message ever carries it, so the memo boundary holds.
-export const Message = memo(function Message({ m, answering, dense, paired, textOnly, showSendButton, staleAwaiting, shadowedBy, placed, thread, restingCardShown, restedAt }: { m: ChatMessage; answering?: MessageAnswering; dense?: boolean; paired?: PairedAnswer[] | null; textOnly?: boolean; showSendButton?: boolean; staleAwaiting?: boolean; shadowedBy?: readonly RegisteredQuestionView[]; placed?: readonly RegisteredQuestionView[]; thread?: ThreadViewData; restingCardShown?: boolean; restedAt?: string }) {
+export const Message = memo(function Message({ m, answering, dense, paired, textOnly, showSendButton, staleAwaiting, shadowedBy, placed, thread, restingCardShown }: { m: ChatMessage; answering?: MessageAnswering; dense?: boolean; paired?: PairedAnswer[] | null; textOnly?: boolean; showSendButton?: boolean; staleAwaiting?: boolean; shadowedBy?: readonly RegisteredQuestionView[]; placed?: readonly RegisteredQuestionView[]; thread?: ThreadViewData; restingCardShown?: boolean }) {
   // ANSWERING ON A PHONE happens in a sheet, one question at a time (MobileAnswerSheet) — the cards in
   // the transcript stay READ-ONLY there, so the questions are still visible in the context that
   // produced them but a 44pt-thumb answer never has to land on a 24pt chip inside a scrolling message.
@@ -3286,9 +3277,6 @@ export const Message = memo(function Message({ m, answering, dense, paired, text
     pictureEdges.push(edges)
   }
   const qi = { n: -1 }
-  // Whether one of this message's ```awaiting fences drew its card — the card that already states the
-  // rest's waits, so the rested-on card below (see `restedAt`) is not drawn beside it.
-  const liveAwaitingFence = { drawn: false }
   // THIS message's open question blocks, in the order the answering controller numbers them. Only
   // populated when the message actually has a controller (i.e. its ask is still open).
   const askBlocks: { raw: string; kind: QuestionKind; danger: boolean; bi: number }[] = []
@@ -3326,7 +3314,6 @@ export const Message = memo(function Message({ m, answering, dense, paired, text
         // goes too, for the spacer reason above: FenceCard returning null would still leave its slot's
         // spacer standing between the prose and that card.
         if (fseg.fenceKind === "awaiting" && (m.fenceRefused || staleAwaiting || restingCardShown)) continue
-        if (fseg.fenceKind === "awaiting") liveAwaitingFence.drawn = true
         push(
           <FenceCard
             key={`${keyBase}-f${fi}`}
@@ -3334,7 +3321,6 @@ export const Message = memo(function Message({ m, answering, dense, paired, text
             body={fseg.body}
             hints={fseg.hints}
             wrap={dense}
-            notAfter={restedAt}
           />,
         )
         continue
@@ -3418,17 +3404,6 @@ export const Message = memo(function Message({ m, answering, dense, paired, text
       if (collapsed.length > 0) push(<ToolCalls key="tools" tools={collapsed} dense={dense} at={m.at} />, toolBandEdges(collapsed))
     }
     renderText(m.text, "leg")
-  }
-
-  // THE REST'S CARD, when the worker rested here on registered rows and wrote no fence to leave one
-  // behind. At rest the resting card at the tail stated it (showsRestingCard, off the same registries);
-  // the bump took that card with the tail, and the "Agent rested" hairline under this message was left
-  // pointing at nothing. So the same card is drawn here — same heading, same rows, no queue action —
-  // until the worker rests again and the tail takes it back. Gated on there being a row to draw at the
-  // rest's instant, and skipped entirely (never pushed as null) when this message's own fence card
-  // already draws the table, so the block list never spends a spacer on an empty slot.
-  if (restedAt !== undefined && thread && !liveAwaitingFence.drawn && !m.fenceRefused && hasAwaitingWaitRows(thread, { notAfter: restedAt })) {
-    push(<AwaitingBackgroundCard key="rested-on" thread={thread} notAfter={restedAt} />)
   }
 
   // An assistant turn that produced no renderable block (empty/whitespace-only) contributes NOTHING —
@@ -3694,10 +3669,7 @@ export function InlineVisualization({ file }: { file: string }) {
 // its thread's Archive lives in the stable lifecycle footer. `awaiting` → THE RESTING CARD ITSELF
 // (AwaitingBackgroundCard), which is the whole point: one component draws that card on every surface and
 // at every runtime, so steering a worker cannot re-shape it. See the branch below.
-// `notAfter` — the rest's instant, when this fence is drawn at a rest the thread is running past
-// (Message's `restedAt`): the wait table then lists what the worker rested on, not what its reply has
-// started since. Absent on every other surface, where the table reads the thread as it is.
-export function FenceCard({ fenceKind, body, hints, wrap, notAfter }: { fenceKind: FenceKind; body: string; hints: AwaitingHint[]; wrap?: boolean; notAfter?: string }) {
+export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKind; body: string; hints: AwaitingHint[]; wrap?: boolean }) {
   // BLOCK markdown, not inline. A fence's prose is arbitrary Markdown since frontmatter landed
   // (2026-08-17), and inline rendering flattened a worker's paragraphs and lists into one run — the shape
   // a handoff most often takes.
@@ -3780,7 +3752,7 @@ export function FenceCard({ fenceKind, body, hints, wrap, notAfter }: { fenceKin
   // the flag — and it must stay a null rather than a second card, or the tail's card and this one draw
   // the same wait twice.
   if (fenceThread && showsRestingCard(fenceThread)) return null
-  return <AwaitingBackgroundCard thread={fenceThread} fence={{ body, hints }} notAfter={notAfter} />
+  return <AwaitingBackgroundCard thread={fenceThread} fence={{ body, hints }} />
 }
 
 // A permission-blocked agent is INVISIBLE in the transcript (the turn is parked mid-tool_use, so no

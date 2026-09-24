@@ -2809,6 +2809,231 @@ export function queuedThread(t: Pick<ThreadView, "kind" | "foreign" | "needsYou"
   return t.kind === "session" && t.foreign !== true && t.needsYou === true && t.state !== "archived"
 }
 
+// ── THE SIDEBAR'S BANDS ────────────────────────────────────────────────────────────────────────────
+// Moved here from web/src/groups.ts (which re-exports them) so the SERVER can count a project's Active
+// band for the rail — the same reason `queuedThread` lives here: a rail badge that disagreed with the
+// sidebar beside it would be worse than none. The vocabulary (Rested / Active / Snoozed / Done) is in
+// groups.ts § SIDEBAR SECTIONS and ARCHITECTURE.md § Board nomenclature.
+
+export type SectionKey = "active" | "snoozed" | "inactive"
+
+// A session process is "at rest" (off-turn) when the pane is idle or the session has exited — the gate
+// an awaiting excusal needs (a mid-turn worker is still working, never awaiting).
+export function atRest(t: ThreadView): boolean {
+  return t.runtime === "turn-idle" || t.runtime === "exited"
+}
+
+// DECLARED PARK: at rest behind an ```awaiting fence — the thread ITSELF declared it is parked, not
+// still working. The current contract reserves this for a human gate/timer; legacy hints remain readable. The
+// RAW signal; the banding below refines it into external-vs-internal. NB: this requires the worker to
+// actually emit the fence — a thread that rests bare (prose only) reads as idle/waiting, not declared.
+export function isDeclaredAwaiting(t: ThreadView): boolean {
+  return atRest(t) && t.lastFence?.kind === "awaiting"
+}
+
+// INTERNAL WORK: a thread with a LIVE sub-agent is awaiting its OWN dispatched child — not an external
+// event — so it is a fully ACTIVE thread and must never be dimmed (maintainer 2026-07-10: "when an
+// agent is merely awaiting its own sub-agents, we should NOT dim it — that's the differentiator").
+// Direct children only, matching the server's hasLiveBackgroundWork: `subAgents` also carries the live
+// DESCENDANTS under those children so the rows can nest, and those are a rendering concern that must
+// never move thread state (see isDirectSubAgent). A running descendant sits under a running direct child
+// anyway, so the reading is unchanged — this keeps it that way by construction rather than by luck.
+export function hasLiveSubAgents(t: ThreadView): boolean {
+  return (t.subAgents ?? []).some((s) => isDirectSubAgent(s) && s.state === "running")
+}
+
+// A background Bash/Monitor does NOT make its thread live (maintainer 2026-07-22). `run_in_background`
+// means only "don't block my turn": a vite dev server and a CI watcher are indistinguishable through
+// it, and 26% of real background launches are long-lived servers that will never end. Treating them
+// as live work spun a finished thread forever and kept it out of the queue. `bgShells` stays as
+// transcript-level telemetry (the "background running" chip) — it just no longer speaks for the
+// THREAD. A worker that genuinely wants to wait dispatches a sub-agent to own the wait.
+//
+// `awaitingBackground` is the ONE exception, and it is not `bgShells` by another name: it is SERVER
+// truth (board.deriveAwaitingBackground) meaning "at rest, its own dispatched work is still live, and
+// nothing harder outranks that". Reading it here is what keeps the bands honest for a thread with no
+// queue card behind it — the server excuses a rest on a live SUB-AGENT from the queue (2026-07-30), so
+// without this a live-but-cardless row would fall into the RESTED band, which is the queue-ordered band,
+// with nothing behind it: the exact 2026-07-29 report, "showing up as a rested thread in my sidebar, yet
+// there's no card for it". (That report was an EVENT-SNOOZED shell-only rest, which is cardless too; since
+// 2026-08-28 that one parks in Snoozed instead — isSnoozed reads `bgSnoozed` ahead of this flag — so this
+// flag no longer bands it. An UNsnoozed shell-only rest DOES card since 2026-08-04, and `needsYou` then
+// bands it below the rule regardless — see inActiveBand. This flag decides nothing for it beyond keeping
+// it out of Snoozed.)
+//
+// It does NOT re-spin finished threads. What the row reads as is a separate decision made downstream in
+// sessionIndicatorKind, and a shell-only rest gets the quiet pulsing dot there, never the spinner — the
+// 2026-07-22 worry (a dev server spinning its thread forever) is answered by the GLYPH.
+//
+// AND THE FLAG NO LONGER MEANS WHAT THE PARAGRAPH ABOVE SAYS, WHICH IS WHY THE TIMER CARVE-OUT EXISTS.
+// `awaitingBackground` was "its own dispatched work is still live" when this read it, and the sentence
+// that made that safe — deriveAwaitingBackground drops any fenced thread — stopped being true in three
+// steps: a parked PR watch (2026-08-13), a declared background park, and an ARMED TIMER (2026-08-24,
+// f50f9e60). The flag now means "at rest behind a declared wait the resting card should state", which
+// includes a park with NOTHING running behind it at all. See parkedOnArmedTimerAlone.
+export function hasLiveOps(t: ThreadView): boolean {
+  if (hasLiveSubAgents(t)) return true
+  return t.awaitingBackground === true && !parkedOnArmedTimerAlone(t)
+}
+
+// AN ARMED TIMER IS A PARK, NOT LIVE WORK — it is the archetypal Snoozed row, and it was the one park that
+// could never reach the band. A `timers:` fence names a future wake and launches nothing, so when the
+// server widened `awaitingBackground` to cover it (f50f9e60, so the resting card could state the wait),
+// hasLiveOps read that through its old meaning and isSnoozed's very FIRST gate threw the thread into the
+// Active band — the band ARCHITECTURE.md reserves for rows with no queue card and something in flight,
+// against its own definition of Snoozed: "a declared `human:` gate, a valid future `timer:`, a user
+// wall-clock snooze, or a limit pause frizz will auto-resume". Reported 2026-08-26 on a thread parked on
+// a Sept-2 timer: "showing up in a separate rail that isn't held".
+//
+// ALONE is the whole predicate. Anything else behind the same fence keeps the row visible and undimmed,
+// exactly as it is today: a live child or shell is own work in flight (maintainer 2026-07-10, "when an
+// agent is merely awaiting its own sub-agents, we should NOT dim it"), and a PR watcher is a handoff
+// that must never vanish into the dimmed band (see parkedAwaitingHint, maintainer 2026-07-22). Reading
+// raw `bgShells` is safe in that direction where it would not be in hasLiveOps: this is already gated on
+// the server's own verdict and only ever keeps a thread OUT of Snoozed, so a stale shell costs a dimming,
+// never a disappearance — the same argument restingOnLiveBackgroundWork makes below.
+export function parkedOnArmedTimerAlone(t: ThreadView): boolean {
+  if (t.awaitingBackground !== true) return false
+  const watches = t.watches ?? []
+  if (!watches.some((w) => w.kind === "timer" && w.state === "armed")) return false
+  if (hasLiveSubAgents(t) || (t.bgShells ?? []).some((s) => s.state === "running")) return false
+  return !watches.some((w) => w.kind === "github" && w.state === "armed")
+}
+
+export function futureSnoozedUntil(
+  t: Pick<ThreadView, "snoozedUntil">,
+  nowMs = Date.now(),
+): string | undefined {
+  const at = Date.parse(t.snoozedUntil ?? "")
+  return Number.isFinite(at) && at > nowMs ? t.snoozedUntil : undefined
+}
+
+// HELD: one semantic predicate owns both classification and presentation. Only a specific external
+// human/review gate or a valid FUTURE timestamp belongs in the dimmed Snoozed band. Legacy automated
+// waits (pr/ci/session), malformed/elapsed timers, and hintless fences stay OUT of it — rested (in the
+// queue) if their turn is over, Active if it isn't — so they cannot hide work an agent should own
+// through an in-band watcher. A canonical blocked+timer status remains a compatibility path only when
+// it carries the same explicit future ISO instant. A live child/Monitor wins, and archived rows go Done.
+export function isSnoozed(t: ThreadView, nowMs = Date.now()): boolean {
+  const userSnooze = futureSnoozedUntil(t, nowMs) !== undefined
+  if (t.state === "archived") return false
+  // THE RESTING CARD'S EVENT-SNOOZE IS A PARK THE HUMAN MADE, and it parks into Snoozed exactly as the
+  // wall-clock snooze does. It arrives as `bgSnoozed` (server truth: bg_snooze_rested_at equals the
+  // current rest) on a thread resting behind a shell, a PR watch or a timer — the three shapes whose
+  // queue card carries that snooze. Until 2026-08-28 the gate below read `hasLiveOps` alone, and that
+  // predicate reads `awaitingBackground`, which the server keeps TRUE across the snooze (the flag states
+  // what the thread waits on, and a snooze does not change that) — so the click took the card away and
+  // left the row in the Active band, undimmed, wearing an at-rest mark. Reported on a thread parked on a
+  // green PR (maintainer 2026-08-28: "It's resting and snoozed, and for some reason it's in the actively
+  // running rail instead of a snoozed rail"). A live SUB-AGENT still wins, as it does over every park:
+  // a child's return re-invokes the parent within seconds, so that row keeps spinning in Active
+  // (maintainer 2026-07-10, "when an agent is merely awaiting its own sub-agents, we should NOT dim it").
+  const eventSnooze = t.bgSnoozed === true && t.runtime === "turn-idle"
+  if (hasLiveSubAgents(t) || (hasLiveOps(t) && !eventSnooze)) return false
+  // A user-owned snooze deliberately wins over a concrete ask, permission prompt, or crash. Those
+  // states still exist in the transcript/runtime and re-enter Queue at the exact wake deadline; the
+  // snooze merely parks their presentation until then. Mid-turn work keeps spinning in the Active band,
+  // while a provider permission prompt is itself parked and may therefore move to Snoozed.
+  if (userSnooze) return t.runtime !== "running" && t.runtime !== "spawning"
+  // A LIMIT KILL OUTRANKS EVERY PARK BELOW (2026-08-31). The fault postdates any ```awaiting fence the
+  // worker left at its LAST rest, so letting `declaredWait` below claim the row would park a killed
+  // thread on a stale story. The server already queues it (needsYou, next line), but the mark and the
+  // band must not hinge on that flag arriving: a limit-killed thread is never Snoozed unless the
+  // OPERATOR snoozed it (userSnooze above, which wins by design). PRESENCE, not `autoResume`: a fault
+  // frizz cannot promise to resume (an unknown phrasing, an aged-out pause) is MORE the human's
+  // problem, not less.
+  if (t.limitPause && t.foreign !== true) return false
+  // Without an explicit user snooze, higher-priority attention states render ?, !, or a native
+  // prompt—not a wait glyph—so a stale awaiting fence cannot demote them out of Queue.
+  if (t.needsYou || t.pendingAsk || t.runtime === "perm-prompt") return false
+  if (!atRest(t)) return false
+  // (A limit pause used to return true here — "parked on the clock with a wake already armed" — until
+  // 2026-08-31. It is now the hard NON-snooze gate above, and the queue's problem: see deriveNeedsYou.)
+  // The event-snooze needs no fence behind it: a shell-only rest cards without one and its snooze is the
+  // same click. It expires by itself at the thread's next rest, which is the wake the human asked for.
+  if (eventSnooze) return true
+  // THE SERVER ALREADY DECIDED THIS, and the client must not re-derive it. A park is honoured only when
+  // every item the fence names is still live — checked against telemetry and the registries, which the
+  // browser cannot see (board.hasDeclaredBackgroundPark). What reaches here is that verdict: the server
+  // excuses an honoured park from the queue, so by this line `!t.needsYou` and `atRest(t)` already hold,
+  // and an `awaiting` fence on top of them means the park was checked and stood.
+  //
+  // Reading the HINTS instead is what the deleted grammar did, and it is exactly why a worker could park
+  // itself on `human: Alice` or an instant already in the past: the client believed the assertion.
+  const declaredWait = t.lastFence?.kind === "awaiting"
+  return userSnooze || declaredWait
+}
+
+// ACTIVELY RUNNING: a live session with work in flight — running/spawning, or turn-idle while a
+// dispatched sub-agent is still going. NOT the same as the ACTIVE band, and the gap is the whole reason
+// `inActiveBand` exists: this is true of a queued thread too, and a queued thread belongs to Rested no
+// matter how much live work it has out. Read this as "has motion", and `inActiveBand` as "is Active".
+// A running thread must NEVER be filed under Done, even when its row is archived (maintainer
+// 2026-07-10, hit 3×: a bumped-then-resumed archived thread showed a spinner under the archived band).
+export function isActivelyRunning(t: ThreadView): boolean {
+  if (t.runtime === "running" || t.runtime === "spawning") return true
+  return t.runtime === "turn-idle" && hasLiveOps(t)
+}
+
+export function sectionOf(t: ThreadView): SectionKey | null {
+  // MAINTAINER 2026-07-09 (v2 sections): ONE section for open work — anything running, awaiting the
+  // human, or machine-awaiting lands here (the split sections made seen-clearance visibly shuffle rows
+  // between Needs-you and Working on click, which read as an unread feature). It is the Active AND
+  // Rested bands together; the rule between them is drawn downstream (partitionActive), and the
+  // needs-you/awaiting distinction renders as the row INDICATOR and the queue cards, not as sections.
+  // Legacy (.frizz-file) rows are HIDDEN entirely (null; not even a shelf). Foreign never rows.
+  if (t.kind !== "session") return null
+  // Archived → Done, UNLESS it's actively running: a live, in-flight session must never sit under Done
+  // (maintainer, hit 3×). It shows in the Active band with its spinner while it works, and drops back
+  // to Done only once it comes to rest still-archived. (A user BUMP un-archives it for good via
+  // resume; this is the display safety net for a running-yet-archived session.)
+  if (t.state === "archived" && !isActivelyRunning(t)) return "inactive"
+  // Only truthful human/future-timer waiters split into the labeled, dimmed Snoozed band. Everything else
+  // open — running, needs-you, bare rest, done-fenced, awaiting-its-own-subs, or an awaiting
+  // `session`/hintless wait — belongs to the Active/Rested section, which band decided downstream.
+  if (isSnoozed(t)) return "snoozed"
+  return "active"
+}
+
+// THE RULE THE CUE IS DRAWN ON: a row belongs above it EXACTLY WHEN it has a queue card. Everything
+// else in this section — spinning or not — belongs below, in the Active band.
+//
+// THE INVARIANT, both directions (maintainer 2026-08-01: "if something is listed as currently running,
+// then it should never show up in the queue"): nothing in this band has a card, and every card has a row
+// in the cue above the rule. `needsYou` IS the queue (see `queued`, which within this section reduces to
+// exactly this field — foreign rows never section, and the server clears needsYou on an archived row),
+// so keying the split on it alone is what makes both halves true by construction rather than by every
+// upstream excusal remembering to band its own threads.
+//
+// It used to read `isActivelyRunning(t) && t.needsYou !== true`, which enforced only the first half. The
+// second half was left to the SERVER: a thread it excused from the queue was expected to be either Snoozed
+// or visibly alive (`awaitingBackground`, which is what puts a shell-only or CI-holding rest in this
+// band). Every excusal that forgot dropped its thread into the cue with nothing behind it — a row that
+// looks queued, has no card, and opens a DRAWER on click instead of scrolling to one. Reported
+// 2026-07-29 on a snoozed shell-only rest ("there's no card for it in the UI — when I click it, it opens
+// it in a drawer") and again 2026-08-14 on a stale delivery ledger, which is a queue excusal with no
+// banding of its own at all (board.ts hasFreshDelivery). Two different upstream bugs, one symptom,
+// because the rule the maintainer actually reads the rail by was never written down here.
+//
+// A cardless row below the rule states the truth in every case that reaches it: the human has nothing to
+// answer, and something — a child, a shell, CI, a follow-up in flight — is between this thread and its
+// next rest. It wears its own at-rest mark there (sessionIndicatorKind), so it never fakes a spinner.
+export function inActiveBand(t: ThreadView): boolean {
+  return t.needsYou !== true
+}
+
+/**
+ * A row of the maintainer's ACTIVE band — open, not Snoozed, not Done, and holding no queue card.
+ *
+ * The rail's running count: the rows the sidebar draws below the rule, with their spinners. Unlike
+ * the sidebar it ignores a pin — a pin moves a row to the top of ONE project's sidebar, and says
+ * nothing about whether that project has work in flight.
+ */
+export function activeBandThread(t: ThreadView): boolean {
+  if (t.kind !== "session" || t.foreign === true) return false
+  return sectionOf(t) === "active" && inActiveBand(t)
+}
+
 // STRUCTURED board error — a machine-readable companion to the legacy `errors: string[]` so the
 // client can tell a REPAIRABLE error from an inert one and which file it names. `no-frontmatter` is
 // the one-click-repairable case (a thread .md written with no YAML frontmatter, invisible to the
@@ -3177,8 +3402,9 @@ export const FollowUpInput = z.object({
   freshProcess: z.boolean().optional(),
   // PREEMPT the operation the worker is running right now, so this message is read at once instead of
   // when that operation finishes. The operator's "Interrupt and send" verb, and opt-in for the same
-  // reason `freshProcess` is: it costs the in-flight tool call's result and the worker's in-memory
-  // sub-agents.
+  // reason `freshProcess` is: it costs the in-flight tool call's result. (It no longer costs the
+  // worker's sub-agents: since 2026-09-24 the broker's SDK query declares `perTaskStopAffordance`,
+  // so the interrupt aborts only the turn and background agents run on.)
   //
   // It exists because delivery is ALREADY as fast as queueing can be. Measured over 14 days of this
   // project's own transcripts, Claude Code drains its queue at the first sampling boundary that
@@ -4863,6 +5089,18 @@ export const ProjectCard = z.object({
   iconIsCustom: z.boolean().optional(),
 })
 export type ProjectCard = z.infer<typeof ProjectCard>
+
+/**
+ * One project's rail badge: its queue (`queuedThread`) and its Active band (`activeBandThread`).
+ *
+ * Two numbers rather than their sum because the tooltip splits them, and the spinner reads `running`
+ * alone. A project absent from the map has no board open on this server — no badge, not a zero.
+ */
+export const ProjectRailCounts = z.object({
+  queued: z.number().int().nonnegative(),
+  running: z.number().int().nonnegative(),
+})
+export type ProjectRailCounts = z.infer<typeof ProjectRailCounts>
 
 /** Formats the icon route will serve — a browser renders each of these in an `<img>`. */
 export const PROJECT_ICON_EXTENSIONS = ["png", "svg", "ico", "webp", "jpg", "jpeg", "gif"] as const

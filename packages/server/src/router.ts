@@ -173,7 +173,7 @@ import { projectRetiredBackgroundOps, retiredOpsFor } from "./transcript.ts"
 import { clearProjectIcon, customIconPath, findById, forgetProject, ICON_SCAN_VERSION, listProjects, moveProjectDirectory, renameProject, reorderProjects, setProjectIcon, type RegistryEntry } from "./project-registry.ts"
 import { basename, dirname } from "node:path"
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
-import { ProjectCard, PROJECT_ICON_EXTENSIONS, PROJECT_ICON_MAX_BASE64_CHARS, queuedThread } from "@frizz/shared"
+import { activeBandThread, ProjectCard, ProjectRailCounts, PROJECT_ICON_EXTENSIONS, PROJECT_ICON_MAX_BASE64_CHARS, queuedThread } from "@frizz/shared"
 import { imageDimensions } from "./image-header.ts"
 import { homedir } from "node:os"
 import { chosenProjectRoot, ensureProjectIdFile, existingProjectId, isHomeDirectory, writeProjectIdFile } from "./project-root.ts"
@@ -277,6 +277,9 @@ export interface CodexTurnTerminator {
 export interface AcpTurnTerminator {
   turnLiveness(threadSlug: string, sessionId: string): { turnActive: boolean } | undefined
   interruptTurn(threadSlug: string, sessionId: string): Promise<{ interrupted: boolean }>
+  /** End the agent itself — its daemon outlives frizz (acp-host.ts), so a stop that only cancelled
+   *  the turn would leave the agent running for nobody. */
+  releaseSession(threadSlug: string, sessionId: string, reason: "session-replaced" | "session-deleted"): void
 }
 
 // Which rows the bridge owns. A LEGACY Codex row — dispatched pre-cutover, `codex_runtime` NULL,
@@ -332,9 +335,13 @@ export async function stopThreadRuntime(
 ): Promise<"absent" | "stopped"> {
   if (row.backend === "acp") {
     // The bridge answers both questions: is a turn running, and stop it (session/cancel, then wait for
-    // the prompt to return). A resting ACP thread costs nothing here.
-    if (!acp?.turnLiveness(row.slug, row.session_id)?.turnActive) return "absent"
-    return (await acp.interruptTurn(row.slug, row.session_id)).interrupted ? "stopped" : "absent"
+    // the prompt to return). Then END the agent: it lives in a detached daemon that would otherwise sit
+    // idle for hours after the thread is put away. A resting thread with no daemon costs nothing here.
+    if (!acp) return "absent"
+    const turnActive = acp.turnLiveness(row.slug, row.session_id)?.turnActive === true
+    const stopped = turnActive && (await acp.interruptTurn(row.slug, row.session_id)).interrupted
+    acp.releaseSession(row.slug, row.session_id, "session-deleted")
+    return stopped ? "stopped" : "absent"
   }
   if (isAppServerCodexRow(row)) {
     if (!appServerCodexTurnLive(codex, row)) return "absent"
@@ -3481,7 +3488,12 @@ export function createRouter(ctx: AppContext) {
     }),
 
     /**
-     * How many threads are in each project's queue, keyed by project id — the rail's badges.
+     * Each project's queue size and Active-band size, keyed by project id — the rail's badges.
+     *
+     * The rail draws ONE yellow badge per project whose number is the SUM, with a spinner lapping it
+     * while `running` is non-zero, and its tooltip splits the two (issue #41: which projects still
+     * have work in flight, at a glance). `running` is `activeBandThread` — the rows the sidebar draws
+     * below the rule — so the rail and the sidebar beside it count with one rule.
      *
      * MACHINE-WIDE, answered from the boards this process has OPEN. A queue count is a board fact:
      * `needsYou` is derived from the tailer's live view of each session, so a project with no board
@@ -3499,15 +3511,18 @@ export function createRouter(ctx: AppContext) {
      * home page with forty projects, and this is a walk over live boards. The cached snapshot makes
      * it cheap too — but cheap-and-polled is a different budget from cheap-and-once.
      */
-    projectsQueueCounts: query({
-      output: z.record(z.string(), z.number().int().nonnegative()),
+    projectsRailCounts: query({
+      output: z.record(z.string(), ProjectRailCounts),
       handler: async () => {
-        const counts: Record<string, number> = {}
+        const counts: Record<string, ProjectRailCounts> = {}
         const open = ctx.activeTenants?.() ?? [{ project: ctx.project, board: ctx.board }]
         for (const { project, board } of open) {
           try {
             const { threads } = await board.snapshot()
-            counts[project.id] = threads.filter(queuedThread).length
+            counts[project.id] = {
+              queued: threads.filter(queuedThread).length,
+              running: threads.filter(activeBandThread).length,
+            }
           } catch {
             // A board that is stopping mid-walk (its project is being deactivated) is a project with
             // no count this round, not a failed request for every other project.

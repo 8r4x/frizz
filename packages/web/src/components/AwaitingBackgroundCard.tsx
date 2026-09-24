@@ -742,14 +742,11 @@ export function AgentRow({ agent, slug, now }: { agent: ThreadView["subAgents"][
 // one of the rows, one of the three specifically. It hides the background shell for some reason"). A
 // hint is resolved against the thread's live shells exactly as the board resolves it — a name matching
 // nothing running is not a wait and gets no row — so the fence card cannot claim a shell that finished.
-//
-// `notAfter` is the instant the thread RESTED, when the card is drawn at a rest the thread has since
-// been bumped past: a wait that started AFTER it — a sub-agent the reply dispatched, a watcher it
-// registered — is mid-turn work, listed under the prompt box, and not something the worker rested on.
-// The fence's own hints are exempt: the worker named them, so they were there.
+// (A `notAfter` instant cut the rows to what was live at a rest the thread had run past, for the card
+// the transcript drew at that rest from 2026-08-28; no awaiting card is drawn while a thread runs since
+// 2026-09-24, so the option went with it.)
 export interface AwaitingWaitOptions {
   hints?: readonly AwaitingHint[]
-  notAfter?: string
 }
 
 /** A fence's `shells:` hints as watch rows, for the shells the thread still has running. Skips any the
@@ -769,25 +766,22 @@ function hintedShellWatches(thread: Pick<ThreadView, "id" | "bgShells">, hints: 
   return out
 }
 
-/** The rows themselves, before they are drawn — one list per kind, already filtered to what is live
- *  (and, given `notAfter`, to what was live at the rest). Exported through hasAwaitingWaitRows so a
- *  caller can decide whether to spend a card on them without rendering one. */
+/** The rows themselves, before they are drawn — one list per kind, already filtered to what is live.
+ *  Exported through hasAwaitingWaitRows so a caller can decide whether to spend a card on them without
+ *  rendering one. */
 function awaitingWaitItems(thread: Pick<ThreadView, "id" | "subAgents" | "bgShells" | "watches">, opts: AwaitingWaitOptions = {}) {
-  const cutoff = Date.parse(opts.notAfter ?? "")
-  // Unknown start → kept: a row with no instant is never dropped on the strength of a guess.
-  const startedByRest = (iso: string | undefined) => !Number.isFinite(cutoff) || !iso || !(Date.parse(iso) > cutoff)
-  const github = (thread.watches ?? []).filter((w) => w.kind === "github" && w.state === "armed" && startedByRest(w.createdAt))
+  const github = (thread.watches ?? []).filter((w) => w.kind === "github" && w.state === "armed")
   const prs = github.filter((w) => w.subject !== "issue")
   const issues = github.filter((w) => w.subject === "issue")
-  const declared = declaredShellWatches(thread).filter((w) => startedByRest(resolveShell(thread, w.target)?.startedAt ?? w.createdAt))
+  const declared = declaredShellWatches(thread)
   const shells = [...declared, ...hintedShellWatches(thread, opts.hints ?? [], declared)]
-  const agents = liveAgents(thread).filter((a) => startedByRest(a.startedAt))
-  const timers = armedTimerWatches(thread).filter((w) => startedByRest(w.createdAt))
+  const agents = liveAgents(thread)
+  const timers = armedTimerWatches(thread)
   return { prs, issues, shells, agents, timers }
 }
 
-/** Would the wait table draw at least one row for this thread? The gate for drawing a card at a rest
- *  the thread has been bumped past: a card with a heading and no rows says less than nothing. */
+/** Would the wait table draw at least one row for this thread? A card with a heading and no rows says
+ *  less than nothing, so a caller asks first. */
 export function hasAwaitingWaitRows(thread: Pick<ThreadView, "id" | "subAgents" | "bgShells" | "watches">, opts: AwaitingWaitOptions = {}): boolean {
   const items = awaitingWaitItems(thread, opts)
   return items.prs.length + items.issues.length + items.shells.length + items.agents.length + items.timers.length > 0
@@ -890,17 +884,14 @@ export function WaitGrid({ groups, divider }: { groups: ReadonlyArray<WaitGroup>
  *  NOTHING when the thread has no rows: a fence whose shell has since finished (the worker woke on it
  *  and is working) draws its prose alone rather than a heading over an empty grid — and never the raw
  *  ids the fence was written in. `divider` says whether there is prose above for the rule to separate.
- *  `hints` are the fence's own, so its `shells:` row whether or not the board still lists them; `notAfter`
- *  is the rest's instant when the fence is drawn at a rest the thread has moved past (see
- *  AwaitingWaitOptions). */
-export function AwaitingWaitTable({ thread, divider, hints, notAfter }: {
+ *  `hints` are the fence's own, so its `shells:` row whether or not the board still lists them. */
+export function AwaitingWaitTable({ thread, divider, hints }: {
   thread: Pick<ThreadView, "id" | "subAgents" | "bgShells" | "watches">
   divider: boolean
   hints?: readonly AwaitingHint[]
-  notAfter?: string
 }) {
   const now = useNowMs()
-  return <WaitGrid groups={awaitingWaitGroups(thread, now, { hints, notAfter })} divider={divider} />
+  return <WaitGrid groups={awaitingWaitGroups(thread, now, { hints })} divider={divider} />
 }
 
 /** Does the CHAT show the resting card at the bottom of this thread?
@@ -996,7 +987,7 @@ function AwaitingSnooze({ thread, onSnooze, onSnoozeFailed }: {
   )
 }
 
-export function AwaitingBackgroundCard({ thread, fence, onSnooze, onSnoozeFailed, notAfter }: {
+export function AwaitingBackgroundCard({ thread, fence, onSnooze, onSnoozeFailed }: {
   // `id` joins the Pick because the rows OPEN things now: a shell's output drawer and a sub-agent's
   // transcript are both addressed by the parent thread's slug. `lastFence` joined on 2026-08-24: the
   // fence's prose is this card's opening stratum, so the card reads it directly off the thread.
@@ -1025,11 +1016,6 @@ export function AwaitingBackgroundCard({ thread, fence, onSnooze, onSnoozeFailed
   // to fade. Their absence no longer decides whether the Snooze RENDERS — see AwaitingSnooze.
   onSnooze?: () => void
   onSnoozeFailed?: () => void
-  // Set when the card is drawn IN THE TRANSCRIPT at a rest the thread has been bumped past — the fourth
-  // surface, since 2026-08-28 (ChatView.Message): a rest on registered rows alone has no fence to leave a
-  // card behind, so the message the worker rested on draws this one until the worker rests again. The
-  // instant keeps the rows honest to that rest (AwaitingWaitOptions.notAfter).
-  notAfter?: string
 }) {
   // The thread's live work, as the rows and the heading read it. A card with no owning thread has none
   // of it — no rows, no shell-only heading — rather than a branch at every use below.
@@ -1050,9 +1036,9 @@ export function AwaitingBackgroundCard({ thread, fence, onSnooze, onSnoozeFailed
   // child pushes no delta). One clock read for the whole card rather than one per row.
   const now = useNowMs()
   // The fence's own `shells:` ride along at rest too. The board already rows them then, so this is
-  // idle in that case — it is what keeps the card whole at a rest the thread was bumped past, where the
-  // board has forgotten the fence (see AwaitingWaitOptions).
-  const groups = awaitingWaitGroups(work, now, { hints, notAfter })
+  // idle in that case — it is what keeps the card whole where the board has forgotten the fence (a
+  // bg-snoozed thread, see AwaitingWaitOptions).
+  const groups = awaitingWaitGroups(work, now, { hints })
   const unrowed = unrowedWatchRefs(work, hints)
   // THE SNOOZE IS THE ONE THING THAT VARIES WITH THE RUNTIME, and the maintainer ruled it the only
   // thing that may (2026-09-04: "you can remove the snooze button and stuff because the interactive
@@ -1061,11 +1047,10 @@ export function AwaitingBackgroundCard({ thread, fence, onSnooze, onSnoozeFailed
   //
   // It renders exactly when the thread is PARKED ON THIS REST — the same predicate the queue and the
   // transcript tail already gate the card on, so nothing changes for them. What it excludes is the two
-  // shapes that now reach this card through ChatView's fence block: a thread running past the rest, and
-  // one the human has already bg-snoozed. Both would offer a park the mutation refuses
-  // (router.snoozeAwaitingBackground guards on the rest instant). `notAfter` says the same thing from
-  // the other side for a historical rest drawn in the transcript.
-  const snoozable = notAfter === undefined && thread !== undefined && showsRestingCard(thread) && threadLifecycleAvailability(thread).snooze
+  // shape that still reaches this card through ChatView's fence block — a thread the human has already
+  // bg-snoozed — which would offer a park the mutation refuses (router.snoozeAwaitingBackground guards
+  // on the rest instant). A thread running past its rest draws no awaiting card at all since 2026-09-24.
+  const snoozable = thread !== undefined && showsRestingCard(thread) && threadLifecycleAvailability(thread).snooze
   return (
     // The SAME shell as every transcript card (TranscriptCard). This card stacks directly under an
     // awaiting fence card on a queue card, and it used to be a visibly different object there —
@@ -1160,7 +1145,7 @@ export function AwaitingBackgroundCard({ thread, fence, onSnooze, onSnoozeFailed
       {/* THE FOOTER BAND — the card's snooze, in a recessed full-width strip flush with the card's
           bottom corners (the queue card's own footer idiom), so the control reads as chrome under the
           content rather than as one more row of it. It draws on EVERY surface the card is live on as of
-          2026-08-31; a historical rest (`notAfter`) draws the card with the shell's normal padding. */}
+          2026-08-31; a thread with no snooze verb draws the card with the shell's normal padding. */}
       {snoozable ? (
         <div data-awaiting-snooze className={`-mx-4 mt-3 flex flex-wrap items-center gap-x-2.5 gap-y-2 border-t border-border bg-fg/[0.03] px-4 py-2.5 ${BLOCK_RADIUS_INNER_BOTTOM}`}>
           <AwaitingSnooze thread={thread} onSnooze={onSnooze} onSnoozeFailed={onSnoozeFailed} />

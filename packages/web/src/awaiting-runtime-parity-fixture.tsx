@@ -168,7 +168,9 @@ const restThread = (c: Case): ThreadView => ({
 
 // STEERED: the human replied, the worker is running again. The board no longer holds the fence — the
 // tailer clears `lastFence` on the user record that bumps the thread — so the card can only be drawn from
-// the fence the transcript parsed out of the message, which is the prop.
+// the fence the transcript parsed out of the message, which is the prop. (Since 2026-09-24 ChatView draws
+// no awaiting card at all while the thread runs; this column still pins that the CARD itself reads the
+// same at every runtime it is handed.)
 const runThread = (c: Case): ThreadView => ({ ...base(`${c.slug}-run`, c.live), runtime: "running" } as unknown as ThreadView)
 
 setBoard({

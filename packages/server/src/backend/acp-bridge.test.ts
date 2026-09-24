@@ -7,6 +7,8 @@ import { fileURLToPath } from "node:url"
 import Database from "../sqlite.ts"
 import { createInteractionStore, type InteractionStore } from "../interaction-store.ts"
 import { createAcpBridge, type AcpBridge } from "./acp-bridge.ts"
+import { liveAcpDaemonRecord, liveAcpDaemonSessionIds, stopAcpDaemon } from "./acp-host.ts"
+import { spawnAcpChild } from "./acp-rpc.ts"
 import { acpTranscriptPath, parseAcpRecord, projectAcpTranscript, type AcpRecord } from "./acp-transcript.ts"
 import { newTailState } from "../tailer.ts"
 import { createAcpBackend } from "./acp-transcript.ts"
@@ -18,8 +20,8 @@ const FAKE = fileURLToPath(new URL("./acp.fixtures/fake-acp-agent.mjs", import.m
 
 interface Rig { bridge: AcpBridge; stateDir: string; store: InteractionStore; status: number; diagnostics: string[] }
 
-function rig(mode = "", opts: { customCommand?: string } = {}): Rig {
-  const stateDir = mkdtempSync(join(tmpdir(), "acp-bridge-"))
+function rig(mode = "", opts: { customCommand?: string; stateDir?: string; direct?: boolean } = {}): Rig {
+  const stateDir = opts.stateDir ?? mkdtempSync(join(tmpdir(), "acp-bridge-"))
   const store = createInteractionStore(new Database(":memory:"))
   const r: Rig = { stateDir, store, status: 0, diagnostics: [], bridge: undefined as unknown as AcpBridge }
   r.bridge = createAcpBridge({
@@ -34,8 +36,17 @@ function rig(mode = "", opts: { customCommand?: string } = {}): Rig {
     onDiagnostic: (d) => { if (d.kind !== "stderr") r.diagnostics.push(`${d.kind}: ${d.message}`) },
     flushMs: 20,
     initializeTimeoutMs: 5_000,
+    // The default host forks a REAL detached daemon per session — the production transport — so every
+    // test below exercises the daemon too; `direct` is the pre-daemon plain child, for the control.
+    ...(opts.direct ? { spawn: spawnAcpChild } : {}),
   })
   return r
+}
+
+/** `shutdown()` DETACHES from the daemons (that is its whole point), so a test must end them itself. */
+async function teardown(r: Rig): Promise<void> {
+  await r.bridge.shutdown()
+  for (const sessionId of liveAcpDaemonSessionIds(r.stateDir)) await stopAcpDaemon(r.stateDir, sessionId)
 }
 
 const records = (r: Rig, sessionId: string): AcpRecord[] =>
@@ -80,7 +91,7 @@ test("acp-bridge: a dispatch opens a session with the frizz MCP server, runs the
     assert.equal(msgs[2]!.tools[0]!.name, "write")
     assert.equal(msgs[2]!.tools[0]!.status, "completed")
     assert.ok(r.status >= 2, "status changed at turn start and end")
-  } finally { await r.bridge.shutdown() }
+  } finally { await teardown(r) }
 })
 
 test("acp-bridge: a follow-up during a turn queues and runs after it; one after rest runs at once", async () => {
@@ -107,7 +118,7 @@ test("acp-bridge: a follow-up during a turn queues and runs after it; one after 
     assert.equal(delivered.state, "delivered")
     await untilIdle(r, "s1")
     assert.equal(records(r, "s1").filter((x) => x.kind === "turn-end").length, 3)
-  } finally { await r.bridge.shutdown() }
+  } finally { await teardown(r) }
 })
 
 test("acp-bridge: a permission request becomes a card with canonical decision ids; resolving it answers the agent with its own optionId", async () => {
@@ -129,7 +140,7 @@ test("acp-bridge: a permission request becomes a card with canonical decision id
     const result = records(r, "s1").find((x) => x.kind === "tool-result") as { text: string } | undefined
     assert.equal(result?.text, "removed", "the agent got the allow_once optionId back and completed the tool")
     assert.equal(r.bridge.ownsInteraction(scope, card.id), false)
-  } finally { await r.bridge.shutdown() }
+  } finally { await teardown(r) }
 })
 
 test("acp-bridge: an open card is cancelled — and the agent answered cancelled — when the session is released", async () => {
@@ -143,7 +154,7 @@ test("acp-bridge: an open card is cancelled — and the agent answered cancelled
     r.bridge.releaseSession("t1", "s1", "session-deleted")
     assert.equal(r.store.listPending(scope).length, 0)
     assert.equal(r.bridge.turnLiveness("t1", "s1"), undefined)
-  } finally { await r.bridge.shutdown() }
+  } finally { await teardown(r) }
 })
 
 test("acp-bridge: after the session is gone, a follow-up re-opens it with session/load when the agent can", async () => {
@@ -160,7 +171,7 @@ test("acp-bridge: after the session is gone, a follow-up re-opens it with sessio
     const after = records(r, "s1")
     // The load's replayed history was NOT written again: the new records are exactly the follow-up turn.
     assert.deepEqual(after.slice(before).map((x) => x.kind), ["user-message", "turn-start", "reasoning", "tool-call", "tool-result", "assistant-text", "context-usage", "turn-end"])
-  } finally { await r.bridge.shutdown() }
+  } finally { await teardown(r) }
 })
 
 test("acp-bridge: an agent without loadSession gets a fresh session and the transcript says so", async () => {
@@ -174,7 +185,7 @@ test("acp-bridge: an agent without loadSession gets a fresh session and the tran
     assert.notEqual(again.acpSessionId, info.acpSessionId)
     const note = records(r, "s1").find((x) => x.kind === "acp-note") as { text: string } | undefined
     assert.match(note?.text ?? "", /fresh Fake agent session/)
-  } finally { await r.bridge.shutdown() }
+  } finally { await teardown(r) }
 })
 
 test("acp-bridge: a missing executable and an unknown agent fail the dispatch with actionable errors and leave no session", async () => {
@@ -183,14 +194,14 @@ test("acp-bridge: a missing executable and an unknown agent fail the dispatch wi
     await assert.rejects(r.bridge.spawnDispatch({ threadSlug: "t1", sessionId: "s1", cwd: r.stateDir, agentId: "fake", prompt: "go", userText: "go" }), /is not installed/)
     await assert.rejects(r.bridge.spawnDispatch({ threadSlug: "t1", sessionId: "s2", cwd: r.stateDir, agentId: "nope", prompt: "go", userText: "go" }), /Unknown ACP agent "nope"/)
     assert.equal(r.bridge.turnLiveness("t1", "s1"), undefined)
-  } finally { await r.bridge.shutdown() }
+  } finally { await teardown(r) }
 })
 
 test("acp-bridge: an agent that never completes the handshake fails the dispatch, naming the agent", async () => {
   const r = rig("slow-init")
   try {
     await assert.rejects(r.bridge.spawnDispatch({ threadSlug: "t1", sessionId: "s1", cwd: r.stateDir, agentId: "fake", prompt: "go", userText: "go" }), /Fake agent did not complete the ACP handshake/)
-  } finally { await r.bridge.shutdown() }
+  } finally { await teardown(r) }
 })
 
 test("acp-bridge: a dispatch naming a model asks the agent for it, and an unknown one leaves a note", async () => {
@@ -208,7 +219,7 @@ test("acp-bridge: a dispatch naming a model asks the agent for it, and an unknow
     await untilIdle(r, "s2", "t2")
     const note = records(r, "s2").find((x) => x.kind === "acp-note") as { text: string } | undefined
     assert.match(note?.text ?? "", /could not switch to fake\/nonexistent/)
-  } finally { await r.bridge.shutdown() }
+  } finally { await teardown(r) }
 })
 
 test("acp-bridge: setModel switches a LIVE session's model in place, notes a refusal, and reports a closed session as not applied", async () => {
@@ -222,7 +233,7 @@ test("acp-bridge: setModel switches a LIVE session's model in place, notes a ref
     assert.match((records(r, "s1").find((x) => x.kind === "acp-note") as { text: string } | undefined)?.text ?? "", /could not switch to fake\/nonexistent/)
     assert.deepEqual(await r.bridge.setModel("t1", "nope", "fake/large"), { applied: false }, "no live session: the slug reaches the agent on the next open")
     assert.deepEqual(await r.bridge.setModel("other", "s1", "fake/large"), { applied: false }, "another thread's session is not this thread's to steer")
-  } finally { await r.bridge.shutdown() }
+  } finally { await teardown(r) }
 })
 
 test("acp-bridge: agentModels reads the advertised list through a throwaway session and caches it", async () => {
@@ -237,5 +248,117 @@ test("acp-bridge: agentModels reads the advertised list through a throwaway sess
     const missing = await r.bridge.agentModels("nope", r.stateDir)
     assert.deepEqual(missing.models, [])
     assert.match(missing.error ?? "", /nope/)
-  } finally { await r.bridge.shutdown() }
+  } finally { await teardown(r) }
+})
+
+// ---- THE DETACHED DAEMON: an agent and its turn outlive the bridge ----------------------------------
+// The whole reason acp-daemon.ts exists (maintainer 2026-09-24: an ACP restart ended the agent, its
+// turn and every sub-agent inside it). Bridge A is shut down MID-TURN — exactly what a Frizz restart
+// does — and bridge B, a fresh instance over the same state dir, warms up and carries the turn to its
+// real ending. The plain-child control shows the turn dying instead.
+
+const pending = (r: Rig, slug = "t1", sessionId = "s1") => r.store.listPending({ projectId: "proj-1", threadSlug: slug, sessionId })
+
+async function untilTurnActive(r: Rig, sessionId: string, slug = "t1"): Promise<void> {
+  for (let i = 0; i < 250; i++) {
+    if (r.bridge.turnLiveness(slug, sessionId)?.turnActive) return
+    await new Promise((res) => setTimeout(res, 20))
+  }
+  throw new Error("turn never started")
+}
+
+test("acp-bridge: a turn survives the bridge shutting down mid-turn; a fresh bridge reattaches and records its real ending", async () => {
+  const a = rig()
+  let b: Rig | undefined
+  try {
+    await a.bridge.spawnDispatch({ threadSlug: "t1", sessionId: "s1", cwd: a.stateDir, agentId: "fake", prompt: "SLOW count", userText: "SLOW count" })
+    await untilTurnActive(a, "s1")
+    await new Promise((res) => setTimeout(res, 300)) // let a few chunks stream first
+    await a.bridge.shutdown() // the restart: the socket drops, the agent does not
+    const record = liveAcpDaemonRecord(a.stateDir, "s1")
+    assert.ok(record, "the daemon is still running after the bridge went away")
+    const beforeReattach = records(a, "s1")
+    assert.equal(beforeReattach.filter((x) => x.kind === "turn-end").length, 0, "shutting down did NOT write a turn-end: the turn is still running")
+    assert.equal(beforeReattach.filter((x) => x.kind === "provider-error").length, 0)
+
+    b = rig("", { stateDir: a.stateDir })
+    await b.bridge.warmUp([{ threadSlug: "t1", sessionId: "s1", cwd: a.stateDir, agentId: "fake" }])
+    assert.equal(b.bridge.turnLiveness("t1", "s1")?.turnActive, true, "the reattached bridge sees the turn as live")
+    await untilIdle(b, "s1", "t1", 15_000)
+    const after = records(b, "s1")
+    assert.ok(after.some((x) => x.kind === "acp-note" && /Reattached to the running Fake agent/.test((x as { text: string }).text)))
+    assert.equal(after.filter((x) => x.kind === "turn-start").length, 1, "one turn, not two")
+    const end = after.filter((x) => x.kind === "turn-end") as Array<{ successful: boolean; finalText?: string }>
+    assert.equal(end.length, 1)
+    assert.equal(end[0]!.successful, true)
+    assert.match(end[0]!.finalText ?? "", /PONG$/, "the turn's real ending, streamed after the reattach")
+    const streamed = after.filter((x) => x.kind === "assistant-text").map((x) => (x as { text: string }).text).join("")
+    for (let i = 1; i <= 200; i++) assert.ok(streamed.includes(`${i}\n`), `chunk ${i} — streamed while nobody was attached — was replayed into the transcript`)
+    assert.equal(after.filter((x) => x.kind === "provider-error").length, 0)
+    // The same session takes an ordinary follow-up afterwards, still on the same daemon.
+    const follow = await b.bridge.followUp({ threadSlug: "t1", sessionId: "s1", cwd: a.stateDir, agentId: "fake", text: "again", acpSessionId: record.sessionId })
+    assert.equal(follow.state, "delivered")
+    assert.equal(liveAcpDaemonRecord(a.stateDir, "s1")?.generation, record.generation, "no new agent process was started")
+  } finally {
+    await teardown(a)
+    if (b) await teardown(b)
+  }
+})
+
+test("acp-bridge: a permission card open at shutdown is raised afresh by the reattached bridge, and its answer reaches the agent", async () => {
+  const a = rig("ask-permission")
+  let b: Rig | undefined
+  try {
+    await a.bridge.spawnDispatch({ threadSlug: "t1", sessionId: "s1", cwd: a.stateDir, agentId: "fake", prompt: "go", userText: "go" })
+    for (let i = 0; i < 100 && pending(a).length === 0; i++) await new Promise((res) => setTimeout(res, 20))
+    assert.equal(pending(a).length, 1, "the card is up")
+    await a.bridge.shutdown()
+    assert.equal(pending(a).length, 0, "the dead runtime's card is cancelled on its side")
+
+    b = rig("ask-permission", { stateDir: a.stateDir })
+    await b.bridge.warmUp([{ threadSlug: "t1", sessionId: "s1", cwd: a.stateDir, agentId: "fake" }])
+    for (let i = 0; i < 100 && pending(b).length === 0; i++) await new Promise((res) => setTimeout(res, 20))
+    const card = pending(b)[0]
+    assert.ok(card, "the daemon re-sent the unanswered request and the new bridge raised the card")
+    const scope = { projectId: "proj-1", threadSlug: "t1", sessionId: "s1" }
+    b.store.resolve(scope, { slug: "t1", sessionId: "s1", interactionId: card.id, sessionEpoch: card.owner.sessionEpoch, capabilityRevision: card.owner.capabilityRevision, expectedRecordRevision: card.recordRevision, responseId: "resp-1", decisionId: "accept" })
+    await untilIdle(b, "s1", "t1", 15_000)
+    const result = records(b, "s1").find((x) => x.kind === "tool-result") as { text: string } | undefined
+    assert.equal(result?.text, "removed", "the allow reached the agent through the daemon")
+  } finally {
+    await teardown(a)
+    if (b) await teardown(b)
+  }
+})
+
+test("acp-bridge: CONTROL — with a plain child instead of the daemon, shutting down mid-turn ends the turn", async () => {
+  const r = rig("", { direct: true })
+  try {
+    await r.bridge.spawnDispatch({ threadSlug: "t1", sessionId: "s1", cwd: r.stateDir, agentId: "fake", prompt: "SLOW count", userText: "SLOW count" })
+    await untilTurnActive(r, "s1")
+    await r.bridge.shutdown()
+    assert.equal(liveAcpDaemonRecord(r.stateDir, "s1"), null, "no daemon was ever forked")
+    // The child exited with its stdin; nothing is left to reattach to, and a fresh bridge finds no turn.
+    const b = rig("", { stateDir: r.stateDir, direct: true })
+    await b.bridge.warmUp([{ threadSlug: "t1", sessionId: "s1", cwd: r.stateDir, agentId: "fake" }])
+    assert.equal(b.bridge.turnLiveness("t1", "s1"), undefined, "the turn died with the runtime")
+    await teardown(b)
+  } finally { await teardown(r) }
+})
+
+test("acp-bridge: releasing a session ends its daemon, and a new open starts a new agent process", async () => {
+  const r = rig()
+  try {
+    await r.bridge.spawnDispatch({ threadSlug: "t1", sessionId: "s1", cwd: r.stateDir, agentId: "fake", prompt: "hi", userText: "hi" })
+    await untilIdle(r, "s1")
+    const first = liveAcpDaemonRecord(r.stateDir, "s1")
+    assert.ok(first)
+    r.bridge.releaseSession("t1", "s1", "session-deleted")
+    for (let i = 0; i < 200 && liveAcpDaemonRecord(r.stateDir, "s1"); i++) await new Promise((res) => setTimeout(res, 25))
+    assert.equal(liveAcpDaemonRecord(r.stateDir, "s1"), null, "the daemon and its agent are gone")
+    await r.bridge.followUp({ threadSlug: "t1", sessionId: "s1", cwd: r.stateDir, agentId: "fake", text: "again", acpSessionId: first.sessionId })
+    await untilIdle(r, "s1")
+    const second = liveAcpDaemonRecord(r.stateDir, "s1")
+    assert.ok(second && second.generation !== first.generation, "a fresh daemon for the re-opened session")
+  } finally { await teardown(r) }
 })

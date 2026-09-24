@@ -7,7 +7,7 @@ import type { AppContext } from "./context.ts"
 import type { BoardManager } from "./board.ts"
 import type { Project } from "./project.ts"
 
-// The rail's badges. Handlers are lazy, so the stub carries only what `createRouter` resolves up
+// The rail's badges: each open project's queue and Active band. Handlers are lazy, so the stub carries only what `createRouter` resolves up
 // front plus this procedure's one dependency: `activeTenants`, the server's view of which projects are
 // open in this process and their boards.
 function harness(activeTenants: AppContext["activeTenants"], own?: { project: Project; board: BoardManager }) {
@@ -29,7 +29,7 @@ const session = (needsYou: boolean, extra: Partial<ThreadView> = {}): Partial<Th
 
 test("counts the queue of every open project, keyed by id, and leaves out one that will not answer", async () => {
   const router = harness(() => [
-    { project: project("a"), board: board([session(true), session(true), session(false)]) },
+    { project: project("a"), board: board([session(true), session(true), session(false, { runtime: "running" })]) },
     // Archived, foreign and legacy rows never queue, whatever `needsYou` says — the same predicate the
     // web's sidebar bands on (groups.ts `queued`), so the badge and the rail cannot disagree.
     { project: project("b"), board: board([session(true, { state: "archived" }), session(true, { foreign: true }), { kind: "legacy", needsYou: true }, session(true)]) },
@@ -38,10 +38,36 @@ test("counts the queue of every open project, keyed by id, and leaves out one th
     // others still do.
     { project: project("d"), board: { snapshot: async () => { throw new Error("board stopped") } } as unknown as BoardManager },
   ])
-  assert.deepEqual(await router.projectsQueueCounts.handler({ input: undefined }), { a: 2, b: 1, c: 0 })
+  assert.deepEqual(await router.projectsRailCounts.handler({ input: undefined }), {
+    a: { queued: 2, running: 1 },
+    b: { queued: 1, running: 0 },
+    c: { queued: 0, running: 0 },
+  })
+})
+
+test("counts the Active band as running — the rows the sidebar spins below the rule, and nothing else", async () => {
+  const future = new Date(Date.now() + 3_600_000).toISOString()
+  const router = harness(() => [
+    {
+      project: project("p"),
+      board: board([
+        session(false, { runtime: "running" }), // mid-turn
+        session(false, { runtime: "spawning" }), // starting
+        session(false, { runtime: "turn-idle", subAgents: [{ state: "running" }] } as Partial<ThreadView>), // resting on its own sub-agent
+        // Not Active: queued (the badge's other half, even with a live child), snoozed by the operator,
+        // parked behind an awaiting fence the server honoured, archived, and a terminal the human owns.
+        session(true, { runtime: "turn-idle", subAgents: [{ state: "running" }] } as Partial<ThreadView>),
+        session(false, { runtime: "turn-idle", snoozedUntil: future }),
+        session(false, { runtime: "turn-idle", lastFence: { kind: "awaiting", body: "", hints: [] } }),
+        session(false, { runtime: "exited", state: "archived" }),
+        session(false, { runtime: "running", foreign: true }),
+      ]),
+    },
+  ])
+  assert.deepEqual(await router.projectsRailCounts.handler({ input: undefined }), { p: { queued: 1, running: 3 } })
 })
 
 test("without a tenant map (a test context, a one-project server) it answers for its own project alone", async () => {
-  const router = harness(undefined, { project: project("solo"), board: board([session(true), session(false)]) })
-  assert.deepEqual(await router.projectsQueueCounts.handler({ input: undefined }), { solo: 1 })
+  const router = harness(undefined, { project: project("solo"), board: board([session(true), session(false, { runtime: "running" })]) })
+  assert.deepEqual(await router.projectsRailCounts.handler({ input: undefined }), { solo: { queued: 1, running: 1 } })
 })

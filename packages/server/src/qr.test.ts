@@ -63,10 +63,47 @@ test("colour polarity is explicit, so a dark terminal theme cannot invert the co
   // An inverted QR does not scan on iOS. Dark modules must be painted dark REGARDLESS of theme, which
   // means every cell carries its own fg+bg rather than inheriting the terminal's.
   const rendered = renderQr(SAMPLE)
-  assert.match(rendered, /\x1b\[38;5;0m/, "some cell paints a dark top module")
-  assert.match(rendered, /\x1b\[48;5;15m/, "some cell paints a light bottom module")
+  assert.match(rendered, /\x1b\[48;5;0m/, "some cell paints a dark pair as background")
+  assert.match(rendered, /\x1b\[48;5;15m/, "some cell paints a light module as background")
   assert.ok(rendered.endsWith("\x1b[0m"), "the last row resets, or the terminal keeps the QR's colours")
   for (const line of rendered.split("\n")) assert.ok(line.endsWith("\x1b[0m"), "every row resets")
+})
+
+/** Each terminal cell of a coloured row: the SGR sequences that precede its one character, and it. */
+function cells(line: string): Array<{ sgr: string[]; glyph: string }> {
+  const out: Array<{ sgr: string[]; glyph: string }> = []
+  const re = /((?:\x1b\[[0-9;]*m)*)(.)/gu
+  for (const [, codes, glyph] of line.replace(/\x1b\[0m$/u, "").matchAll(re)) {
+    out.push({ sgr: codes!.match(/\x1b\[[0-9;]*m/gu) ?? [], glyph: glyph! })
+  }
+  return out
+}
+
+test("a uniform cell is background only, and a half block is always dark ink on a light field", () => {
+  // The artifact this pins (2026-09-23): a dark-over-dark `▀` is a glyph the same colour as its own
+  // background, which minimum-contrast terminals lighten and short half-block fonts leave a seam
+  // through — every solid dark run came out striped and the phone would not read the finders. So no
+  // uniform cell may carry a glyph, and no glyph may share a colour with the field it sits on.
+  const { size, dark } = truth(SAMPLE)
+  const lines = renderQrLines(SAMPLE)
+  assert.equal(lines.length, Math.ceil(size / 2))
+  for (let row = 0; row < lines.length; row++) {
+    const rowCells = cells(lines[row]!)
+    assert.equal(rowCells.length, size, `row ${row} has one cell per column`)
+    for (let x = 0; x < size; x++) {
+      const top = dark(x, row * 2)
+      const bottom = row * 2 + 1 < size ? dark(x, row * 2 + 1) : false
+      const { sgr, glyph } = rowCells[x]!
+      const where = `cell (${x},${row})`
+      if (top === bottom) {
+        assert.equal(glyph, " ", `${where}: a uniform pair is a bare space`)
+        assert.deepEqual(sgr, [top ? "\x1b[48;5;0m" : "\x1b[48;5;15m"], `${where}: painted as background alone`)
+      } else {
+        assert.equal(glyph, top ? "▀" : "▄", `${where}: the half block names the dark module`)
+        assert.deepEqual(sgr, ["\x1b[38;5;0m", "\x1b[48;5;15m"], `${where}: dark ink on a light field`)
+      }
+    }
+  }
 })
 
 test("a launch-sized code fits an 80x24 terminal", () => {

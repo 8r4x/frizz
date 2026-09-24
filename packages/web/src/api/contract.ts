@@ -91,6 +91,7 @@ import type {
   CancelInteractionResult,
   CompletionHold,
   ProjectCard,
+  ProjectRailCounts,
   ThreadLocation,
   DirectoryPickResult,
   AddOwnPrWatchInput,
@@ -325,7 +326,7 @@ export interface Api {
   // this server is absent (no honest count without one), which the rail draws as no badge rather than
   // as zero. The server opens every registered project within about a second of boot, so that is a transient
   // state and not the "you have not clicked into it yet" it used to be — see server/tenant-prime.ts.
-  projectsQueueCounts(): Promise<Record<string, number>>
+  projectsRailCounts(): Promise<Record<string, ProjectRailCounts>>
   // Opens the machine's native image picker ALREADY IN the project's directory, then stores what
   // comes back. The browser input cannot be aimed anywhere, which is the whole reason this exists.
   projectIconPick(input: { id: string }): Promise<DirectoryPickResult>
@@ -449,7 +450,7 @@ export const PROCEDURES = {
   projectAdd: "mutation",
   projectsReorder: "mutation",
   projectRemove: "mutation",
-  projectsQueueCounts: "query",
+  projectsRailCounts: "query",
   projectIconPick: "mutation",
   projectIconSet: "mutation",
   projectIconClear: "mutation",

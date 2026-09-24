@@ -718,8 +718,9 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   void codexAppServer?.warmUp()
   opts.startup?.afterPhase?.("Codex app-server bridge")
 
-  // The generic ACP bridge. Nothing to warm up: an ACP child does not outlive the server, so every
-  // thread re-opens its session (session/load, else a fresh one) on its next input.
+  // The generic ACP bridge. Its agents live in detached daemons (acp-host.ts), so like codex and the
+  // Claude broker it warms up: every open thread whose daemon survived the restart is reattached now,
+  // in-flight turn adopted, rather than on its next input.
   const acpBridge = createAcpBridge({
     projectId: project.id,
     stateDir: project.stateDir,
@@ -733,6 +734,13 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   contextUnsubscribers.push(storage.subscribeSessionLifecycle((event) => {
     acpBridge.releaseSession(event.previous.slug, event.previous.session_id, event.type === "replaced" ? "session-replaced" : "session-deleted")
   }))
+  // Same predicate as the Claude broker's boot reattach: open, unarchived ACP rows only. Fire-and-forget:
+  // one agent that cannot be reached must never hold up (or fail) a boot.
+  void acpBridge.warmUp(
+    storage.allSessions()
+      .filter((row) => row.backend === "acp" && row.state !== "archived" && row.archived !== 1)
+      .map((row) => ({ threadSlug: row.slug, sessionId: row.session_id, cwd: project.dir, agentId: row.acp_agent ?? "", modelId: acpModelIdFromModel(row.model), acpSessionId: row.agent_session_id })),
+  )
 
   // The consumer for the broker's structured event stream. Until this existed the bridge forwarded
   // every SDK event to a `deps.onEvent` nobody supplied, so the whole stream was dropped and the

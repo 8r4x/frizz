@@ -11,6 +11,7 @@ import { LogoutConfirmModal, SignInModal } from "./SignInModal.tsx"
 import { draftKey, draftStore, useDraft, useProjectDir } from "../lib/drafts.ts"
 import { parseAccountAlias } from "../lib/signIn.ts"
 import { useEagerFollowUp, type EagerFollowUpCallbacks } from "../lib/eagerComposerSubmission.ts"
+import { canInterruptAndSend } from "../lib/composerKeyboard.ts"
 
 // THE prompt box for a registered thread — the single block every "steer this thread" surface renders.
 // The <Composer> leaf was already shared; the ~14 lines AROUND it were not, and the queue card's copy had
@@ -104,12 +105,9 @@ export function ThreadComposerBox({
   }, [slug, message, stagedContext])
 
   // INTERRUPT AND SEND is offered only when there is something to interrupt AND a runtime that can be
-  // preempted. `runtime === "running"` is exactly "process alive, turn in flight"; codex is excluded
-  // because its app-server bridge owns the steer/turn decision itself and frizz does not reach past it,
-  // and an ACP agent because ACP has no steer — a follow-up queues behind the running turn.
-  // A `submitOverride` surface (the queue card's staged answers) is excluded too — that controller
-  // sends a whole answer set, and preemption is not part of its contract.
-  const canInterrupt = !submitOverride && thread?.runtime === "running" && thread.backend !== "codex" && thread.backend !== "acp"
+  // preempted — `runtime === "running"` is exactly "process alive, turn in flight". The backend policy
+  // (Claude only; Codex steers, ACP queues) lives in canInterruptAndSend, pinned by its test.
+  const canInterrupt = canInterruptAndSend(thread, submitOverride !== undefined)
 
   function send(interrupt = false) {
     const text = message.trim()

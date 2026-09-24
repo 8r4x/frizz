@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { shouldInterruptSubmitComposerEnter, shouldRestoreOptionEnterNewline, shouldSubmitComposerEnter, shouldSubmitStagedEnter, type ComposerKeyboardEvent } from "./composerKeyboard.ts"
+import { canInterruptAndSend, shouldInterruptSubmitComposerEnter, shouldRestoreOptionEnterNewline, shouldSubmitComposerEnter, shouldSubmitStagedEnter, type ComposerKeyboardEvent } from "./composerKeyboard.ts"
 
 function key(overrides: Partial<ComposerKeyboardEvent> = {}): ComposerKeyboardEvent {
   return {
@@ -97,4 +97,17 @@ test("a staged answer box never submits a non-Enter key or an IME confirmation",
   // WebKit/Safari can confirm an IME candidate with isComposing=false but keyCode=229.
   assert.equal(shouldSubmitStagedEnter(key({ keyCode: 229 })), false)
   assert.equal(shouldSubmitStagedEnter(key({ keyCode: 13 })), true)
+})
+
+// THE FORCED CHORD MAY ONLY INTERRUPT A CLAUDE TURN. A Codex follow-up steers the running turn and an
+// ACP follow-up queues behind it; neither runtime is ever sent an interrupt for a message, so a
+// worker's sub-agents on those backends cannot be ended by ⌘-Enter (maintainer 2026-09-24: "make sure
+// that we don't kill subagents unnecessarily for Codex either. Or any of the ACPs").
+test("⌘-Enter may interrupt only a running Claude turn — never Codex or an ACP agent", () => {
+  assert.equal(canInterruptAndSend({ runtime: "running", backend: "claude" }, false), true)
+  assert.equal(canInterruptAndSend({ runtime: "running", backend: "codex" }, false), false, "codex: the chord is a plain send that steers")
+  assert.equal(canInterruptAndSend({ runtime: "running", backend: "acp" }, false), false, "acp: the chord is a plain send that queues")
+  assert.equal(canInterruptAndSend({ runtime: "rested", backend: "claude" }, false), false, "nothing in flight to interrupt")
+  assert.equal(canInterruptAndSend(undefined, false), false)
+  assert.equal(canInterruptAndSend({ runtime: "running", backend: "claude" }, true), false, "a staged-answer surface sends a whole answer set")
 })

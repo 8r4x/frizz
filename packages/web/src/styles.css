@@ -435,6 +435,20 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .frizz-rail-heartbeat { animation: none; opacity: 1; }
 }
+/* The PROJECT rail's badge ring (ProjectRail.tsx RunningRing): one lap of a pathLength="100" rect, so it
+   serves a circle and a two-digit pill alike. 1.1s is BoxSpinner's lap, so the rail's badge and the
+   sidebar's rows spin at one tempo. Under reduced motion the segment holds still on its faint outline —
+   the ring is the signal, the motion only emphasises it. */
+.frizz-rail-badge-lap {
+  animation: frizz-rail-badge-lap 1.1s linear infinite;
+}
+@keyframes frizz-rail-badge-lap {
+  from { stroke-dashoffset: 100; }
+  to { stroke-dashoffset: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .frizz-rail-badge-lap { animation: none; }
+}
 @keyframes frizz-live-pulse {
   50% { opacity: 0.62; box-shadow: 0 0 0 2px color-mix(in srgb, var(--live-dot) 14%, transparent); }
 }

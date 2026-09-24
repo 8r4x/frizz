@@ -3,7 +3,8 @@ import type { InteractionSessionScope, InteractionStore } from "../interaction-s
 import { redactCredentialSyntax } from "../credential-redaction.ts"
 import { log } from "../logging.ts"
 import { acpAgentSpecs, resolveAcpAgent, type AcpAgentInput, type AcpAgentSpec, type ResolvedAcpAgent } from "./acp-agents.ts"
-import { AcpConnection, AcpRemoteError, AcpRequestError, spawnAcpChild, type AcpSpawn } from "./acp-rpc.ts"
+import { AcpConnection, AcpConnectionClosed, AcpRemoteError, AcpRequestError, spawnAcpChild, type AcpSpawn } from "./acp-rpc.ts"
+import { daemonAcpHost, directAcpHost, liveAcpDaemonRecord, stopAcpDaemon, type AcpHost } from "./acp-host.ts"
 import { AcpTranscriptWriter, acpTranscriptPath, type AcpRecord } from "./acp-transcript.ts"
 import {
   ACP_ERROR_AUTH_REQUIRED, ACP_ERROR_INTERNAL, ACP_ERROR_METHOD_NOT_FOUND, ACP_PROTOCOL_VERSION,
@@ -30,10 +31,14 @@ import type { AcpAgentModels } from "@frizz/shared"
 //     resolves it and CANCELLED (fail closed) when the turn ends, the session is released or nobody can
 //     answer — the Claude bridge's contract, because a card nothing terminalizes never leaves the queue.
 //
-// A Frizz restart closes stdin and the agent exits with it (the protocol's teardown). The next input
-// re-opens the session: `session/load` when the agent advertised `loadSession`, else a fresh session
-// with a transcript note saying so. A running turn does not survive that — the stated difference from
-// the broker and the app-server, accepted for a generic fallback.
+// The agent runs inside a DETACHED DAEMON (acp-daemon.ts, attached through acp-host.ts), so a Frizz
+// restart or crash only drops the socket: the agent, its running turn and every sub-agent inside it keep
+// going, and `warmUp()` reattaches at the next boot — adopting the in-flight `session/prompt` as the live
+// turn and raising afresh any permission card the dead runtime was holding. Until 2026-09-24 the agent
+// was a plain child whose stdin closed with the server, and a running turn died with it; that was the
+// stated difference from the broker and the app-server, and it is gone. A session whose daemon has
+// actually died is re-opened on the next input: `session/load` when the agent advertised `loadSession`,
+// else a fresh session with a transcript note saying so.
 
 export interface AcpBridgeOptions {
   projectId: string
@@ -45,7 +50,10 @@ export interface AcpBridgeOptions {
   env?: NodeJS.ProcessEnv
   /** The operator's own agent entries (settings.acpAgents), re-read on every spawn. */
   customAgents?: () => readonly AcpAgentInput[] | undefined
+  /** Test seam: a plain child per open, no daemon, no reattach (wrapped as `directAcpHost`). */
   spawn?: AcpSpawn
+  /** How an agent process is obtained. Default: the detached daemon host (`daemonAcpHost`). */
+  host?: AcpHost
   onDiagnostic?: (d: { threadSlug: string; kind: string; message: string }) => void
   /** Called whenever a turn starts or ends, so the board can refresh without polling. */
   onStatusChange?: () => void
@@ -124,6 +132,9 @@ interface Turn {
   finish: () => void
 }
 
+/** The turn's outcome record, shared by a turn this bridge started and one it adopted after a restart. */
+type TurnOutcome = { kind: "ended"; raw: unknown } | { kind: "failed"; err: unknown }
+
 interface ToolMeta { kind?: string; title?: string; locations?: string[]; written: boolean; status?: string }
 
 interface LiveSession {
@@ -145,6 +156,9 @@ interface LiveSession {
   pendingPerms: Map<string, PendingPermission>
   tools: Map<string, ToolMeta>
   exited: boolean
+  /** True from `shutdown()` on: the connection is being DETACHED from a daemon that keeps running, so
+   *  a rejected prompt is not the turn ending and must not be recorded as one. */
+  detaching: boolean
 }
 
 const AUTH_HINT = "The agent needs a login first. "
@@ -273,22 +287,45 @@ export class AcpBridge {
 
   /** Spawn the agent, initialize, and open (or load) a session. Throws an actionable error on any
    *  failure and leaves nothing behind. */
-  private async open(input: { threadSlug: string; sessionId: string; cwd: string; agentId: string; modelId?: string | null; acpSessionId?: string | null }): Promise<{ live: LiveSession; resumed: "loaded" | "fresh" }> {
+  private host(): AcpHost {
+    return this.options.host ?? (this.options.spawn ? directAcpHost(this.options.spawn) : daemonAcpHost)
+  }
+
+  private async open(input: { threadSlug: string; sessionId: string; cwd: string; agentId: string; modelId?: string | null; acpSessionId?: string | null }): Promise<{ live: LiveSession; resumed: "loaded" | "fresh" | "reattached" }> {
     const { threadSlug: slug, sessionId, cwd } = input
     const agent = this.resolveAgent(input.agentId)
     const env = inheritWorkerEnvironment(this.options.env ?? process.env)
-    const spawn = this.options.spawn ?? spawnAcpChild
-    const proc = spawn({ command: agent.bin!, args: agent.args, cwd, env })
+    const attachment = await this.host()({ stateDir: this.options.stateDir, threadSlug: slug, sessionId, command: agent.bin!, args: agent.args, cwd, env })
+    const proc = attachment.process
     const writer = new AcpTranscriptWriter(acpTranscriptPath(this.options.stateDir, sessionId))
     let live: LiveSession | undefined
+    // Traffic from the agent that arrives before the session is READY is held, not dropped or refused.
+    // On a reattach the daemon replays everything the agent said while Frizz was away — the running
+    // turn's chunks, and any permission request it re-sends — the instant the socket opens, before
+    // `initialize` has even been answered. Refusing a request then ("session not ready") would be taken
+    // by the daemon as THE answer, and a dropped chunk is a hole in the transcript. `ready()` flips at
+    // the point the handlers can act: right after the session exists on a fresh open (so session/load's
+    // own replay is still governed by `loading`), and after the in-flight turn is adopted on a reattach.
+    let isReady = false
+    const held: Array<() => void> = []
+    const ready = (): void => { isReady = true; for (const run of held.splice(0)) run() }
     const conn = new AcpConnection(proc, {
-      onRequest: (method, params) => live ? this.handleRequest(live, method, params) : Promise.reject(new AcpRequestError(ACP_ERROR_INTERNAL, "session not ready")),
-      onNotification: (method, params) => { if (live && method === "session/update") this.handleNotification(live, params) },
+      onRequest: (method, params) => {
+        if (isReady && live) return this.handleRequest(live, method, params)
+        return new Promise((resolve, reject) => { held.push(() => { this.handleRequest(live!, method, params).then(resolve, reject) }) })
+      },
+      onNotification: (method, params) => {
+        if (method !== "session/update") return
+        if (isReady && live) this.handleNotification(live, params)
+        else held.push(() => this.handleNotification(live!, params))
+      },
       onDiagnostic: (d) => this.diagnostic(slug, d.kind, d.message),
       requestTimeoutMs: this.options.initializeTimeoutMs ?? 60_000,
     })
     const fail = async (err: unknown): Promise<never> => {
       await conn.close(500)
+      // An agent that cannot complete the handshake or open a session is no use alive in a daemon.
+      await stopAcpDaemon(this.options.stateDir, sessionId).catch(() => {})
       const stderr = conn.recentStderr.slice(-3).join(" | ")
       const e = err instanceof Error ? err : new Error(String(err))
       throw new Error(`${e.message}${stderr ? ` (agent stderr: ${clip(stderr, 400)})` : ""}`)
@@ -302,8 +339,32 @@ export class AcpBridge {
       }))
     } catch (err) { return fail(err instanceof Error ? new Error(`${agent.label} did not complete the ACP handshake: ${err.message}`) : err) }
     const mcpServers = frizzMcpServer(this.options.frizzMcp, slug)
-    live = { slug, sessionId, cwd, agent, conn, init, acpSessionId: "", writer, loading: false, queue: [], pendingPerms: new Map(), tools: new Map(), exited: false }
+    live = { slug, sessionId, cwd, agent, conn, init, acpSessionId: "", writer, loading: false, queue: [], pendingPerms: new Map(), tools: new Map(), exited: false, detaching: false }
     void conn.exited.then(() => { if (live) this.onExit(live) })
+
+    // REATTACHED to an agent that outlived a frizz restart: the session is already open (the daemon
+    // reports its id) and a `session/prompt` may still be running. Adopt both — no session/new, no
+    // session/load, and the in-flight prompt becomes the live turn so it ends in the transcript exactly
+    // as it would have had nothing happened.
+    if (attachment.reattached && attachment.hello.acpSessionId) {
+      live.acpSessionId = attachment.hello.acpSessionId
+      writer.append({ kind: "acp-note", at: this.now(), text: `Reattached to the running ${agent.label} session after a Frizz restart.` })
+      if (attachment.hello.droppedWhileDetached > 0) {
+        writer.append({ kind: "acp-note", at: this.now(), text: `${attachment.hello.droppedWhileDetached} message(s) from the agent were lost while Frizz was away; the transcript may have gaps.` })
+      }
+      this.sessions.set(sessionId, live)
+      const prompt = attachment.hello.outstanding.find((o) => o.method === "session/prompt")
+      if (prompt) {
+        const current = live
+        const turn = this.newTurn(undefined)
+        current.turn = turn
+        this.options.onStatusChange?.()
+        void this.awaitTurn(current, turn, conn.adoptPending("session/prompt", (id) => attachment.adopt(prompt.daemonId, id)))
+      }
+      ready()
+      return { live, resumed: "reattached" }
+    }
+    ready()
 
     const authError = (err: AcpRemoteError): Error => {
       const hint = (init.authMethods ?? []).map((m) => m.description ?? m.name ?? m.id).filter(Boolean).join("; ")
@@ -465,7 +526,8 @@ export class AcpBridge {
     if (!live || live.exited || live.conn.closed) {
       const opened = await this.open(input)
       live = opened.live
-      resumed = opened.resumed
+      // A reattach IS the live session — the agent never went away, only the socket did.
+      resumed = opened.resumed === "reattached" ? "live" : opened.resumed
     }
     if (live.turn) {
       live.queue.push({ text: input.text, ...(input.deliveryId ? { deliveryId: input.deliveryId } : {}) })
@@ -487,14 +549,36 @@ export class AcpBridge {
     return { interrupted: true }
   }
 
-  releaseSession(threadSlug: string, sessionId: string, reason: "session-replaced" | "session-deleted" | "shutdown"): void {
+  /** END the session's agent: cancel its turn, drop its cards, and stop the daemon holding it. This is
+   *  the teardown for a thread that is dismissed, replaced or marked done — never for a restart, which
+   *  is `shutdown()`. Inert when nothing is live AND no daemon exists for the session. */
+  releaseSession(threadSlug: string, sessionId: string, reason: "session-replaced" | "session-deleted"): void {
     const live = this.sessions.get(sessionId)
-    if (!live || live.slug !== threadSlug) return
-    this.sessions.delete(sessionId)
-    live.queue.length = 0
-    this.retirePermissions(live, "provider-cancelled")
-    if (live.turn) live.conn.notify("session/cancel", { sessionId: live.acpSessionId })
-    void live.conn.close(reason === "shutdown" ? 1_000 : 3_000)
+    if (live && live.slug === threadSlug) {
+      this.sessions.delete(sessionId)
+      live.queue.length = 0
+      this.retirePermissions(live, "provider-cancelled")
+      if (live.turn) live.conn.notify("session/cancel", { sessionId: live.acpSessionId })
+      void live.conn.close(3_000)
+    }
+    void reason
+    void stopAcpDaemon(this.options.stateDir, sessionId).catch(() => {})
+  }
+
+  /** Boot-time reattach: every session in `rows` whose daemon is still running is re-opened NOW, so a
+   *  turn that survived the restart is live on the board (and its in-flight prompt adopted) before the
+   *  next input rather than after it. Fire-and-forget per row: one agent's trouble never blocks a boot. */
+  async warmUp(rows: ReadonlyArray<{ threadSlug: string; sessionId: string; cwd: string; agentId: string; modelId?: string | null; acpSessionId?: string | null }>): Promise<void> {
+    for (const row of rows) {
+      if (this.closed) return
+      if (!liveAcpDaemonRecord(this.options.stateDir, row.sessionId)) continue
+      if (this.sessions.has(row.sessionId)) continue
+      try {
+        await this.open(row)
+      } catch (err) {
+        this.diagnostic(row.threadSlug, "reattach", `could not reattach to the running agent: ${(err as Error).message}`)
+      }
+    }
   }
 
   /** Switch a LIVE session's model (`session/set_config_option`); `applied: false` when the session is
@@ -525,15 +609,28 @@ export class AcpBridge {
     return live !== undefined && live.slug === scope.threadSlug && live.pendingPerms.has(interactionId)
   }
 
+  /** DETACH from every agent — the daemons and their turns keep running for the next runtime to
+   *  reattach to. Open cards are cancelled on OUR side only (the answer would have nowhere to go); the
+   *  agent's request stays unanswered in its daemon, which re-sends it on reattach so the card is raised
+   *  afresh. A plain-child session (test seam) simply ends here, as it always did. */
   async shutdown(): Promise<void> {
     this.closed = true
     this.unsubscribe?.()
     const all = [...this.sessions.values()]
     this.sessions.clear()
     await Promise.all(all.map(async (live) => {
-      this.retirePermissions(live, "provider-cancelled")
+      live.detaching = true
+      this.dropPermissionCards(live)
       await live.conn.close(1_000)
     }))
+  }
+
+  /** Cancel a session's open cards without answering the agent. The pending entries go FIRST, so the
+   *  store's cancellation event (which resolves a pending entry with `cancelled`) finds none to answer. */
+  private dropPermissionCards(live: LiveSession): void {
+    if (!live.pendingPerms.size) return
+    live.pendingPerms.clear()
+    try { this.options.interactions?.cancelForSession(live.slug, live.sessionId, "provider-cancelled") } catch { /* hygiene */ }
   }
 
   private info(live: LiveSession): AcpSessionInfo {
@@ -546,17 +643,40 @@ export class AcpBridge {
 
   // ---- the turn ---------------------------------------------------------------------------------
 
-  private async runTurn(live: LiveSession, sendText: string, recordText: string, deliveryId: string | undefined): Promise<void> {
+  private newTurn(deliveryId: string | undefined): Turn {
     let finish!: () => void
     const done = new Promise<void>((r) => { finish = r })
-    const turn: Turn = { startedAt: this.now(), ...(deliveryId ? { deliveryId } : {}), text: "", messageText: "", thought: "", cancelRequested: false, done, finish }
+    return { startedAt: this.now(), ...(deliveryId ? { deliveryId } : {}), text: "", messageText: "", thought: "", cancelRequested: false, done, finish }
+  }
+
+  private async runTurn(live: LiveSession, sendText: string, recordText: string, deliveryId: string | undefined): Promise<void> {
+    const turn = this.newTurn(deliveryId)
     live.turn = turn
     live.writer.append({ kind: "user-message", at: turn.startedAt, text: recordText, synthetic: false })
     live.writer.append({ kind: "turn-start", at: turn.startedAt })
     this.options.onStatusChange?.()
+    await this.awaitTurn(live, turn, live.conn.requestOpenEnded("session/prompt", { sessionId: live.acpSessionId, prompt: [{ type: "text", text: sendText }] }))
+  }
+
+  /** Wait for a `session/prompt` — one this bridge sent, or one adopted from a daemon after a restart —
+   *  and write the turn's ending. */
+  private async awaitTurn(live: LiveSession, turn: Turn, response: Promise<unknown>): Promise<void> {
+    let outcome: TurnOutcome
+    try { outcome = { kind: "ended", raw: await response } } catch (err) { outcome = { kind: "failed", err } }
+    // DETACHING, not ending: `shutdown()` closed the socket to a daemon whose agent is still running
+    // this very turn. Leave the turn OPEN in the transcript — the next runtime reattaches and adopts it,
+    // and its real ending is written then. Nothing else in `finally` applies either: the cards are the
+    // daemon's to re-raise, and the queue was never the agent's.
+    if (outcome.kind === "failed" && live.detaching && outcome.err instanceof AcpConnectionClosed) {
+      if (turn.flushTimer) { clearTimeout(turn.flushTimer); turn.flushTimer = undefined }
+      this.flushThought(live)
+      this.flushText(live, false)
+      turn.finish()
+      return
+    }
     try {
-      const raw = await live.conn.requestOpenEnded("session/prompt", { sessionId: live.acpSessionId, prompt: [{ type: "text", text: sendText }] })
-      const result = AcpPromptResult.parse(raw)
+      if (outcome.kind === "failed") throw outcome.err
+      const result = AcpPromptResult.parse(outcome.raw)
       this.flushThought(live)
       const finalText = this.flushText(live, true)
       // A cancelled turn is not a success: the tailer clears provider faults on a successful bracket,
