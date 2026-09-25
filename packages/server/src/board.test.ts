@@ -4,7 +4,7 @@ import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, w
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { questionAnswerMessage, questionsCancelledWakeMessage, type InteractionRequest } from "@frizz/shared"
-import { answersInFlight, appServerTurnStalled, createBoard, deriveAwaitingBackground, deriveNeedsYou, degradeIfAwaitingAnswer, degradeIfNoTranscript, fenceWatchViews, hasDeclaredWait, hasParkedTimerWatch, hasRegisteredBackgroundPark, isBoardRelevantFrizzPath, registeredDoneFence, resolveLimitPause, resolveSessionPermission, resolveSessionProfile, resolveSessionTitle, type RegisteredWatch } from "./board.ts"
+import { ANSWER_IN_FLIGHT_EXCUSAL_MS, answerAwaitingDelivery, answersInFlight, appServerTurnStalled, createBoard, deriveAwaitingBackground, deriveNeedsYou, degradeIfAwaitingAnswer, degradeIfNoTranscript, fenceWatchViews, hasDeclaredWait, hasParkedTimerWatch, hasRegisteredBackgroundPark, isBoardRelevantFrizzPath, registeredDoneFence, resolveLimitPause, resolveSessionPermission, resolveSessionProfile, resolveSessionTitle, type RegisteredWatch } from "./board.ts"
 import { Bus } from "./bus.ts"
 import { createStorage, type ThreadQuestionRow } from "./storage.ts"
 import type { Project } from "./project.ts"
@@ -2180,6 +2180,40 @@ test("a dismissal RIDES an answer, and is named by its question rather than its 
 test("one unreadable row never blanks the card the others earned", () => {
   const wire = answersInFlight([askedRow(), askedRow({ id: "qst_2", answer: "{not json" })], undefined)
   assert.match(wire ?? "", /“SQLite or a JSON file\?” → SQLite/)
+})
+
+// ---- …AND IT TAKES THE THREAD OUT OF THE QUEUE -------------------------------------------------------
+//
+// Between the answer being stored and the wake landing, the thread is at rest with no question open, and
+// deriveNeedsYou read that as a bare rest: the row stayed in the queue wearing the at-rest ellipsis for a
+// thread the human had just set back to work (maintainer 2026-09-25).
+
+test("answerAwaitingDelivery: an answer the worker has not received excuses the thread, for a bounded window", () => {
+  const settled = 2000
+  assert.equal(answerAwaitingDelivery([askedRow()], undefined, settled + 1), true)
+  assert.equal(answerAwaitingDelivery([askedRow({ delivered: 1 })], new Date(1999).toISOString(), settled + 1), true, "enqueued is not received")
+  assert.equal(answerAwaitingDelivery([askedRow()], new Date(settled).toISOString(), settled + 1), false, "the record landed")
+  // THE CAP: a wake the outbox exhausts never lands, and the thread must come back to the queue rather
+  // than sit out of it forever, answered and unwoken.
+  assert.equal(answerAwaitingDelivery([askedRow()], undefined, settled + ANSWER_IN_FLIGHT_EXCUSAL_MS - 1), true)
+  assert.equal(answerAwaitingDelivery([askedRow()], undefined, settled + ANSWER_IN_FLIGHT_EXCUSAL_MS), false)
+})
+
+test("answerAwaitingDelivery: a dismissal or an open question excuses nothing", () => {
+  assert.equal(answerAwaitingDelivery([askedRow({ state: "dismissed", answer: null })], undefined, 2001), false, "a dismissal wakes nobody")
+  assert.equal(answerAwaitingDelivery([askedRow({ state: "open", settled_at: null, answer: null })], undefined, 2001), false)
+})
+
+test("deriveNeedsYou: an answer in flight takes a bare rest out of the queue, but never a crash or a live ask", () => {
+  const rested = tele({ lastActivityAt: T0 })
+  const at = Date.parse(T0)
+  const needs = (t: SessionTelemetry, runtime: Parameters<typeof deriveNeedsYou>[2], inFlight: boolean, interaction = false) =>
+    deriveNeedsYou(row(), t, runtime, interaction, at, undefined, true, false, {}, new Set(), new Set(), [], 0, inFlight)
+  assert.equal(needs(rested, "turn-idle", false), true, "baseline: the bare rest the answer leaves behind queues")
+  assert.equal(needs(rested, "turn-idle", true), false, "the human has answered; the worker is about to read it")
+  assert.equal(needs(tele({ turn: "in-flight" }), "exited", true), true, "a worker that died mid-turn is still a stall")
+  assert.equal(needs(rested, "turn-idle", true, true), true, "a typed interaction is its own gate")
+  assert.equal(needs(tele({ pendingAsk: { id: "x", questions: [] } }), "turn-idle", true), true, "…and so is a native ask")
 })
 
 // ---- A REGISTERED COMPLETION -----------------------------------------------------------------------

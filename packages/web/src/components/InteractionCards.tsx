@@ -42,6 +42,7 @@ import {
 } from "../lib/typedInteractions.ts"
 import { safeHttpUrl } from "../lib/external-links.ts"
 import { draftKey, draftStore, useDraftValues, useProjectDir } from "../lib/drafts.ts"
+import { clearSteered, markSteered } from "../lib/steering.ts"
 // THE question card. A native AskUserQuestion is a question, not an authorization request, so it
 // renders through the very component a ```question fence renders through — same card, same option
 // chips, same free-text box, same Send answers verb (maintainer 2026-07-27: "Ideally, they could
@@ -198,6 +199,7 @@ function InteractionQuestionCard({
       // Fail CLOSED on an ambiguous write, exactly as the typed card does: a response frizz cannot
       // prove landed must not look re-sendable.
       failClosedAmbiguousInteraction(qc, record)
+      clearSteered(record.owner.threadSlug)
       setError(errorText(cause))
     },
   })
@@ -208,6 +210,9 @@ function InteractionQuestionCard({
     const signature = interactionDecisionSignature(answerDecision.id, values)
     const responseId = responseIds.current.get(signature) ?? newResponseId()
     responseIds.current.set(signature, responseId)
+    // The answer releases the blocked turn, so the rail row moves to the running band now rather than
+    // when the tailer next sees the turn advance — see steerOnDecision.
+    markSteered(record.owner.threadSlug)
     mutation.mutate({ decisionId: answerDecision.id, values, responseId })
   }
   const setText = (entry: (typeof questions)[number], text: string) => {
@@ -296,6 +301,16 @@ export function InteractionCard({
   const asQuestions = useMemo(() => interactionQuestions(record), [record])
   if (asQuestions) return <InteractionQuestionCard record={record} questions={asQuestions} autoFocus={autoFocus} />
   return <InteractionApprovalCard record={record} autoFocus={autoFocus} />
+}
+
+// A RESPONSE TO A BLOCKED TURN IS A STEER. The provider is mid-turn, parked on this request, and every
+// decision but `cancel` hands the tool its result and lets the turn run on — a denial included, which the
+// model reads and works around. So the row takes the steer's optimistic overlay the instant the human
+// commits, exactly as a composer send does, instead of sitting in the queue until the tailer sees the
+// turn move (lib/steering.ts). `cancel` is left alone: it may end the turn, and a guess of "running"
+// there would be one the server has to take back.
+function steerOnDecision(decision: CanonicalInteractionDecision): boolean {
+  return decision.semantic !== "cancel"
 }
 
 function InteractionApprovalCard({
@@ -427,6 +442,7 @@ function InteractionApprovalCard({
     },
     onError: (cause) => {
       setStatus(undefined)
+      clearSteered(record.owner.threadSlug)
       setError(errorText(cause))
       // The write may have committed even though its HTTP response was lost. Fail the shared list
       // cache closed before attempting reconciliation so a remount (or a second copy of this card in
@@ -497,6 +513,7 @@ function InteractionApprovalCard({
     const signature = interactionDecisionSignature(decision.id, values)
     const responseId = responseIds.current.get(signature) ?? newResponseId()
     responseIds.current.set(signature, responseId)
+    if (steerOnDecision(decision)) markSteered(record.owner.threadSlug)
     mutation.mutate({ decision, values, responseId })
   }
 

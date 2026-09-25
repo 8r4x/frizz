@@ -24,6 +24,7 @@ import { X } from "lucide-react"
 import type { QuestionAnswer, RegisteredQuestionView, SettledQuestionView, ThreadView } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { draftKey, draftStore, useDraftValues, useProjectDir } from "../lib/drafts.ts"
+import { clearSteered, markSteered } from "../lib/steering.ts"
 import type { BlockAnswer } from "../lib/questionBlocks.ts"
 import type { PairedAnswer } from "../lib/answersMessage.ts"
 import { ROOT_PATH, liveQuestionNodes, nodeAnswered, registeredAnswer, settledQuestionNodes } from "../lib/registeredQuestion.ts"
@@ -122,6 +123,7 @@ export function useRegisteredAnswering(thread: ThreadView | undefined): Register
       // looking at a queue that quietly swallowed their reply. Same reversal an optimistic Mark-as-done
       // makes when the server declines it.
       queueDismiss?.cancel()
+      if (slug) clearSteered(slug)
       setError(errorText(cause))
     },
     // Server truth replaces the optimistic settled cards either way: on success it carries the real
@@ -141,6 +143,11 @@ export function useRegisteredAnswering(thread: ThreadView | undefined): Register
     // Local truth FIRST, then the network — the ordering every other send on this card obeys, and the
     // whole of what "the card goes away when I answer it" means on a machine under load.
     queueDismiss?.dismiss()
+    // …AND THE RAIL ROW GOES TO WORK WITH IT. Every answer wakes the worker (the scheduler delivers the
+    // batch), so this is a steer in all but name, and it takes the steer's overlay: without it the row
+    // dropped its question mark on the board push, sat in the queue wearing the at-rest ellipsis, and only
+    // moved to the running band once the delivery landed (lib/steering.ts).
+    markSteered(slug)
     // THE CARD GREYS IN PLACE ON SEND, before the round-trip: the answered question joins the settled
     // list now, and the surface stops drawing the open card for any id that list holds (see
     // withoutSettledQuestions). Waiting for the server instead left a beat where the open card had gone

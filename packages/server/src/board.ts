@@ -507,6 +507,26 @@ export function answersInFlight(rows: readonly ThreadQuestionRow[], lastUserAt: 
   return wakeOnDismissals && dismissed.length > 0 ? questionsCancelledWakeMessage(dismissed.length) : undefined
 }
 
+/** How long a stored answer excuses its thread from the queue while the wake carrying it has not landed.
+ *  The delivery normally lands within seconds (answerQuestions kicks the scheduler at once); a worker
+ *  that has to be resumed first takes longer. The cap is what keeps the excusal honest: a wake the
+ *  outbox EXHAUSTS never produces the user record that ends it, and without a bound that thread would
+ *  sit out of the queue, answered and unwoken, with nothing on screen to say so. */
+export const ANSWER_IN_FLIGHT_EXCUSAL_MS = 60_000
+
+/** Has the human answered a registered question that the worker has not received yet, recently enough
+ *  to trust that the wake is still on its way? Answers only: a dismissal wakes nobody on its own. Reads
+ *  the same "newest user record" test as answersInFlight, so the two can never disagree on arrival. */
+export function answerAwaitingDelivery(rows: readonly ThreadQuestionRow[], lastUserAt: string | undefined, nowMs = Date.now()): boolean {
+  const userAt = lastUserAt ? Date.parse(lastUserAt) : Number.NaN
+  return rows.some((q) =>
+    q.state === "answered" &&
+    q.settled_at != null &&
+    !(Number.isFinite(userAt) && userAt >= q.settled_at) &&
+    nowMs - q.settled_at < ANSWER_IN_FLIGHT_EXCUSAL_MS
+  )
+}
+
 /** One armed `thread_watch` row, as the board reads it — the registry half of a wait, where
  *  `declaredWaitIds` is the fence half. */
 export interface RegisteredWatch {
@@ -875,6 +895,9 @@ export function deriveNeedsYou(
   // How many REGISTERED questions this thread has open (thread_question). A count rather than the rows:
   // the queue rule only asks whether there are any, and the rows themselves travel on the view.
   openQuestions = 0,
+  // The human has ANSWERED a registered question and the wake carrying it has not landed yet — see
+  // answerAwaitingDelivery, which bounds it. The caller's for the same reason `openQuestions` is.
+  answerInFlight = false,
 ): boolean {
   // Snooze is explicit operator lifecycle state. It must be checked before provider/question/crash
   // gates so choosing Snooze from any queue card actually parks that card until its exact deadline.
@@ -905,6 +928,13 @@ export function deriveNeedsYou(
   // resolves (a question, a done handoff, bare rest). `unconfirmed` is excluded on purpose: a send frizz
   // could not confirm is one the human may need to re-drive, so the ledger's own aging re-surfaces it.
   if (hasFreshDelivery(row, deliveryProcessGone)) return false
+  // THE SAME EXCUSAL FOR AN ANSWER. answerQuestions stores the answer and the scheduler delivers it a
+  // beat later, so between the two the thread is at rest with no question left open — and it read as a
+  // BARE REST: the card stayed in the queue wearing the at-rest ellipsis, for a thread the human had just
+  // set back to work (maintainer 2026-09-25: "it switches over … to the three-dot ellipses, but then it
+  // doesn't move the card from the queue into the running rail"). The human has responded; nothing here
+  // is theirs to do until the worker has read it.
+  if (answerInFlight) return false
   if (tele?.providerError && !tele.providerError.retrying) return true
   // An unanswered ```question fence in the last assistant message is an EXPLICIT ask — a hard queue
   // member exactly like a native pendingAsk, NOT subject to interaction-clearance. VIEWING a question
@@ -1521,7 +1551,7 @@ function sessionThreadView(
   const state = effectiveSessionState(row, registeredLegacyTerminal)
   const archived = state === "archived"
   const limitPause = resolveLimitPause(row, tele, nowMs)
-  const needsYou = archived ? false : deriveNeedsYou(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, true, deliveryProcessGone, github, registeredPrWatches, armedTimerIds, armedWatches, questions.length)
+  const needsYou = archived ? false : deriveNeedsYou(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, true, deliveryProcessGone, github, registeredPrWatches, armedTimerIds, armedWatches, questions.length, answerAwaitingDelivery(questionRows, rawTele?.lastUserAt, nowMs))
   const awaitingBackground = archived ? false : deriveAwaitingBackground(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, deliveryProcessGone, github, registeredPrWatches, armedTimerIds, armedWatches, questions.length)
   // A worker that exited with work still outstanding — a turn in flight, OR a sub-agent still reading
   // "running" (its parent is gone, so it cannot actually be live) — is a crash/stall, not a clean
