@@ -268,6 +268,31 @@ test("answering stores the answer WITHOUT delivering it, and leaves the row for 
   } finally { h.close() }
 })
 
+test("the transcript reads back the ANSWERED questions with their answers, and nothing else", async () => {
+  const h = harness()
+  try {
+    h.storage.upsertSession(row("t"))
+    h.storage.upsertSession(row("other"))
+    const { registered } = await h.router.ask.handler({ input: { slug: "t", questions: [simple(), simple("Ship it?"), simple("Tag it?"), simple("Still open?")] } })
+    const [answered, dismissed, withdrawn] = registered
+    await h.router.ask.handler({ input: { slug: "other", questions: [simple("Another thread's?")] } })
+    const answer = { questionId: answered.id, question: answered.spec.question, chosen: ["SQLite — transactional, matches how sessions are already stored"], text: "and index it" }
+    await h.router.answerQuestions.handler({ input: { slug: "t", answers: [answer] } })
+    await h.router.dismissQuestions.handler({ input: { slug: "t", ids: [dismissed.id] } })
+    await h.router.unask.handler({ input: { slug: "t", id: withdrawn.id } })
+
+    const { questions } = await h.router.threadSettledQuestions.handler({ input: { slug: "t" } })
+    // A dismissal and a withdrawal carry no answer to draw, an open question is still the live card, and
+    // another thread's rows never leak in.
+    assert.deepEqual(questions.map((q) => q.id), [answered.id])
+    assert.deepEqual(questions[0].answer, answer)
+    assert.deepEqual(questions[0].spec, answered.spec)
+    assert.equal(questions[0].askedAt, answered.askedAt)
+    assert.ok(Date.parse(questions[0].settledAt) >= Date.parse(questions[0].askedAt))
+    assert.deepEqual((await h.router.threadSettledQuestions.handler({ input: { slug: "other" } })).questions, [])
+  } finally { h.close() }
+})
+
 test("the × dismisses an ordinary question and CANNOT reach a danger-tagged one", async () => {
   const h = harness()
   try {

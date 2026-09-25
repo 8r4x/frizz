@@ -110,6 +110,9 @@ import {
   AnswerQuestionsResult,
   DismissQuestionsInput,
   DismissQuestionsResult,
+  ThreadSettledQuestionsResult,
+  QuestionAnswerSchema,
+  type SettledQuestionView,
   AskedQuestionSchema,
   askedQuestionFaults,
   type AskedQuestion,
@@ -896,6 +899,16 @@ export function createRouter(ctx: AppContext) {
     }
   }
 
+  function parseStoredAnswer(raw: string | null): SettledQuestionView["answer"] | undefined {
+    if (!raw) return undefined
+    try {
+      const parsed = QuestionAnswerSchema.safeParse(JSON.parse(raw))
+      return parsed.success ? parsed.data : undefined
+    } catch {
+      return undefined
+    }
+  }
+
   // This thread's OPEN questions, in the shape the worker's read-back, the board and the card all use.
   function openQuestionViews(slug: string): RegisteredQuestionView[] {
     const out: RegisteredQuestionView[] = []
@@ -1384,6 +1397,26 @@ export function createRouter(ctx: AppContext) {
       handler: async ({ input }) => {
         const page = readEarlierThreadTranscriptPage(ctx.project, ctx.storage, input.slug, input.cursor, ctx.backendFor)
         return retireOpsInPage(input.slug, projectTranscriptPageAgentLifecycles(page, (id) => ctx.tailer.subAgent(input.slug, id), (taskId) => ctx.tailer.subAgentByTaskId?.(input.slug, taskId)))
+      },
+    }),
+
+    // The thread's ANSWERED registered questions, each with its answer, so the transcript can keep the
+    // card in the slot it stood in — greyed, showing only what was picked — instead of the ask vanishing
+    // the instant it is sent. Per thread, not on the board: see SettledQuestionView. A row whose spec or
+    // answer no longer parses is dropped, the same drop-don't-throw rule as the open list.
+    threadSettledQuestions: query({
+      input: SlugInput,
+      output: ThreadSettledQuestionsResult,
+      handler: async ({ input }) => {
+        const questions: SettledQuestionView[] = []
+        for (const q of ctx.storage.listThreadQuestions(input.slug)) {
+          if (q.state !== "answered" || q.settled_at == null) continue
+          const spec = parseQuestionSpec(q.spec)
+          const answer = parseStoredAnswer(q.answer)
+          if (!spec || !answer) continue
+          questions.push({ id: q.id, spec, askedAt: new Date(q.asked_at).toISOString(), settledAt: new Date(q.settled_at).toISOString(), answer })
+        }
+        return { questions }
       },
     }),
 

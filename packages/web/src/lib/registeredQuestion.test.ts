@@ -2,7 +2,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import type { AskedQuestion } from "@frizz/shared"
 import type { BlockAnswer } from "./questionBlocks.ts"
-import { ROOT_PATH, childPath, liveQuestionNodes, nodeAnswered, registeredAnswer, toParsedQuestion } from "./registeredQuestion.ts"
+import { ROOT_PATH, childPath, liveQuestionNodes, nodeAnswered, registeredAnswer, settledQuestionNodes, toParsedQuestion } from "./registeredQuestion.ts"
 
 const blank: BlockAnswer = { chosen: null, chosenSet: [], text: "" }
 const pick = (i: number): BlockAnswer => ({ chosen: i, chosenSet: [], text: "" })
@@ -186,4 +186,49 @@ test("any one of a pick, a toggle or typed text is an answer; nothing is not", (
   assert.equal(nodeAnswered(STORE, typed("x")), true)
   assert.equal(nodeAnswered({ ...STORE, kind: "multi" }, toggle(0)), true)
   assert.equal(nodeAnswered({ ...STORE, kind: "multi" }, pick(0)), false)
+})
+
+// ---- settledQuestionNodes: the answered card, built from the answer registeredAnswer produced ----
+
+const BRANCHED: AskedQuestion = {
+  question: "Ship it?",
+  kind: "question",
+  options: [
+    { label: "Hold", description: "nothing moves" },
+    { label: "Ship", description: "cut the release", recommended: true, followUps: [
+      { question: "Which channel?", kind: "question", options: [{ label: "latest" }, { label: "next" }] },
+    ] },
+  ],
+}
+
+test("a settled card keeps ONLY the picked option, lettered as it was, and the branch it opened", () => {
+  const answer = registeredAnswer({ id: "qst_a", spec: BRANCHED }, new Map([[ROOT_PATH, pick(1)], [childPath(ROOT_PATH, 1, 0), pick(1)]]))!
+  const nodes = settledQuestionNodes(BRANCHED, answer)
+  assert.deepEqual(nodes.map((n) => [n.depth, n.question.options, n.settled]), [
+    [1, ["B. Ship — cut the release"], { chosenIdxs: [0] }],
+    [2, ["B. next"], { chosenIdxs: [0] }],
+  ])
+  // The recommendation follows the kept option to its new index rather than pointing at a dropped one.
+  assert.equal(nodes[0].question.recommendedIdx, 0)
+})
+
+test("a settled card whose answer took the other branch drops the recommendation and opens nothing", () => {
+  const answer = registeredAnswer({ id: "qst_a", spec: BRANCHED }, new Map([[ROOT_PATH, pick(0)]]))!
+  const nodes = settledQuestionNodes(BRANCHED, answer)
+  assert.equal(nodes.length, 1)
+  assert.deepEqual(nodes[0].question.options, ["A. Hold — nothing moves"])
+  assert.equal(nodes[0].question.recommendedIdx, null)
+})
+
+test("free text settles as text with no option chips, and a multi keeps every toggle plus its note", () => {
+  const free = settledQuestionNodes(STORE, registeredAnswer({ id: "qst_a", spec: STORE }, new Map([[ROOT_PATH, typed("Postgres")]]))!)
+  assert.deepEqual([free[0].question.options, free[0].settled], [[], { chosenIdxs: [], text: "Postgres" }])
+  const MULTI: AskedQuestion = { question: "Which platforms?", kind: "multi", options: [{ label: "macOS" }, { label: "Linux" }, { label: "Windows" }] }
+  const multi = settledQuestionNodes(MULTI, registeredAnswer({ id: "qst_b", spec: MULTI }, new Map([[ROOT_PATH, { chosen: null, chosenSet: [2, 0], text: "ARM too" }]]))!)
+  assert.deepEqual([multi[0].question.options, multi[0].settled], [["A. macOS", "C. Windows"], { chosenIdxs: [0, 1], text: "ARM too" }])
+})
+
+test("a chosen label the spec no longer names is kept as text rather than lost", () => {
+  const nodes = settledQuestionNodes(STORE, { questionId: "qst_a", question: STORE.question, chosen: ["Postgres"] })
+  assert.deepEqual(nodes[0].settled, { chosenIdxs: [], text: "Postgres" })
 })

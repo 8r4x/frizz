@@ -18,15 +18,15 @@
 // thread; the surface mounts it ONCE (RegisteredAnsweringProvider) and every card and every stack on
 // that surface reads it through context. A stack mounted with no provider above it (a surface that
 // never places) owns a state of its own, exactly as it did before.
-import { createContext, useContext, useMemo, useState, type ReactNode } from "react"
-import { useMutation } from "@tanstack/react-query"
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { X } from "lucide-react"
-import type { QuestionAnswer, RegisteredQuestionView, ThreadView } from "@frizz/shared"
+import type { QuestionAnswer, RegisteredQuestionView, SettledQuestionView, ThreadView } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { draftKey, draftStore, useDraftValues, useProjectDir } from "../lib/drafts.ts"
 import type { BlockAnswer } from "../lib/questionBlocks.ts"
 import type { PairedAnswer } from "../lib/answersMessage.ts"
-import { ROOT_PATH, liveQuestionNodes, nodeAnswered, registeredAnswer } from "../lib/registeredQuestion.ts"
+import { ROOT_PATH, liveQuestionNodes, nodeAnswered, registeredAnswer, settledQuestionNodes } from "../lib/registeredQuestion.ts"
 import { AnswersCard } from "./AnswersCard.tsx"
 import { QueueDismissContext } from "./ChatView.tsx"
 import { QuestionBlockCard } from "./QuestionBlockCard.tsx"
@@ -95,10 +95,12 @@ export function useRegisteredAnswering(thread: ThreadView | undefined): Register
 
   // EVERY answered question goes in ONE call. A per-question send would half-wake the turn: the worker
   // would come back to a payload it cannot act on and would have to ask for the rest again.
-  const staged: QuestionAnswer[] = questions.flatMap((q) => {
+  const stagedPairs = questions.flatMap((q) => {
     const built = registeredAnswer(q, answersOf(q))
-    return built ? [built] : []
+    return built ? [{ q, answer: built }] : []
   })
+  const staged: QuestionAnswer[] = stagedPairs.map((pair) => pair.answer)
+  const queryClient = useQueryClient()
 
   const send = useMutation({
     mutationFn: async (answers: QuestionAnswer[]) => rpc.answerQuestions({ slug: slug!, answers }),
@@ -122,6 +124,11 @@ export function useRegisteredAnswering(thread: ThreadView | undefined): Register
       queueDismiss?.cancel()
       setError(errorText(cause))
     },
+    // Server truth replaces the optimistic settled cards either way: on success it carries the real
+    // `settledAt`, and on failure it no longer holds them, which brings the open card back.
+    onSettled: () => {
+      if (slug) void queryClient.invalidateQueries({ queryKey: settledQuestionsKey(slug) })
+    },
   })
   const dismiss = useMutation({
     mutationFn: async (id: string) => rpc.dismissQuestions({ slug: slug!, ids: [id] }),
@@ -134,6 +141,18 @@ export function useRegisteredAnswering(thread: ThreadView | undefined): Register
     // Local truth FIRST, then the network — the ordering every other send on this card obeys, and the
     // whole of what "the card goes away when I answer it" means on a machine under load.
     queueDismiss?.dismiss()
+    // THE CARD GREYS IN PLACE ON SEND, before the round-trip: the answered question joins the settled
+    // list now, and the surface stops drawing the open card for any id that list holds (see
+    // withoutSettledQuestions). Waiting for the server instead left a beat where the open card had gone
+    // with the board push and the settled one had not arrived — the card blinking out and back.
+    const key = settledQuestionsKey(slug)
+    void queryClient.cancelQueries({ queryKey: key })
+    const settledAt = new Date().toISOString()
+    const ids = new Set(stagedPairs.map((pair) => pair.q.id))
+    queryClient.setQueryData<SettledQuestion[]>(key, (prev) => [
+      ...(prev ?? []).filter((s) => !ids.has(s.id)),
+      ...stagedPairs.map(({ q, answer }): SettledQuestion => ({ id: q.id, spec: q.spec, askedAt: q.askedAt, settledAt, answer, pending: true })),
+    ])
     send.mutate(staged)
   }
 
@@ -181,6 +200,92 @@ export function useRegisteredAnswering(thread: ThreadView | undefined): Register
     sending: send.isPending,
     error,
   }
+}
+
+// ---- ANSWERED questions: the card stays where it stood, greyed, showing only the answer ----
+
+/** An answered registration as the transcript draws it. `pending` marks one this tab just sent and has
+ *  not yet read back — see lib/settledQuestions. */
+export type SettledQuestion = SettledQuestionView & { pending?: true }
+const NO_SETTLED: readonly SettledQuestion[] = []
+export const settledQuestionsKey = (slug: string) => ["settledQuestions", slug] as const
+
+/** The thread's answered questions. Read per thread rather than off the board (see the shared
+ *  SettledQuestionView), and re-read on the one board event that can add to it: a question leaving the
+ *  OPEN list — answered here, in another tab, or on the queue card. A withdrawal or a dismissal re-reads
+ *  too, and finds nothing new; that costs one indexed SELECT. */
+export function useSettledQuestions(thread: ThreadView | undefined): readonly SettledQuestion[] {
+  const slug = thread?.id
+  const queryClient = useQueryClient()
+  const query = useQuery({
+    queryKey: settledQuestionsKey(slug ?? ""),
+    queryFn: async (): Promise<SettledQuestion[]> => (await rpc.threadSettledQuestions({ slug: slug! })).questions,
+    enabled: Boolean(slug),
+    refetchOnWindowFocus: false,
+  })
+  const openIds = (thread?.questions ?? []).map((q) => q.id).join(" ")
+  const previous = useRef(openIds)
+  useEffect(() => {
+    const before = previous.current
+    previous.current = openIds
+    if (!slug || before === openIds) return
+    const now = new Set(openIds.split(" "))
+    if (before.split(" ").some((id) => id && !now.has(id))) void queryClient.invalidateQueries({ queryKey: settledQuestionsKey(slug) })
+  }, [openIds, queryClient, slug])
+  return query.data ?? NO_SETTLED
+}
+
+/** The thread with every question the settled list holds taken off its OPEN list, so one question never
+ *  draws twice: in the beat between Send and the board push the row is still open on the board while
+ *  its settled card is already drawn. The same object when there is nothing to take, so a memo keyed on
+ *  the thread does not churn. */
+export function withoutSettledQuestions<T extends ThreadView | undefined>(thread: T, settled: readonly SettledQuestion[]): T {
+  if (!thread || settled.length === 0 || thread.questions.length === 0) return thread
+  const ids = new Set(settled.map((s) => s.id))
+  if (!thread.questions.some((q) => ids.has(q.id))) return thread
+  return { ...thread, questions: thread.questions.filter((q) => !ids.has(q.id)) }
+}
+
+/** ONE answered registration, in the slot its open card filled: the same card, the same branch rule,
+ *  greyed, and carrying only what was picked or typed. Read-only — the answer has been sent. */
+export function SettledQuestionCard({ s, wrap }: { s: SettledQuestion; wrap?: boolean }) {
+  const nodes = useMemo(() => settledQuestionNodes(s.spec, s.answer), [s.spec, s.answer])
+  const card = (node: (typeof nodes)[number]) => (
+    <QuestionBlockCard
+      key={node.path}
+      question={node.question}
+      // "Question" even for a `multi`: its own title, "Select multiple", is an instruction nobody can act
+      // on any more.
+      label={node.depth > 1 ? "Follow-up" : "Question"}
+      settled={node.settled}
+      wrap={wrap}
+    />
+  )
+  const branch = nodes.slice(1)
+  return (
+    <article data-question-id={s.id} data-settled-question aria-label="Answered question" className="flex min-w-0 flex-col gap-2 opacity-60">
+      {card(nodes[0])}
+      {branch.length > 0 && (
+        <div className="ml-3 flex flex-col gap-2 border-l border-border pl-3">
+          {branch.map((node) => (
+            <div key={node.path} className={node.depth > 2 ? "ml-3 border-l border-border pl-3" : undefined}>
+              {card(node)}
+            </div>
+          ))}
+        </div>
+      )}
+    </article>
+  )
+}
+
+/** Several answered registrations anchored after one message. */
+export function SettledQuestionStack({ questions, wrap, className = "" }: { questions: readonly SettledQuestion[]; wrap?: boolean; className?: string }) {
+  if (questions.length === 0) return null
+  return (
+    <section data-settled-questions aria-label={`${questions.length} answered question${questions.length === 1 ? "" : "s"}`} className={`flex min-w-0 flex-col gap-3 ${className}`}>
+      {questions.map((s) => <SettledQuestionCard key={s.id} s={s} wrap={wrap} />)}
+    </section>
+  )
 }
 
 /** Mount ONCE per surface that draws registered cards in more than one place. Must sit INSIDE the

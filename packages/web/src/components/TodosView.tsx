@@ -20,6 +20,7 @@ import { lastHumanTurnIndex } from "../lib/messagePresentation.ts"
 import { isOptimisticallySteering, useSteeredAt } from "../lib/steering.ts"
 import { questionsByAnchor } from "../lib/questionAnchor.ts"
 import { allFencesShadowed, placeQuestions, registeredStandingAt } from "../lib/questionShadow.ts"
+import { settledQuestionPositions } from "../lib/settledQuestions.ts"
 import { FenceCard, LimitPauseCard, Message, PermPolicyDenialCard, PermPromptBanner, PendingAskCard, VSpace, STEP, messageTailIsMeta, messageHeadIsMeta, messageRendersNothing, messageHasRenderableText, lastAssistantIndex } from "./ChatView.tsx"
 import { BLOCK_RADIUS, BLOCK_RADIUS_TOP } from "./TranscriptCard.tsx"
 import { AwaitingBackgroundCard, showsRestingCard } from "./AwaitingBackgroundCard.tsx"
@@ -34,7 +35,7 @@ import { ThreadTitle } from "./ThreadTitle.tsx"
 import { DispatchForm } from "./NewThreadModal.tsx"
 import { StatusRow } from "./StatusRow.tsx"
 import { InteractionStack } from "./InteractionCards.tsx"
-import { RegisteredAnsweringProvider, RegisteredQuestionStack } from "./RegisteredQuestionCards.tsx"
+import { RegisteredAnsweringProvider, RegisteredQuestionStack, SettledQuestionStack, useSettledQuestions, withoutSettledQuestions } from "./RegisteredQuestionCards.tsx"
 import { QueueSubAgentLines, hasQueueSubAgentLines } from "./QueueSubAgentLines.tsx"
 import { WakeDivider } from "./WakeDivider.tsx"
 import { LastActive } from "./LastActive.tsx"
@@ -704,7 +705,11 @@ function IntermediateSummary({ toolCount, onExpand }: { toolCount: number; onExp
 // changed, instead of every mounted card — and each card's transcript is further guarded by the
 // memoized Message. `onResolve` takes the slug (stable useCallback in TodosView) so this card's props
 // never churn identity render-to-render.
-const QueueCard = memo(function QueueCard({ thread, leaving, frozen, onResolve, onUnresolve }: { thread: ThreadView; leaving: boolean; frozen: boolean; onResolve: (slug: string) => void; onUnresolve: (slug: string) => void }) {
+const QueueCard = memo(function QueueCard({ thread: boardThread, leaving, frozen, onResolve, onUnresolve }: { thread: ThreadView; leaving: boolean; frozen: boolean; onResolve: (slug: string) => void; onUnresolve: (slug: string) => void }) {
+  // ANSWERED registered questions keep drawing, greyed, where their open card stood — the thread view's
+  // rule (lib/settledQuestions). An id the settled list holds is off the open list for the whole card.
+  const settledQuestions = useSettledQuestions(boardThread)
+  const thread = useMemo(() => withoutSettledQuestions(boardThread, settledQuestions), [boardThread, settledQuestions])
   // Tracks only vtReturnTarget (valtio re-renders on accessed keys alone), so the memo'd card
   // re-renders just when a /full exit primes or clears it — see the root div's viewTransitionName.
   const vtSnap = useSnapshot(store)
@@ -1008,6 +1013,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, frozen, onResolve, 
     }
     return { byAnchor, tail }
   }, [atRest, messages, placement.placedIds, thread?.questions])
+  const settledPlacement = useMemo(() => settledQuestionPositions(messages, settledQuestions), [messages, settledQuestions])
   // A thread dispatched after the free-form fence was retired never gets a fence controller: a
   // ```question with a body is prose there, drawn read-only, and the registered card is the only
   // answerable thing (shared QUESTION_FENCE_RETIRED_AT). A legacy thread keeps the whole fence path.
@@ -1366,7 +1372,20 @@ const QueueCard = memo(function QueueCard({ thread, leaving, frozen, onResolve, 
               // the first rendered row at or past their anchor, so a group whose anchor was a message this
               // card does not draw (or one above the window) still lands above what came after it.
               const pending = [...questionAnchors.byAnchor.entries()].sort((a, b) => a[0] - b[0])
+              // ANSWERED questions flush the same way, ahead of any open group at the same anchor — but
+              // only inside the window: a settled card owes nothing, so one whose rest is above the cut
+              // is not hoisted to the top the way an open one is.
+              const pendingSettled = [...settledPlacement.anchored.entries()].filter(([anchor]) => anchor >= base).sort((a, b) => a[0] - b[0])
+              const flushSettled = (globalIdx: number) => {
+                while (pendingSettled.length > 0 && pendingSettled[0][0] <= globalIdx) {
+                  const [anchor, group] = pendingSettled.shift()!
+                  if (prevTailIsMeta !== null) out.push(<VSpace key={`sq-space-${anchor}`} h={STEP} />)
+                  out.push(<SettledQuestionStack key={`sq-${anchor}`} questions={group} wrap />)
+                  prevTailIsMeta = false
+                }
+              }
               const flushQuestions = (globalIdx: number) => {
+                flushSettled(globalIdx)
                 while (pending.length > 0 && pending[0][0] <= globalIdx) {
                   const [anchor, group] = pending.shift()!
                   if (prevTailIsMeta !== null) out.push(<VSpace key={`qa-space-${anchor}`} h={STEP} />)
@@ -1510,7 +1529,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, frozen, onResolve, 
                   const textKey = m.sourceId ?? `legacy-${globalIdx}`
                   out.push(
                     <div key={textKey} data-transcript-source-id={textKey} className="flex flex-col">
-                      <Message m={m} dense textOnly answering={fencesLive ? answeringForMessage(m) : undefined} paired={paired[globalIdx]} staleAwaiting={isStaleAwaiting(globalIdx)} restingCardShown={globalIdx === lastAgentIdx && restingShown} shadowedBy={shadowedByMessage.get(globalIdx)} placed={placement.placed.get(globalIdx)} thread={thread} />
+                      <Message m={m} dense textOnly answering={fencesLive ? answeringForMessage(m) : undefined} paired={paired[globalIdx]} staleAwaiting={isStaleAwaiting(globalIdx)} restingCardShown={globalIdx === lastAgentIdx && restingShown} shadowedBy={shadowedByMessage.get(globalIdx)} placed={placement.placed.get(globalIdx)} settledPlaced={settledPlacement.placed.get(globalIdx)} thread={thread} />
                     </div>,
                   )
                   // Text-only → the row ends in prose (tool band dropped), so the next gap is a full STEP.
@@ -1531,6 +1550,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, frozen, onResolve, 
                     paired={paired[globalIdx]}
                     shadowedBy={shadowedByMessage.get(globalIdx)}
                     placed={placement.placed.get(globalIdx)}
+                    settledPlaced={settledPlacement.placed.get(globalIdx)}
                     thread={thread}
                   />
                   </div>,
@@ -1538,6 +1558,9 @@ const QueueCard = memo(function QueueCard({ thread, leaving, frozen, onResolve, 
                 prevTailIsMeta = messageTailIsMeta(m)
                 flushQuestions(globalIdx)
               })
+              // A settled group anchored on a trailing row this card does not draw still belongs above the
+              // queued sends.
+              flushSettled(Number.POSITIVE_INFINITY)
               // Queued (optimistic) messages pinned to the bottom, same as the drawer.
               visible.forEach((m, i) => {
                 if (!m.queued) return

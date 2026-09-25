@@ -148,3 +148,59 @@ export function registeredAnswer(
   }
   return build(view.spec, ROOT_PATH)
 }
+
+/** One question of an ANSWERED registration as its settled card draws it: the ask, and ONLY the
+ *  option(s) the human picked — lettered as they were, so "C." still says which one — with whatever
+ *  they typed beside them. The options nobody picked are dropped rather than dimmed: the card is a
+ *  record of the answer now, and a full option list reads as a question still waiting (maintainer
+ *  2026-09-25: "show the selected answer, as opposed to showing all the answers"). */
+export interface SettledQuestionNode {
+  path: string
+  question: ParsedQuestion
+  /** QuestionBlockCard's settled state over `question`'s TRIMMED options: every one of them is a pick. */
+  settled: { chosenIdxs: number[]; text?: string }
+  depth: number
+}
+
+/** Walk an answered registration the way the human answered it: the root, then the follow-ups under the
+ *  option it took, each paired with its own answer. A follow-up the answer does not carry was never
+ *  asked, and draws nothing. A chosen label the spec no longer names (it cannot, today — the spec is
+ *  stored verbatim — but an answer outliving a schema change must still read) folds into the text. */
+export function settledQuestionNodes(spec: AskedQuestion, answer: QuestionAnswer): SettledQuestionNode[] {
+  const out: SettledQuestionNode[] = []
+  const walk = (node: AskedQuestion, said: QuestionAnswer, path: string, depth: number) => {
+    const options = node.options ?? []
+    const { question } = toParsedQuestion(node)
+    const kept: number[] = []
+    const unmatched: string[] = []
+    for (const label of said.chosen) {
+      const i = options.findIndex((o) => o.label === label)
+      if (i === -1) unmatched.push(label)
+      else if (!kept.includes(i)) kept.push(i)
+    }
+    kept.sort((a, b) => a - b)
+    const text = [unmatched.join(", "), said.text?.trim()].filter(Boolean).join(" — ") || undefined
+    const rec = question.recommendedIdx
+    out.push({
+      path,
+      question: {
+        ...question,
+        options: kept.map((i) => question.options[i]),
+        recommendedIdx: rec !== null && kept.includes(rec) ? kept.indexOf(rec) : null,
+        ...(question.optionBodies ? { optionBodies: kept.map((i) => question.optionBodies![i]) } : {}),
+      },
+      settled: { chosenIdxs: kept.map((_, j) => j), ...(text ? { text } : {}) },
+      depth,
+    })
+    // Only a single-select can open a branch (see takenOption), and registeredAnswer lists the taken
+    // option's follow-ups in order — so the i-th follow-up answer IS the i-th follow-up.
+    if (node.kind === "multi" || kept.length !== 1) return
+    const taken = kept[0]
+    ;(options[taken]?.followUps ?? []).forEach((child, i) => {
+      const childSaid = said.followUps?.[i]
+      if (childSaid) walk(child, childSaid, childPath(path, taken, i), depth + 1)
+    })
+  }
+  walk(spec, answer, ROOT_PATH, 1)
+  return out
+}

@@ -107,6 +107,7 @@ import type {
   AnswerQuestionsResult,
   DismissQuestionsInput,
   DismissQuestionsResult,
+  ThreadSettledQuestionsResult,
   AddOwnPrWatchResult,
   DropOwnPrWatchInput,
   DropOwnPrWatchResult,
@@ -126,6 +127,8 @@ export interface Api {
   threadBody(input: { slug: string }): Promise<{ markdown: string }>
   threadTranscript(input: { slug: string }): Promise<TranscriptPage>
   threadTranscriptEarlier(input: TranscriptEarlierInput): Promise<TranscriptPage>
+  // The thread's answered registered questions, which the transcript keeps drawing where they stood.
+  threadSettledQuestions(input: { slug: string }): Promise<ThreadSettledQuestionsResult>
   // `steerable` is the server's answer to "can this child be prompted right now" — a broker-backed
   // claude thread's own live Agent-tool child, and nothing else. The drawer renders its prompt box
   // if and only if this is true; the client never re-derives the policy.
@@ -363,6 +366,7 @@ export const PROCEDURES = {
   board: "query",
   threadBody: "query",
   threadTranscript: "query",
+  threadSettledQuestions: "query",
   threadTranscriptEarlier: "query",
   subAgentTranscript: "query",
   subAgentSteer: "mutation",

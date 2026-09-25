@@ -2310,7 +2310,7 @@ export interface QuestionAnswer {
   followUps?: QuestionAnswer[]
 }
 
-const QuestionAnswerSchema: z.ZodType<QuestionAnswer> = z.lazy(() => z.object({
+export const QuestionAnswerSchema: z.ZodType<QuestionAnswer> = z.lazy(() => z.object({
   questionId: z.string().min(1).max(64),
   question: z.string().min(1).max(4000),
   // No count cap: a `multi` may carry any number of options (see AskedQuestionSchema), and the human
@@ -2348,6 +2348,27 @@ export const DismissQuestionsResult = z.object({
   open: z.array(RegisteredQuestionView),
 }).strict()
 export type DismissQuestionsResult = z.infer<typeof DismissQuestionsResult>
+
+/** A registered question the human ANSWERED, with the answer — what the transcript draws in the slot the
+ *  open card used to fill. An answered card used to vanish the moment it was sent, leaving the rest it
+ *  was asked at with no trace of the ask; the maintainer wanted it to stay where it was, greyed out,
+ *  showing only what was picked (2026-09-25). Read per thread, beside its transcript, rather than
+ *  carried on the board: the board ships every thread on every keyframe, and a thread's whole answered
+ *  history is dead weight to every surface but the one reading that thread. */
+export const SettledQuestionView = z.object({
+  id: z.string(),
+  spec: AskedQuestionSchema,
+  askedAt: z.string(),
+  /** When the human sent the answer — what decides which rest the card stood at when it was answered. */
+  settledAt: z.string(),
+  answer: QuestionAnswerSchema,
+}).strict()
+export type SettledQuestionView = z.infer<typeof SettledQuestionView>
+
+export const ThreadSettledQuestionsResult = z.object({
+  questions: z.array(SettledQuestionView),
+}).strict()
+export type ThreadSettledQuestionsResult = z.infer<typeof ThreadSettledQuestionsResult>
 
 /** THE HEADER OF THE ONE WIRE FORMAT AN ANSWER TRAVELS IN, and the reason it is declared in shared
  *  rather than beside either producer: two of them write this line — the fence path's `composeAnswerWire`

@@ -29,6 +29,7 @@ import { ProviderErrorCard, providerErrorVisible } from "./ProviderErrorCard.tsx
 import { parseAnswersCard, pairAllAnswers, unrenderedAnswers, type PairedAnswer } from "../lib/answersMessage.ts"
 import { questionsByAnchor } from "../lib/questionAnchor.ts"
 import { fenceStandsFor, placeQuestions, registeredStandingAt, type QuestionPlacement } from "../lib/questionShadow.ts"
+import { settledQuestionPositions, type SettledPlacement } from "../lib/settledQuestions.ts"
 import { FrizzWake } from "./FrizzWake.tsx"
 import { RecurringPromptLine } from "./RecurringPromptLine.tsx"
 import { LinkifiedText } from "./LinkifiedText.tsx"
@@ -75,7 +76,7 @@ import { ThreadLinks } from "./ThreadLinks.tsx"
 import { MessageRow, MessageStamp } from "./MessageTimestamp.tsx"
 import { TRANSCRIPT_META_LABEL_CLASS, transcriptMetaChevronClass } from "../lib/transcriptMetaLabels.ts"
 import { InteractionStack } from "./InteractionCards.tsx"
-import { RegisteredAnsweringProvider, RegisteredQuestionCard, RegisteredQuestionStack } from "./RegisteredQuestionCards.tsx"
+import { RegisteredAnsweringProvider, RegisteredQuestionCard, RegisteredQuestionStack, SettledQuestionCard, SettledQuestionStack, useSettledQuestions, withoutSettledQuestions, type SettledQuestion } from "./RegisteredQuestionCards.tsx"
 // The shared card chrome and THE question card both live in their own modules now, so every
 // surface can render them without importing the thread view. QuestionBlockCard in particular is
 // shared with the native-AskUserQuestion path, which reaches it through InteractionCards.tsx —
@@ -221,7 +222,12 @@ export function ThreadView({ slug, onStatusApplied, onClose, virtualized = false
 
 function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean }) {
   const board = useBoard()
-  const thread = threadBySlug(board, slug)
+  const boardThread = threadBySlug(board, slug)
+  // ANSWERED registered questions stay in the transcript, greyed, where their open card stood (see
+  // lib/settledQuestions). Any id the settled list holds is taken off the open list for this whole
+  // surface, so a question just sent never draws as both.
+  const settledQuestions = useSettledQuestions(boardThread)
+  const thread = useMemo(() => withoutSettledQuestions(boardThread, settledQuestions), [boardThread, settledQuestions])
   const running = thread?.runtime === "running" || thread?.runtime === "spawning"
   const copyTerminalCommand = useCopyTerminalCommand(slug)
 
@@ -309,6 +315,9 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
   // CURRENT rest places: a stale one from the rest that asked the question would otherwise strand the
   // card up there while the handoff below it drew a bare Send button.
   const placement = useMemo(() => placeQuestions(messages, thread?.questions ?? [], { atRest: !running }), [messages, running, thread?.questions])
+  // Where each ANSWERED question's card stood when it was answered — the same two readers, replayed over
+  // the transcript as it was before the answer (lib/settledQuestions).
+  const settledPlacement = useMemo(() => settledQuestionPositions(messages, settledQuestions), [messages, settledQuestions])
   // A thread dispatched after the free-form fence was retired never gets a fence controller: a
   // ```question with a body is prose there, drawn read-only, and the registered card is the only
   // answerable thing (shared QUESTION_FENCE_RETIRED_AT). A legacy thread keeps the whole fence path.
@@ -411,6 +420,7 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
           inFlightAnswers={inFlightAnswers}
           answeringForMessage={answeringForMessage}
           placement={placement}
+          settledPlacement={settledPlacement}
           fencesLive={fencesLive}
           thread={thread}
           running={running}
@@ -521,6 +531,7 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
                     restingCardShown={messageIndex === lastAgentIdx && restingShown}
                     shadowedBy={shadowedByMessage.get(messageIndex)}
                     placed={placement.placed.get(messageIndex)}
+                    settledPlaced={settledPlacement.placed.get(messageIndex)}
                     thread={thread}
                   />
                 )
@@ -648,6 +659,9 @@ type VirtualThreadRow =
   // A REGISTERED question, dropped at the REST IT WAS ASKED AT rather than at the tail — see
   // lib/questionAnchor. Its own row because it belongs BETWEEN two messages, which the tail cannot be.
   | { key: string; kind: "questions"; questions: RegisteredQuestionView[] }
+  // ANSWERED registered questions, greyed, in the slot the open card filled when it was answered — see
+  // lib/settledQuestions. Its own row for the same reason: it sits between two messages.
+  | { key: string; kind: "settled-questions"; questions: SettledQuestion[] }
   | { key: "transport-fallback"; kind: "transport-fallback" }
   | { key: string; kind: "earlier-history" }
   | ({ kind: "message"; stampAt: string | undefined } & VirtualTranscriptMessageRow)
@@ -796,6 +810,7 @@ function VirtualizedThreadTranscript({
   inFlightAnswers,
   answeringForMessage,
   placement,
+  settledPlacement,
   fencesLive,
   thread,
   running,
@@ -822,6 +837,7 @@ function VirtualizedThreadTranscript({
   answeringForMessage: LiveAnswering["answeringForMessage"]
   // The worker's marker placements and the fence gate, both computed by the parent off the SAME list.
   placement: QuestionPlacement<RegisteredQuestionView>
+  settledPlacement: SettledPlacement<SettledQuestion>
   fencesLive: boolean
   thread: ThreadViewData | undefined
   running: boolean
@@ -913,6 +929,24 @@ function VirtualizedThreadTranscript({
     }
     return { byRow, tail }
   }, [messageRows, messages, placement.placedIds, running, thread?.questions])
+  // The ANSWERED questions' anchors, keyed into `messageRows` the same way: the last row at or before
+  // the anchor. No tail special case — a settled card is not an ask, so it never rides the
+  // interactions row; anchored at the last message it simply follows that message's row.
+  const settledByRow = useMemo(() => {
+    const byRow = new Map<number, SettledQuestion[]>()
+    for (const [anchor, group] of settledPlacement.anchored) {
+      let rowIdx = -1
+      for (let i = 0; i < messageRows.length; i++) {
+        if (messageRows[i].messageIndex > anchor) break
+        rowIdx = i
+      }
+      if (rowIdx < 0) continue
+      const at = byRow.get(rowIdx)
+      if (at) at.push(...group)
+      else byRow.set(rowIdx, [...group])
+    }
+    return byRow
+  }, [messageRows, settledPlacement.anchored])
   // The same rows, keyed by message index, for the fold: a fence restating or naming a registration
   // standing at that message draws nothing of its own (lib/questionShadow).
   const shadowedByMessage = useMemo(() => registeredStandingAt(messages, thread?.questions ?? []), [messages, thread?.questions])
@@ -927,6 +961,9 @@ function VirtualizedThreadTranscript({
     if (before) next.push({ key: "questions:head", kind: "questions", questions: before })
     messageRows.forEach((row, i) => {
       next.push({ ...row, kind: "message" as const })
+      // Answered before anything still open at the same slot was, so drawn above it.
+      const settledGroup = settledByRow.get(i)
+      if (settledGroup) next.push({ key: `settled-questions:${row.key}`, kind: "settled-questions", questions: settledGroup })
       const group = questionGroups.byRow.get(i)
       if (group) next.push({ key: `questions:${row.key}`, kind: "questions", questions: group })
     })
@@ -945,7 +982,7 @@ function VirtualizedThreadTranscript({
       queuedGap = STEP
     })
     return next
-  }, [beforeCursor, earlierError, hasEarlier, hasRuntimeStatus, loadingEarlier, messageRows, messages, questionGroups, transportFallback])
+  }, [beforeCursor, earlierError, hasEarlier, hasRuntimeStatus, loadingEarlier, messageRows, messages, questionGroups, settledByRow, transportFallback])
 
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -959,6 +996,7 @@ function VirtualizedThreadTranscript({
       if (row.kind === "transport-fallback") return 76
       if (row.kind === "runtime-status") return 54
       if (row.kind === "questions") return 220
+      if (row.kind === "settled-questions") return 140
       return row.kind === "message" ? 108 + row.gap : 82 + row.gap
     },
     overscan: 8,
@@ -1384,6 +1422,9 @@ function VirtualizedThreadTranscript({
             )
             : row.kind === "questions" ? (
               <RegisteredQuestionStack thread={thread} questions={row.questions} className="px-6 pt-5" />
+            )
+            : row.kind === "settled-questions" ? (
+              <SettledQuestionStack questions={row.questions} className="px-6 pt-5" />
             ) : row.kind === "transport-fallback" ? (
               transportFallback ? <div className="px-6 pt-3"><div
                 data-transcript-sync-fallback
@@ -1436,6 +1477,7 @@ function VirtualizedThreadTranscript({
                   restingCardShown={row.messageIndex === lastAgentIdx && restingShown}
                   shadowedBy={shadowedByMessage.get(row.messageIndex)}
                   placed={placement.placed.get(row.messageIndex)}
+                  settledPlaced={settledPlacement.placed.get(row.messageIndex)}
                   thread={thread}
                 />
               </MessageRow>
@@ -3200,7 +3242,7 @@ function UserBubble({ text, rawText, queued, deliveryUnconfirmed, deliveryId, so
 // with explicit spacers, and a card that renders null still spent one — a 14px gap dangling under the
 // prose, above the resting card (maintainer 2026-08-28, with a screenshot of the gap). Only the last
 // agent message ever carries it, so the memo boundary holds for every other row.
-export const Message = memo(function Message({ m, answering, dense, paired, textOnly, showSendButton, staleAwaiting, shadowedBy, placed, thread, restingCardShown }: { m: ChatMessage; answering?: MessageAnswering; dense?: boolean; paired?: PairedAnswer[] | null; textOnly?: boolean; showSendButton?: boolean; staleAwaiting?: boolean; shadowedBy?: readonly RegisteredQuestionView[]; placed?: readonly RegisteredQuestionView[]; thread?: ThreadViewData; restingCardShown?: boolean }) {
+export const Message = memo(function Message({ m, answering, dense, paired, textOnly, showSendButton, staleAwaiting, shadowedBy, placed, settledPlaced, thread, restingCardShown }: { m: ChatMessage; answering?: MessageAnswering; dense?: boolean; paired?: PairedAnswer[] | null; textOnly?: boolean; showSendButton?: boolean; staleAwaiting?: boolean; shadowedBy?: readonly RegisteredQuestionView[]; placed?: readonly RegisteredQuestionView[]; settledPlaced?: readonly SettledQuestion[]; thread?: ThreadViewData; restingCardShown?: boolean }) {
   // ANSWERING ON A PHONE happens in a sheet, one question at a time (MobileAnswerSheet) — the cards in
   // the transcript stay READ-ONLY there, so the questions are still visible in the context that
   // produced them but a 44pt-thumb answer never has to land on a 24pt chip inside a scrolling message.
@@ -3357,8 +3399,17 @@ export const Message = memo(function Message({ m, answering, dense, paired, text
         // the controller numbers every fence in the flat text — so the blocks that do render keep their
         // answer state.
         if (shadowedBy && fenceStandsFor(seg, shadowedBy) !== undefined) continue
-        // A LEGACY placement marker whose row is not standing here — answered, withdrawn, or a mistyped
-        // id — has nothing to draw either: its body is empty by construction.
+        // A marker whose question has been ANSWERED draws that question's settled card, greyed, in the
+        // slot the open card filled (lib/settledQuestions) — once, like the open card.
+        const settledHere = settledPlaced && seg.registeredId ? settledPlaced.find((q) => q.id.toLowerCase() === seg.registeredId) : undefined
+        if (settledHere && !placedDrawn.has(settledHere.id)) {
+          placedDrawn.add(settledHere.id)
+          push(<SettledQuestionCard key={`${keyBase}-${fi}-q${si}`} s={settledHere} wrap={dense} />)
+          continue
+        }
+        // A LEGACY placement marker whose row is not standing here — withdrawn, dismissed, answered at a
+        // later rest's marker, or a mistyped id — has nothing to draw either: its body is empty by
+        // construction.
         if (seg.registeredId && seg.text.trim() === "") continue
         if (answering) askBlocks.push({ raw: seg.text, kind: seg.questionKind, danger: seg.danger, bi })
         // On a phone the card is a READING surface and the sheet is the answering one, so it renders
