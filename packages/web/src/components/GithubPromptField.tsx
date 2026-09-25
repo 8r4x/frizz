@@ -141,6 +141,7 @@ export function GithubPromptField({
         </div>
       </div>
       <textarea
+        data-1p-ignore
         value={value ?? fallback}
         // Emptying the box clears the override (→ undefined), so it snaps back to showing the default
         // and drops the "Reset" affordance — matching the server's blank-means-default semantics

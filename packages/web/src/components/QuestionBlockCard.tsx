@@ -223,6 +223,7 @@ export function QuestionBlockCard({
           {interactive && (
             <textarea
               ref={taRef}
+              data-1p-ignore
               rows={1}
               // Its own surface tag — deliberately NOT the queue card's `queueComposer`, which is the
               // separate free-form prompt box at the bottom of the card. Escape BLURS (climb out, same

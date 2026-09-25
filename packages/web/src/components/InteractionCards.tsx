@@ -826,6 +826,7 @@ function InteractionFieldControl({
       <textarea
         id={baseId}
         name={field.id}
+        data-1p-ignore
         value={typeof value === "string" ? value : ""}
         onChange={(event) => setValue(event.target.value)}
         required={field.required}

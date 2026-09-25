@@ -621,6 +621,9 @@ export function Composer({
         <textarea
           id={id}
           ref={taRef}
+          // 1Password's extension offers to create an SSH key on any bare textarea it focuses; this is
+          // its documented opt-out. Every prose textarea in the app carries it.
+          data-1p-ignore
           onScroll={backdropSegments ? syncContextScroll : undefined}
           data-surface={surface}
           // Escape here BLURS (onKeyDown below); the enclosing ThreadSheet reads this to leave the

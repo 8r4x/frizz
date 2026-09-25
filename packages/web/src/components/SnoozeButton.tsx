@@ -197,6 +197,7 @@ export function SnoozeButton({ thread, onSnoozed }: { thread: ThreadView; onSnoo
               focused: the dialog exists to write one, and the time above already carries a sane default. */}
           <textarea
             id={promptInputId}
+            data-1p-ignore
             autoFocus
             rows={3}
             maxLength={SNOOZE_PROMPT_MAX}

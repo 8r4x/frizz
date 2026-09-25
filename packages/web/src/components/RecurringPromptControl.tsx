@@ -570,6 +570,7 @@ function PromptPanel({ thread, armed, close }: {
       <textarea
         ref={textarea}
         data-recurring-text
+        data-1p-ignore
         value={text}
         maxLength={RECURRING_PROMPT_MAX}
         onChange={(e) => setText(e.target.value)}
