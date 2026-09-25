@@ -1435,14 +1435,14 @@ export const SIGNOFF_NUDGE_MARKER = "**This message is from frizz, not from the 
 export interface SignoffLiveOps {
   /** Running background shells, named by the handle the RUNTIME gave the worker — the string it was
    *  actually shown ("Command running in background with ID: bzvtnt3ig"), not the launch tool_use id.
-   *  These are what a `shell:` line names. */
+   *  These are what a `shells:` list names. */
   shells: { id?: string; label: string }[]
   /** Running sub-agents, named the same way. A fence may park on one, though it does not need to: a
    *  finished sub-agent re-invokes its parent by itself. */
   subAgents: { id?: string; label: string }[]
-  /** Armed one-off timers, by row id (`tmr_…`) — what a `timer:` line names. */
+  /** Armed one-off timers, by row id (`tmr_…`) — what a `timers:` list names. */
   timers?: { id?: string; label: string }[]
-  /** Registered pull requests, by ref (`owner/repo#N`) — what a `pr:` line names. */
+  /** Registered pull requests, by ref (`owner/repo#N`) — what a `prs:` list names. */
   prs?: { id?: string; label: string }[]
   /** Registered GitHub issues, by ref (`owner/repo#N`) — what an `issues:` entry names. */
   issues?: { id?: string; label: string }[]
@@ -1453,7 +1453,12 @@ export interface SignoffLiveOps {
 // turn) cannot write a correct fence and will be bumped for naming something wrong. Giving it the exact
 // lines here closes that loop at the one moment it is provably needed: it just rested without a fence.
 // `mcp__frizz__activity` returns the same list on demand, from the same source.
-/** The four registries as `kind: id` lines a fence can copy verbatim, or `[]` when nothing is running.
+/** The registries as one `kinds: [id, …]` line per kind a fence can copy verbatim, each above the ids it
+ *  holds and what they are, or `[]` when nothing is running.
+ *
+ *  ONE LINE PER KIND, NOT PER ITEM, because the frontmatter is YAML (2026-08-24) and YAML has no repeated
+ *  keys. This printed `shell: <id>` per item until 2026-09-25 — the retired grammar, which the park check
+ *  refuses by name — so a worker that copied what frizz handed it was bumped for copying it.
  *
  *  Shared with SOURCE 12's corrections, and that sharing is the point rather than tidiness: a worker
  *  dispatched before `mcp__frizz__activity` existed CANNOT call it — its MCP server is frozen at dispatch
@@ -1461,24 +1466,25 @@ export interface SignoffLiveOps {
  *  the population most likely to be writing a bad fence. Printing the ids needs no tool at all. */
 export function liveOpsLines(ops?: SignoffLiveOps): string[] {
   const lines: string[] = []
-  const section = (heading: string, kind: string, items: { id?: string; label: string }[]) => {
+  const section = (heading: string, key: string, items: { id?: string; label: string }[]) => {
     if (!items.length) return
     lines.push("", heading)
-    for (const i of items) lines.push(`- \`${kind}: ${i.id ?? "?"}\`  — ${i.label}`)
+    for (const i of items) lines.push(`- \`${i.id ?? "?"}\`  — ${i.label}`)
+    lines.push(`In a fence: \`${key}: [${items.map((i) => i.id ?? "?").join(", ")}]\``)
   }
-  section("Background shells still running:", "shell", ops?.shells ?? [])
-  section("Sub-agents still running (they re-invoke you on their own, so parking on one is optional):", "agent", ops?.subAgents ?? [])
-  section("Timers you have armed:", "timer", ops?.timers ?? [])
-  section("Pull requests you registered:", "pr", ops?.prs ?? [])
-  section("Issues you registered:", "issue", ops?.issues ?? [])
+  section("Background shells still running:", "shells", ops?.shells ?? [])
+  section("Sub-agents still running (they re-invoke you on their own, so parking on one is optional):", "agents", ops?.subAgents ?? [])
+  section("Timers you have armed:", "timers", ops?.timers ?? [])
+  section("Pull requests you registered:", "prs", ops?.prs ?? [])
+  section("Issues you registered:", "issues", ops?.issues ?? [])
   return lines
 }
 
 export function signoffNudgeMessage(ops?: SignoffLiveOps): string {
   const lines = liveOpsLines(ops)
   if (lines.length) {
-    lines.push("", "An ```awaiting fence takes one such line per thing you are ACTUALLY waiting on, plus a")
-    lines.push("required `for:` duration (`30s`/`15m`/`2h`/`3d`), then a `---` line and whatever prose you want")
+    lines.push("", "An ```awaiting fence names only what you are ACTUALLY waiting on, one such list per kind, plus")
+    lines.push("a required `for:` duration (`30s`/`15m`/`2h`/`3d`), then a `---` line and whatever prose you want")
     lines.push("(optional). Frizz checks every id: name something that is not running and you are bumped")
     lines.push("rather than parked.")
   }
@@ -1522,12 +1528,12 @@ export const SIGNOFF_NUDGE_MESSAGE = [
   "  if anything is still owed, it is not done. Body: 1-3 sentences, then bullets, each opening with a",
   "  **bolded verb phrase**.",
   "- `` ```awaiting `` — you are WAITING on work that is actually running. FRONTMATTER, THEN MARKDOWN:",
-  "  one structural line per thing you are waiting on, a REQUIRED `for:` duration, then a `---` line and",
+  "  one YAML list per kind of thing you are waiting on, a REQUIRED `for:` duration, then a `---` line and",
   "  as much prose as you want. The prose is OPTIONAL; the lines above it are not.",
   "",
   "  ```awaiting",
-  "  shell: <the id your runtime gave you>",
-  "  pr: owner/repo#123",
+  "  shells: [<the id your runtime gave you>]",
+  "  prs: [owner/repo#123]",
   "  for: 2h",
   "  ---",
   "  What you are waiting for, in your own words — this is what the human reads on your card.",
