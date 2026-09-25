@@ -272,6 +272,13 @@ test("the status read used by the wait yields the version, and undefined for any
   assert.deepEqual(await readLauncherStatus(4917, noVersion), { state: "ready" });
 });
 
+// npm 12 answers `view <spec> version --json` with a one-element array; npm 11 answered the bare string.
+test("npm view's answer reads the same from npm 11 and npm 12", async () => {
+  const printing = (stdout: string) => () => ({ command: process.execPath, prefixArgs: ["-e", `console.log(${JSON.stringify(stdout)})`] });
+  assert.equal(await createNpmRegistryReleaseAdapter({ npm: printing('"1.3.0"') }).latestVersion("frizz"), "1.3.0");
+  assert.equal(await createNpmRegistryReleaseAdapter({ npm: printing('[\n  "1.3.0"\n]') }).latestVersion("frizz"), "1.3.0");
+});
+
 // A stalled registry held the probe for npm's own fetch timeout times its retries, and a source
 // build of a native dependency held every tab behind the overlay for as long as it took (audit
 // 2026-09-11, finding 6). The stand-in for npm is node itself, sleeping past the limit.

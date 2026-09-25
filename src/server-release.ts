@@ -163,7 +163,12 @@ export function npmServerPackageInstaller(env: NodeJS.ProcessEnv = process.env):
     },
     async latestVersion(packageName) {
       if (!PACKAGE.test(packageName)) throw new Error("invalid Frizz server package name");
-      const version: unknown = JSON.parse(await run(["view", `${packageName}@latest`, "version", "--json"]));
+      // npm 12 prints `view <spec> version --json` as a ONE-ELEMENT ARRAY where npm 11 printed the bare
+      // string. Reading only the string made every probe throw, and the throw reads as "no update": a
+      // launcher on npm 12 never offered a newer server and failed every click (measured 2026-09-25,
+      // npm 11.20.0 `"0.15.2"` against npm 12.1.0 `["0.15.2"]`). More than one element is still refused.
+      const parsed: unknown = JSON.parse(await run(["view", `${packageName}@latest`, "version", "--json"]));
+      const version = Array.isArray(parsed) && parsed.length === 1 ? parsed[0] : parsed;
       if (typeof version !== "string" || !VERSION.test(version)) throw new Error("npm returned an invalid Frizz server version");
       return version;
     },

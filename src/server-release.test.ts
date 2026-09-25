@@ -242,3 +242,21 @@ test("the npm adapter executes a real JS child with isolated prefix and scripts 
   assert.equal(argv.at(-1), "frizz-server@1.0.0");
   assert.equal(await installer.latestVersion("frizz-server"), "1.1.0");
 });
+
+// npm 12 answers `view <spec> version --json` with a one-element array; npm 11 answered the bare
+// string. Reading only the string left every launcher on npm 12 reporting "no update" (2026-09-25).
+test("the latest-version probe reads npm 12's one-element array and still refuses anything wider", async (t) => {
+  const { root } = setup(t);
+  const answering = (name: string, stdout: string) => {
+    // resolveNpmCli honours npm_execpath only when it names an `npm-cli.js`; anything else silently
+    // falls through to the real npm beside Node.
+    const cli = join(root, name, "npm-cli.js");
+    mkdirSync(dirname(cli), { recursive: true });
+    writeFileSync(cli, `console.log(${JSON.stringify(stdout)})`);
+    return npmServerPackageInstaller({ ...process.env, npm_execpath: cli });
+  };
+  assert.equal(await answering("npm11", '"1.1.0"').latestVersion("frizz-server"), "1.1.0");
+  assert.equal(await answering("npm12", '[\n  "1.1.0"\n]').latestVersion("frizz-server"), "1.1.0");
+  await assert.rejects(() => answering("two", '["1.1.0", "1.2.0"]').latestVersion("frizz-server"), /npm returned an invalid Frizz server version/);
+  await assert.rejects(() => answering("empty", "[]").latestVersion("frizz-server"), /npm returned an invalid Frizz server version/);
+});

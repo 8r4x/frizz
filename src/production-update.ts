@@ -472,7 +472,11 @@ export function createNpmRegistryReleaseAdapter(options: NpmAdapterOptions = {})
               return reject(new Error(`could not check npm for ${packageName}: ${why}`));
             }
             try {
-              const parsed = JSON.parse(stdout) as unknown;
+              // npm 12 answers a one-element array where npm 11 answered the bare string (see the
+              // server installer's latestVersion). String() of that array happened to read right;
+              // unwrap it on purpose instead.
+              const answer = JSON.parse(stdout) as unknown;
+              const parsed = Array.isArray(answer) && answer.length === 1 ? answer[0] : answer;
               resolveVersion(typeof parsed === "string" ? parsed : String(parsed));
             } catch {
               resolveVersion(stdout.trim().replaceAll('"', ""));
