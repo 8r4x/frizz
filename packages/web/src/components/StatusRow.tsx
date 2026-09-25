@@ -149,7 +149,8 @@ export function StatusRow() {
       >
         <SettingsIcon size={STATUS_ROW_ICON} aria-hidden="true" />
       </button>
-      {/* Renders null unless there is an update to install — the gap collapses and the row stays even. */}
+      {/* Greyed when there is no update to install; null only before a supervisor has answered, when
+          the gap collapses and the row stays even. */}
       <RestartFrizzButton />
       {quotaVisible && (
         <>

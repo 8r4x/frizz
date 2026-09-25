@@ -110,24 +110,38 @@ test("busy Update and restart keeps only the clockwise spinner inside the button
   assert.doesNotMatch(html, /Updating…|Restarting…/)
 })
 
-// Rendered over a seeded status query, the way StatusRow mounts it: the control exists only while
-// there is something to install (maintainer 2026-09-25). frizz-dev omits `updateAvailable` and can
-// always rebuild from source, so it keeps the button.
-test("the restart control renders only when there is an update to install", () => {
+// Rendered over a seeded status query, the way StatusRow mounts it: the control is live only while
+// there is something to install, and greyed otherwise (maintainer 2026-09-25). frizz-dev omits
+// `updateAvailable` and can always rebuild from source, so it keeps a live button.
+test("the restart control is live only when there is an update to install, and greyed otherwise", () => {
   const render = (status: Record<string, unknown> | null) => {
     const client = new QueryClient()
     client.setQueryData(SUPERVISOR_STATUS_KEY, status && { protocol: 1, state: "ready", requestedAt: Date.now(), ...status })
     return renderToStaticMarkup(createElement(QueryClientProvider, { client }, createElement(RestartFrizzButton)))
   }
-  assert.match(render({ updateRestart: true, updateAvailable: true, version: "0.4.2", updateVersion: "0.5.0" }), /aria-label="Update Frizz"/)
-  assert.match(render({ updateRestart: true }), /aria-label="Update Frizz"/)
-  assert.equal(render({ updateRestart: true, updateAvailable: false, version: "0.5.0" }), "")
-  assert.equal(render({}), "", "a legacy supervisor with no update verb offers nothing")
-  assert.equal(render(null), "")
+  const greyed = (html: string) => /aria-disabled="true"/.test(html) && /pointer-events-none opacity-40/.test(html)
+  for (const live of [render({ updateRestart: true, updateAvailable: true, version: "0.4.2", updateVersion: "0.5.0" }), render({ updateRestart: true })]) {
+    assert.match(live, /aria-label="Update Frizz"/)
+    assert.equal(greyed(live), false)
+  }
+  for (const current of [render({ updateRestart: true, updateAvailable: false, version: "0.5.0" }), render({})]) {
+    assert.match(current, /aria-label="Frizz is up to date"/)
+    assert.equal(greyed(current), true)
+    assert.doesNotMatch(current, /Restart Frizz/)
+  }
+  assert.equal(render(null), "", "nothing before a supervisor has answered")
 })
 
-// The button itself is hidden when there is nothing to install; this plain-restart spelling survives
-// only for a failure card that stays on screen after an answer flips `updateAvailable` off.
+test("the greyed control's popover says there is nothing to install, not a verb", () => {
+  const html = renderToStaticMarkup(createElement(UpdateRestartPopover, { open: true, update: false, current: true, version: "0.5.0" }))
+  assert.match(html, /Frizz is up to date/)
+  assert.match(html, /font-mono[^"]*"[^>]*>0\.5\.0</)
+  assert.match(html, /There is no newer version of Frizz to install\./)
+  assert.doesNotMatch(html, /Restart Frizz|Update Frizz/)
+})
+
+// The greyed button offers no verb; this plain-restart spelling survives only for a failure card that
+// stays on screen after an answer flips `updateAvailable` off.
 test("the plain restart popover names itself as a restart, not an update", () => {
   const html = renderToStaticMarkup(createElement(UpdateRestartPopover, { open: true, update: false }))
   assert.match(html, /Restart Frizz/)

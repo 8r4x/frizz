@@ -1,6 +1,6 @@
 import React, { useRef, useState } from "react"
 import { useSnapshot } from "valtio"
-import { AlertTriangle, RefreshCw, X } from "lucide-react"
+import { AlertTriangle, Check, RefreshCw, X } from "lucide-react"
 import {
   canRestart,
   canUpdateRestart,
@@ -44,6 +44,9 @@ export function isBadgeRelease(currentVersion: string | undefined, updateVersion
 const updateCopy = "Install the latest version of Frizz. Your running threads will not be affected."
 const newerVersionCopy = "A newer version of Frizz is available. Your running threads will not be affected."
 const restartCopy = "Restart Frizz. Your running threads will not be affected."
+// True of a registry launcher that has confirmed it is current AND of a legacy supervisor with no
+// update verb at all, which is why it does not claim "the latest version".
+const currentCopy = "There is no newer version of Frizz to install."
 
 // The one anchor both panels that hang off this button use. Desktop: anchored to the button's LEFT
 // edge and opening RIGHTWARD, into the gutter and the workpane beyond it. The button sits at the
@@ -128,18 +131,21 @@ const PANEL_SURFACE = "rounded-xl bg-elevated p-3.5 shadow-xl shadow-shadow-ink/
 export function UpdateRestartPopover({
   open,
   update,
+  current = false,
   version,
   updateVersion,
 }: {
   open: boolean
   update: boolean
+  /** Nothing to install: the greyed button's popover says so instead of offering a verb. */
+  current?: boolean
   /** The running application-server version. Absent keeps legacy/monolithic versionless UI unchanged. */
   version?: string
   /** The newer application-server version, once the launcher has observed one. */
   updateVersion?: string
 }) {
   if (!open) return null
-  const action = update ? "Update Frizz" : "Restart Frizz"
+  const action = current ? "Frizz is up to date" : update ? "Update Frizz" : "Restart Frizz"
   // Name the newer version only on the verb that installs it: in plain-restart mode the board is
   // confirmed current, so `updateVersion` is never present there anyway.
   const newer = update ? updateVersion : undefined
@@ -154,7 +160,7 @@ export function UpdateRestartPopover({
       <span aria-hidden="true" className={`${PANEL_ARROW} border-border-strong`} />
       <div className="relative flex items-center gap-2.5">
         <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-fg/10 text-fg">
-          <RefreshCw aria-hidden="true" size={14} strokeWidth={2.25} />
+          {current ? <Check aria-hidden="true" size={14} strokeWidth={2.25} /> : <RefreshCw aria-hidden="true" size={14} strokeWidth={2.25} />}
         </span>
         <div className="flex min-w-0 flex-col">
           <span className="text-[13px] font-semibold tracking-[-0.01em] text-fg">{action}</span>
@@ -164,7 +170,7 @@ export function UpdateRestartPopover({
           )}
         </div>
       </div>
-      <p className="relative mt-2.5 text-[12px] leading-relaxed text-muted">{update ? (newer ? newerVersionCopy : updateCopy) : restartCopy}</p>
+      <p className="relative mt-2.5 text-[12px] leading-relaxed text-muted">{current ? currentCopy : update ? (newer ? newerVersionCopy : updateCopy) : restartCopy}</p>
     </div>
   )
 }
@@ -229,6 +235,7 @@ export function RestartFailureNotice({
 export function RestartActionButton({
   update,
   busy,
+  current = false,
   version,
   updateVersion,
   onFocus,
@@ -237,6 +244,8 @@ export function RestartActionButton({
 }: {
   update: boolean
   busy: boolean
+  /** Nothing to install: greyed and inert, but still focusable and hoverable so its popover can say why. */
+  current?: boolean
   /** The running registry version, used with updateVersion to decide whether this is a new release line. */
   version?: string
   /** A confirmed newer registry version. Patch updates stay actionable but do not earn the badge dot. */
@@ -249,13 +258,17 @@ export function RestartActionButton({
     <button
       type="button"
       aria-describedby="update-restart-popover"
-      aria-label={update ? "Update Frizz" : "Restart Frizz"}
+      aria-label={current ? "Frizz is up to date" : update ? "Update Frizz" : "Restart Frizz"}
       disabled={busy}
       aria-busy={busy || undefined}
-      className={`relative ${STATUS_ROW_ACTION}`}
+      // aria-disabled, not the native attribute, for the same reason as AiRenameButton: the popover
+      // that explains the grey hangs off this button's focus and its wrapper's hover. The button
+      // itself takes no pointer, so it paints no hover fill and a click never reaches it.
+      aria-disabled={current || undefined}
+      className={`relative ${STATUS_ROW_ACTION}${current ? " pointer-events-none opacity-40" : ""}`}
       onFocus={onFocus}
       onBlur={onBlur}
-      onClick={onClick}
+      onClick={current ? undefined : onClick}
     >
       <RefreshCw size={STATUS_ROW_ICON} aria-hidden="true" className={busy ? "animate-spin" : undefined} />
       {/* The popover only opens on hover, so the mark calls out a new RELEASE LINE, not routine patch
@@ -272,10 +285,10 @@ export function RestartActionButton({
 }
 
 /**
- * The update action. It shows only while there is something to install — a plain restart of a current
- * Frizz changes nothing the operator asked for, so the control is not offered for one (maintainer
- * 2026-09-25: "The restart button should not show up if there's no version to upgrade to"). It stays
- * mounted while a click it took is in flight or its failure is on screen, so neither vanishes mid-read.
+ * The update action. It is live only while there is something to install; on a current Frizz it stays
+ * in the row, greyed and inert, rather than offering a plain restart that changes nothing (maintainer
+ * 2026-09-25: hidden first, then "Actually, just gray it out"). A click in flight or a failure on screen
+ * keeps it live, so neither greys out mid-read.
  */
 export function RestartFrizzButton() {
   const snap = useSnapshot(store)
@@ -316,14 +329,16 @@ export function RestartFrizzButton() {
     ? restartFailureOutcome(requested.current.version, { version: status?.version })
     : PREVIOUS_KEPT
 
-  // Nothing to offer until a supervisor has affirmatively answered — an unreachable one and a poll that
-  // has not landed yet read the same — and nothing once it says the running version is the newest.
-  // A click in flight or a failure on screen keeps the control, so the answer that flips
-  // `updateAvailable` cannot take the spinner or the failure card away with it.
-  if (!canRestart(status) || (!updateAvailable && !busy && !shownError)) return null
+  // Nothing to show until a supervisor has affirmatively answered — an unreachable one and a poll that
+  // has not landed yet read the same.
+  if (!canRestart(status)) return null
+  // Greyed once it says the running version is the newest. A click in flight or a failure on screen
+  // keeps the control live, so the answer that flips `updateAvailable` cannot grey out the spinner or
+  // leave the failure card hanging off an inert button.
+  const current = !updateAvailable && !busy && !shownError
 
   const updateAndRestart = async () => {
-    if (busy) return
+    if (busy || current) return
     requested.current = { version: status?.version }
     setOpen(false)
     setBusy(true)
@@ -384,6 +399,7 @@ export function RestartFrizzButton() {
       <RestartActionButton
         update={updateAvailable}
         busy={busy}
+        current={current}
         version={versions.version}
         updateVersion={versions.updateVersion}
         onFocus={() => setOpen(true)}
@@ -391,7 +407,7 @@ export function RestartFrizzButton() {
         onClick={() => void updateAndRestart()}
       />
       {shownError && <RestartFailureNotice update={updateAvailable} message={shownError} outcome={outcome} onDismiss={() => setDismissed(shownError)} />}
-      <UpdateRestartPopover open={open && !shownError} update={updateAvailable} version={versions.version} updateVersion={versions.updateVersion} />
+      <UpdateRestartPopover open={open && !shownError} update={updateAvailable} current={current} version={versions.version} updateVersion={versions.updateVersion} />
     </div>
   )
 }
