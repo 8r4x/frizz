@@ -1,5 +1,5 @@
 import { ListChecks } from "lucide-react"
-import type { PairedAnswer } from "../lib/answersMessage.ts"
+import { answersForDisplay, type PairedAnswer } from "../lib/answersMessage.ts"
 import { LinkifiedText } from "./LinkifiedText.tsx"
 import { BLOCK_RADIUS, CardContent, CardHead } from "./TranscriptCard.tsx"
 
@@ -19,7 +19,7 @@ export function AnswersCard({ answers, queued, sourceId }: { answers: PairedAnsw
         <CardHead icon={ListChecks} label="Answers" />
         <CardContent>
           <div className="flex flex-col gap-2.5">
-            {answers.map((a, i) => (
+            {answersForDisplay(answers).map((a, i) => (
               // A FOLLOW-UP sits under the answer that opened it, behind the same rule every nested
               // question in this app wears (RegisteredQuestionCards). The wire form is flat — an
               // indented line there reads as a continuation of the row above (see questionAnswerMessage)

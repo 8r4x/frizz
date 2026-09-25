@@ -2376,8 +2376,9 @@ export const ANSWER_CONTINUATION_INDENT = "  "
 export const indentAnswerContinuation = (text: string): string => text.replace(/\n/g, `\n${ANSWER_CONTINUATION_INDENT}`)
 
 /** What a DISMISSED question carries in place of an answer. One row like any other (see below), so it
- *  reads to the human as what it is — a question sent on with nothing chosen — while still telling the
- *  worker what to do with it. */
+ *  cannot be swallowed into the answer above it, and it tells the worker what to do with it. It is the
+ *  WORKER's row only: the human's Answers card leaves it out (the web's `answersForDisplay`), because
+ *  the × already said it and the row can arrive several rests after the click. */
 export const DISMISSED_ANSWER = "(dismissed — decide it yourself; do not re-ask)"
 
 /** A question the human waved away, as the answer message needs it: the TEXT, never the id. The worker

@@ -3181,7 +3181,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       const dismissed: QuestionDismissal[] = []
       // The ids are kept alongside for the delivery key ONLY. The MESSAGE names each dismissed question
       // by its text, because the worker never saw an id — frizz minted it — so a list of ids names
-      // nothing it can act on, and the human's card would have a blank row where the question goes.
+      // nothing it can act on. (The human's Answers card leaves these rows out — see answersForDisplay.)
       const dismissedIds: string[] = []
       for (const q of rows) {
         if (q.state === "dismissed") {

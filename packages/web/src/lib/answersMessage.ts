@@ -1,4 +1,4 @@
-import { ANSWER_CONTINUATION_INDENT, ANSWER_FOLLOW_UP_MARKER, BURIED_ANSWERS_HEADER } from "@frizz/shared"
+import { ANSWER_CONTINUATION_INDENT, ANSWER_FOLLOW_UP_MARKER, BURIED_ANSWERS_HEADER, DISMISSED_ANSWER } from "@frizz/shared"
 import { splitQuestionBlocks, parseQuestionBlock, type MessageSegment } from "./questionBlocks.ts"
 
 // Detect + parse OUR OWN composed-answer format, so a user message that is a multi-block answer renders
@@ -174,6 +174,17 @@ export function parseBuriedAnswersMessage(text: string): PairedAnswer[] | null {
 // message without the surrounding list (the sub-agent sheet); list call sites go through pairAllAnswers.
 export function parseAnswersCard(text: string): PairedAnswer[] | null {
   return parseBuriedAnswersMessage(text) ?? parseAnswersMessage(text)
+}
+
+// THE ROWS THE HUMAN SEES — every row but a dismissal. A dismissed question rides the next answer's
+// message because that is the WORKER's only news of it (questionAnswerMessage), but the human already
+// said it with the × and needs nothing back. And "next answer" can be several rests later, so the row
+// reads as that question coming back: an × from turns ago drew as a fourth answer under three fresh ones
+// (maintainer 2026-09-25). The parse keeps the row — the wire is the worker's and the pairing counts
+// on it — and only the card leaves it out. A card of nothing but dismissals never reaches here: the
+// server composes that as the cancellation wake, a different message.
+export function answersForDisplay(answers: readonly PairedAnswer[]): PairedAnswer[] {
+  return answers.filter((a) => a.answer !== DISMISSED_ANSWER)
 }
 
 // The minimal structural slice of a transcript message the pairing needs — role/kind/text plus the

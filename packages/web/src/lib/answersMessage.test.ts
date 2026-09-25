@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { ANSWER_FOLLOW_UP_MARKER, BURIED_ANSWERS_HEADER, DISMISSED_ANSWER, questionAnswerMessage } from "@frizz/shared"
-import { parseAnswersMessage, parseBuriedAnswersMessage, parseAnswersCard, pairAnswersMessage, pairAllAnswers, unrenderedAnswers, isAnswersMessage, type MsgLike } from "./answersMessage.ts"
+import { answersForDisplay, parseAnswersMessage, parseBuriedAnswersMessage, parseAnswersCard, pairAnswersMessage, pairAllAnswers, unrenderedAnswers, isAnswersMessage, type MsgLike } from "./answersMessage.ts"
 import { composeAnswerWire } from "./answering.ts"
 
 test("parses the multi-block composed-answer format into numbered rows", () => {
@@ -173,6 +173,18 @@ test("the SERVER's composed answer round-trips through this reader — the one t
     { n: 2, answer: "Yes, at boot", question: "Migrate the existing rows?", followUp: true },
     { n: 3, answer: DISMISSED_ANSWER, question: "Ship the banner this week?" },
   ])
+})
+
+test("the card drops a dismissal row: the worker needs it, the human already said it with the ×", () => {
+  // A dismissal rides the NEXT answer's message, which can be several rests after the click, so drawing
+  // it read as the dismissed question coming back under the fresh answers (maintainer 2026-09-25).
+  const wire = questionAnswerMessage(
+    [{ questionId: "qst_a", question: "SQLite or a JSON file?", chosen: ["SQLite"] }],
+    [{ question: "Ship the banner this week?" }],
+  )
+  const parsed = parseAnswersCard(wire)
+  assert.equal(parsed?.length, 2, "the parse keeps the row — it is the worker's wire")
+  assert.deepEqual(answersForDisplay(parsed ?? []), [{ n: 1, answer: "SQLite", question: "SQLite or a JSON file?" }])
 })
 
 test("buried detection is strict: wrong header, or rows without the quote-arrow, → null", () => {

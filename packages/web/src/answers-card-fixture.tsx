@@ -38,7 +38,8 @@ const buried = {
 
 // A REGISTERED question's answer, as the SERVER composes it (questionAnswerMessage). Same wire form as
 // the buried one above and the same reader — but its questions can be a static TREE, so it is the one
-// shape that carries follow-up rows, and a dismissed question rides along as a row of its own. Built
+// shape that carries follow-up rows, and a dismissed question rides along as a row of its own — on the
+// wire only; the card must NOT draw it (answersForDisplay). Built
 // from the composer rather than hand-typed: the whole defect this fixture now guards was the two drifting
 // apart, and a hand-written copy here would drift with them.
 const registered = {
