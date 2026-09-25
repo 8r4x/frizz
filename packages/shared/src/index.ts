@@ -968,7 +968,7 @@ export type ThreadRecurringPrompt = z.infer<typeof ThreadRecurringPrompt>
 // message that opens by quoting the marker keeps its bubble.
 //
 // Lives HERE rather than in transcript.ts (its first caller) because the tailer needs it too — an
-// interrupt receipt is the one `user` record that means the turn is OVER, not starting — and
+// interrupt receipt is a `user` record that means the turn is OVER, not starting — and
 // transcript.ts already imports from tailer.ts, so the other direction would close a cycle.
 const INTERRUPT_MARKERS = ["[Request interrupted by user]", "[Request interrupted by user for tool use]"]
 export function isInterruptMarker(text: string): boolean {

@@ -615,6 +615,9 @@ export interface TailState extends FoldState {
   // and pins the turn in-flight FOREVER when nothing follows it — the same trap the isMeta guard in
   // applyRecord already documents, arriving through a different record. See computeTurn.
   interrupted?: boolean
+  // The same kind of receipt from a LOCAL slash command — one the CLI runs itself, without the model
+  // (a manual `/compact`). See isLocalCommandReceipt.
+  localCommandDone?: boolean
   // ---- provider event stream vs its own disk write (broker Claude rows only) ----
   // `runtimeEventsSeen` is the provider event count this session's fold has already caught up with;
   // `runtimeChase` counts consecutive nudge-driven ticks spent waiting for it to. Both live here
@@ -944,6 +947,22 @@ export function isRealUserMessage(content: unknown): boolean {
   if (typeof content === "string") return true
   if (!Array.isArray(content)) return false
   return content.some((b) => !(b && typeof b === "object" && (b as { type?: string }).type === "tool_result"))
+}
+
+// The CLI's own receipt for a LOCAL slash command — one it runs itself instead of handing to the model.
+// A manual `/compact` is the one that reaches a frizz thread: Claude Code 2.1.282 writes the compact
+// boundary, the carry-over summary, the command's `<command-name>` envelope and then this record as the
+// command's output, all `type:"user"`, and then nothing but sidecars — no assistant record, so nothing
+// the fold read as the end of a turn, and the thread showed running until the next real message. The
+// SDK stream settles it (`result` right after the replayed stdout), but resolveRuntimeTurn never lets a
+// runtime reading override a fold holding real evidence, so the fold has to know. Measured 2026-09-25.
+//
+// Anchored at BOTH ends on the trimmed text, like the interrupt markers: a human message that quotes the
+// tag is still a prompt. Older builds wrote a local command's output as a `system`/`local_command`
+// record instead, which the fold already ignores.
+const LOCAL_COMMAND_RECEIPT = /^<local-command-(stdout|stderr)>[\s\S]*<\/local-command-\1>$/
+function isLocalCommandReceipt(content: unknown): boolean {
+  return LOCAL_COMMAND_RECEIPT.test(userMessageText(content).trim())
 }
 
 // Did the HUMAN produce this user record, or did the machinery? EVERY `type:"user"` record reaches the
@@ -1799,6 +1818,7 @@ export function applyRecord(state: TailState, rec: Record): void {
     // again. Cleared here and on any non-interrupt user record so the flag only ever describes the LAST
     // substantive record, exactly like lastKind.
     state.interrupted = undefined
+    state.localCommandDone = undefined
     // The agent's OWN output timestamp = the rest-time key. For an at-rest thread the last assistant
     // record IS its final resting message; unlike lastActivityAt this never moves from a sub-agent's
     // completion notification (a promptSource:system USER record), so the queue never reshuffles on
@@ -1894,7 +1914,7 @@ export function applyRecord(state: TailState, rec: Record): void {
     // (shimmer), not idle. This is what shows motion while an agent resumes after a sub-agent returns.
     state.lastKind = "user"
     state.lastStopReason = undefined
-    // …with ONE exception, and it is the reason this flag exists: the runtime's own
+    // …with TWO exceptions, and the first is the reason this flag exists: the runtime's own
     // `[Request interrupted by user]` receipt is a user record that means the OPPOSITE of a prompt. The
     // turn it names was cut short and the model will write nothing more until new input arrives, so
     // reading it as "about to respond" left an abandoned thread spinning on the board until the next
@@ -1902,6 +1922,8 @@ export function applyRecord(state: TailState, rec: Record): void {
     // frozen" — 23 hours in the Active band with an idle worker behind it).
     const userText = lastTextBlock(rec.message?.content) ?? ""
     state.interrupted = isInterruptMarker(userText) || undefined
+    // …and the second one: a local command's output receipt, which follows a command the model never saw.
+    state.localCommandDone = isLocalCommandReceipt(rec.message?.content) || undefined
     // A newer user record supersedes any pending chat question / excusal fence (they only signal as the
     // FINAL message); the NEXT assistant record recomputes them.
     //
@@ -2148,14 +2170,16 @@ export function computeTurn(state: TailState, nowMs: number): TurnState {
   // is still the newTailState "in-flight" the old fallthrough returned. For codex it makes the explicit
   // task_started/task_complete brackets authoritative (the fix: a folded `idle` survives the tick).
   if (state.lastKind === undefined) return state.turn
-  // An INTERRUPT is the one user record that ENDS a turn rather than opening one (see applyRecord).
+  // An INTERRUPT is a user record that ENDS a turn rather than opening one (see applyRecord).
   // It gets the same 5s-silence treatment the unknown-stop-reason branch above uses, and for the same
   // reason: frizz interrupts as a FEATURE — "send now" cuts the turn short so the worker reads the
   // queue at once — and there the real prompt lands milliseconds later and re-opens the turn. Flipping
   // idle the instant the receipt appears would flash a rest through every send-now, and a rest is not
   // cosmetic here: it cards the row into the queue and can fire the sign-off nudge at a thread that
   // never stopped. An interrupt with NOTHING after it for 5s is what it looks like — a stopped thread.
-  if (state.interrupted) {
+  // A local command's receipt (a manual `/compact`) ends its "turn" the same way and gets the same
+  // silence, for the same reason: a message queued behind the command is delivered right after it.
+  if (state.interrupted || state.localCommandDone) {
     const at = state.lastActivityAt ? Date.parse(state.lastActivityAt) : NaN
     if (Number.isFinite(at) && nowMs - at > IDLE_BACKSTOP_MS) return "idle"
   }
