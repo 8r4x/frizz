@@ -80,3 +80,15 @@ test("one batch stays together in the order it was asked", () => {
   ])
   assert.deepEqual(anchored.get(1)?.map((s) => s.id), ["qst_a", "qst_b"])
 })
+
+test("the card stays above the rest divider that closes its rest, not below it", () => {
+  // The shape the real tailer produces: a synthetic "Agent rested" event row after every handoff.
+  const messages = [
+    msg("user", "2026-09-25T10:00:00Z"),
+    msg("assistant", "2026-09-25T10:02:00Z"),
+    msg("assistant", "2026-09-25T10:02:00Z", "Agent rested", "event"),
+    msg("user", "2026-09-25T10:06:00Z"),
+  ]
+  const { anchored } = settledQuestionPositions(messages, [settled("qst_a", "2026-09-25T10:01:30Z", "2026-09-25T10:05:00Z")])
+  assert.deepEqual([...anchored.keys()], [1])
+})

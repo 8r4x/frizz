@@ -235,15 +235,20 @@ export function useSettledQuestions(thread: ThreadView | undefined): readonly Se
   return query.data ?? NO_SETTLED
 }
 
-/** The thread with every question the settled list holds taken off its OPEN list, so one question never
+const NO_OPEN: readonly RegisteredQuestionView[] = []
+
+/** The thread's OPEN questions minus every one the settled list already holds, so one question never
  *  draws twice: in the beat between Send and the board push the row is still open on the board while
- *  its settled card is already drawn. The same object when there is nothing to take, so a memo keyed on
- *  the thread does not churn. */
-export function withoutSettledQuestions<T extends ThreadView | undefined>(thread: T, settled: readonly SettledQuestion[]): T {
-  if (!thread || settled.length === 0 || thread.questions.length === 0) return thread
+ *  its settled card is already drawn. For the question cards ONLY — everything else keeps reading the
+ *  board's own `thread.questions`, because the rows are still open there until that push, and the push
+ *  is what also brings `answersInFlight`: a surface that saw no questions AND nothing in flight in that
+ *  beat would draw the "Rested without a sign-off" card in the hole. The board's own array when nothing
+ *  is taken, so a memo keyed on it does not churn. */
+export function openQuestionsOf(thread: ThreadView | undefined, settled: readonly SettledQuestion[]): readonly RegisteredQuestionView[] {
+  const open = thread?.questions ?? NO_OPEN
+  if (settled.length === 0 || open.length === 0) return open
   const ids = new Set(settled.map((s) => s.id))
-  if (!thread.questions.some((q) => ids.has(q.id))) return thread
-  return { ...thread, questions: thread.questions.filter((q) => !ids.has(q.id)) }
+  return open.some((q) => ids.has(q.id)) ? open.filter((q) => !ids.has(q.id)) : open
 }
 
 /** ONE answered registration, in the slot its open card filled: the same card, the same branch rule,

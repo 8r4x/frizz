@@ -20,7 +20,9 @@ test("every answerable Message site hands the registered questions at its rest t
 })
 
 test("the map is built off the same messages and questions the anchors use, on all three surfaces", () => {
-  const build = /registeredStandingAt\(messages, thread\?\.questions \?\? \[\]\), \[messages, thread\?\.questions\]\)/g
+  // `openQuestions` is the board's open list minus the ids already drawn settled (openQuestionsOf) — the
+  // same list the placement and the anchors read on each surface.
+  const build = /registeredStandingAt\(messages, openQuestions\), \[messages, openQuestions\]\)/g
   assert.equal((chat.match(build) ?? []).length, 2, "one per ChatView transcript path")
   assert.equal((queue.match(build) ?? []).length, 1, "the queue card")
 })

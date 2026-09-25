@@ -35,7 +35,7 @@ import { ThreadTitle } from "./ThreadTitle.tsx"
 import { DispatchForm } from "./NewThreadModal.tsx"
 import { StatusRow } from "./StatusRow.tsx"
 import { InteractionStack } from "./InteractionCards.tsx"
-import { RegisteredAnsweringProvider, RegisteredQuestionStack, SettledQuestionStack, useSettledQuestions, withoutSettledQuestions } from "./RegisteredQuestionCards.tsx"
+import { RegisteredAnsweringProvider, RegisteredQuestionStack, SettledQuestionStack, openQuestionsOf, useSettledQuestions } from "./RegisteredQuestionCards.tsx"
 import { QueueSubAgentLines, hasQueueSubAgentLines } from "./QueueSubAgentLines.tsx"
 import { WakeDivider } from "./WakeDivider.tsx"
 import { LastActive } from "./LastActive.tsx"
@@ -705,11 +705,11 @@ function IntermediateSummary({ toolCount, onExpand }: { toolCount: number; onExp
 // changed, instead of every mounted card — and each card's transcript is further guarded by the
 // memoized Message. `onResolve` takes the slug (stable useCallback in TodosView) so this card's props
 // never churn identity render-to-render.
-const QueueCard = memo(function QueueCard({ thread: boardThread, leaving, frozen, onResolve, onUnresolve }: { thread: ThreadView; leaving: boolean; frozen: boolean; onResolve: (slug: string) => void; onUnresolve: (slug: string) => void }) {
+const QueueCard = memo(function QueueCard({ thread, leaving, frozen, onResolve, onUnresolve }: { thread: ThreadView; leaving: boolean; frozen: boolean; onResolve: (slug: string) => void; onUnresolve: (slug: string) => void }) {
   // ANSWERED registered questions keep drawing, greyed, where their open card stood — the thread view's
-  // rule (lib/settledQuestions). An id the settled list holds is off the open list for the whole card.
-  const settledQuestions = useSettledQuestions(boardThread)
-  const thread = useMemo(() => withoutSettledQuestions(boardThread, settledQuestions), [boardThread, settledQuestions])
+  // rule (lib/settledQuestions). The open cards skip any id the settled list holds (openQuestionsOf).
+  const settledQuestions = useSettledQuestions(thread)
+  const openQuestions = useMemo(() => openQuestionsOf(thread, settledQuestions), [thread, settledQuestions])
   // Tracks only vtReturnTarget (valtio re-renders on accessed keys alone), so the memo'd card
   // re-renders just when a /full exit primes or clears it — see the root div's viewTransitionName.
   const vtSnap = useSnapshot(store)
@@ -999,12 +999,12 @@ const QueueCard = memo(function QueueCard({ thread: boardThread, leaving, frozen
   // At rest only a marker in the CURRENT rest places; a stale one from the asking rest lets the card
   // fall back to the tail, where the rest the human is reading actually is.
   const atRest = thread.runtime !== "running" && thread.runtime !== "spawning"
-  const placement = useMemo(() => placeQuestions(messages, thread?.questions ?? [], { atRest }), [atRest, messages, thread?.questions])
+  const placement = useMemo(() => placeQuestions(messages, openQuestions, { atRest }), [atRest, messages, openQuestions])
   const questionAnchors = useMemo(() => {
     const tail: RegisteredQuestionView[] = []
     const byAnchor = new Map<number, RegisteredQuestionView[]>()
     const tailAnchor = messages.length - 1
-    const unplaced = (thread?.questions ?? []).filter((q) => !placement.placedIds.has(q.id))
+    const unplaced = openQuestions.filter((q) => !placement.placedIds.has(q.id))
     for (const [anchor, group] of questionsByAnchor(messages, unplaced, { atRest })) {
       if (anchor >= tailAnchor) { tail.push(...group); continue }
       const at = byAnchor.get(anchor)
@@ -1012,7 +1012,7 @@ const QueueCard = memo(function QueueCard({ thread: boardThread, leaving, frozen
       else byAnchor.set(anchor, [...group])
     }
     return { byAnchor, tail }
-  }, [atRest, messages, placement.placedIds, thread?.questions])
+  }, [atRest, messages, openQuestions, placement.placedIds])
   const settledPlacement = useMemo(() => settledQuestionPositions(messages, settledQuestions), [messages, settledQuestions])
   // A thread dispatched after the free-form fence was retired never gets a fence controller: a
   // ```question with a body is prose there, drawn read-only, and the registered card is the only
@@ -1020,7 +1020,7 @@ const QueueCard = memo(function QueueCard({ thread: boardThread, leaving, frozen
   const fencesLive = questionFencesLive(thread.spawnedAt)
   // The registered questions standing at each message — its rest and every later one — so a fence
   // restating or naming one folds into its card (lib/questionShadow), here exactly as on the thread page.
-  const shadowedByMessage = useMemo(() => registeredStandingAt(messages, thread?.questions ?? []), [messages, thread?.questions])
+  const shadowedByMessage = useMemo(() => registeredStandingAt(messages, openQuestions), [messages, openQuestions])
   // What the human's in-flight answer still has to SAY — the rows of it the transcript above is not
   // already drawing. Over `messages`, not the window: an answer scrolled above the fold is still on this
   // card's page and a second copy of it at the tail is the duplicate either way.

@@ -46,6 +46,16 @@ function prefixLength(messages: readonly AnchorMessage[], settledAtMs: number): 
   return messages.length
 }
 
+/** The anchor moved up past the frizz event rows that close its rest ("Agent rested" above all). While
+ *  the card was open that row was the transcript's tail and drew nothing, so the card sat directly under
+ *  the handoff; once the human's answer lands after it the divider draws, and a card anchored ON it
+ *  would fall below the divider — outside the rest it was asked at. */
+function aboveTrailingEvents(messages: readonly AnchorMessage[], anchor: number): number {
+  let at = anchor
+  while (at > 0 && messages[at].kind === "event") at--
+  return at
+}
+
 export function settledQuestionPositions<S extends SettledPositionable>(
   messages: readonly (AnchorMessage & { text?: string })[],
   settled: readonly S[],
@@ -77,7 +87,7 @@ export function settledQuestionPositions<S extends SettledPositionable>(
     const unplaced = batch.filter((s) => !placement.placedIds.has(s.id))
     for (const [anchor, group] of questionsByAnchor(prefix, unplaced, { atRest: true })) {
       if (anchor < 0) continue
-      add(anchored, anchor, group)
+      add(anchored, aboveTrailingEvents(prefix, anchor), group)
     }
   }
   // Batches were walked in settle order; within one slot the cards read in the order they were ASKED,

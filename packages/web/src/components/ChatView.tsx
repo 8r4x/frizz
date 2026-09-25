@@ -76,7 +76,7 @@ import { ThreadLinks } from "./ThreadLinks.tsx"
 import { MessageRow, MessageStamp } from "./MessageTimestamp.tsx"
 import { TRANSCRIPT_META_LABEL_CLASS, transcriptMetaChevronClass } from "../lib/transcriptMetaLabels.ts"
 import { InteractionStack } from "./InteractionCards.tsx"
-import { RegisteredAnsweringProvider, RegisteredQuestionCard, RegisteredQuestionStack, SettledQuestionCard, SettledQuestionStack, useSettledQuestions, withoutSettledQuestions, type SettledQuestion } from "./RegisteredQuestionCards.tsx"
+import { RegisteredAnsweringProvider, RegisteredQuestionCard, RegisteredQuestionStack, SettledQuestionCard, SettledQuestionStack, openQuestionsOf, useSettledQuestions, type SettledQuestion } from "./RegisteredQuestionCards.tsx"
 // The shared card chrome and THE question card both live in their own modules now, so every
 // surface can render them without importing the thread view. QuestionBlockCard in particular is
 // shared with the native-AskUserQuestion path, which reaches it through InteractionCards.tsx —
@@ -222,12 +222,12 @@ export function ThreadView({ slug, onStatusApplied, onClose, virtualized = false
 
 function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean }) {
   const board = useBoard()
-  const boardThread = threadBySlug(board, slug)
+  const thread = threadBySlug(board, slug)
   // ANSWERED registered questions stay in the transcript, greyed, where their open card stood (see
-  // lib/settledQuestions). Any id the settled list holds is taken off the open list for this whole
-  // surface, so a question just sent never draws as both.
-  const settledQuestions = useSettledQuestions(boardThread)
-  const thread = useMemo(() => withoutSettledQuestions(boardThread, settledQuestions), [boardThread, settledQuestions])
+  // lib/settledQuestions). The open cards skip any id the settled list holds, so a question just sent
+  // never draws as both.
+  const settledQuestions = useSettledQuestions(thread)
+  const openQuestions = useMemo(() => openQuestionsOf(thread, settledQuestions), [thread, settledQuestions])
   const running = thread?.runtime === "running" || thread?.runtime === "spawning"
   const copyTerminalCommand = useCopyTerminalCommand(slug)
 
@@ -308,13 +308,13 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
   const { answeringForMessage } = useLiveAnswering(slug, messages)
   // The registered questions standing at each message — its rest and every later one — so a fence
   // restating or naming one folds into its card.
-  const shadowedByMessage = useMemo(() => registeredStandingAt(messages, thread?.questions ?? []), [messages, thread?.questions])
+  const shadowedByMessage = useMemo(() => registeredStandingAt(messages, openQuestions), [messages, openQuestions])
   // Where the worker PLACED its registered questions — the message whose empty ```question qst_… marker
   // names each one (lib/questionShadow). A placed card renders in that slot and is subtracted from its
   // anchor group; every other question renders at its anchor as before. At rest only a marker in the
   // CURRENT rest places: a stale one from the rest that asked the question would otherwise strand the
   // card up there while the handoff below it drew a bare Send button.
-  const placement = useMemo(() => placeQuestions(messages, thread?.questions ?? [], { atRest: !running }), [messages, running, thread?.questions])
+  const placement = useMemo(() => placeQuestions(messages, openQuestions, { atRest: !running }), [messages, running, openQuestions])
   // Where each ANSWERED question's card stood when it was answered — the same two readers, replayed over
   // the transcript as it was before the answer (lib/settledQuestions).
   const settledPlacement = useMemo(() => settledQuestionPositions(messages, settledQuestions), [messages, settledQuestions])
@@ -421,6 +421,7 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
           answeringForMessage={answeringForMessage}
           placement={placement}
           settledPlacement={settledPlacement}
+          openQuestions={openQuestions}
           fencesLive={fencesLive}
           thread={thread}
           running={running}
@@ -811,6 +812,7 @@ function VirtualizedThreadTranscript({
   answeringForMessage,
   placement,
   settledPlacement,
+  openQuestions,
   fencesLive,
   thread,
   running,
@@ -838,6 +840,8 @@ function VirtualizedThreadTranscript({
   // The worker's marker placements and the fence gate, both computed by the parent off the SAME list.
   placement: QuestionPlacement<RegisteredQuestionView>
   settledPlacement: SettledPlacement<SettledQuestion>
+  // The board's open questions minus the ones already drawn settled (openQuestionsOf).
+  openQuestions: readonly RegisteredQuestionView[]
   fencesLive: boolean
   thread: ThreadViewData | undefined
   running: boolean
@@ -915,7 +919,7 @@ function VirtualizedThreadTranscript({
     const tailAnchor = messages.length - 1
     // A question a marker PLACED renders inside its message, so it leaves its anchor group — but the
     // group's Send stays: the tail stack draws the one "Send answers" for every card of the rest.
-    const unplaced = (thread?.questions ?? []).filter((q) => !placement.placedIds.has(q.id))
+    const unplaced = openQuestions.filter((q) => !placement.placedIds.has(q.id))
     for (const [anchor, group] of questionsByAnchor(messages, unplaced, { atRest: !running })) {
       if (anchor >= tailAnchor) { tail.push(...group); continue }
       let rowIdx = -1
@@ -928,7 +932,7 @@ function VirtualizedThreadTranscript({
       else byRow.set(rowIdx, [...group])
     }
     return { byRow, tail }
-  }, [messageRows, messages, placement.placedIds, running, thread?.questions])
+  }, [messageRows, messages, openQuestions, placement.placedIds, running])
   // The ANSWERED questions' anchors, keyed into `messageRows` the same way: the last row at or before
   // the anchor. No tail special case — a settled card is not an ask, so it never rides the
   // interactions row; anchored at the last message it simply follows that message's row.
@@ -949,7 +953,7 @@ function VirtualizedThreadTranscript({
   }, [messageRows, settledPlacement.anchored])
   // The same rows, keyed by message index, for the fold: a fence restating or naming a registration
   // standing at that message draws nothing of its own (lib/questionShadow).
-  const shadowedByMessage = useMemo(() => registeredStandingAt(messages, thread?.questions ?? []), [messages, thread?.questions])
+  const shadowedByMessage = useMemo(() => registeredStandingAt(messages, openQuestions), [messages, openQuestions])
 
   const rows = useMemo<VirtualThreadRow[]>(() => {
     const next: VirtualThreadRow[] = [{ key: "head-anchor", kind: "head-anchor" }]
