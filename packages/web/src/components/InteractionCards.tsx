@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useContext,
   useEffect,
   useId,
   useMemo,
@@ -49,6 +50,7 @@ import { clearSteered, markSteered } from "../lib/steering.ts"
 // share a component"). Only the plumbing differs: a fence answers by composing a user message, a
 // native question answers by resolving this interaction.
 import { QuestionBlockCard } from "./QuestionBlockCard.tsx"
+import { QueueDismissContext } from "./ChatView.tsx"
 import { interactionQuestionValues, interactionQuestions } from "../lib/interactionQuestion.ts"
 import type { BlockAnswer } from "../lib/questionBlocks.ts"
 
@@ -109,6 +111,7 @@ export function InteractionStack({
           key={interaction.id}
           record={interaction}
           autoFocus={autoFocusFirst && index === 0}
+          sole={interactions.length === 1}
         />
       ))}
     </section>
@@ -136,12 +139,15 @@ function InteractionQuestionCard({
   record,
   questions,
   autoFocus,
+  sole,
 }: {
   record: InteractionRecord
   questions: NonNullable<ReturnType<typeof interactionQuestions>>
   autoFocus: boolean
+  sole: boolean
 }) {
   const qc = useQueryClient()
+  const turn = useTurnRelease(record.owner.threadSlug, sole)
   const cardRef = useRef<HTMLElement>(null)
   const responseIds = useRef(new Map<string, string>())
   const projectDir = useProjectDir()
@@ -199,7 +205,7 @@ function InteractionQuestionCard({
       // Fail CLOSED on an ambiguous write, exactly as the typed card does: a response frizz cannot
       // prove landed must not look re-sendable.
       failClosedAmbiguousInteraction(qc, record)
-      clearSteered(record.owner.threadSlug)
+      turn.rollback()
       setError(errorText(cause))
     },
   })
@@ -212,7 +218,7 @@ function InteractionQuestionCard({
     responseIds.current.set(signature, responseId)
     // The answer releases the blocked turn, so the rail row moves to the running band now rather than
     // when the tailer next sees the turn advance — see steerOnDecision.
-    markSteered(record.owner.threadSlug)
+    turn.release()
     mutation.mutate({ decisionId: answerDecision.id, values, responseId })
   }
   const setText = (entry: (typeof questions)[number], text: string) => {
@@ -291,16 +297,20 @@ function InteractionQuestionCard({
 export function InteractionCard({
   record,
   autoFocus = false,
+  sole = false,
 }: {
   record: InteractionRecord
   autoFocus?: boolean
+  // The ONLY request this thread has pending. Only then does answering it release the turn — see
+  // useTurnRelease.
+  sole?: boolean
 }) {
   // A QUESTION renders as the shared question card, not as this authorization chrome. Anything that
   // cannot be expressed as a question (a numeric or secret prompt) falls through to the typed form
   // below rather than silently dropping an input the operator still has to fill.
   const asQuestions = useMemo(() => interactionQuestions(record), [record])
-  if (asQuestions) return <InteractionQuestionCard record={record} questions={asQuestions} autoFocus={autoFocus} />
-  return <InteractionApprovalCard record={record} autoFocus={autoFocus} />
+  if (asQuestions) return <InteractionQuestionCard record={record} questions={asQuestions} autoFocus={autoFocus} sole={sole} />
+  return <InteractionApprovalCard record={record} autoFocus={autoFocus} sole={sole} />
 }
 
 // A RESPONSE TO A BLOCKED TURN IS A STEER. The provider is mid-turn, parked on this request, and every
@@ -313,14 +323,42 @@ function steerOnDecision(decision: CanonicalInteractionDecision): boolean {
   return decision.semantic !== "cancel"
 }
 
+// THE ROW AND THE CARD MOVE TOGETHER. The steer puts the rail row in Running, so the queue card has to
+// leave on the same click — a row in Running with a card still in the queue breaks the rail's one
+// invariant (groups.inActiveBand), and it is the same dissolve a registered answer or a composer steer
+// makes. Only for the thread's SOLE pending request: with two out, answering one leaves the turn blocked
+// on the other, and both the steer and the dismissal would be a claim the server has to take back.
+// Null context on the thread page, where there is no card to dismiss.
+function useTurnRelease(slug: string, sole: boolean) {
+  const queueDismiss = useContext(QueueDismissContext)
+  const released = useRef(false)
+  return {
+    release: () => {
+      if (!sole) return
+      released.current = true
+      markSteered(slug)
+      queueDismiss?.dismiss()
+    },
+    rollback: () => {
+      if (!released.current) return
+      released.current = false
+      clearSteered(slug)
+      queueDismiss?.cancel()
+    },
+  }
+}
+
 function InteractionApprovalCard({
   record,
   autoFocus = false,
+  sole,
 }: {
   record: InteractionRecord
   autoFocus?: boolean
+  sole: boolean
 }) {
   const qc = useQueryClient()
+  const turn = useTurnRelease(record.owner.threadSlug, sole)
   const headingId = useId()
   const cardRef = useRef<HTMLElement>(null)
   const responseIds = useRef(new Map<string, string>())
@@ -442,7 +480,7 @@ function InteractionApprovalCard({
     },
     onError: (cause) => {
       setStatus(undefined)
-      clearSteered(record.owner.threadSlug)
+      turn.rollback()
       setError(errorText(cause))
       // The write may have committed even though its HTTP response was lost. Fail the shared list
       // cache closed before attempting reconciliation so a remount (or a second copy of this card in
@@ -513,7 +551,7 @@ function InteractionApprovalCard({
     const signature = interactionDecisionSignature(decision.id, values)
     const responseId = responseIds.current.get(signature) ?? newResponseId()
     responseIds.current.set(signature, responseId)
-    if (steerOnDecision(decision)) markSteered(record.owner.threadSlug)
+    if (steerOnDecision(decision)) turn.release()
     mutation.mutate({ decision, values, responseId })
   }
 
