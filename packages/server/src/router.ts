@@ -71,6 +71,8 @@ import {
   type ThreadSkill,
   SetThreadProfileInput,
   SetThreadProfileResult,
+  UpgradeThreadModelInput,
+  UpgradeThreadModelResult,
   DispatchPreferences,
   SetDispatchPreferenceInput,
   ListInteractionsInput,
@@ -155,7 +157,8 @@ import { ghInstalled, ghAuthed, ghRepo, gitGithubRemote, listItems, hydrateIssue
 import { createGithubHovercardService } from "./github-hovercard.ts"
 import { slugify, resolveSlug, resolveLegacyThreadFile, loadWorkerPrompt, scratchpadOrientation, frizzConfigBlock, coldResumePermission } from "./dispatch.ts"
 import { readCodexModels } from "./backend/codex-models.ts"
-import { readClaudeModels } from "./backend/claude-models.ts"
+import { peekClaudeModels, readClaudeModels } from "./backend/claude-models.ts"
+import { claudeModelStanding, claudeModelUpgradeBlock, claudeModelUpgradeDue, claudeModelUpgradeRefusal, claudeUpgradeCandidate, SERVER_STARTED_AT_MS } from "./backend/claude-model-upgrade.ts"
 import { log as frizzLog } from "./logging.ts"
 import { codexSandbox } from "./backend/codex.ts"
 import type { CodexSandboxMode } from "./backend/codex-app-server.ts"
@@ -280,6 +283,9 @@ export interface AcpTurnTerminator {
   /** End the agent itself — its daemon outlives frizz (acp-host.ts), so a stop that only cancelled
    *  the turn would leave the agent running for nobody. */
   releaseSession(threadSlug: string, sessionId: string, reason: "session-replaced" | "session-deleted"): void
+  /** Whether an agent process exists for this session at all — attached or not, mid-turn or idle. The
+   *  Claude broker's `isDaemonAlive` twin: an idle daemon is still a live worker to end. */
+  isAgentAlive(threadSlug: string, sessionId: string): boolean
 }
 
 // Which rows the bridge owns. A LEGACY Codex row — dispatched pre-cutover, `codex_runtime` NULL,
@@ -338,10 +344,11 @@ export async function stopThreadRuntime(
     // the prompt to return). Then END the agent: it lives in a detached daemon that would otherwise sit
     // idle for hours after the thread is put away. A resting thread with no daemon costs nothing here.
     if (!acp) return "absent"
+    const alive = acp.isAgentAlive(row.slug, row.session_id)
     const turnActive = acp.turnLiveness(row.slug, row.session_id)?.turnActive === true
-    const stopped = turnActive && (await acp.interruptTurn(row.slug, row.session_id)).interrupted
+    if (turnActive) await acp.interruptTurn(row.slug, row.session_id)
     acp.releaseSession(row.slug, row.session_id, "session-deleted")
-    return stopped ? "stopped" : "absent"
+    return alive ? "stopped" : "absent"
   }
   if (isAppServerCodexRow(row)) {
     if (!appServerCodexTurnLive(codex, row)) return "absent"
@@ -544,8 +551,12 @@ export async function completeRegisteredThread(
     ? (claudeBroker?.isDaemonAlive(row.session_id) ?? false)
     : appServerCodex
     ? appServerCodexTurnLive(codex, row)
+    // An ACP row is live while its agent's daemon exists — idle or mid-turn — exactly as a broker Claude
+    // row is. Reading only the TURN here left Mark as done on an idle ACP thread skipping the stop, so
+    // the daemon and its agent outlived the archived thread (found on the promoted-artifact run,
+    // 2026-09-24: two `opencode acp` processes still up after both threads were marked done).
     : row.backend === "acp"
-    ? (acp?.turnLiveness(row.slug, row.session_id)?.turnActive ?? false)
+    ? (acp?.isAgentAlive(row.slug, row.session_id) ?? false)
     : false
 
   // A live runtime is asked about when it is still working; a dead one when it never finished. The
@@ -1901,6 +1912,15 @@ export function createRouter(ctx: AppContext) {
           // server boot) defaults to mid-turn — the conservative direction, since the gray bubble is
           // honest for a queued send and merely late for a delivered one.
           const midTurn = (ctx.tailer.get(input.slug)?.turn ?? "in-flight") === "in-flight"
+          // THE UPGRADE AT COMPACTION (claude-model-upgrade.ts): a thread that compacted on an edition its
+          // family has since moved past takes this message in a fresh process, forked from the current pin.
+          // Only at rest — the gate refuses a turn in flight, a sub-agent, a shell, an approval or an
+          // undelivered send, so a steer never restarts anything.
+          const upgradeCandidate = claudeUpgradeCandidate({ stateDir: ctx.project.stateDir, projectId: ctx.project.id, storage: ctx.storage, telemetry: ctx.tailer.get(input.slug) }, row)
+          const upgrade = upgradeCandidate
+            ? claudeModelUpgradeDue(upgradeCandidate, { catalogue: peekClaudeModels(), nowMs: Date.now(), serverStartedAtMs: SERVER_STARTED_AT_MS })
+            : undefined
+          if (upgrade?.due) frizzLog.info("server", `${input.slug}: compacted on ${upgrade.from}; this follow-up starts a fresh worker on ${upgrade.to}`)
           await bridge.followUp({
             threadSlug: input.slug,
             sessionId: row.session_id,
@@ -1924,7 +1944,7 @@ export function createRouter(ctx: AppContext) {
             // which the server cannot derive: only the human knows they want the worker back on a newer
             // build. It is OR'd in rather than replacing the derivation, so a restart clicked on a
             // limit-latched thread still behaves. The live-sub-agent refusal above applies to both.
-            freshProcess: input.freshProcess === true || needsFreshProcessForLimit(
+            freshProcess: input.freshProcess === true || upgrade?.due === true || needsFreshProcessForLimit(
               ctx.tailer.get(input.slug)?.limitFault,
               Date.now(),
               mayHaveLiveBackgroundWork(ctx.tailer.get(input.slug)),
@@ -2307,6 +2327,32 @@ export function createRouter(ctx: AppContext) {
         ctx.storage.setProfile(input.slug, input.model, input.effort)
         ctx.board.refresh()
         return { effect: "next-resume" as const }
+      },
+    }),
+
+    // The composer's one-click model upgrade: move a Claude thread whose worker runs an older edition of
+    // its family ("Opus 5") onto the one the pinned runtime resolves the family to now ("Opus 5.5"). The
+    // row keeps its alias — `opus` is already right — so there is nothing to persist; the act is retiring
+    // the daemon, and the next turn cold-resumes the transcript in a process forked from the current pin.
+    // See claude-model-upgrade.ts. Refused unless the thread is at rest with nothing in flight, the same
+    // gate the upgrade at compaction uses, because a retire kills a running turn and its sub-agents.
+    upgradeThreadModel: mutation({
+      input: UpgradeThreadModelInput,
+      output: UpgradeThreadModelResult,
+      handler: async ({ input }) => {
+        const row = currentOwnedSession(input.slug, input.sessionId)
+        if (!row || !isBrokerClaudeRow(row)) throw new Error("Only a Claude thread Frizz runs can be upgraded")
+        const telemetry = ctx.tailer.get(input.slug)
+        const newer = claudeModelStanding(telemetry?.model, peekClaudeModels())?.newer
+        if (!newer) throw new Error("This thread already runs the newest edition of its model")
+        const candidate = claudeUpgradeCandidate({ stateDir: ctx.project.stateDir, projectId: ctx.project.id, storage: ctx.storage, telemetry }, row)
+        // No live worker: the next turn already forks from the current pin. Nothing to retire.
+        if (!candidate) return { effect: "next-turn" as const, label: newer.label }
+        const blockedBy = claudeModelUpgradeBlock(candidate, Date.now())
+        if (blockedBy) throw new Error(claudeModelUpgradeRefusal(blockedBy))
+        ctx.claudeBroker?.retireDaemon({ threadSlug: input.slug, sessionId: row.session_id })
+        ctx.board.refresh()
+        return { effect: "next-turn" as const, label: newer.label }
       },
     }),
 

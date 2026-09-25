@@ -44,7 +44,11 @@ export function useThreadComposerControls(slug: string): { busy: boolean; footer
   const permission = useMutation({
     mutationFn: (permissionMode: PermissionMode) => rpc.setThreadPermission({ slug, permissionMode }),
   })
-  const localBusy = profile.isPending || permission.isPending
+  // The one-click move onto the edition the thread's family resolves to now (ThreadView.modelUpgrade).
+  const upgrade = useMutation({
+    mutationFn: (sessionId: string) => rpc.upgradeThreadModel({ slug, sessionId }),
+  })
+  const localBusy = profile.isPending || permission.isPending || upgrade.isPending
   const backend = thread?.backend === "codex" ? "codex" : thread?.backend === "acp" ? "acp" : "claude"
   // An ACP thread's model slug is `acp:<agent>[@<model>]`. The AGENT cannot be swapped under a live
   // session, so the thread's one control is the model inside it (AcpModelSelect below); the agent's
@@ -112,6 +116,17 @@ export function useThreadComposerControls(slug: string): { busy: boolean; footer
     })
   }
 
+  // The same process-restart gate the permission picker uses, because it is the same act: the upgrade
+  // retires the worker so the next turn starts in a fresh one. The server re-checks it on its own.
+  const upgradeBlocked = backend === "claude" ? threadPermissionBlockedReason(thread) : null
+  function upgradeModel() {
+    if (!thread?.sessionId) return
+    upgrade.mutate(thread.sessionId, {
+      onSuccess: (result) => showToast(`${result.label} from the next turn — the worker restarts then`),
+      onError: (e) => showToast(`Upgrade failed: ${(e as Error).message.slice(0, 120)}`),
+    })
+  }
+
   function changeProfile(target: { model: string; effort: string }) {
     profile.mutate(target, {
       onSuccess: (result) => showToast(backend === "acp"
@@ -155,6 +170,16 @@ export function useThreadComposerControls(slug: string): { busy: boolean; footer
             compact
             side="top"
             className="min-w-0 max-w-[min(72%,20rem)] px-1.5 py-0.5"
+            runningModelLabel={thread.runningModelLabel}
+            upgrade={thread.modelUpgrade && thread.runningModelLabel
+              ? {
+                  latest: thread.modelUpgrade.label,
+                  staged: thread.modelUpgrade.staged,
+                  blockedReason: upgradeBlocked,
+                  pending: upgrade.isPending,
+                  onUpgrade: upgradeModel,
+                }
+              : undefined}
           />
         )}
         {/* An ACP thread carries ONE control, the model inside its agent. The agent itself is not a

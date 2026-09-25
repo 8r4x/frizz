@@ -61,11 +61,15 @@ export function threadProfileOptions(backend: unknown, claudeModels?: readonly C
   if (backend === "claude") {
     return {
       backend,
-      options: CLAUDE_THREAD_PROFILES.map((option) => ({
-        ...option,
-        label: claudeModels?.find((model) => model.alias === option.model)?.label ?? option.label,
-        efforts: [...option.efforts],
-      })),
+      options: CLAUDE_THREAD_PROFILES.map((option) => {
+        const resolved = claudeModels?.find((model) => model.alias === option.model)
+        return {
+          ...option,
+          label: resolved?.label ?? option.label,
+          ...(resolved?.edition ? { edition: resolved.edition } : {}),
+          efforts: [...option.efforts],
+        }
+      }),
     }
   }
   if (backend === "codex") {

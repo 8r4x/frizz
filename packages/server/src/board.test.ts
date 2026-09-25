@@ -2268,3 +2268,50 @@ test("a registered issue watcher gets a github row with subject issue, read from
     ["github:t:acme/app#7", "pull", undefined, undefined],
   ])
 })
+
+// A worker keeps the `claude` binary it was forked with, so a pin bump that moves `opus` from Opus 5 to
+// Opus 5.5 leaves every older thread on Opus 5 while its row still says `opus`. The board states both
+// halves: the edition the worker RUNS (off the transcript's model id) and the newer one its family
+// resolves to now (off the pin's catalogue) — and whether the next turn already starts on it by itself.
+test("a Claude thread on an older edition of its family carries its running label and the upgrade", () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-board-edition-"))
+  const project: Project = { dir, id: "project-ed", name: "fixture", label: "fixture", stateDir: dir, cwdSlug: "fixture" }
+  const storage = createStorage(join(dir, "ui.db"), "p")
+  storage.upsertSession(row({ slug: "behind", session_id: "sess-behind", thread_name: "frizz-behind", model: "opus", effort: "high" }))
+  storage.setBackend("behind", "claude")
+  storage.setClaudeRuntime("behind", "broker")
+  let observed = "claude-opus-5"
+  const tailer = {
+    get: () => tele({ model: observed, profileAt: LATER }),
+    foreignIds: () => [], subAgent: () => undefined, forget: () => {},
+    start: () => {}, stop: () => {}, tick: () => {},
+  } satisfies Tailer
+  const catalogue = [{ alias: "opus", label: "Opus 5.5", resolvedModel: "claude-opus-5-5", edition: "5.5" }]
+  const view = (alive: boolean, models: typeof catalogue | null = catalogue) =>
+    createBoard(project, storage, new Bus(), tailer, `ed-${alive}`, { claudeBrokerDaemonAlive: () => alive, claudeModels: () => models ?? undefined })
+      .refresh().threads.find((t) => t.id === "behind")!
+
+  const live = view(true)
+  assert.equal(live.model, "opus")
+  assert.equal(live.runningModelLabel, "Opus 5")
+  assert.deepEqual(live.modelUpgrade, { label: "Opus 5.5", staged: false }, "a live worker holds the old edition: offer the upgrade")
+  assert.deepEqual(view(false).modelUpgrade, { label: "Opus 5.5", staged: true }, "no live worker: the next turn forks from the current pin")
+  assert.equal(view(true, null).modelUpgrade, undefined, "no catalogue yet is never 'behind'")
+  assert.equal(view(true, null).runningModelLabel, "Opus 5", "the running edition needs no catalogue")
+
+  observed = "claude-opus-5-5"
+  assert.equal(view(true).runningModelLabel, "Opus 5.5")
+  assert.equal(view(true).modelUpgrade, undefined, "already on the family's current edition")
+
+  // A model switch the worker has not taken yet: the transcript still reports OPUS while the readout
+  // names Sonnet. Its edition would be a reading of the wrong model, so neither field is emitted.
+  observed = "claude-opus-5"
+  storage.setProfile("behind", "sonnet", "high")
+  const switched = view(true)
+  assert.equal(switched.model, "sonnet")
+  assert.equal(switched.runningModelLabel, undefined)
+  assert.equal(switched.modelUpgrade, undefined)
+
+  storage.close()
+  rmSync(dir, { recursive: true, force: true })
+})

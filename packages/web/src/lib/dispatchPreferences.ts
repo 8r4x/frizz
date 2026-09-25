@@ -81,6 +81,7 @@ export function dispatchProfileGroups(codexModels: readonly CodexModel[], acpAge
       options: claudeModelOptions(claudeModels).map((option) => ({
         model: option.value,
         label: option.label,
+        edition: claudeModels.find((model) => model.alias === option.value)?.edition,
         defaultEffort: "high",
         // Per-model, exactly like the codex rows below: the ultracode rung exists only on the
         // xhigh-capable models, so Haiku's row leaves that grid cell empty.

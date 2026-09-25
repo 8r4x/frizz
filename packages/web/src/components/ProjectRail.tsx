@@ -180,43 +180,58 @@ function railCountsLabel(queued: number, running: number): string {
   return parts.join(", ")
 }
 
+/** The half pixel of page colour that, with the badge's 1px cut-out, makes RunningRing's 1.5px gap. */
+const RUNNING_GAP_SHADOW = "shadow-[0_0_0_0.5px_var(--color-bg)]"
+
+/**
+ * The badge's width, a WHOLE pixel per digit count rather than sized to its text.
+ *
+ * Content-sized, a two-digit badge came out ~20.4px wide; Chrome paints that box on whole pixels but
+ * paints RunningRing's scaled box where it really is, so the ring sat 0.48px right of a "12" and 1px
+ * heavier on one side (measured 2026-09-24). A whole-pixel width keeps every layer on the same grid.
+ * 16 is the circle; 22 and 28 hold the widest two and three digits ("88", "888") with the same side
+ * room a single digit gets.
+ */
+function badgeWidth(count: number): string {
+  return count < 10 ? "w-[16px]" : count < 100 ? "w-[22px]" : "w-[28px]"
+}
+
 /**
  * The spinner lapping the badge while the project has threads in flight.
  *
  * The sidebar's BoxSpinner at badge scale — a faint full outline and one bright segment travelling it,
- * in the same muted ink and at the same 1.1s lap, so a project's rail badge and its rows in the sidebar
- * say "in flight" with one motion. It sits in a MOAT: the badge's 1.5px cut-out grows by 2px of the
- * page background, and the ring runs at the moat's outer edge, so the segment reads against the moat
- * rather than against the icon underneath. 2px and not the mockup's 3: the badge's right edge is 3px
- * inside the scrolling band, which clips at its own edge, so a 3px moat put the ring flush against the
- * rail's border and shaved its right side off (measured in the running app, 2026-09-24).
+ * at the same 1.1s lap, so a project's rail badge and its rows in the sidebar say "in flight" with one
+ * motion. It is drawn in the BADGE'S OWN ink (accent), not the spinner's muted grey, so the ring and the
+ * disc read as one object (the maintainer's pick from a round of gap/weight mockups, 2026-09-24).
  *
- * `pathLength="100"` is what lets one dash pattern and one keyframe serve a circle and a two-digit pill
- * alike; the SVG is inset by half the stroke so a 100%-sized rect puts the stroke's outer edge exactly
- * on the moat's edge. The corner radius is half the moat's fixed 20px height minus that inset.
+ * GEOMETRY, and why every number is built the way it is. The ask was a 1.5px gap between the yellow
+ * face and a 1.25px ring (maintainer, 2026-09-24: "a 1.5 px gap"; it was 2.25px nominal). Chrome
+ * PAINTS BOX EDGES ON WHOLE CSS PIXELS at every device scale — a background box at x 35.25 painted at
+ * 35, one at 36.5 at 37, measured at dsf 2 and 8 alike — so a half-pixel gap cannot be built from boxes;
+ * the first attempt measured 1px on one side and 2px on the other. Two things DO keep their fractions,
+ * and the ring is built from exactly those:
+ *
+ *   • the GAP is the badge's own 1px page-coloured cut-out plus a 0.5px page-coloured box-shadow
+ *     (`RUNNING_GAP_SHADOW`, applied to the badge while this ring is shown). A shadow's spread is
+ *     painted in floating point and follows the badge's shape, pill included.
+ *   • the RING is a conic disc on a whole-pixel box 2px outside the badge (20px for one digit), SCALED
+ *     to 0.975 — 19.5px — because a transform is not snapped either. The badge and its shadow sit on top
+ *     and cover everything but the outer 1.25px. A pill's sides come out ~0.08px lighter than its ends
+ *     (the scale is uniform), which is below anything a screen shows.
+ *
+ * Measured on the rendered pixels, dsf 2 and 8: gap 1.5 on all four sides, ring 1.25, centres coincident
+ * — against a control shifted 0.5px that reads 0.5. The instrument is
+ * .frizz/threads/39de55d9-73a0-434a-badd-16b69b24f748/measure-badge-ring.mjs.
+ *
+ * THE RING IS CSS, NOT SVG. It shipped as an <svg> inset half a stroke, and its ink sat 0.375px right
+ * of and below the badge (maintainer: "your circles aren't concentric") because Chrome pixel-snaps an
+ * SVG root's content box. Nor a MASK: the band was once cut with `mask: … content-box exclude`, and on a
+ * quarter-pixel box Chrome painted that exclusion with a square top-left corner, erasing the ring there.
+ * See `.frizz-rail-badge-ring` in styles.css.
  */
 function RunningRing() {
   return (
-    <span aria-hidden className="absolute -inset-[2px] rounded-full bg-bg">
-      {/* Sized explicitly, not by `inset`: an <svg> is a replaced element, so its width/height never
-          stretch between insets — a `width="100%"` attribute here overrode the right inset and shifted
-          the ring half a stroke right, past the band's clip edge. */}
-      <svg className="absolute left-[0.625px] top-[0.625px] h-[calc(100%-1.25px)] w-[calc(100%-1.25px)] overflow-visible text-muted-85">
-        <rect width="100%" height="100%" rx="9.375" fill="none" stroke="currentColor" strokeOpacity="0.3" strokeWidth="1.25" />
-        <rect
-          width="100%"
-          height="100%"
-          rx="9.375"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.25"
-          strokeLinecap="round"
-          pathLength={100}
-          strokeDasharray="24 76"
-          className="frizz-rail-badge-lap"
-        />
-      </svg>
-    </span>
+    <span aria-hidden className="frizz-rail-badge-ring absolute -inset-[2px] scale-[0.975] rounded-full text-accent-fill" />
   )
 }
 
@@ -341,8 +356,16 @@ function RailLink({
             <span
               // Proportional figures, not tabular: a badge centres ONE number, it aligns no column, and a
               // tabular "1" carries a fixed cell's worth of side-bearing that put the ink of "12" 1.02px
-              // left of the pill's centre. Measured 2026-08-24 at 10px/600 in the sans UI font.
-              className="relative flex h-[16px] min-w-[16px] items-center justify-center rounded-full border-[1.5px] border-bg bg-accent-fill px-[3.5px] text-[10px] font-semibold leading-none proportional-nums text-on-accent"
+              // left of the pill's centre. Measured 2026-08-24 at 10px/600 in the sans UI font. The
+              // width is fixed per digit count (badgeWidth), so the pill centres the digits itself.
+              //
+              // The cut-out is a WHOLE 1px, and it has to be. It was `border-[1.5px]`, and Chrome floors a
+              // fractional border to whole CSS pixels at every scale (computed `1px` at dsf 1, 2 and 3,
+              // 2026-09-24), so the face painted 14px where the numbers said 13 — and RunningRing's gap,
+              // specced in the badge's box, came out half a pixel short of what was asked. 1px is what
+              // Chrome was already drawing, so nothing moves there; it makes every browser draw the same.
+              // The ring's half-pixel of extra gap is a box-shadow, which is NOT snapped — see RunningRing.
+              className={`relative flex h-[16px] ${badgeWidth(count)} items-center justify-center rounded-full border border-bg bg-accent-fill text-[10px] font-semibold leading-none proportional-nums text-on-accent ${running ? RUNNING_GAP_SHADOW : ""}`}
             >
               {/* The cap band, not the line box — the same fix the monogram above uses, for the same reason:
                   `items-center` centred the digits' LINE BOX and their ink rode 0.4–0.5px low in the sans
@@ -689,7 +712,7 @@ export function ProjectRail() {
       <div
         ref={bandRef}
         data-overflowing={overflowing || undefined}
-        // `pb-2` absorbs the last square's badge — 5px below its square, 7px once the running ring's
+        // `pb-2` absorbs the last square's badge — 5px below its square, 6.75px once the running ring's
         // moat is round it: without it the badge extends the scroll height, which the bottom fade reads
         // as "there is more" and dims the square.
         className="frizz-rail-scroll flex w-full min-h-0 flex-1 flex-col items-center gap-2 overflow-y-auto pb-2"

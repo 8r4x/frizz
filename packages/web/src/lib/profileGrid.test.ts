@@ -65,6 +65,8 @@ test("profile grid represents recovered, effort-unknown, retired, and pending la
   )
   assert.equal(profileGridDisplayLabel(groups, undefined, "Profile loading…"), "Profile loading…")
   assert.equal(profileGridDisplayLabel(groups, { model: "gpt-5.6-sol", effort: "ultra" }, "Pending profile"), "GPT-5.6 Sol › ultra")
+  // A running thread names the edition its worker RUNS, not the one the row resolves to now.
+  assert.equal(profileGridDisplayLabel(groups, current, undefined, "Sonnet 4.6"), "Sonnet 4.6 › high")
 })
 
 test("profile grid keyboard movement follows rows and supported effort columns", () => {
