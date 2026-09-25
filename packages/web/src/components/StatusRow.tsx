@@ -149,7 +149,7 @@ export function StatusRow() {
       >
         <SettingsIcon size={STATUS_ROW_ICON} aria-hidden="true" />
       </button>
-      {/* Renders null on a supervisor that can't restart — the gap collapses and the row stays even. */}
+      {/* Renders null unless there is an update to install — the gap collapses and the row stays even. */}
       <RestartFrizzButton />
       {quotaVisible && (
         <>

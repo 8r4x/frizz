@@ -2,7 +2,9 @@ import assert from "node:assert/strict"
 import { test } from "node:test"
 import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
-import { isBadgeRelease, PANEL_ARROW_GEOMETRY, RestartActionButton, RestartFailureNotice, UPDATE_RESTART_ICON_ROTATION, UpdateRestartPopover } from "./RestartFrizzButton.tsx"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
+import { SUPERVISOR_STATUS_KEY } from "../api/supervisorStatus.ts"
+import { isBadgeRelease, PANEL_ARROW_GEOMETRY, RestartActionButton, RestartFailureNotice, RestartFrizzButton, UPDATE_RESTART_ICON_ROTATION, UpdateRestartPopover } from "./RestartFrizzButton.tsx"
 
 test("Update Frizz presents one calm sentence whose highlight is that threads are untouched", () => {
   const html = renderToStaticMarkup(createElement(UpdateRestartPopover, { open: true, update: true }))
@@ -108,7 +110,25 @@ test("busy Update and restart keeps only the clockwise spinner inside the button
   assert.doesNotMatch(html, /Updating…|Restarting…/)
 })
 
-test("legacy supervisors present an ordinary restart action instead of hiding the control", () => {
+// Rendered over a seeded status query, the way StatusRow mounts it: the control exists only while
+// there is something to install (maintainer 2026-09-25). frizz-dev omits `updateAvailable` and can
+// always rebuild from source, so it keeps the button.
+test("the restart control renders only when there is an update to install", () => {
+  const render = (status: Record<string, unknown> | null) => {
+    const client = new QueryClient()
+    client.setQueryData(SUPERVISOR_STATUS_KEY, status && { protocol: 1, state: "ready", requestedAt: Date.now(), ...status })
+    return renderToStaticMarkup(createElement(QueryClientProvider, { client }, createElement(RestartFrizzButton)))
+  }
+  assert.match(render({ updateRestart: true, updateAvailable: true, version: "0.4.2", updateVersion: "0.5.0" }), /aria-label="Update Frizz"/)
+  assert.match(render({ updateRestart: true }), /aria-label="Update Frizz"/)
+  assert.equal(render({ updateRestart: true, updateAvailable: false, version: "0.5.0" }), "")
+  assert.equal(render({}), "", "a legacy supervisor with no update verb offers nothing")
+  assert.equal(render(null), "")
+})
+
+// The button itself is hidden when there is nothing to install; this plain-restart spelling survives
+// only for a failure card that stays on screen after an answer flips `updateAvailable` off.
+test("the plain restart popover names itself as a restart, not an update", () => {
   const html = renderToStaticMarkup(createElement(UpdateRestartPopover, { open: true, update: false }))
   assert.match(html, /Restart Frizz/)
   assert.match(html, /Restart Frizz\. Your running threads will not be affected\./)

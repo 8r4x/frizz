@@ -271,7 +271,12 @@ export function RestartActionButton({
   )
 }
 
-/** Global recovery action. It stays mounted in App chrome even when the app child is unhealthy. */
+/**
+ * The update action. It shows only while there is something to install — a plain restart of a current
+ * Frizz changes nothing the operator asked for, so the control is not offered for one (maintainer
+ * 2026-09-25: "The restart button should not show up if there's no version to upgrade to"). It stays
+ * mounted while a click it took is in flight or its failure is on screen, so neither vanishes mid-read.
+ */
 export function RestartFrizzButton() {
   const snap = useSnapshot(store)
   const [open, setOpen] = useState(false)
@@ -296,10 +301,6 @@ export function RestartFrizzButton() {
   const updateAvailable = canUpdateRestart(status)
   const versions = { version: status?.version, updateVersion: status?.updateVersion }
 
-  // Nothing to offer until a supervisor has affirmatively answered — an unreachable one and a poll that
-  // has not landed yet read the same, which is the correct bias for a global recovery verb.
-  if (!canRestart(status)) return null
-
   // A failure the SUPERVISOR reports (a build that won't compile, an artifact that won't promote)
   // never reaches the click handler's catch — the POST was accepted, and the overlay simply drops
   // when a poll observes "failed". Its only trace was a 7-second toast, which is why a broken update
@@ -314,6 +315,12 @@ export function RestartFrizzButton() {
   const outcome: RestartFailureOutcome = !error && reported && requested.current
     ? restartFailureOutcome(requested.current.version, { version: status?.version })
     : PREVIOUS_KEPT
+
+  // Nothing to offer until a supervisor has affirmatively answered — an unreachable one and a poll that
+  // has not landed yet read the same — and nothing once it says the running version is the newest.
+  // A click in flight or a failure on screen keeps the control, so the answer that flips
+  // `updateAvailable` cannot take the spinner or the failure card away with it.
+  if (!canRestart(status) || (!updateAvailable && !busy && !shownError)) return null
 
   const updateAndRestart = async () => {
     if (busy) return
