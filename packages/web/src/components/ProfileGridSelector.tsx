@@ -8,12 +8,14 @@ import {
   PROFILE_GRID_TYPOGRAPHY_CLASS,
   profileGridColumns,
   profileGridDisplayLabel,
+  profileGridDisplayParts,
   profileGridSelectionFromKey,
   profileGridSelectionKey,
   profileGridSelectionKnown,
   profileGridTemplateColumns,
   type ProfileGridGroup,
   type ProfileGridMoveKey,
+  type ProfileGridDisplayParts,
   type ProfileGridSelection,
   profileGridSelections,
 } from "../lib/profileGrid.ts"
@@ -33,6 +35,18 @@ function ModelLabel({ label, edition }: { label: string; edition?: string }) {
   const suffix = edition ? ` ${edition}` : ""
   if (!suffix || !label.endsWith(suffix)) return <>{label}</>
   return <>{label.slice(0, -suffix.length)} <span className="profile-grid-edition text-edition">{edition}</span></>
+}
+
+// The trigger's readout: the model, its version in the same dim ink as the menu's model column, then the
+// effort — "Opus 5.5 › high" with the 5.5 grayed, in the dispatch composer and a running thread's alike.
+function TriggerLabel({ name, edition, effort }: ProfileGridDisplayParts) {
+  return (
+    <>
+      {name}
+      {edition && <> <span className="profile-grid-edition text-edition">{edition}</span></>}
+      {effort && ` › ${effort}`}
+    </>
+  )
 }
 
 // "Opus 5.5" must never break between the family and its version when a sentence wraps.
@@ -215,7 +229,7 @@ export function ProfileGridSelector({
         >
           {/* Sans cap-band residual is 0.23px without a text nudge; 3px box gap paints 6.69px of ink. */}
           <span className={`profile-grid-value min-w-0 flex-1 truncate text-left ${typography}`}>
-            {profileGridDisplayLabel(groups, value, placeholder, runningModelLabel)}
+            <TriggerLabel {...profileGridDisplayParts(groups, value, placeholder, runningModelLabel)} />
           </span>
           {pendingLabel && <Loader2 aria-hidden="true" size={compact ? 10 : 11} className="shrink-0 animate-spin text-muted-65" />}
           <ChevronDown aria-hidden="true" size={compact ? 11 : 13} className="shrink-0 text-fg/65 transition-transform group-data-[state=open]:rotate-180" />

@@ -7,6 +7,7 @@ import {
   PROFILE_GRID_COMPACT_TYPOGRAPHY_CLASS,
   PROFILE_GRID_TYPOGRAPHY_CLASS,
   profileGridDisplayLabel,
+  profileGridDisplayParts,
   profileGridEfforts,
   profileGridSelectionFromKey,
   profileGridSelectionKey,
@@ -177,4 +178,16 @@ test("profile grid movement treats the shared ceiling as one column", () => {
     { provider: "codex", model: "gpt-5.6-sol", effort: "ultra" },
     "the ceiling column is continuous across providers, under each provider's own name",
   )
+})
+
+test("the trigger splits the version off the model so it can be set in the edition ink", () => {
+  const claude = [{ id: "claude", label: "Claude Code", options: [{ model: "opus", label: "Opus 5.5", edition: "5.5", efforts: ["high"] }] }]
+  // The dispatch composer: the row's own edition.
+  assert.deepEqual(profileGridDisplayParts(claude, { model: "opus", effort: "high" }), { name: "Opus", edition: "5.5", effort: "high" })
+  // A running thread: the edition its worker RUNS, read off the running label.
+  assert.deepEqual(profileGridDisplayParts(claude, { model: "opus", effort: "high" }, undefined, "Opus 5"), { name: "Opus", edition: "5", effort: "high" })
+  // No edition (a codex row, the degraded family word) renders whole, never a guessed split.
+  assert.deepEqual(profileGridDisplayParts(groups, { model: "gpt-5.6-sol", effort: "ultra" }), { name: "GPT-5.6 Sol", effort: "ultra" })
+  assert.deepEqual(profileGridDisplayParts(claude, undefined, "Profile loading…"), { name: "Profile loading…" })
+  assert.equal(profileGridDisplayLabel(claude, { model: "opus", effort: "high" }, undefined, "Opus 5"), "Opus 5 › high")
 })

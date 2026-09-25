@@ -120,7 +120,20 @@ export function profileGridSelectionKnown(
   )
 }
 
-export function profileGridDisplayLabel(
+// The trigger's readout in parts, so the version can be set in the edition ink the menu's model column
+// uses (maintainer 2026-09-25: "make sure that the version numbers show up with the light gray" in both
+// composers' prompt boxes). `edition` is present only when it is the literal tail of the model label.
+export interface ProfileGridDisplayParts {
+  name: string
+  edition?: string
+  effort?: string
+}
+
+// A Claude edition label's version: "5" of "Opus 5", "4.5" of "Haiku 4.5". Only applied to the RUNNING
+// label, which the server always spells `${family} ${edition}` (ThreadView.runningModelLabel).
+const TRAILING_EDITION = / (\d+(?:\.\d+)*)$/
+
+export function profileGridDisplayParts(
   groups: readonly ProfileGridGroup[],
   selection: Partial<ProfileGridSelection> | undefined,
   placeholder = "Profile unknown",
@@ -128,15 +141,32 @@ export function profileGridDisplayLabel(
   // ThreadView.runningModelLabel. The row is what the family resolves to NOW; the readout must not claim
   // an edition the worker is not on.
   modelLabel?: string,
-): string {
-  if (!selection?.model && !selection?.effort) return placeholder
+): ProfileGridDisplayParts {
+  if (!selection?.model && !selection?.effort) return { name: placeholder }
   const option = groups.flatMap((group) => group.options).find((candidate) => candidate.model === selection.model)
-  const model = modelLabel ?? option?.label ?? selection.model ?? "Model unknown"
+  const label = modelLabel ?? option?.label ?? selection.model ?? "Model unknown"
+  const edition = modelLabel ? TRAILING_EDITION.exec(modelLabel)?.[1] : option?.edition
+  const split = edition !== undefined && label.endsWith(` ${edition}`)
   // A Claude thread records its resolved model in the provider transcript but never the launch effort,
   // so a thread dispatched without an explicit effort (or an older/foreign session) has a known model
   // and an unknown effort. Show the model alone in that case: a concrete effort is displayed verbatim
   // when present, and no effort is ever inferred — but the profile never reads as a "legacy" state.
-  return selection.effort ? `${model} › ${selection.effort}` : model
+  return {
+    name: split ? label.slice(0, -(edition.length + 1)) : label,
+    ...(split ? { edition } : {}),
+    ...(selection.effort ? { effort: selection.effort } : {}),
+  }
+}
+
+export function profileGridDisplayLabel(
+  groups: readonly ProfileGridGroup[],
+  selection: Partial<ProfileGridSelection> | undefined,
+  placeholder = "Profile unknown",
+  modelLabel?: string,
+): string {
+  const { name, edition, effort } = profileGridDisplayParts(groups, selection, placeholder, modelLabel)
+  const model = edition ? `${name} ${edition}` : name
+  return effort ? `${model} › ${effort}` : model
 }
 
 // Arrow keys move through the visual matrix rather than the DOM's flattened menu order. Horizontal
