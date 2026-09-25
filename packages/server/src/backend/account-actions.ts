@@ -5,9 +5,9 @@ import { readAuthSnapshot } from "./auth-status.ts"
 
 const execFileAsync = promisify(execFile)
 
-// Typed provider account actions (claude-auth plan): `/logout` and the future login utility both
-// resolve to these — never to text submitted into a provider transcript. Logout is more consequential
-// than login because it mutates process-GLOBAL account state: it must refuse to race a live turn for
+// Typed provider account actions (claude-auth plan): `/logout` resolves to these — never to text
+// submitted into a provider transcript. Sign-in has no action here: the human runs the provider's own
+// login command in a terminal. Logout is consequential because it mutates process-GLOBAL account state: it must refuse to race a live turn for
 // that provider, and the exact CLI argv runs WITHOUT a shell.
 
 // A turn that could be mid-request for this provider. turn-idle is safe ONLY when nothing is running

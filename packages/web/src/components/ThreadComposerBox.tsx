@@ -65,8 +65,7 @@ export function ThreadComposerBox({
   // The ONLY padding/chrome difference between the call sites — the drawer's bordered panel footer vs the
   // queue card's flush bottom block.
   className?: string
-  // DOM id for the textarea. The drawer's is "followup-input": the terminal tab's "reply in chat" button
-  // focuses it by id (TerminalPane).
+  // DOM id for the textarea. The drawer's is "followup-input".
   id?: string
   // Running background operations, rendered INSIDE the padded box under the prompt so those rows hang
   // tight off it. Composed by the caller — this component does not decide which ops a surface shows.

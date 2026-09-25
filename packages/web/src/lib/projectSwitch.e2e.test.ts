@@ -49,7 +49,7 @@ test("switching projects from the grid re-points the live feed at the project th
         .filter((s, i, all) => all.indexOf(s) === i))
     assert.ok(slugs.length >= 2, `needs a stack serving ≥2 projects, saw: ${slugs.join(", ") || "none"}`)
 
-    // The BOARD socket for a project, ignoring the per-thread terminal sockets (/term/:slug). Matched
+    // The BOARD socket for a project, ignoring any other socket the page opens. Matched
     // with a regex rather than `endsWith("…")`, which frizzRouteUrls.test.ts reads as a hand-built
     // client URL — this only recognises one, it never constructs one.
     const isBoard = /\/ws$/

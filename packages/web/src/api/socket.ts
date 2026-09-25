@@ -12,7 +12,7 @@ import { localFileQueryKey } from "../lib/localFileQuery.ts"
 
 // The stage-2 multiplexed client: ONE WebSocket("/ws") carrying the board channel (keyframe + deltas +
 // notify, driven through the shared BoardStream) AND per-thread transcript push (replacing the 1.5s
-// threadTranscript poll). Terminals keep their own /term/:slug socket.
+// threadTranscript poll).
 //
 // GRACEFUL FALLBACK: a pre-restart server has no /ws route — its upgrade handler destroys the socket, so
 // we never see `onopen`. On a close/error BEFORE the socket ever confirms, we hand the board channel back

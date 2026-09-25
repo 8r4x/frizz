@@ -3171,23 +3171,6 @@ export const AccountLogoutResult = z.object({
   detail: z.string().max(200).optional(),
 })
 export type AccountLogoutResult = z.infer<typeof AccountLogoutResult>
-// Slice B login utility: start/inspect/cancel the restricted `claude auth login` terminal. The
-// attempt id is slug-shaped so it can ride the hardened /term/<slug> transport; it is server-issued
-// and opaque — the client never constructs one.
-export const AccountLoginStartInput = z.object({ backend: AccountBackend }).strict()
-export type AccountLoginStartInput = z.infer<typeof AccountLoginStartInput>
-export const AccountLoginStartResult = z.object({ attemptId: ThreadSlug })
-export type AccountLoginStartResult = z.infer<typeof AccountLoginStartResult>
-export const AccountLoginStatusInput = z.object({ attemptId: ThreadSlug }).strict()
-export type AccountLoginStatusInput = z.infer<typeof AccountLoginStatusInput>
-// `auth` is the live credential re-read; the client treats state:"exited" + auth:"authed" as a
-// completed sign-in. The NEXT real provider request remains the validity proof (an expired token
-// also reads "authed" here — the runtime 401 classifier covers that).
-export const AccountLoginStatusResult = z.object({
-  state: z.enum(["running", "exited", "unknown"]),
-  auth: ProviderAuth,
-})
-export type AccountLoginStatusResult = z.infer<typeof AccountLoginStatusResult>
 export type AuthSnapshot = z.infer<typeof AuthSnapshot>
 
 // ---- Settings ----
@@ -4996,16 +4979,11 @@ export const TranscriptEarlierInput = z.object({
 }).strict()
 export type TranscriptEarlierInput = z.infer<typeof TranscriptEarlierInput>
 
-// ---- Terminal WebSocket protocol (ws://host/term/:slug) ----
-// client -> server: {t:"input", d:string} | {t:"resize", cols:number, rows:number}
-// server -> client: raw utf8 terminal output frames
-export type TermClientMsg = { t: "input"; d: string } | { t: "resize"; cols: number; rows: number }
-
 // ---- /ws multiplex protocol (ws://host/ws) — stage 2: ONE socket for board + transcript + notify ----
 // The board & notify frames REUSE the stage-1 ServerEvent shapes verbatim (wrapped in {t:"event"}), so the
 // client feeds them through the exact same delta/seq/boot handler as SSE (see web/api/board-stream.ts).
-// Transcript frames replace the 1.5s threadTranscript poll with server PUSH for subscribed slugs. Terminals
-// keep their own /term/:slug socket. Coexists with /events as a graceful fallback (a pre-restart server has
+// Transcript frames replace the 1.5s threadTranscript poll with server PUSH for subscribed slugs.
+// Coexists with /events as a graceful fallback (a pre-restart server has
 // no /ws route → the client degrades to SSE + polling).
 
 // Client -> server (zod-validated server-side): subscribe / unsubscribe a thread's transcript push.

@@ -10,7 +10,7 @@ import puppeteer from "puppeteer"
 import { createRpcClient } from "./lib/rpc-client.mjs"
 import { seedLightModeFixture } from "./lib/light-mode-fixture.mjs"
 import { RestartSupervisorProxy } from "../packages/server/src/restart-supervisor.ts"
-import { checkThemePreferences, checkRichRendererState, checkLoginTerminal, checkIframeFirstPaint } from "./lib/light-mode-browser-checks.mjs"
+import { checkThemePreferences, checkRichRendererState, checkIframeFirstPaint } from "./lib/light-mode-browser-checks.mjs"
 import { measureTextContrast, measureAppearanceInk } from "./lib/light-mode-contrast.mjs"
 import { checkSurfaceStates } from "./lib/light-mode-surfaces.mjs"
 
@@ -148,7 +148,6 @@ try {
     await setTheme("dark")
     await checkRichRendererState({ page, url: stack.url, check })
     await checkIframeFirstPaint({ browser, url: stack.url, check })
-    await checkLoginTerminal({ page, url: stack.url, check, out })
   }
   const contrastFailures = Object.entries(result).filter(([key]) => key.startsWith('light-') && key.endsWith('-contrast')).flatMap(([surface, readings]) => readings.filter(reading => !reading.disabled && reading.ratio < 4.5).map(reading => ({ surface, ...reading })))
   assert.deepEqual(contrastFailures, [], "Light text meets 4.5:1 contrast on every sampled surface")

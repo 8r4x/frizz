@@ -558,7 +558,7 @@ function attachInstalledDependencyClosure(source: string, snapshot: string): voi
  * tree out of any repo a user happens to init above it (see project-root.ts). Tailwind v4 finds its
  * class names by SCANNING the source tree, and its scanner honours ancestor `.gitignore` files, so
  * that one `*` makes every `.tsx` in the snapshot invisible to it. Nothing fails: Vite exits 0, the
- * bundle is complete, and the emitted CSS still holds `@theme` variables, xterm's stylesheet and
+ * bundle is complete, and the emitted CSS still holds `@theme` variables, imported stylesheets and
  * every hand-written component rule — just not one utility class. The app is entirely Tailwind, so
  * the whole UI renders unstyled.
  *

@@ -1,6 +1,6 @@
 ---
 name: real-subsystem-harness
-description: Verify backend behavior a browser cannot reach — the broker socket, a real pty, spawn/exec paths, resume and wake, SQLite migrations, the scheduler, a detached daemon's environment — by writing a small `nub` script that spins the REAL resource and asserts the REAL function, with a negative control that proves the harness can fail. Load this when the thing you changed has no UI, when a unit test would only prove your mock matches your belief, or when a feature SPANS processes and the seam between them is where the bug lives. Also carries the polling discipline (early exit on the failure signal, not just success) that keeps a verification run from burning its whole timeout, and the rule that a green harness over a stubbed seam is worse than honest incompleteness. Pair with `frizz-stack` when the real resource is a running Frizz.
+description: Verify backend behavior a browser cannot reach — the broker socket, spawn/exec paths, resume and wake, SQLite migrations, the scheduler, a detached daemon's environment — by writing a small `nub` script that spins the REAL resource and asserts the REAL function, with a negative control that proves the harness can fail. Load this when the thing you changed has no UI, when a unit test would only prove your mock matches your belief, or when a feature SPANS processes and the seam between them is where the bug lives. Also carries the polling discipline (early exit on the failure signal, not just success) that keeps a verification run from burning its whole timeout, and the rule that a green harness over a stubbed seam is worse than honest incompleteness. Pair with `frizz-stack` when the real resource is a running Frizz.
 version: 0.1.0
 metadata:
   internal: true
@@ -8,19 +8,19 @@ metadata:
 
 # real-subsystem-harness — spin the real thing, assert the real function
 
-Browser QA can't reach the broker socket, a real pty, the resume/wake path, SQLite migrations, or the
+Browser QA can't reach the broker socket, the resume/wake path, SQLite migrations, or the
 scheduler. For those, write a small `nub` harness that spins the **real** resource and asserts the
 **real** function — a mock proves only that your mock matches your belief.
 
-Worked examples in this repo: `scripts/verify-relay-terminal.mjs` (the real login utility and `/term`
-transport behind the real relay supervisor, with a negative control), `scripts/win-claude-resolve-probe.mjs` (the real binary resolver, with a
+Worked examples in this repo: `scripts/verify-relay-gate.mjs` (a relayed socket against the real
+relay supervisor's access gate, with a negative control), `scripts/win-claude-resolve-probe.mjs` (the real binary resolver, with a
 differential control that proves the tool under test is actually installed), and
 `scripts/verify-orphan-reaper.mjs`.
 
 ```js
 import { execFileSync } from "node:child_process"
 import { theFixedFunction } from "../packages/server/src/<module>.ts"
-// 1. create the real precondition (a real pty, a real socket, a real sqlite db, a real server…)
+// 1. create the real precondition (a real socket, a real sqlite db, a real server…)
 // 2. call the real function
 // 3. PASS/FAIL each assertion to stdout; process.exit(1) on any failure
 // 4. tear the real resource down in finally

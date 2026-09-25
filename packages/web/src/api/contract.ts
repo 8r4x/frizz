@@ -77,10 +77,6 @@ import type {
   AuthSnapshot,
   AccountLogoutInput,
   AccountLogoutResult,
-  AccountLoginStartInput,
-  AccountLoginStartResult,
-  AccountLoginStatusInput,
-  AccountLoginStatusResult,
   DispatchPreferences,
   SetDispatchPreferenceInput,
   ListInteractionsInput,
@@ -298,10 +294,6 @@ export interface Api {
   // overloaded "unavailable" — reports only whether a credential exists. Never rejects.
   authStatus(input?: undefined, opts?: RpcCallOpts): Promise<AuthSnapshot>
   accountLogout(input: AccountLogoutInput): Promise<AccountLogoutResult>
-  // Slice B login utility: start/attach/inspect/cancel the restricted `claude auth login` terminal.
-  accountLoginStart(input: AccountLoginStartInput): Promise<AccountLoginStartResult>
-  accountLoginStatus(input: AccountLoginStatusInput): Promise<AccountLoginStatusResult>
-  accountLoginCancel(input: AccountLoginStatusInput): Promise<Record<never, never>>
   // Machine-scoped: the registry is one file, so the grid reads the same from every project.
   // Which project owns a thread slug. Every URL from the per-project era is unprefixed, so a
   // bookmark that named its project by PORT now resolves against whichever project launched the
@@ -445,9 +437,6 @@ export const PROCEDURES = {
   quota: "query",
   authStatus: "query",
   accountLogout: "mutation",
-  accountLoginStart: "mutation",
-  accountLoginStatus: "query",
-  accountLoginCancel: "mutation",
   threadLocate: "query",
   projectsList: "query",
   projectPick: "mutation",

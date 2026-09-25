@@ -1,6 +1,5 @@
 import { createRoot } from "react-dom/client"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import "@xterm/xterm/css/xterm.css"
 import "./styles.css"
 import { RootErrorBoundary } from "./components/ErrorBoundary.tsx"
 import { RouterProvider } from "react-router"
@@ -63,8 +62,7 @@ if (!settingsFixture) {
   installThreadLinkInterceptor()
 }
 
-// No StrictMode: it double-mounts effects, which would open the terminal
-// WebSocket (and xterm instance) twice per selection in dev.
+// No StrictMode: it double-mounts effects, which would open each live socket twice in dev.
 if (!settingsFixture) {
   createRoot(document.getElementById("root")!).render(
     <QueryClientProvider client={queryClient}>

@@ -55,10 +55,6 @@ import {
   AuthSnapshot,
   AccountLogoutInput,
   AccountLogoutResult,
-  AccountLoginStartInput,
-  AccountLoginStartResult,
-  AccountLoginStatusInput,
-  AccountLoginStatusResult,
   RenameThreadInput,
   AiRenameThreadInput,
   AiRenameThreadResult,
@@ -3485,39 +3481,6 @@ export function createRouter(ctx: AppContext) {
           codexBin: ctx.codexBin,
           liveThreads: liveThreadsForBackend(snapshot.threads, input.backend),
         })
-      },
-    }),
-
-    // Slice B login utility: the sign-in modal's PRIMARY action. Starts (or re-attaches to) the one
-    // live `claude auth login` — login-utility.ts runs it over pipes — addressed by a
-    // server-issued slug-shaped attempt id the browser then attaches to over the existing hardened
-    // /term transport.
-    accountLoginStart: mutation({
-      input: AccountLoginStartInput,
-      output: AccountLoginStartResult,
-      handler: async ({ input }) => ctx.loginUtility.start(input.backend),
-    }),
-
-    accountLoginStatus: query({
-      input: AccountLoginStatusInput,
-      output: AccountLoginStatusResult,
-      handler: async ({ input }) => {
-        const { state, backend } = ctx.loginUtility.status(input.attemptId)
-        const auth = await readAuthSnapshot({ claudeBin: ctx.claudeBin })
-        // The login CLI finished → the attempt is spent; tear it down eagerly so the OAuth bytes don't
-        // linger in its replay buffer. Cancel is idempotent.
-        if (state === "exited") ctx.loginUtility.cancel(input.attemptId)
-        // The login utility only signs into Claude and Codex; an ACP agent logs in with its own CLI.
-        return { state, auth: backend === "acp" ? "unknown" : auth[backend ?? "claude"] }
-      },
-    }),
-
-    accountLoginCancel: mutation({
-      input: AccountLoginStatusInput,
-      output: z.object({}),
-      handler: async ({ input }) => {
-        ctx.loginUtility.cancel(input.attemptId)
-        return {}
       },
     }),
 

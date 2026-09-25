@@ -37,8 +37,6 @@ export function DrawerStack() {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key !== "Escape") return
-      // The terminal is a native TUI surface. Its Escape belongs to xterm, never to this layer.
-      if (e.target instanceof Element && e.target.closest(".xterm")) return
       // Portaled selectors are not descendants of their owning dialog/drawer. Give the topmost
       // model/effort matrix or Select this physical Escape before unwinding the app overlay stack.
       if (dismissOpenSelect()) {

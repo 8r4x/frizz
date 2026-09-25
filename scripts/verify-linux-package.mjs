@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // A packed Frizz on a clean Linux box: the real launcher (`npm exec frizz`) installs the real server
-// generation from a registry, boots it, and a real `claude auth login` runs through the real /term
-// transport. scripts/verify-server-package.mjs is the full macOS run (browser, update, worker); this is
-// the part nothing else ran on Linux, where node-pty's missing prebuild killed every boot (#42).
+// generation from a registry, boots it, and answers a real RPC. scripts/verify-server-package.mjs is
+// the full macOS run (browser, update, worker); this is the part nothing else ran on Linux, where
+// node-pty's missing prebuild killed every boot (#42). The server resolves the provider CLIs from PATH
+// here (`FRIZZ_RUNTIMES=path`), which is why the image installs Claude Code first.
 //
 // Pack both tarballs with the shell pinning the server (see verify-server-package.mjs), then run it in a
 // slim image with no C++ toolchain — Docker's `--tmpfs` keeps it off a full Docker disk:
@@ -22,9 +23,7 @@ import { createServer as createNetServer } from "node:net"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs"
 import { join, resolve } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
-import { createRequire } from "node:module"
 import { createRpcClient } from "./lib/rpc-client.mjs"
-const WebSocket = createRequire(import.meta.url)("ws")
 
 const arg = (name) => process.argv.find((value) => value.startsWith(`--${name}=`))?.slice(name.length + 3)
 const publicVersion = arg("public")
@@ -111,30 +110,10 @@ try {
   const generation = readdirSync(join(generations, key)).find((id) => !id.endsWith(".staging"))
   check("the installed generation carries no node-pty", !existsSync(join(generations, key, generation, "node_modules", "node-pty")))
 
-  // A REAL provider sign-in through the real RPC and the real /term transport.
-  const api = createRpcClient(base)
-  const { attemptId } = await api.mutate("accountLoginStart", { backend: "claude" })
-  const ws = new WebSocket(`ws://127.0.0.1:${port}/_frizz/term/${attemptId}`, { headers: { origin: base } })
-  let screen = ""
-  ws.on("message", (data) => { screen += data.toString() })
-  const closed = new Promise((done) => ws.on("close", (code, reason) => done({ code, reason: reason.toString() })))
-  await once(ws, "open")
-  await until("the sign-in prompt", () => screen.includes("Paste code here"), 60_000)
-  check("the claude sign-in prints its OAuth URL and prompt in the pane", /https:\/\/claude\.com\/cai\/oauth\/authorize/.test(screen))
-  ws.send(JSON.stringify({ t: "resize", cols: 100, rows: 30 }))
-  for (const key of "bogus-codeX") ws.send(JSON.stringify({ t: "input", d: key }))
-  ws.send(JSON.stringify({ t: "input", d: "\x7f" }))
-  ws.send(JSON.stringify({ t: "input", d: "\r" }))
-  await until("the typed code's echo", () => screen.includes("bogus-codeX\b \b\r\n"), 10_000)
-  check("typing is echoed, Backspace erases, Enter ends the line", true)
-  await until("the CLI's answer to the pasted code", () => /bogus-codeX[\b] [\b]\r\n\S/.test(screen), 60_000)
-  check("the CLI read the pasted code from its stdin and answered", true, JSON.stringify(screen.slice(screen.indexOf("bogus"))))
-  // A malformed code gets a re-prompt, not an exit, so end it the way a user would: Ctrl-C.
-  ws.send(JSON.stringify({ t: "input", d: "\x03" }))
-  const close = await Promise.race([closed, delay(30_000).then(() => ({ code: "timeout" }))])
-  check("Ctrl-C ends the CLI and the pane closes as exited", close.code === 1000 && /^pty exit /.test(close.reason ?? ""), `${close.code} ${close.reason ?? ""}`)
-  const after = await api.query("accountLoginStatus", { attemptId })
-  check("the attempt reads as exited", after.state === "exited", JSON.stringify(after))
+  // A real RPC through the booted server. The provider credential read is the one Linux-specific path a
+  // board takes on its first render (a file under ~/.claude, where macOS reads the Keychain).
+  const auth = await createRpcClient(base).query("authStatus")
+  check("the server answers a real RPC", typeof auth?.claude === "string", JSON.stringify(auth))
 } catch (error) {
   if (!checks.length || checks.every(Boolean)) check("harness completed", false, error instanceof Error ? error.stack ?? error.message : String(error))
 } finally {

@@ -12,10 +12,10 @@ import type { AgentBackend } from "./backend/types.ts"
 import { projectRetiredBackgroundOps, retiredOpsFor, projectTranscriptAgentLifecycles, projectTranscriptPeerNames, readLatestThreadTranscriptPage, type AgentLifecycleProjection } from "./transcript.ts"
 import { isTrustedLocalWebSocketRequest, rejectWebSocketUpgrade } from "./local-origin.ts"
 
-// Stage-2 multiplex: a SECOND noServer WebSocket at /ws (beside the terminal WS) carrying the board
+// Stage-2 multiplex: a noServer WebSocket at /ws carrying the board
 // channel (keyframe + deltas + notify — the stage-1 ServerEvent shapes, wrapped in {t:"event"}) AND
 // per-thread transcript PUSH (replacing the client's 1.5s threadTranscript poll). index.ts routes the
-// /ws upgrade here; terminals stay on /term/:slug.
+// /ws upgrade here.
 
 const WS_PATH = frizzRoute("/ws")
 

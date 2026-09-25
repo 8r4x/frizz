@@ -51,7 +51,7 @@ stack rules:
   headless through its own `.mcp.json` — Frizz mounts no browser into the workers it dispatches),
   which states and widths to capture, browser process hygiene (one owned instance per task;
   never a global close or a broad `pkill`), and how to embed evidence so Frizz renders it inline.
-- **`real-subsystem-harness`** — for behavior no browser can reach: the broker socket, a pty, spawn/exec
+- **`real-subsystem-harness`** — for behavior no browser can reach: the broker socket, spawn/exec
   paths, migrations, a detached daemon's environment. Real resource, real function, negative control.
 
 # Visual alignment is the implementer's job, not a review someone else does
@@ -141,11 +141,11 @@ What actually happens: a Claude thread is `claude_runtime="broker"`, and `claude
 
 # There is NO pty. Everything Frizz runs talks over pipes
 
-Nothing the server ships opens a pseudo-terminal. A Claude thread runs in the session broker, a Codex thread in the app-server, an ACP agent over newline-delimited JSON-RPC — all pipes. Provider sign-in (the sign-in modal behind `/login`) runs `claude auth login` / `codex login` over pipes too: `login-utility.ts` spawns the CLI and supplies the little line editing a pty used to (echo, Backspace, Enter, Ctrl-C). Sign-in was the last pty, on node-pty, until 2026-09-24; node-pty publishes no Linux prebuild, so every Linux and WSL install died at boot on `import "node-pty"` ([#42](https://github.com/colinhacks/frizz/pull/42)).
+Nothing the server ships opens a pseudo-terminal. A Claude thread runs in the session broker, a Codex thread in the app-server, an ACP agent over newline-delimited JSON-RPC — all pipes. Provider sign-in runs nothing at all: the sign-in modal behind `/login` shows `claude auth login` / `codex login` for the human to run in their own terminal, then re-reads the credential. Sign-in was the last pty — an embedded terminal on node-pty and the `/term` socket — until 2026-09-24; node-pty publishes no Linux prebuild, so every Linux and WSL install died at boot on `import "node-pty"` ([#42](https://github.com/colinhacks/frizz/pull/42)). The maintainer then chose the command alone over keeping any hosted sign-in, and `/term` went with it.
 
 **So: never propose a pty, node-pty, or "just run it in a terminal" for anything the server does, and never describe sign-in or an agent as running in one.** If a CLI seems to need a TTY, prove it over pipes first — both provider logins were assumed to need one and neither did. `src/package-contents.test.ts` fails if node-pty comes back as a server dependency, and `scripts/verify-linux-package.mjs` (run it in Docker; its header has the command) boots a packed Frizz on a Linux box with no C++ toolchain.
 
-Three things look like exceptions and are not. node-pty is a ROOT `devDependency` for `scripts/verify-product-e2e.mjs` alone, which drives the launcher's interactive readout and never ships. "PTY" in the Codex code (`codex-app-server.ts`, `transcript.ts`) is Codex's own logical terminal handle inside its app-server, not a Frizz process. And `/term` still closes with the reason `pty exit N`: a wire token an older tab matches to stop reconnecting, not a pty.
+Two things look like exceptions and are not. node-pty is a ROOT `devDependency` for `scripts/verify-product-e2e.mjs` alone, which drives the launcher's interactive readout and never ships. "PTY" in the Codex code (`codex-app-server.ts`, `transcript.ts`) is Codex's own logical terminal handle inside its app-server, not a Frizz process.
 
 # Board nomenclature: "active" means SPINNING, and nothing else
 

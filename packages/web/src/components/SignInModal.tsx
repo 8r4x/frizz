@@ -1,6 +1,6 @@
 import * as RadixDialog from "@radix-ui/react-dialog"
-import { Suspense, lazy, useEffect, useRef, useState } from "react"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useState } from "react"
+import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { Copy, Check, Loader2 } from "lucide-react"
 import type { AccountBackend, AccountLogoutResult, AuthSnapshot } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
@@ -8,17 +8,12 @@ import { showToast } from "../store.ts"
 import { copyTextToClipboard } from "../lib/clipboard.ts"
 import { SIGN_IN_COMMAND, PROVIDER_LABEL } from "../lib/signIn.ts"
 
-// LAZY: TerminalPane pulls in @xterm/xterm, a browser-only module that must not be evaluated when
-// node (tests) imports this file transitively — it only loads once an embedded attempt renders.
-const TerminalPane = lazy(() => import("./TerminalPane.tsx").then((m) => ({ default: m.TerminalPane })))
-
 // The sign-in gate modal. Shown when a dispatch targets a signed-out provider or the runtime 401
-// classifier flags a rejected credential. The PRIMARY action embeds the provider's own login CLI
-// (`claude auth login`) in a restricted, short-lived terminal (Slice B): the server spawns exactly
-// that argv over pipes, addressed by an opaque attempt id, the browser attaches over
-// the existing hardened /term transport, and frizz polls the credential state to detect completion.
-// The copyable command remains the fallback when the embedded flow can't start or the user prefers
-// their own terminal. Fails open — the gate only ever reaches here on a positive "signed-out".
+// classifier flags a rejected credential. It hands the human the provider's own login command to run
+// in a terminal on the machine Frizz runs on, then re-reads the credential on Retry. Frizz does not run
+// the login itself: it embedded `claude auth login` in a terminal pane here until 2026-09-24, and the
+// maintainer chose the command alone over keeping that pane and its /term transport alive (#42).
+// Fails open — the gate only ever reaches here on a positive "signed-out".
 export function SignInModal({
   backend,
   onClose,
@@ -30,61 +25,8 @@ export function SignInModal({
 }) {
   const queryClient = useQueryClient()
   const [copied, setCopied] = useState(false)
-  // The live embedded login attempt (slug-shaped server-issued id), else null → the plain state.
-  const [attempt, setAttempt] = useState<string | null>(null)
-  const settledRef = useRef(false)
   const command = SIGN_IN_COMMAND[backend]
   const label = PROVIDER_LABEL[backend]
-
-  const start = useMutation({
-    mutationFn: () => rpc.accountLoginStart({ backend }),
-    onSuccess: (res) => {
-      settledRef.current = false
-      setAttempt(res.attemptId)
-    },
-    onError: (e) => showToast(`Couldn't start the sign-in terminal: ${(e as Error).message.slice(0, 80)} — use the command below instead`, { duration: 7000 }),
-  })
-
-  // Completion detection: poll the attempt + credential state while the terminal is embedded. The
-  // login CLI exiting is the signal; the re-read credential is the verdict (an expired token still
-  // reads authed here — the next real request and the runtime classifier are the validity proof).
-  const status = useQuery({
-    queryKey: ["accountLoginStatus", attempt],
-    queryFn: () => rpc.accountLoginStatus({ attemptId: attempt! }),
-    enabled: !!attempt,
-    refetchInterval: 2000,
-  })
-  useEffect(() => {
-    if (!attempt || settledRef.current) return
-    const data = status.data
-    if (!data || data.state === "running" || data.state === "unknown") return
-    settledRef.current = true
-    if (data.auth !== "signed-out") {
-      queryClient.setQueryData(["authStatus"], (prev: AuthSnapshot | undefined) =>
-        prev ? { ...prev, [backend]: data.auth } : prev)
-      showToast(`Signed in to ${label}`)
-      onAuthed()
-      return
-    }
-    showToast(`${label} sign-in didn't complete — try again or use the command below`, { duration: 7000 })
-    setAttempt(null)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [attempt, status.data, backend, label])
-
-  // Leaving the modal abandons any live attempt: the server kills the pane so OAuth bytes don't
-  // linger. Fire-and-forget — closing must never block on the RPC.
-  function abandonAttempt() {
-    if (attempt && !settledRef.current) void rpc.accountLoginCancel({ attemptId: attempt }).catch(() => {})
-  }
-  // Unmount (thread switch, drawer close, route change) is also abandonment — without this, only the
-  // explicit Cancel/close paths tear the pane down and a navigation leaks it until the server-side
-  // lifetime timer. Refs, not state, so the cleanup sees the final values.
-  const abandonRef = useRef<{ attempt: string | null; settled: boolean }>({ attempt: null, settled: false })
-  abandonRef.current = { attempt, settled: settledRef.current }
-  useEffect(() => () => {
-    const { attempt: liveAttempt, settled } = abandonRef.current
-    if (liveAttempt && !settled) void rpc.accountLoginCancel({ attemptId: liveAttempt }).catch(() => {})
-  }, [])
 
   async function copyCommand() {
     try {
@@ -112,87 +54,51 @@ export function SignInModal({
   })
 
   return (
-    <RadixDialog.Root open onOpenChange={(open) => { if (!open) { abandonAttempt(); onClose() } }}>
+    <RadixDialog.Root open onOpenChange={(open) => { if (!open) onClose() }}>
       <RadixDialog.Portal>
         <RadixDialog.Overlay className="fixed inset-0 z-[210] bg-scrim-30 backdrop-blur-md backdrop-saturate-150" />
         <RadixDialog.Content
           aria-modal="true"
           aria-describedby={undefined}
-          className={`fixed left-1/2 top-1/2 z-[210] ${attempt ? "w-[680px]" : "w-[440px]"} max-w-[92vw] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-panel p-5 shadow-2xl shadow-shadow-ink/50 outline-none`}
+          className="fixed left-1/2 top-1/2 z-[210] w-[440px] max-w-[92vw] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-panel p-5 shadow-2xl shadow-shadow-ink/50 outline-none"
         >
           <RadixDialog.Title className="mb-1 text-[14px] font-medium">Signed out of {label}</RadixDialog.Title>
 
-          {attempt ? (
-            <>
-              <p className="mb-3 text-[12.5px] leading-relaxed text-muted">
-                This terminal is running <code className="font-mono-keep text-fg/90">{command}</code> —
-                follow its prompts (it may open your browser). Frizz detects completion automatically.
-              </p>
-              {/* The restricted account terminal: a global provider sign-in session, NOT a thread —
-                  it inherits no project prompt and accepts no other command. */}
-              <div className="mb-4 h-[340px] overflow-hidden rounded-lg border border-border bg-bg">
-                <Suspense fallback={<div className="flex h-full items-center justify-center text-[12px] text-muted">Opening terminal…</div>}>
-                  <TerminalPane slug={attempt} />
-                </Suspense>
-              </div>
-              <div className="flex items-center justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => { abandonAttempt(); setAttempt(null) }}
-                  className="button-outline rounded-md px-3 py-1.5 text-[12.5px] text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg"
-                >
-                  Cancel sign-in
-                </button>
-              </div>
-            </>
-          ) : (
-            <>
-              <p className="mb-4 text-[12.5px] leading-relaxed text-muted">
-                Frizz can't start a {label} thread until you're signed in. Sign in here, or run the
-                command in your own terminal and retry:
-              </p>
+          <p className="mb-4 text-[12.5px] leading-relaxed text-muted">
+            Frizz can't start a {label} thread until you're signed in. Run this command in a terminal on
+            the machine running Frizz, then retry:
+          </p>
 
-              <div className="mb-4 flex items-center gap-2 rounded-lg border border-border bg-panel-2 px-3 py-2">
-                <code className="flex-1 select-all font-mono-keep text-[12.5px] text-fg">{command}</code>
-                <button
-                  type="button"
-                  aria-label="Copy command"
-                  onClick={copyCommand}
-                  className="icon-hover-outline flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted outline-none transition-colors hover:bg-panel hover:text-fg"
-                >
-                  {copied ? <Check size={14} strokeWidth={2} className="text-success" /> : <Copy size={14} strokeWidth={1.8} />}
-                </button>
-              </div>
+          <div className="mb-4 flex items-center gap-2 rounded-lg border border-border bg-panel-2 px-3 py-2">
+            <code className="flex-1 select-all font-mono-keep text-[12.5px] text-fg">{command}</code>
+            <button
+              type="button"
+              aria-label="Copy command"
+              onClick={copyCommand}
+              className="icon-hover-outline flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted outline-none transition-colors hover:bg-panel hover:text-fg"
+            >
+              {copied ? <Check size={14} strokeWidth={2} className="text-success" /> : <Copy size={14} strokeWidth={1.8} />}
+            </button>
+          </div>
 
-              <div className="flex items-center justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={onClose}
-                  className="button-outline rounded-md px-3 py-1.5 text-[12.5px] text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={() => recheck.mutate()}
-                  disabled={recheck.isPending}
-                  className="flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-[12.5px] text-fg/90 outline-none transition-colors hover:bg-panel-2 disabled:opacity-60"
-                >
-                  {recheck.isPending && <Loader2 size={13} className="animate-spin" />}
-                  Retry
-                </button>
-                <button
-                  type="button"
-                  onClick={() => start.mutate()}
-                  disabled={start.isPending}
-                  className="button-outline flex items-center gap-1.5 rounded-md bg-accent-fill px-3 py-1.5 text-[12.5px] font-medium text-accent-fg outline-none transition-opacity hover:opacity-90 disabled:opacity-60"
-                >
-                  {start.isPending && <Loader2 size={13} className="animate-spin" />}
-                  Sign in here
-                </button>
-              </div>
-            </>
-          )}
+          <div className="flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="button-outline rounded-md px-3 py-1.5 text-[12.5px] text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => recheck.mutate()}
+              disabled={recheck.isPending}
+              className="button-outline flex items-center gap-1.5 rounded-md bg-accent-fill px-3 py-1.5 text-[12.5px] font-medium text-accent-fg outline-none transition-opacity hover:opacity-90 disabled:opacity-60"
+            >
+              {recheck.isPending && <Loader2 size={13} className="animate-spin" />}
+              Retry
+            </button>
+          </div>
         </RadixDialog.Content>
       </RadixDialog.Portal>
     </RadixDialog.Root>

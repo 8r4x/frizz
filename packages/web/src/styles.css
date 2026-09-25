@@ -125,7 +125,7 @@
    history was two parties fighting over the scrollbar gutter (our overlay lock, Radix's
    react-remove-scroll compensation, short-vs-long pages under a centered layout). With a zero-width
    scrollbar there is no gutter to reserve, drop, or compensate: gap math is 0 for everyone, always.
-   Scrolling still works (trackpad/wheel/keys); inner surfaces (drawers, xterm) keep their own
+   Scrolling still works (trackpad/wheel/keys); inner surfaces (drawers) keep their own
    scrollbars.
 
    THE ROOT'S OWN overflow MUST STAY `visible`, and that is load-bearing rather than incidental. A

@@ -16,7 +16,6 @@ ContextStartupError,
 } from "./context.ts"
 import { createApp, type AppOptions } from "./app.ts"
 import { compress, negotiateEncoding, shouldCompress, type ContentEncoding } from "./compression.ts"
-import { createTerminalServer } from "./terminal.ts"
 import { createAppSocketServer, makeTranscriptReader } from "./app-socket.ts"
 import {
   createRetryableCleanup,
@@ -63,7 +62,6 @@ export type ServerStartupPhase =
   | "context"
   | "GitHub initialization"
   | "application"
-  | "terminal transport"
   | "application socket"
   | "board producer"
   | "tailer producer"
@@ -78,13 +76,11 @@ export type ServerStartupPhase =
   | "signal handlers"
 
 type HttpServer = ReturnType<typeof createServer>
-type TerminalServer = ReturnType<typeof createTerminalServer>
 type AppSocketServer = ReturnType<typeof createAppSocketServer>
 
-/** Everything one project serves: its HTTP app and its two live transports. */
+/** Everything one project serves: its HTTP app and its live transport. */
 interface TenantSurfaces {
   app: ReturnType<typeof createApp>
-  terminal: TerminalServer
   appSocket: AppSocketServer
 }
 type ViteServer = import("vite").ViteDevServer
@@ -98,7 +94,6 @@ export interface StartServerRuntime {
   createContext(options: ContextOptions): AppContext | Promise<AppContext>| Promise<AppContext>
   initGithub(ctx: AppContext): Promise<void>
   createApp(ctx: AppContext, options: AppOptions): ReturnType<typeof createApp>
-  createTerminal(options: Parameters<typeof createTerminalServer>[0]): TerminalServer
   createAppSocket(options: Parameters<typeof createAppSocketServer>[0]): AppSocketServer
   createVite(options: {
     root: string
@@ -128,7 +123,6 @@ const defaultStartServerRuntime: StartServerRuntime = {
   createContext,
   initGithub,
   createApp,
-  createTerminal: createTerminalServer,
   createAppSocket: createAppSocketServer,
   createVite: async (options) => {
     const { createServer: createVite } = await import("vite")
@@ -649,17 +643,15 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
     // (see "status publication"), so it is the only file a tenant's worker can read the port out of.
     contextOptions: { get claudeBin() { return runtimes?.claude.bin ?? opts.claudeBin }, get codexBin() { return runtimes?.codex.bin ?? opts.codexBin }, serverLockPath: serverLockPathFor(project), activeTenants, teardownProject, launchProjectId: project.id, get database() { return frizzDb?.db } },
     // Each project's app carries ITS OWN owner proof, so /health stays honest per project rather than
-    // answering for whichever one happened to launch the server. The transports are per project for a
-    // blunter reason: a socket is a live feed of ONE board, so sharing the launcher's would push its
+    // answering for whichever one happened to launch the server. The socket is per project for a
+    // blunter reason: it is a live feed of ONE board, so sharing the launcher's would push its
     // threads into every other project's UI.
     createApp: (tenantCtx) => ({
       app: runtime.createApp(tenantCtx, appOptionsFor(tenantCtx)),
-      terminal: runtime.createTerminal(terminalOptionsFor(tenantCtx)),
       appSocket: runtime.createAppSocket(appSocketOptionsFor(tenantCtx)),
     }),
     closeApp: async (surfaces) => {
       await surfaces.appSocket.close()
-      await surfaces.terminal.close()
     },
     // The same producers boot starts for the launching project, in the same order. The tailer's cold
     // prime is what makes this affordable to do lazily — it is bounded per tick, so activating a
@@ -681,9 +673,6 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
     ownerProof: projectLaunchTokenProof(projectLaunchTarget(c.project), effectiveOwnerToken),
     controlToken: effectiveOwnerToken,
     requestOwnerStop,
-  })
-  const terminalOptionsFor = (c: AppContext) => ({
-    resolveLogin: (slug: string) => c.loginUtility.attach(slug),
   })
   const appSocketOptionsFor = (c: AppContext) => ({
     bus: c.bus,
@@ -710,7 +699,6 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
       watchLocalFile(resolveWatchableLocalFile(path, openableFileRoots(c.project)), onChange),
   })
   let githubInit: Promise<void> | undefined
-  let terminal: TerminalServer | undefined
   let appSocket: AppSocketServer | undefined
   let vite: ViteServer | undefined
   let httpServer: HttpServer | undefined
@@ -773,7 +761,6 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
     const closingHttp = stopHttp()
     await Promise.all([closingHttp, Promise.allSettled([...requestTasks]).then(() => undefined)])
   })
-  const cleanupTerminal = createRetryableCleanup(async () => { await terminal?.close() })
   const cleanupAppSocket = createRetryableCleanup(async () => { await appSocket?.close() })
   // The per-project half, from context.ts, so one project can be torn down without the server —
   // `() => ctx` rather than `ctx` because these are built before the context exists.
@@ -791,7 +778,6 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
     }
   })
   const cleanupTailer = createRetryableCleanup(tenant.tailer)
-  const cleanupLoginUtility = createRetryableCleanup(tenant.loginUtility)
   const cleanupSubscriptions = createRetryableCleanup(tenant.subscriptions)
   const cleanupScheduler = createRetryableCleanup(tenant.scheduler)
   const cleanupBoard = createRetryableCleanup(tenant.board)
@@ -817,17 +803,11 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
         run: cleanupHttp,
       },
       {
-        name: "terminal transport",
-        run: cleanupTerminal,
-      },
-      {
         name: "application socket",
         run: cleanupAppSocket,
       },
       { name: "other projects", run: cleanupExtraTenants },
       { name: "tailer producer", run: cleanupTailer },
-      // Kill any live login-attempt pane so OAuth bytes never outlive the server.
-      { name: "login utility", run: cleanupLoginUtility },
       { name: "context subscriptions", run: cleanupSubscriptions },
       { name: "wake scheduler", run: cleanupScheduler },
       { name: "board producer and watcher", run: cleanupBoard },
@@ -998,11 +978,6 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
     await runtime.afterPhase?.("GitHub initialization")
 
     const app = await phase("application", () => runtime.createApp(ctx!, appOptionsFor(ctx!)))
-    terminal = await phase(
-      "terminal transport",
-      () => runtime.createTerminal(terminalOptionsFor(ctx!)),
-      (value) => { terminal = value },
-    )
     appSocket = await phase(
       "application socket",
       () => runtime.createAppSocket(appSocketOptionsFor(ctx!)),
@@ -1011,7 +986,7 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
     // Re-adopt with the surfaces attached. The early adopt registered the context so the map is never
     // missing the launching project; these did not exist yet at that point, and routing is closed
     // until `accepting` flips below, so nothing can observe the gap.
-    tenants.adopt(project, ctx, { app, terminal, appSocket })
+    tenants.adopt(project, ctx, { app, appSocket })
     await phase("board producer", () => ctx!.board.start())
     // The tailer's FIRST pass is the one boot step that can legitimately take minutes on a cold board
     // of thousands of threads. Report its position so a waiting launcher can tell "working" from
@@ -1169,9 +1144,7 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
         .then((routed) => {
           const surfaces = routed?.surfaces
           if (routed) req.url = routed.url
-          const term = surfaces?.terminal ?? terminal!
           const ws = surfaces?.appSocket ?? appSocket!
-          if (term.handleUpgrade(req, socket, head)) return
           if (ws.handleUpgrade(req, socket, head)) return
           socket.destroy()
         })

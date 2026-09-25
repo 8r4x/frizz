@@ -55,7 +55,6 @@ Two things that will waste your time otherwise:
 nub --test packages/relay/src/board-socket.test.ts packages/relay/src/worker.test.ts
 nub scripts/verify-relay-e2e.mjs        # the frames, on real workerd
 nub scripts/verify-relay-gate.mjs       # a relayed terminal against the REAL access gate
-nub scripts/verify-relay-terminal.mjs   # a REAL sign-in source, through the real terminal server
 ```
 
 The unit tests drive the Durable Object's state machine against fakes, which proves each half and
@@ -63,12 +62,11 @@ nothing about the seam between them — and there are three seams here that all 
 the e2e harness runs the real Worker under `wrangler dev`, a real board on loopback, and a real agent
 connecting them, including a terminal typed through both runtimes.
 
-The three harnesses answer different questions, and each later one exists because the earlier cannot.
+The two harnesses answer different questions, and the second exists because the first cannot.
 A board in `verify-relay-e2e.mjs` is a toy that accepts every upgrade, so a relay forwarding NO visitor
 identity passes there and would fail against the real thing. `verify-relay-gate.mjs` puts the real
 `RestartSupervisorProxy` in the path: an unauthenticated terminal is REFUSED and never reaches the
-board, and a visitor holding a redeemed session gets through. `verify-relay-terminal.mjs` then replaces
-the toy entirely, driving the real terminal server and the real login utility, with a shell standing in for the provider CLI.
+ board, and a visitor holding a redeemed session gets through.
 
 **Two measured facts worth not re-deriving.** `wrangler dev` does NOT enforce Cloudflare's 1 MiB
 WebSocket message cap, so an UNCHUNKED build passes the end-to-end reassembly check — the assertion

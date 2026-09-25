@@ -13,7 +13,6 @@ function fakeContext(stopped: string[], overrides: Partial<Record<string, () => 
   const mark = (n: string, fn?: () => unknown) => () => { stopped.push(n); return fn?.() }
   return {
     tailer: { stop: mark("tailer", overrides.tailer) },
-    loginUtility: { stop: mark("loginUtility", overrides.loginUtility) },
     stopSubscriptions: mark("subscriptions", overrides.subscriptions),
     scheduler: { stop: mark("scheduler", overrides.scheduler) },
     board: { stop: mark("board", overrides.board) },
@@ -128,7 +127,7 @@ test("deactivate stops one project's resources in the barrier's order, leaving t
 
   assert.equal(await tenants.deactivate("p1"), true)
   assert.deepEqual(stopped, [
-    "tailer", "loginUtility", "subscriptions", "scheduler", "board", "bridge", "storage",
+    "tailer", "subscriptions", "scheduler", "board", "bridge", "storage",
   ])
   assert.equal(tenants.get("p1"), undefined)
   assert.ok(tenants.get("p2"), "the other project is still serving")

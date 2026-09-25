@@ -29,7 +29,6 @@ import { createCodexBackend, codexSandbox } from "./backend/codex.ts"
 import { createAcpBackend } from "./backend/acp-transcript.ts"
 import { createAcpBridge, type AcpBridge } from "./backend/acp-bridge.ts"
 import { readClaudePreflightAuth, readCodexAuthState, readCodexBinaryState } from "./backend/auth-status.ts"
-import { createLoginUtility, type LoginUtility } from "./login-utility.ts"
 import type { AgentBackend } from "./backend/types.ts"
 import { needsFreshProcessForLimit } from "./backend/usage-limit.ts"
 import { onClaudeModelsResolved, peekClaudeModels, readClaudeModels } from "./backend/claude-models.ts"
@@ -228,12 +227,9 @@ export interface AppContext {
   // The dispatch Claude executable (tests use a stand-in). The account logout action runs the SAME
   // binary so sign-out targets the credential the workers actually use.
   claudeBin?: string
-  // Same seam for Codex: the resolved app-server/backend executable, so codex login/logout target
+  // Same seam for Codex: the resolved app-server/backend executable, so codex logout targets
   // the binary frizz actually runs rather than whatever "codex" is first on PATH.
   codexBin?: string
-  // Slice B account utility: the restricted short-lived `claude auth login` terminal behind the
-  // sign-in modal's primary action. Attempts ride the /term transport via slug-shaped opaque ids.
-  loginUtility: LoginUtility
 }
 
 export interface ContextOptions {
@@ -457,7 +453,7 @@ export function deliverClaudeBrokerWake(deps: {
 /**
  * The per-PROJECT half of a shutdown, named so a caller can order it against its own phases.
  *
- * Process-level transports — the HTTP server, the terminal socket, the app socket, Vite — belong to
+ * Process-level transports — the HTTP server, the app socket, Vite — belong to
  * the server, not to any one project, and stay with startServer. Everything here belongs to a single
  * AppContext, which is what makes it reusable: today startServer runs these once at exit, and a
  * tenant lifecycle runs the same set when one project is deactivated while others keep serving.
@@ -468,7 +464,6 @@ export function deliverClaudeBrokerWake(deps: {
  */
 export function projectContextCleanups(get: () => AppContext | undefined): {
   tailer: () => void
-  loginUtility: () => void
   subscriptions: () => void
   scheduler: () => Promise<void>
   board: () => Promise<void>
@@ -477,7 +472,6 @@ export function projectContextCleanups(get: () => AppContext | undefined): {
 } {
   return {
     tailer: () => get()?.tailer.stop(),
-    loginUtility: () => get()?.loginUtility?.stop(),
     subscriptions: () => get()?.stopSubscriptions(),
     scheduler: async () => { await get()?.scheduler.stop() },
     board: async () => { await get()?.board.stop() },
@@ -1091,6 +1085,5 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     launchProjectId: opts.launchProjectId,
     claudeBin: opts.claudeBin,
     codexBin: opts.codexBin,
-    loginUtility: createLoginUtility({ claudeBin: opts.claudeBin, codexBin: opts.codexBin, cwd: project.dir }),
   }
 }
