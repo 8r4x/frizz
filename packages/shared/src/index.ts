@@ -3489,6 +3489,27 @@ export const DeliverQueuedNowResult = z.object({
 }).strict()
 export type DeliverQueuedNowResult = z.infer<typeof DeliverQueuedNowResult>
 
+// COMPACT NOW — the button in the context meter's hover panel. Asks the thread's own harness to
+// summarize its context in place, the same act as typing `/compact` into Claude Code or codex: a
+// broker-backed Claude row is sent the literal `/compact` (the Agent SDK runs a streamed slash command
+// as a local command, recording a `compact_boundary` with trigger "manual"), and an app-server codex row
+// gets `thread/compact/start`. Refused while a turn is in flight and for every other runtime.
+export const CompactThreadInput = z.object({
+  slug: ThreadSlug,
+  // Same staleness guard as followUp: a stale tab must not compact a re-dispatched session.
+  sessionId: z.string().min(1),
+}).strict()
+export type CompactThreadInput = z.infer<typeof CompactThreadInput>
+
+/** Whether the thread's runtime gives Frizz a way to request a compaction at all — the gate the
+ *  server enforces and the context meter's panel reads to decide whether to offer the button. */
+export function threadCanCompact(thread: { backend?: string; claudeRuntime?: string; foreign?: boolean }): boolean {
+  if (thread.foreign) return false
+  // `claudeRuntime` is set only on a Claude row, whose `backend` may itself be absent (Claude is the
+  // unmarked default), so the broker marker alone identifies one.
+  return thread.backend === "codex" || thread.claudeRuntime === "broker"
+}
+
 export const SetThreadSnoozeInput = z.object({
   slug: ThreadSlug,
   sessionId: z.string().min(1),

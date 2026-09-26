@@ -735,6 +735,8 @@ interface Record {
   timestamp?: string
   isMeta?: boolean // `/rename <title>` reminder record: CLI metadata, not a user/model turn
   isCompactSummary?: boolean // the carry-over summary claude writes as a user record after compacting
+  subtype?: string // on `system` records: "compact_boundary" is the one the fold reads
+  compactMetadata?: { postTokens?: unknown } // on a compact_boundary: the context size after the summary
   aiTitle?: string // present only on ai-title sidecar records
   customTitle?: string // present only on custom-title records (written by /rename)
   permissionMode?: unknown // present only on Claude permission-mode sidecars
@@ -958,8 +960,9 @@ export function isRealUserMessage(content: unknown): boolean {
 // runtime reading override a fold holding real evidence, so the fold has to know. Measured 2026-09-25.
 //
 // Anchored at BOTH ends on the trimmed text, like the interrupt markers: a human message that quotes the
-// tag is still a prompt. Older builds wrote a local command's output as a `system`/`local_command`
-// record instead, which the fold already ignores.
+// tag is still a prompt. The CLI also writes some local-command output as a `system`/`local_command`
+// record instead — on 2.1.283 a `/compact` with nothing to summarize answers "Not enough messages to
+// compact." that way — and applyRecord treats that receipt as ending the command too.
 const LOCAL_COMMAND_RECEIPT = /^<local-command-(stdout|stderr)>[\s\S]*<\/local-command-\1>$/
 function isLocalCommandReceipt(content: unknown): boolean {
   return LOCAL_COMMAND_RECEIPT.test(userMessageText(content).trim())
@@ -1796,6 +1799,25 @@ export function applyRecord(state: TailState, rec: Record): void {
   // fold already reads, which makes it the post-compaction trigger's clock (scheduler SOURCE 7). It moves
   // nothing else — see the flag's own note above for why this record must not read as human motion.
   if (compactSummaryRec && typeof rec.timestamp === "string") state.lastCompactionAt = rec.timestamp
+  // The boundary's own `postTokens` is the context reading after the summary. An AUTO-compaction does
+  // not need it — it fires mid-turn, and the next request's usage reports the smaller context anyway —
+  // but a MANUAL `/compact` (the footer's "Compact now") runs at rest and makes no model request at all,
+  // so without this the dial kept showing the pre-compaction fill until the thread's next turn
+  // (measured 2026-09-26: 40,467 tokens before and after a compaction whose boundary said 4,304).
+  if (type === "system" && rec.subtype === "compact_boundary" && rec.isSidechain !== true) {
+    const post = rec.compactMetadata?.postTokens
+    if (typeof post === "number" && Number.isFinite(post) && post >= 0) state.contextTokens = post
+  }
+  // A local command answered by a SYSTEM record rather than a user one. The command's
+  // `<command-name>` envelope is a user record, so the fold reads it as a prompt and the turn as in
+  // flight; a user-shaped receipt ends that (see isLocalCommandReceipt), and this is the same receipt
+  // in its other shape. Without it a second "Compact now" on an already-compacted thread — answered
+  // "Not enough messages to compact." — held the thread running until its next real message
+  // (observed 2026-09-26: 3+ minutes). Only straight after a user record: an assistant's end of turn
+  // has already settled the reading, and this record must not reopen or close anything else.
+  if (type === "system" && rec.subtype === "local_command" && state.lastKind === "user" && typeof rec.content === "string" && LOCAL_COMMAND_RECEIPT.test(rec.content.trim())) {
+    state.localCommandDone = true
+  }
   if (typeof rec.timestamp === "string" && (type === "assistant" || (type === "user" && !metaUserRec) || type === "system")) {
     state.lastActivityAt = rec.timestamp
   }

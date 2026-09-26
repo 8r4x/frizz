@@ -28,6 +28,7 @@ import type {
   UnqueueFollowUpResult,
   DeliverQueuedNowInput,
   DeliverQueuedNowResult,
+  CompactThreadInput,
   RenameThreadInput,
   AiRenameThreadResult,
   SetThreadPermissionInput,
@@ -169,6 +170,8 @@ export interface Api {
   // The ↑ on a queued bubble: stop waiting and make the worker read what is already queued. No message
   // payload — see DeliverQueuedNowInput.
   deliverQueuedNow(input: DeliverQueuedNowInput): Promise<DeliverQueuedNowResult>
+  // "Compact now" in the context meter's hover panel — see CompactThreadInput.
+  compactThread(input: CompactThreadInput): Promise<void>
   setThreadPermission(input: SetThreadPermissionInput): Promise<SetThreadPermissionResult>
   threadProfileOptions(input: ThreadProfileOptionsInput): Promise<ThreadProfileOptionsResult>
   // The composer's `/` typeahead: the thread's invocable skills, as its own harness reports them.
@@ -383,6 +386,7 @@ export const PROCEDURES = {
   followUp: "mutation",
   unqueueFollowUp: "mutation",
   deliverQueuedNow: "mutation",
+  compactThread: "mutation",
   setThreadPermission: "mutation",
   threadProfileOptions: "query",
   threadSkills: "query",

@@ -13,6 +13,7 @@ import {
   UnqueueFollowUpInput,
   UnqueueFollowUpResult,
   DeliverQueuedNowInput,
+  CompactThreadInput,
   DeliverQueuedNowResult,
   SetThreadRecurringPromptInput,
   SetOwnThreadRecurringPromptInput,
@@ -2197,6 +2198,68 @@ export function createRouter(ctx: AppContext) {
         // this button exists to end. The ledger is not JSONL bytes, so the frame has to be emitted here.
         if (deliverOutstandingDeliveries(ctx.storage, input.slug)) ctx.transcriptChange.emit([input.slug])
         return { interrupted: true }
+      },
+    }),
+
+    // COMPACT NOW — the button in the context meter's hover panel (CompactThreadInput). Each harness
+    // already has its own manual compaction, so this only reaches it: a broker Claude row is sent the
+    // literal `/compact`, which the Agent SDK runs as a local slash command (probed against the pinned
+    // SDK 2026-09-26: `system/compact_boundary` with trigger "manual", then a `Compacted` local-command
+    // record — no model turn), and an app-server codex row gets `thread/compact/start`.
+    //
+    // NOT a follow-up, although the Claude half travels the same channel: no ledger entry (the
+    // transcript's own compaction divider is the receipt), no gap note (Claude Code reads text after
+    // `/compact` as summarization instructions, so the note would steer the summary), and no reopen or
+    // un-park — tidying a thread's context says nothing about whether it should wake.
+    //
+    // Refused mid-turn. A queued `/compact` did wait for a plain turn to end in the probe, but a turn
+    // with tool calls can splice queued input in between them, where the text is no longer a command;
+    // the panel offers the button only at rest, and this is the same rule for a stale tab.
+    compactThread: mutation({
+      input: CompactThreadInput,
+      handler: async ({ input }) => {
+        const row = currentOwnedSession(input.slug, input.sessionId)
+        if (!row) throw new Error("This thread is no longer the session this tab is looking at")
+        if (hasPendingPermissionChange(row)) throw new Error("Wait for the current permission change to finish, then compact")
+        const telemetry = ctx.tailer.get(input.slug)
+        if (telemetry?.turn === "in-flight") throw new Error("Wait for the current turn to end, then compact")
+        if (row.backend === "codex") {
+          const bridge = ctx.codexAppServer
+          if (!bridge) throw new Error("Codex app-server is unavailable; cannot compact this thread")
+          if (row.codex_runtime !== "app-server") throw new Error("Send this thread a message first — it predates the Codex app-server")
+          const binding = bridge.binding(input.slug, row.session_id)
+          if (!binding || binding.state !== "active") await bridge.resumeOwnedSession(input.slug, row.session_id)
+          await bridge.compactThread(input.slug, row.session_id)
+          ctx.board.refresh()
+          return
+        }
+        if (row.backend !== "claude" || row.claude_runtime !== "broker") {
+          throw new Error("This thread's runtime can't be compacted from Frizz")
+        }
+        const bridge = ctx.claudeBroker
+        if (!bridge) throw new Error("Claude session broker is unavailable; cannot compact this thread")
+        // The same cold-resume inputs a follow-up carries: a hibernated daemon is resumed to run the
+        // command, and it must come back as the worker it was.
+        const appendSystemPrompt = [
+          loadWorkerPrompt("claude"),
+          scratchpadOrientation(row.session_id, "claude"),
+          frizzConfigBlock(ctx.project.dir),
+        ].filter(Boolean).join("\n\n")
+        await bridge.followUp({
+          threadSlug: input.slug,
+          sessionId: row.session_id,
+          cwd: ctx.project.dir,
+          text: "/compact",
+          permissionMode: coldResumePermission(row, ctx.getSettings()),
+          appendSystemPrompt,
+          model: row.model ?? undefined,
+          effort: row.effort ?? undefined,
+          // A process latched on its own usage-limit 429 cannot summarize any more than it can answer.
+          freshProcess: needsFreshProcessForLimit(telemetry?.limitFault, Date.now(), mayHaveLiveBackgroundWork(telemetry)),
+        })
+        // The bridge accepted the command, so a deliberate stop is over — see followUp's same write.
+        if (row.exited === 1) ctx.storage.setExitedIfCurrent(input.slug, row.session_id, row.runtime_generation ?? 0, false)
+        ctx.board.refresh()
       },
     }),
 

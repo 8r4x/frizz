@@ -2245,6 +2245,28 @@ export class CodexAppServerBridge {
     }
   }
 
+  // The operator's "Compact now" (the context meter's hover panel). `thread/compact/start` asks the
+  // app-server to summarize the thread's history in place; it answers at once with an empty object and
+  // runs the compaction as a turn of its own, which the bridge adopts from `turn/started` like any
+  // other app-server-opened turn — so the thread reads as working while it compacts, and the rollout's
+  // `compacted` envelope is what the tailer then folds. Refused mid-turn: the compaction would race the
+  // turn for the same history, and the operator's button is only offered at rest anyway.
+  async compactThread(threadSlug: string, sessionId: string): Promise<void> {
+    const releaseOperation = this.beginOperation()
+    try {
+      const connection = await this.ensureConnected()
+      const binding = this.bindingForScope(threadSlug, sessionId)
+      if (!binding) throw new Error("Codex app-server compaction requires a bridge-owned session")
+      if (binding.connection_epoch !== this.connectionEpoch || binding.state !== "active") {
+        throw new Error("Codex app-server session detached; cannot compact")
+      }
+      if (binding.current_turn_id) throw new Error("Wait for the current turn to end, then compact")
+      await connection.request("thread/compact/start", { threadId: binding.codex_thread_id })
+    } finally {
+      releaseOperation()
+    }
+  }
+
   // The thread's invocable skills, asked of the app-server itself (`skills/list` scoped to the
   // session's cwd). Read-only and cheap — the server caches its scan — so unlike interruptTurn it
   // needs no binding state beyond the cwd, and a detached binding can still be listed for.
