@@ -141,7 +141,7 @@ export function RecurringPromptControl({ thread }: { thread: ThreadView }) {
           // what is armed, exactly as hovering it would.
           onFocus={() => setMode((m) => (m === "closed" ? "preview" : m))}
           onBlur={closePreview}
-          className="icon-hover-outline flex items-center rounded-md p-1 outline-none"
+          className="group/goal icon-hover-outline flex items-center rounded-md p-1 outline-none"
         >
           {/* A TARGET WITH AN ARROW IN IT (see GoalMark for the geometry and why it is drawn rather
               than imported), and the ONLY surface that says this exists (the rail deliberately carries
@@ -170,8 +170,18 @@ export function RecurringPromptControl({ thread }: { thread: ThreadView }) {
               from three different families (maintainer 2026-08-04: "the icon brightnesses and spacing
               look absolutely terrible"). The cluster is one status group, so it takes one tone — the
               armed/idle distinction is carried by the amber, which is the state worth seeing, and not
-              by holding the resting glyph a step below the readouts beside it. */}
-          <GoalMark size={12} className={live ? "text-attention-90" : "text-muted-60 hover:text-muted"} />
+              by holding the resting glyph a step below the readouts beside it.
+
+              THE GLYPH BRIGHTENS ON THE BUTTON'S HOVER, NOT ITS OWN. It carried a bare `hover:`, so the
+              outline lit the moment the pointer crossed the button's padding while the glyph waited for
+              the pointer to reach its 12px of ink — two reactions to one target (maintainer 2026-09-26:
+              "As soon as I'm hovering over the box at all, the icon and the border should both
+              animate"). The group is NAMED because Tailwind's `group-hover` matches ANY `.group`
+              ancestor, not the nearest one. */}
+          <GoalMark
+            size={12}
+            className={live ? "text-attention-90" : "text-muted-60 group-hover/goal:text-muted group-focus-visible/goal:text-muted"}
+          />
         </button>
       </PopoverAnchor>
       {mode === "preview" ? (
