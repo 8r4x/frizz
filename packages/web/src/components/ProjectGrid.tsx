@@ -13,15 +13,18 @@ import * as RadixDialog from "@radix-ui/react-dialog"
 import * as RadixDropdown from "@radix-ui/react-dropdown-menu"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useEffect, useRef, useState, type ReactNode } from "react"
-import { Ellipsis, ImagePlus, Loader2 } from "lucide-react"
+import { Ellipsis, ImagePlus, Loader2, Settings as SettingsIcon } from "lucide-react"
 import { Link, useNavigate } from "react-router"
+import { useSnapshot } from "valtio"
 import { slugify, type ProjectCard } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { relativeAge } from "../lib/activityTime.ts"
 import { projectHref } from "../lib/base-path.ts"
-import { showToast } from "../store.ts"
+import { useIsMobile } from "../lib/mobile.ts"
+import { showToast, store } from "../store.ts"
 import { Dialog } from "./ui/Dialog.tsx"
 import { ProjectIconMenu, ProjectSquare } from "./ProjectRail.tsx"
+import { SettingsDrawer } from "./SettingsDrawer.tsx"
 
 /**
  * The mark, at the size where it is legible AS a mark.
@@ -43,14 +46,8 @@ function shortPath(path: string, home: string | undefined): string {
 const CARD_BASE =
   "flex flex-col gap-1 rounded-lg border px-3 py-2.5 outline-none transition-colors focus-visible:ring-1 focus-visible:ring-focus-ink-60"
 
-// On a phone the same rows go FULL WIDTH: no card border, no radius, no grid gutter — a hairline
-// between rows instead, and the whole row is the target. The grid above the breakpoint is untouched.
-// The row keeps the 16px inset the desktop card gave up: a full-bleed row wants a page margin, not a
-// card's, and the trigger offsets below were measured against it. `pl-4`, not `px-4`: a media-query
-// utility outranks the link's own `pr-9`, so `px-4` here would shrink the strip the overflow trigger
-// sits on to 16px and the truncated path would run into the ellipsis (seen at 390px, 2026-09-19).
-// The row's strip is 40: the same 28px box, 7 from the edge, plus 5.
-const MOBILE_ROW = "max-[700px]:rounded-none max-[700px]:border-x-0 max-[700px]:border-t-0 max-[700px]:border-b-border/70 max-[700px]:bg-transparent max-[700px]:pl-4 max-[700px]:pr-10 max-[700px]:py-3.5"
+// Above the phone breakpoint only: below it the page is MobileProjectList, a plain list, and no card
+// renders at all (phone design 2026-09-30). The card carried `max-[700px]` row overrides until then.
 
 /** The card's icon is the rail's square at card size, and the one place to change it. */
 const CARD_ICON = 34
@@ -74,7 +71,7 @@ function Card({ project, home }: { project: ProjectCard; home: string | undefine
         // that reflow the moment the pointer arrives read as the card flinching away from it. 36 is the
         // trigger's own 32px footprint (28px box, 4px from the edge) plus 4px, so the truncated text
         // never runs up against a box it cannot see.
-        className={`${CARD_BASE} ${MOBILE_ROW} flex-row items-center gap-3 border-border bg-panel pr-9 group-hover/card:border-border-strong group-hover/card:bg-panel-2 ${
+        className={`${CARD_BASE} flex-row items-center gap-3 border-border bg-panel pr-9 group-hover/card:border-border-strong group-hover/card:bg-panel-2 ${
           project.stale ? "opacity-60" : ""
         }`}
       >
@@ -105,9 +102,7 @@ function Card({ project, home }: { project: ProjectCard; home: string | undefine
       {/* THE ICON IS THE CONTROL. The trigger is the square's own footprint — same size, same corner
           radius, laid exactly over it. The offsets are the link's frame, which this sits outside of:
           13 is its 1px border plus `px-3`, and the square is centred in the link, so `top-1/2` plus the
-          translate centres this on it. The phone row (MOBILE_ROW) drops the side and top borders and
-          pads 16 of its own, so there it is 16, and the centre moves up half the missing top border
-          — measured 2026-08-24: 1px left and 0.5px low without these. It draws nothing until the
+          translate centres this on it. It draws nothing until the
           pointer is over the square, when a scrim and an image glyph say "this changes the picture" —
           the scrim at 75%, because at 60% a monogram's letters and a logo's strokes still showed
           through and tangled with the glyph (measured at dsf 6, 2026-08-24). It stays lit while its
@@ -121,7 +116,7 @@ function Card({ project, home }: { project: ProjectCard; home: string | undefine
           type="button"
           aria-label={`Change the icon for ${project.name}`}
           style={{ width: CARD_ICON, height: CARD_ICON }}
-          className="icon-hover-outline absolute left-[13px] top-1/2 flex -translate-y-1/2 items-center justify-center rounded-[30%] bg-black/75 text-on-overlay opacity-0 outline-none transition-opacity hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-focus-ink-60 data-[state=open]:opacity-100 max-[700px]:left-4 max-[700px]:top-[calc(50%-0.5px)]"
+          className="icon-hover-outline absolute left-[13px] top-1/2 flex -translate-y-1/2 items-center justify-center rounded-[30%] bg-black/75 text-on-overlay opacity-0 outline-none transition-opacity hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-focus-ink-60 data-[state=open]:opacity-100"
         >
           <ImagePlus size={16} strokeWidth={1.75} />
         </button>
@@ -134,15 +129,14 @@ function Card({ project, home }: { project: ProjectCard; home: string | undefine
           ellipsis paints only 10 of the 15px glyph it draws at, centred in a 28px hit area, which is
           9px of dead space a side (measured 2026-08-26). 4 + 9 = the same 13, so the two ends of the
           card balance; at the old 17px inset this was `right-[4px]`, and `right-[5px]` had put the
-          mark at 14 where it read as crowding the border. The phone row (MOBILE_ROW) drops the side
-          borders and pads 16, so there it is 7.
+          mark at 14 where it read as crowding the border.
           It is revealed by the CARD's hover rather than its own, because a control nobody can see until
           they happen to cross nine pixels of empty box is a control nobody finds. */}
       <ProjectMenu onRename={() => setRenaming(true)} onDelete={() => setConfirmingDelete(true)}>
         <button
           type="button"
           aria-label={`More actions for ${project.name}`}
-          className="icon-hover-outline absolute right-[8px] top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-muted opacity-0 outline-none transition-opacity hover:bg-panel-2 hover:text-fg focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-focus-ink-60 group-hover/card:opacity-100 data-[state=open]:opacity-100 max-[700px]:right-[7px] max-[700px]:opacity-100"
+          className="icon-hover-outline absolute right-[8px] top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-muted opacity-0 outline-none transition-opacity hover:bg-panel-2 hover:text-fg focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-focus-ink-60 group-hover/card:opacity-100 data-[state=open]:opacity-100"
         >
           <Ellipsis size={15} />
         </button>
@@ -451,7 +445,7 @@ function PhantomCard({
       type="button"
       onClick={onClick}
       disabled={pending}
-      className={`${CARD_BASE} items-center justify-center gap-1.5 border-dashed border-border-strong bg-transparent text-muted hover:border-accent hover:text-fg max-[700px]:mx-4 max-[700px]:mt-4 ${
+      className={`${CARD_BASE} items-center justify-center gap-1.5 border-dashed border-border-strong bg-transparent text-muted hover:border-accent hover:text-fg ${
         hero ? "min-h-[118px]" : "min-h-[74px]"
       }`}
     >
@@ -548,6 +542,84 @@ function AddProjectDialog({
   )
 }
 
+/**
+ * THE PHONE'S PROJECTS PAGE — a plain list, one row per project (phone design 2026-09-30, § 6).
+ *
+ * The board's ← comes here, so each row answers "where should I go": the project's own square (the
+ * grid's icon, a monogram when it has none), its name, its path, and at the right the project's queue in
+ * the accent and its Active band in muted. Adding, renaming and removing a project stay on the desktop —
+ * the list has no menus, and the phantom "Add a project" card does not render.
+ *
+ * THE COUNTS ARE THE DESKTOP RAIL'S (`projectsRailCounts`, the same query key the rail polls): `queued`
+ * is the project's queue — everything waiting on the human, which is what the rail's accent badge says —
+ * and `running` its Active band. The board's own header counts ASKS alone ("3 need you"), which is a
+ * narrower set; the rail counts carry no per-project ask count, so the two numbers can differ when a
+ * project has rested handoffs that are not questions.
+ *
+ * The gear opens Settings, which is mounted HERE on this page: the board's <App/> is what normally hosts
+ * it, and <App/> does not render on `/`.
+ */
+function MobileProjectList({ projects, home }: { projects: readonly ProjectCard[]; home: string | undefined }) {
+  const { showSettings } = useSnapshot(store)
+  const counts = useQuery({
+    queryKey: ["projectsRailCounts"],
+    queryFn: () => rpc.projectsRailCounts(),
+    refetchInterval: 5_000,
+  })
+  return (
+    <div data-mobile-projects-page className="min-h-dvh bg-bg">
+      <header className="sticky top-0 z-10 border-b border-border/70 bg-bg pt-[env(safe-area-inset-top)]">
+        <div className="flex h-[56px] items-center pl-[18px] pr-[5px]">
+          <h1 className="m-0 min-w-0 flex-1 truncate text-[16.5px] font-semibold tracking-[-0.01em] text-fg">Projects</h1>
+          <button
+            aria-label="Settings"
+            data-mobile-settings
+            onClick={() => (store.showSettings = true)}
+            className="flex size-[44px] shrink-0 items-center justify-center rounded-full text-fg/85 active:bg-hover-strong"
+          >
+            <SettingsIcon size={21} strokeWidth={1.9} />
+          </button>
+        </div>
+      </header>
+      {projects.length === 0 ? (
+        <p className="m-0 px-10 pt-24 text-center text-[15px] text-muted">No projects yet. Add one from Frizz on a computer.</p>
+      ) : (
+        <ul className="m-0 list-none p-0 pb-[env(safe-area-inset-bottom)]">
+          {projects.map((project) => {
+            const c = counts.data?.[project.id]
+            return (
+              <li key={project.id}>
+                <Link
+                  to={projectHref(project.slug)}
+                  data-mobile-project-row={project.slug}
+                  className={`flex min-h-[62px] items-center gap-3 border-b border-border/70 px-[18px] py-2 active:bg-hover ${project.stale ? "opacity-60" : ""}`}
+                >
+                  <span className={`shrink-0 ${project.stale ? "grayscale" : ""}`}>
+                    <ProjectSquare project={project} size={CARD_ICON} />
+                  </span>
+                  <span className="flex min-w-0 flex-1 flex-col">
+                    <span className="truncate text-[15.5px] font-medium leading-[20px] text-fg">{project.name}</span>
+                    <span className="truncate font-mono-keep text-[12.5px] leading-[17px] text-muted" title={project.path}>
+                      {project.stale ? "Directory is missing" : shortPath(project.path, home)}
+                    </span>
+                  </span>
+                  {c && (c.queued > 0 || c.running > 0) ? (
+                    <span data-mobile-project-counts className="flex shrink-0 items-baseline gap-2.5 whitespace-nowrap text-[13px] text-muted">
+                      {c.queued > 0 ? <span className="font-bold tabular-nums text-accent">{c.queued}</span> : null}
+                      {c.running > 0 ? <span className="tabular-nums">{c.running} working</span> : null}
+                    </span>
+                  ) : null}
+                </Link>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+      {showSettings ? <SettingsDrawer /> : null}
+    </div>
+  )
+}
+
 export function ProjectGrid() {
   // The typed-path dialog is the FALLBACK, not the front door: it opens only when the machine has no
   // picker, or the picker failed to open and said why.
@@ -594,6 +666,21 @@ export function ProjectGrid() {
   // The home directory is only ever used to shorten a path for display, so a miss costs a longer row.
   const home = data?.[0]?.path.match(/^(\/(?:Users|home)\/[^/]+)\//u)?.[1]
   const empty = data !== undefined && data.length === 0
+  const isMobile = useIsMobile()
+
+  // Below the phone breakpoint the page is a list, not a grid (MobileProjectList). The two one-shot
+  // readers above still ran — `?add=` and `?unknown=` belong to this arrival on either shell — and the
+  // typed-path dialog still mounts if a launcher asked for one.
+  if (isMobile && data) {
+    return (
+      <>
+        <MobileProjectList projects={data} home={home} />
+        {fallback ? (
+          <AddProjectDialog reason={fallback.reason} proposed={proposed} onClose={() => setFallback(null)} />
+        ) : null}
+      </>
+    )
+  }
 
   return (
     // m-auto rather than justify-center: a centred flex column CLIPS its overflow at the top once
@@ -622,12 +709,12 @@ export function ProjectGrid() {
         <>
           {/* THREE ACROSS WHEN THE WINDOW ALLOWS IT, FEWER WHEN IT DOES NOT. `auto-fill` fits as many
               272px tracks as the width holds and stretches them, and the 900px cap is what makes three
-              the ceiling: a fourth track would need 1112. So the grid is one column under the phone
-              breakpoint, two from there to 832px of content width, and three above — the page pads
+              the ceiling: a fourth track would need 1112. So the grid is one column in the narrowest
+              window (a phone gets MobileProjectList instead), two from there to 832px of content width, and three above — the page pads
               24 a side and the rail reserves 57, so three columns arrive at a 937px window. It was two
               across at 720 until 2026-09-19 (maintainer: "three columns when possible"). */}
           <div
-            className={`grid w-full gap-2 max-[700px]:gap-0 max-[700px]:grid-cols-1 ${
+            className={`grid w-full gap-2 ${
               empty ? "max-w-[360px] grid-cols-1" : "max-w-[900px] grid-cols-[repeat(auto-fill,minmax(272px,1fr))]"
             }`}
           >
