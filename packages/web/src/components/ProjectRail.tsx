@@ -11,6 +11,8 @@ import { queued } from "../groups.ts"
 import { asThreads } from "../hooks.ts"
 import { showToast, store } from "../store.ts"
 import { projectHref, projectSlug } from "../lib/base-path.ts"
+import { useOptimisticallyArchived } from "../lib/optimisticArchive.ts"
+import { useOptimisticallySteered } from "../lib/steering.ts"
 import { dropIndex, edgeScrollVelocity, moveItem, shiftFor } from "../lib/railReorder.ts"
 import { Tooltip } from "./Tooltip.tsx"
 
@@ -523,7 +525,12 @@ function useRailCounts(currentSlug: string | undefined, projects: readonly Proje
   })
   // valtio tracks the property read, so this re-renders on board changes and nothing else.
   const board = useSnapshot(store).board
-  const threads = currentSlug !== undefined && board ? asThreads(board.threads) : undefined
+  // THE SAME TWO OVERLAYS THE SIDEBAR FOLDS IN (Sidebar.tsx), so the square's counts and the rows beside
+  // it change on the same click: a just-sent steer leaves Queue for Running, a just-clicked Mark as done
+  // leaves both. Read off the raw board instead, the badge kept the old split for the whole round-trip
+  // while the sidebar had already moved. Hooks cannot be conditional, hence the empty list.
+  const overlaid = useOptimisticallyArchived(useOptimisticallySteered(board ? asThreads(board.threads) : []))
+  const threads = currentSlug !== undefined && board ? overlaid : undefined
   const live = threads && { queued: threads.filter(queued).length, running: threads.filter(activeBandThread).length }
   const currentId = currentSlug === undefined ? undefined : projects.find((project) => project.slug === currentSlug)?.id
   return (project) => (project.id === currentId && live ? live : polled.data?.[project.id])
