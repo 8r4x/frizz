@@ -657,6 +657,33 @@ test("applyRecord: a child that FAILED and was re-steered comes back live under 
   assert.equal(s.retiredSubAgents.get("toolu_dispatch")?.status, "completed")
 })
 
+test("applyRecord: a resume landing between the carriers of the OLD completion keeps the new run live", () => {
+  // The real lando thread (2026-09-30): one completion reached the transcript three times, byte-identical
+  // — queue enqueue, inline attachment, queue remove — and the parent's SendMessage resumed the child
+  // between the first and the second. The later copies used to retire the resumed run 100 ms after it
+  // started, and Frizz told the worker its helper was "NOT RUNNING" for the hour it went on building.
+  const s = newTailState("t", "s", "/x")
+  const agentId = "a0b3e54c10910201e"
+  applyRecord(s, agentDispatch("toolu_dispatch", "Renaming Lando to Porg", "2026-09-30T17:40:00.000Z"))
+  applyRecord(s, agentLaunch("toolu_dispatch", agentId, OUT, "2026-09-30T17:40:00.200Z"))
+  const old = notify("toolu_dispatch", agentId, "completed", "2026-09-30T18:27:12.887Z")
+  applyRecord(s, old)
+  assert.equal(s.subAgents.size, 0, "the first carrier retires the finished run")
+  applyRecord(s, sendMessage("toolu_send", agentId, "Extend rename to framework", "2026-09-30T18:28:15.000Z"))
+  // The newer, shorter ack shape: `resumedAgentId` with no output path in the message.
+  const text = JSON.stringify({ success: true, message: "Resuming agent a0b3e54", resumedAgentId: agentId, pin: { id: agentId, name: agentId, ref: "39020d" } })
+  applyRecord(s, { type: "user", timestamp: "2026-09-30T18:28:15.725Z", message: { content: [{ type: "tool_result", tool_use_id: "toolu_send", content: [{ type: "text", text }] }] } })
+  assert.equal(s.subAgents.size, 1, "the resume revives it")
+  applyRecord(s, { type: "attachment", timestamp: "2026-09-30T18:28:15.800Z", attachment: { type: "queued_command", prompt: old.content } })
+  const removed = { ...old, operation: "remove", timestamp: "2026-09-30T18:28:15.823Z" }
+  applyRecord(s, removed)
+  assert.equal(s.subAgents.size, 1, "later copies of the OLD completion cannot end the NEW run")
+  // The resumed run's own completion carries a different body, so it still retires the row.
+  const fresh = notify("toolu_send", agentId, "completed", "2026-09-30T19:29:39.559Z")
+  applyRecord(s, { ...fresh, content: fresh.content.replace("Agent finished", "Agent finished the framework rename") })
+  assert.equal(s.subAgents.size, 0, "the resumed run retires on its own notification")
+})
+
 test("applyRecord: an ordinary SendMessage to a LIVE child neither duplicates it nor invents one", () => {
   const s = newTailState("t", "s", "/x")
   applyRecord(s, agentDispatch("toolu_dispatch", "Still working", "2026-07-28T18:14:02.743Z"))

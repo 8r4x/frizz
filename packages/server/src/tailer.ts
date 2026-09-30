@@ -1,5 +1,6 @@
 import { statSync, openSync, readSync, closeSync, readdirSync, realpathSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs"
 import { execFile } from "node:child_process"
+import { createHash } from "node:crypto"
 import { promisify } from "node:util"
 import { basename, join, win32 } from "node:path"
 import { homedir, tmpdir } from "node:os"
@@ -689,6 +690,14 @@ export interface TailState extends FoldState {
   // prompt rest signal the branch has. See recordDescendantTerminal. Bounded; keyed by task-id, which
   // IS the agent id, so it joins straight onto a sidecar. Absent until the first one lands.
   descendantTerminals?: Map<string, number>
+  // DIRECT op task-id → a fingerprint of the last terminal <task-notification> block folded for it. One
+  // notification reaches the transcript up to THREE times, byte-identical — queue enqueue, the inline
+  // attachment, queue remove — and a `SendMessage` resume can land BETWEEN the copies. A later copy
+  // then found the REVIVED run live under the same task id and retired it as if the new run had
+  // finished: a rename helper resumed at 18:28:15 on a real lando thread (2026-09-30) vanished from the
+  // board 100 ms later and stayed gone for an hour while it built. See trackCompletions. Bounded;
+  // absent until the first terminal lands.
+  foldedTerminals?: Map<string, string>
   // SendMessage tool_use id → the `summary` that call carried, held only until its tool_result lands
   // (the very next record). A RESTART ack names the child's runtime id and its output path but nothing
   // about the work, so this is the label of last resort when `trackResumes` has to mint a row for a
@@ -1210,6 +1219,29 @@ function findLiveByTaskId(state: TailState, taskId: string): SubAgentEntry | und
   return undefined
 }
 
+// Is this task id one of THIS session's own ops, live or already retired? Only such a notification is
+// remembered for trackCompletions' repeat check. An id the fold has not met yet must NOT be: that is
+// the shell race, where carrier (a) lands before the launch record and carrier (c) is the one that
+// actually retires the row — remembering (a) would make (c) look like a repeat and pin the shell live.
+function knowsDirectOp(state: TailState, taskId: string): boolean {
+  if (findLiveByTaskId(state, taskId)) return true
+  for (const r of state.retiredSubAgents.values()) if (r.taskId === taskId) return true
+  for (const r of state.retiredShells.values()) if (r.taskId === taskId) return true
+  return false
+}
+
+const FOLDED_TERMINALS_MAX = 64
+function rememberFoldedTerminal(state: TailState, taskId: string, fingerprint: string): void {
+  const seen = (state.foldedTerminals ??= new Map())
+  seen.delete(taskId)
+  seen.set(taskId, fingerprint)
+  while (seen.size > FOLDED_TERMINALS_MAX) {
+    const oldest = seen.keys().next().value
+    if (oldest === undefined) break
+    seen.delete(oldest)
+  }
+}
+
 // Resolve a tracked child's transcript path from its launch ack, best shape first: an explicit
 // "output_file:" (older Agent ack), the shell ack's "Output is being written to:", else DERIVED from
 // the mailbox ack's agentId — subagent transcripts live at <session-dir>/subagents/agent-<id>.jsonl
@@ -1412,6 +1444,8 @@ function trackLaunchResults(state: TailState, rec: Record): void {
 //   • "Agent \"<id>\" had no active task; resumed from transcript …"          230 · resumedAgentId
 //   • "Agent \"<id>\" was stopped (completed); resumed it in the background …"  95 · resumedAgentId
 //   • "Agent \"<id>\" was stopped (failed); resumed it in the background …"     11 · resumedAgentId
+// A fifth, newer shape carries `resumedAgentId` but no output path: "Resuming agent <short id>" (lando
+// thread, 2026-09-30). It parses the same way; only the task id correlates it.
 // The first is the child already being alive — reviving on it would DOUBLE a row the fold still holds,
 // which is the phantom class this whole path has leaked three times. The other three each promise the
 // <task-notification> that will retire the revived row, so nothing minted here can dangle without a
@@ -1543,7 +1577,8 @@ function trackResumes(state: TailState, rec: Record): void {
 // each is retired independently. A task-id can notify more than once (a resumed background agent
 // re-notifies) and a non-terminal "running" ping exists too, so only completed/failed/killed retire
 // the entry. Idempotent: a repeat terminal notify (the same completion arriving via both (a) and (c))
-// finds nothing live to move (no-op).
+// retires nothing — usually because nothing is live to move, and, when a `SendMessage` resume landed
+// between the two copies, because `foldedTerminals` recognises the second copy (see TailState).
 function notificationText(rec: Record): string | undefined {
   if (typeof rec.content === "string") return rec.content
   if (typeof rec.attachment?.prompt === "string") return rec.attachment.prompt
@@ -1597,14 +1632,26 @@ function trackCompletions(state: TailState, rec: Record): void {
     // EVERY correlated live entry, not just the first: the old single-.match() left all-but-one live, so a
     // 3-agent recovery still leaked 2. Dedupe (a tool-use-id and a task-id can name the same entry) and
     // collect before retiring, since retireLive mutates the map findLiveByTaskId scans.
+    // A LATER CARRIER OF A NOTIFICATION ALREADY FOLDED IS NOT A NEW TERMINAL. Any run it could end is
+    // one that started after it was written — a `SendMessage` resume landing between the copies — so it
+    // leaves that run alone. NOT consumed on a match: the lando thread carried THREE byte-identical
+    // copies (queue enqueue, inline attachment, queue remove, 18:27:12 → 18:28:15) around one resume.
+    // The resumed run's own notification carries its own <result>, so it fingerprints differently.
+    const fingerprint = createHash("sha1").update(block).digest("hex").slice(0, 16)
+    const repeatOf = new Set<string>()
+    for (const id of blockTaskIds(block)) {
+      if (state.foldedTerminals?.get(id) === fingerprint) repeatOf.add(id)
+      else if (knowsDirectOp(state, id)) rememberFoldedTerminal(state, id, fingerprint)
+    }
     const doomed = new Set<SubAgentEntry>()
     for (const m of block.matchAll(/<tool-use-id>([^<]*)<\/tool-use-id>/g)) {
       const entry = state.subAgents.get(m[1])
-      if (entry) doomed.add(entry)
+      if (entry && !(entry.taskId && repeatOf.has(entry.taskId))) doomed.add(entry)
     }
     const stampedAt = typeof rec.timestamp === "string" ? Date.parse(rec.timestamp) : Number.NaN
     for (const m of block.matchAll(/<task-id>([^<]*)<\/task-id>/g)) {
       if (m[1].startsWith("__orphan_summary__")) continue // internal scan sentinel — correlates to nothing
+      if (repeatOf.has(m[1])) continue
       const entry = findLiveByTaskId(state, m[1])
       if (entry) doomed.add(entry)
       // Nothing live under this task id. For a DIRECT child that just means the notify is a repeat of
