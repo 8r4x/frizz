@@ -2,7 +2,7 @@ import { FileDiff, Folder } from "lucide-react"
 import { useEffect, useMemo, useRef } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { useSnapshot } from "valtio"
-import type { EditedFile, ThreadView } from "@frizz/shared"
+import { isDirectSubAgent, type EditedFile, type ThreadView } from "@frizz/shared"
 import { useProjectDir, useTranscript } from "../hooks.ts"
 import { editedFileTree, flattenEditedFileTree } from "../lib/editedFileTree.ts"
 import { newestFileChangeKey } from "../lib/editedFilesRefresh.ts"
@@ -11,7 +11,7 @@ import { prewarmLocalFile } from "../lib/localFileQuery.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { prefs } from "../lib/prefs.ts"
 import { PRIMER } from "../lib/primer.ts"
-import { AgentRow, BgShellRow, GithubWatchRow, ON_CAP, TimerRow, WaitGrid, WaitRow, liveAgents, type WaitGroup } from "./AwaitingBackgroundCard.tsx"
+import { AgentRow, BgShellRow, GithubWatchRow, ON_CAP, TimerRow, WaitGrid, WaitRow, type WaitGroup } from "./AwaitingBackgroundCard.tsx"
 
 // THE FULLSCREEN PAGE'S OPERATIONAL RAIL — what is going on in this thread, listed beside the transcript
 // (maintainer 2026-08-28): its live sub-agents, its running background shells, the pull requests and
@@ -161,12 +161,23 @@ export function FocusRail({ thread }: { thread: ThreadView }) {
   const files = transcript.data?.editedFiles ?? []
   const changeKey = useMemo(() => newestFileChangeKey(transcript.data?.messages ?? []), [transcript.data?.messages])
   useEditedFilesRefresh(thread.id, transcript.data !== undefined, changeKey, thread.runtime === "running" || thread.runtime === "spawning")
-  const agents = liveAgents(thread)
+  // The card's live children PLUS the rested ones: a direct child whose own run ended while sub-agents
+  // it dispatched are still working. The server emits a rested row only while that fan-out runs (tailer
+  // anchorRoots), so the branch is genuinely in motion — yet the card's `liveAgents` drops the rested
+  // root by state and the running grandchildren by depth, and the rail's Sub-agents group went empty
+  // with work in flight. The card keeps its own set: it counts the results the thread still AWAITS, and
+  // a rested child has already delivered its result.
+  const agents = (thread.subAgents ?? []).filter((a) => isDirectSubAgent(a) && (a.state === "running" || a.state === "rested"))
   const shells = (thread.bgShells ?? []).filter((s) => s.state === "running")
-  const github = (thread.watches ?? []).filter((w) => w.kind === "github" && w.state === "armed")
+  // AN ARCHIVED THREAD WATCHES NOTHING, though its registrations stay armed for the day it is reopened:
+  // the scheduler neither fires its timers nor polls its PRs and issues (scheduler.ts evalTimers, and the
+  // per-watcher liveness skip). Rowed here, a past-due timer read "firing…" forever and a PR row froze on
+  // its last reading, so the rail leaves them out until the thread is reopened.
+  const watching = thread.state !== "archived"
+  const github = (thread.watches ?? []).filter((w) => watching && w.kind === "github" && w.state === "armed")
   const prs = github.filter((w) => w.subject !== "issue")
   const issues = github.filter((w) => w.subject === "issue")
-  const timers = (thread.watches ?? []).filter((w) => w.kind === "timer" && w.state === "armed")
+  const timers = (thread.watches ?? []).filter((w) => watching && w.kind === "timer" && w.state === "armed")
   const { railFilesCollapsed } = useSnapshot(prefs)
   // The card's order — most-alive first — then the files, which are not a wait at all. The files are
   // also the one group that FOLDS (maintainer 2026-09-03): a worker that touched 22 files fills the
