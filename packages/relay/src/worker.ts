@@ -292,10 +292,12 @@ export class Board {
           end: () => void writer.close().catch(() => {}),
         }
       )
-      // A null-body status takes no body at all — the Response constructor throws on one, even an
-      // empty stream — so close the writer and answer with null. A browser revalidating a page it
-      // still holds (the back button, above all) gets a 304, and before this that 304 became a 504.
-      if (NULL_BODY_STATUSES.has(response.status)) {
+      // No body to stream, so answer with none. A null-body status MUST — the Response constructor
+      // throws on one given any body, even an empty stream, so a browser revalidating a page it still
+      // holds (the back button, above all) got its 304 turned into a 504. And a whole answer that
+      // happens to be empty (an empty 200, a HEAD, a redirect) would otherwise leave the visitor's
+      // stream open, and the request loading, forever.
+      if (NULL_BODY_STATUSES.has(response.status) || (response.end && response.body === null)) {
         void writer.close().catch(() => {})
         return new Response(null, visitorResponseInit(response.status, response.headers))
       }

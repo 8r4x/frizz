@@ -158,6 +158,27 @@ try {
       res.end("CACHED");
       return;
     }
+    if (req.url?.startsWith("/nothing")) {
+      // An ordinary empty body: a 200 that says so with content-length 0, or a redirect with none.
+      res.writeHead(200, { "content-type": "text/plain", "content-length": "0" });
+      res.end();
+      return;
+    }
+    if (req.url?.startsWith("/moved")) {
+      res.writeHead(302, { location: "/", "content-length": "0" });
+      res.end();
+      return;
+    }
+    if (req.url?.startsWith("/cookies")) {
+      res.writeHead(200, { "content-type": "text/plain", "content-length": "2", "set-cookie": ["a=1; Path=/", "b=2; Path=/"] });
+      res.end("OK");
+      return;
+    }
+    if (req.url?.startsWith("/ranged")) {
+      res.writeHead(206, { "content-type": "text/plain", "content-range": "bytes 0-3/13", "content-length": "4" });
+      res.end("BOAR");
+      return;
+    }
     if (req.url?.startsWith("/empty")) {
       res.writeHead(204);
       res.end();
@@ -221,6 +242,29 @@ try {
   check("a revalidation the board answers 304 reaches the visitor AS 304", revalidated.status === 304, `HTTP ${revalidated.status} ${revalidated.status === 304 ? "" : await revalidated.text()}`);
   const empty = await fetch(at("ada", "/empty"), { method: "POST" });
   check("a 204 from the board reaches the visitor as 204", empty.status === 204, `HTTP ${empty.status} ${empty.status === 204 ? "" : await empty.text()}`);
+
+  // EMPTY BODIES THAT ARE NOT NULL-BODY STATUSES. The board sends these as one frame with no body, and
+  // the visitor's stream has to END — a stream left open is a request that never finishes loading.
+  // Every fetch is on a deadline so a hang fails this check instead of hanging the harness.
+  const settled = async (label, promise) => {
+    try {
+      const res = await promise;
+      return { res, text: await res.text() };
+    } catch (error) {
+      return { res: null, text: `<${label}: ${error.name}>` };
+    }
+  };
+  const nothing = await settled("empty 200", fetch(at("ada", "/nothing"), { signal: AbortSignal.timeout(10_000) }));
+  check("an empty 200 from the board finishes loading", nothing.res?.status === 200 && nothing.text === "", nothing.res ? `HTTP ${nothing.res.status}` : nothing.text);
+  const head = await settled("HEAD", fetch(at("ada"), { method: "HEAD", signal: AbortSignal.timeout(10_000) }));
+  check("a HEAD request finishes, with the board's headers", head.res?.status === 200 && head.res.headers.get("x-board") === "yes", head.res ? `HTTP ${head.res.status}` : head.text);
+  const moved = await settled("redirect", fetch(at("ada", "/moved"), { redirect: "manual", signal: AbortSignal.timeout(10_000) }));
+  check("a redirect reaches the visitor with its location", moved.res?.status === 302 && moved.res.headers.get("location") === "/", moved.res ? `HTTP ${moved.res.status} location=${moved.res.headers.get("location")}` : moved.text);
+  const cookies = await settled("cookies", fetch(at("ada", "/cookies"), { signal: AbortSignal.timeout(10_000) }));
+  const setCookies = cookies.res?.headers.getSetCookie() ?? [];
+  check("every set-cookie survives the hop, not only the first", setCookies.length === 2, JSON.stringify(setCookies));
+  const ranged = await settled("206", fetch(at("ada", "/ranged"), { headers: { range: "bytes=0-3" }, signal: AbortSignal.timeout(10_000) }));
+  check("a 206 partial body arrives as 206", ranged.res?.status === 206 && ranged.text === "BOAR", ranged.res ? `HTTP ${ranged.res.status} ${JSON.stringify(ranged.text)}` : ranged.text);
 
   // The seam that a request/response relay would fail: an SSE body has to arrive as it is produced.
   const stream = await fetch(at("ada", "/events"));
