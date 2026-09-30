@@ -859,8 +859,10 @@ export function fenceWatchViews(
 // A follow-up frizz has delivered but the transcript has not yet reflected: it lives in the delivery
 // ledger as `pending` (injected, no JSONL evidence yet), `enqueued` (positively receipted by Claude
 // Code's own queue) or `delivered` (the transport's receipt proved it went straight into a turn). All
-// three mean the human's message is handled and in flight. `unconfirmed` is NOT fresh — frizz could not
-// confirm that send, so it must stay visible for the human to re-drive.
+// three mean the human's message is handled and in flight, and so does the write-ahead `sending` (the
+// transport is being called right now; it settles or fails within SENDING_STALL_MS). `unconfirmed` is
+// NOT fresh — frizz could not confirm that send, so it must stay visible for the human to re-drive — and
+// `failed` is not either: the words never reached the worker, so the thread is still waiting on them.
 //
 // `processGone` is what keeps "in flight" honest, and it is the whole reason this reads a second
 // argument. Both live states are claims about a process HOLDING the message: `pending` says a process
@@ -874,7 +876,7 @@ export function fenceWatchViews(
 // sub-agent phantom deriveRuntime's `headlessLostWork` fixed, and the same lesson.
 function hasFreshDelivery(row: SessionRow, processGone: boolean): boolean {
   if (processGone) return false
-  return parseDeliveryLedger(row.delivery_ledger).some((d) => d.state === "pending" || d.state === "enqueued" || d.state === "delivered")
+  return parseDeliveryLedger(row.delivery_ledger).some((d) => d.state === "sending" || d.state === "pending" || d.state === "enqueued" || d.state === "delivered")
 }
 
 /** How long a message on its way to the worker keeps its row SPINNING (see deriveDeliveryInFlight). A
@@ -903,7 +905,7 @@ export function deriveDeliveryInFlight(
   if (answerInFlight) return true
   if (deliveryProcessGone) return false
   return parseDeliveryLedger(row.delivery_ledger).some((d) =>
-    (d.state === "pending" || d.state === "enqueued" || d.state === "delivered") && nowMs - Date.parse(d.at) < DELIVERY_IN_FLIGHT_SPIN_MS
+    (d.state === "sending" || d.state === "pending" || d.state === "enqueued" || d.state === "delivered") && nowMs - Date.parse(d.at) < DELIVERY_IN_FLIGHT_SPIN_MS
   )
 }
 

@@ -3553,8 +3553,23 @@ export const FollowUpInput = z.object({
   // any other runtime the message is delivered normally and this is ignored, never refused: a send
   // that arrives is always better than a send that errors.
   interrupt: z.boolean().optional(),
+  // The deliveryId of a FAILED send this one re-sends — the failed bubble's Retry. The server drops that
+  // failed entry in the same write that opens this send's own, so the retry replaces the failed bubble
+  // rather than standing beside it. A new deliveryId, never the old one: the old send's failure may be
+  // ambiguous, and only the operator decides to risk a second copy.
+  supersedes: z.string().min(1).max(200).optional(),
 })
 export type FollowUpInput = z.infer<typeof FollowUpInput>
+
+// Dismiss a FAILED send — the × on its bubble, or the second half of Edit (the text goes back into the
+// prompt box first). Only a failed entry can go: every other ledger state belongs to its transport.
+export const DismissFailedFollowUpInput = z.object({
+  slug: ThreadSlug,
+  deliveryId: z.string().min(1).max(200),
+}).strict()
+export type DismissFailedFollowUpInput = z.infer<typeof DismissFailedFollowUpInput>
+export const DismissFailedFollowUpResult = z.object({ dismissed: z.boolean() }).strict()
+export type DismissFailedFollowUpResult = z.infer<typeof DismissFailedFollowUpResult>
 
 // Take a follow-up back out of the provider's queue — the operator clicked their own queued bubble to
 // unqueue it and get the text back in the prompt box. Keyed by the same `deliveryId` the send carried,
@@ -5020,8 +5035,13 @@ export const TranscriptMessage = z.object({
   // yet — renders as an ordinary (un-grayed) user bubble. "unconfirmed": no evidence appeared within
   // the timeout — the injection likely mutated/never landed; the client renders a quiet warning.
   // Once the real transcript record lands the ledger drops the item and this field goes with it.
-  // Additive + optional.
-  deliveryState: z.enum(["pending", "enqueued", "delivered", "unconfirmed"]).optional(),
+  // "sending": the server's WRITE-AHEAD entry, opened before any transport is touched, so the text is
+  // the server's from the instant it arrives. "failed": the transport threw, or never answered — the
+  // text is kept until the operator retries, edits or dismisses it, and nothing retries it on its own.
+  // Additive + optional: an older client renders both as a plain bubble (gray for "sending").
+  deliveryState: z.enum(["sending", "pending", "enqueued", "delivered", "unconfirmed", "failed"]).optional(),
+  // Why a "failed" send failed, verbatim from the transport. Set only alongside deliveryState "failed".
+  deliveryError: z.string().optional(),
   // FRIZZ wrote this user turn, not the human: it is a scheduler wake delivery (isWakeDelivery). The
   // client renders it as a first-party card rather than the human's off-white right-justified bubble,
   // which was claiming the operator had typed a message the watcher composed. Additive + optional: an

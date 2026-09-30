@@ -8,7 +8,8 @@ import { splitComposerValue } from "../lib/imagePaths.ts"
 import { useThreadComposerControls } from "../hooks/useThreadComposerControls.tsx"
 import { Composer } from "./Composer.tsx"
 import { LogoutConfirmModal, SignInModal } from "./SignInModal.tsx"
-import { draftKey, draftStore, useDraft, useProjectDir } from "../lib/drafts.ts"
+import { draftKey, mergeIntoDraft, useDraft, useProjectDir } from "../lib/drafts.ts"
+import { noteFailedDraftOrigin, takeSupersededFailure } from "../lib/failedDelivery.ts"
 import { parseAccountAlias } from "../lib/signIn.ts"
 import { useEagerFollowUp, type EagerFollowUpCallbacks } from "../lib/eagerComposerSubmission.ts"
 import { canInterruptAndSend } from "../lib/composerKeyboard.ts"
@@ -150,10 +151,18 @@ export function ThreadComposerBox({
     const outgoing = buildMessageWithContext(text, staged, projectDir)
     const callbacks: EagerFollowUpCallbacks = {
       onOptimistic: clearMessage,
-      // Never clobber a newer draft typed while the request was in flight.
-      onRollback: () => {
-        if (!draftStore.get(key)) setMessage(message)
+      // Re-sending words an earlier failure handed back replaces that failure's bubble — see
+      // lib/failedDelivery.ts.
+      supersedes: takeSupersededFailure(key, outgoing),
+      // Never clobber a newer draft typed while the request was in flight — and never DROP the failed
+      // message for it either. This used to restore only into an empty box, so a failed send was
+      // silently discarded whenever the operator had typed anything since; the words now go above
+      // whatever is there (mergeIntoDraft). The server keeps its own copy too when it can (`kept`),
+      // because this draft is sessionStorage and does not survive a browser restart.
+      onRollback: (failure) => {
+        mergeIntoDraft(key, message)
         restoreContextItems(slug, staged)
+        noteFailedDraftOrigin(key, { ...failure, text: message })
       },
     }
     if (submitOverride) submitOverride(outgoing, callbacks)
