@@ -64,7 +64,11 @@ const startBoard = async () => {
   });
   const code = await new Promise((resolve, reject) => {
     let buf = "";
-    const timer = setTimeout(() => reject(new Error(`the board never printed a link:\n${buf.slice(0, 400)}`)), 90_000);
+    // Kill the launcher on the way out: `board` is only assigned once this resolves, so a board that
+    // never came up would otherwise outlive the run with nothing left holding its pid.
+    const fail = (why) => { clearTimeout(timer); try { child.kill("SIGTERM"); } catch { /* already gone */ } reject(new Error(`${why}:\n${buf.slice(0, 400)}`)); };
+    const timer = setTimeout(() => fail("the board never printed a link"), 90_000);
+    child.once("exit", (code) => fail(`the board exited (${code}) before printing a link`));
     const onData = (d) => {
       buf += d;
       const m = buf.match(/frizz_code=([A-Za-z0-9_-]+)/);
@@ -110,6 +114,16 @@ try {
   check("a second device redeems its own link", laptop.includes("frizz_session="), laptopCode ? "" : second.out.slice(0, 120));
 
   check("both devices reach the board", (await ask("/", { cookie: phone })).status === 200 && (await ask("/", { cookie: laptop })).status === 200);
+
+  // THE CONTROL PLANE IS GATED TOO. A request through the tunnel with no session used to reach
+  // /_frizz/control/* straight past the session gate — restart, update-restart and status all answered
+  // to anyone who set the right Host and Origin, which a non-browser client does freely.
+  const bareRestart = await ask("/_frizz/control/restart", { method: "POST", origin: ORIGIN });
+  check("a no-cookie restart through the tunnel is refused", bareRestart.status === 401 && bareRestart.body === "", `HTTP ${bareRestart.status} ${bareRestart.body.slice(0, 80)}`);
+  const bareStatus = await ask("/_frizz/control/status", { origin: ORIGIN });
+  check("and so is a no-cookie status read", bareStatus.status === 401 && bareStatus.body === "", `HTTP ${bareStatus.status}`);
+  const afterBare = json((await ask("/_frizz/control/status", { cookie: laptop, origin: ORIGIN })).body);
+  check("the refused restart did not start one", afterBare?.state === "ready", JSON.stringify(afterBare ?? {}).slice(0, 80));
 
   // "SIGN OUT THIS DEVICE" — a third device ends its own session from the tunnel. The body names the
   // LAPTOP's id and asks for all; both must be ignored, because the id comes from the cookie alone.
