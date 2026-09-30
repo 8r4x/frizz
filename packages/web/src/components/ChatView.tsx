@@ -42,6 +42,7 @@ import { MobileAnswerSheet } from "./MobileAnswerSheet.tsx"
 import { sendEagerFollowUp } from "../lib/eagerComposerSubmission.ts"
 import { limitResumeClock } from "../lib/activityTime.ts"
 import { useUnqueueFollowUp, useUnqueueSupported } from "../lib/unqueueFollowUp.ts"
+import { useFailedDeliveryActions } from "../lib/failedDelivery.ts"
 import { useDeliverQueuedNow, useDeliverQueuedNowSupported } from "../lib/deliverQueuedNow.ts"
 import { useInnerHtml } from "../lib/innerHtml.ts"
 import { useLocalFileCodeLinks } from "../lib/localFileCode.ts"
@@ -3144,7 +3145,58 @@ function SentContextBody({ body, items }: { body: string; items: SentContextItem
   )
 }
 
-function UserBubble({ text, rawText, queued, deliveryUnconfirmed, deliveryId, sourceId }: { text: string; rawText?: string; queued?: boolean; deliveryUnconfirmed?: boolean; deliveryId?: string; sourceId?: string }) {
+// A FAILED SEND's row, under its bubble: why it failed, then the operator's three ways out (see
+// lib/failedDelivery.ts for what each does and why none of them is automatic). Its own component so the
+// hooks behind the actions — one of which reads the board snapshot — mount only for a failed bubble,
+// never for every user bubble in the transcript.
+//
+// The actions need a thread to act on, so they render only inside ThreadSlugContext — the same
+// authorization boundary unqueue uses. Without one (a sub-agent's transcript) the error still shows.
+function FailedSendRow({ deliveryId, text, rawText, error }: { deliveryId: string; text: string; rawText: string; error?: string }) {
+  const slug = useContext(ThreadSlugContext)
+  const { retry, edit, dismiss, pending } = useFailedDeliveryActions(slug)
+  const button = "rounded-md border border-border-strong bg-panel-2/60 px-2.5 py-1 text-[12px] font-medium text-fg/80 outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60 disabled:opacity-45 disabled:hover:bg-panel-2/60 disabled:hover:text-fg/80"
+  return (
+    <div data-failed-send={deliveryId} className="mt-1 flex flex-col items-end gap-1.5">
+      <div role="alert" className="text-right text-[12px] leading-snug text-danger-soft [overflow-wrap:anywhere]">
+        Not delivered{error ? ` — ${error}` : ""}
+      </div>
+      {slug && (
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            className={button}
+            disabled={pending}
+            title="Send this message again"
+            onClick={() => retry({ deliveryId, text: rawText })}
+          >
+            Retry
+          </button>
+          <button
+            type="button"
+            className={button}
+            disabled={pending}
+            title="Put this message back in the prompt box"
+            onClick={(e) => edit({ deliveryId, text, from: e.currentTarget })}
+          >
+            Edit
+          </button>
+          <button
+            type="button"
+            className={button}
+            disabled={pending}
+            title="Discard this message"
+            onClick={() => dismiss({ deliveryId })}
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function UserBubble({ text, rawText, queued, deliveryUnconfirmed, deliveryFailed, deliveryError, deliveryId, sourceId }: { text: string; rawText?: string; queued?: boolean; deliveryUnconfirmed?: boolean; deliveryFailed?: boolean; deliveryError?: string; deliveryId?: string; sourceId?: string }) {
   // TAKE IT BACK. A still-queued send is the one bubble in the transcript that isn't history yet, so
   // it alone is clickable: the click unqueues it at the provider and hands the words back to the
   // prompt box (see lib/unqueueFollowUp.ts). Three gates, all of them load-bearing:
@@ -3222,7 +3274,7 @@ function UserBubble({ text, rawText, queued, deliveryUnconfirmed, deliveryId, so
           // in the app uses. A KEYBOARD focus ring still has to exist, so it keeps the accent — but
           // OFFSET onto the near-black page, which is the only place this yellow reads clean and is how
           // every other focus ring in the app is drawn.
-          className={`relative ${BLOCK_RADIUS} rounded-br-sm bg-user-bubble px-3.5 py-3 text-[14px] whitespace-pre-wrap [overflow-wrap:anywhere] text-user-bubble-fg ${queued ? "opacity-50" : ""} ${unqueueable ? "cursor-pointer transition-opacity group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg" : ""} ${unqueuePending ? "!opacity-30" : ""}`}
+          className={`relative ${BLOCK_RADIUS} rounded-br-sm bg-user-bubble px-3.5 py-3 text-[14px] whitespace-pre-wrap [overflow-wrap:anywhere] text-user-bubble-fg ${queued || deliveryFailed ? "opacity-50" : ""} ${unqueueable ? "cursor-pointer transition-opacity group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg" : ""} ${unqueuePending ? "!opacity-30" : ""}`}
         >
           {/* Verbatim bytes, but link-shaped runs (a pasted URL, `#123`, a commit hash) render as the
               anchors they would be in agent prose — see LinkifiedText. The anchors stop their own
@@ -3277,6 +3329,9 @@ function UserBubble({ text, rawText, queued, deliveryUnconfirmed, deliveryId, so
           now, so it states the fact and leaves the next move to them. */}
       {deliveryUnconfirmed && (
         <div className="text-[11px] text-attention-80">Delivery unconfirmed — no receipt from the worker</div>
+      )}
+      {deliveryFailed && deliveryId && (
+        <FailedSendRow deliveryId={deliveryId} text={text} rawText={rawText ?? text} error={deliveryError} />
       )}
       {/* No "click to unqueue" hint: the hover lift above already says the bubble is live, and a
           label spelling that out is noise on every queued send. Only the IN-FLIGHT retraction gets a
@@ -3351,7 +3406,9 @@ export const Message = memo(function Message({ m, answering, dense, paired, text
     // renders as a structured answers card echoing the question component — not a flat run-on bubble.
     // Non-matching text (and a parse hiccup → null) falls back to the plain bubble; text is never lost.
     const answers = paired !== undefined ? paired : parseAnswersCard(text)
-    if (answers) return <AnswersCard answers={answers} queued={m.queued} sourceId={m.sourceId} />
+    // …unless it FAILED: the answers card has no failure row, and a failed send must always show its
+    // Retry / Edit / Dismiss (lib/failedDelivery.ts). The plain bubble carries the same words.
+    if (answers && m.deliveryState !== "failed") return <AnswersCard answers={answers} queued={m.queued} sourceId={m.sourceId} />
     // A scheduler wake is recorded as a user turn because it is pasted into the worker's composer —
     // but FRIZZ wrote it, not the human, so it must not wear the human's off-white right-justified
     // bubble. `m.wake` is the server's own tell (the delivery token it stripped), never a text guess.
@@ -3372,7 +3429,7 @@ export const Message = memo(function Message({ m, answering, dense, paired, text
     // `rawText` rides alongside the presentation text because the two differ: the bubble shows the
     // stripped/normalized copy, while the optimistic cache entry an unqueue has to evict is keyed on
     // the message's own raw text.
-    return <UserBubble text={text} rawText={m.text} queued={m.queued} deliveryUnconfirmed={m.deliveryState === "unconfirmed"} deliveryId={m.deliveryId} sourceId={m.sourceId} />
+    return <UserBubble text={text} rawText={m.text} queued={m.queued} deliveryUnconfirmed={m.deliveryState === "unconfirmed"} deliveryFailed={m.deliveryState === "failed"} deliveryError={m.deliveryError} deliveryId={m.deliveryId} sourceId={m.sourceId} />
   }
 
   // Build ONE ordered list of block-level children, then interleave with explicit spacers. The

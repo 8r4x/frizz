@@ -26,6 +26,8 @@ import type {
   FollowUpInput,
   UnqueueFollowUpInput,
   UnqueueFollowUpResult,
+  DismissFailedFollowUpInput,
+  DismissFailedFollowUpResult,
   DeliverQueuedNowInput,
   DeliverQueuedNowResult,
   CompactThreadInput,
@@ -167,6 +169,8 @@ export interface Api {
   // lib/eagerComposerSubmission.ts DELIVERY_SEND_TIMEOUT_MS for what that costs without one.
   followUp(input: FollowUpInput, opts?: RpcCallOpts): Promise<void>
   unqueueFollowUp(input: UnqueueFollowUpInput): Promise<UnqueueFollowUpResult>
+  // The × (and Edit) on a FAILED send's bubble — see DismissFailedFollowUpInput.
+  dismissFailedFollowUp(input: DismissFailedFollowUpInput): Promise<DismissFailedFollowUpResult>
   // The ↑ on a queued bubble: stop waiting and make the worker read what is already queued. No message
   // payload — see DeliverQueuedNowInput.
   deliverQueuedNow(input: DeliverQueuedNowInput): Promise<DeliverQueuedNowResult>
@@ -385,6 +389,7 @@ export const PROCEDURES = {
   adoptThread: "mutation",
   followUp: "mutation",
   unqueueFollowUp: "mutation",
+  dismissFailedFollowUp: "mutation",
   deliverQueuedNow: "mutation",
   compactThread: "mutation",
   setThreadPermission: "mutation",
