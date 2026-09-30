@@ -104,6 +104,9 @@ export function visitorResponseInit(status: number, headers: Array<[string, stri
   return encoded ? { status, headers, encodeBody: "manual" } : { status, headers }
 }
 
+/** Statuses the Fetch spec forbids a body on; `new Response(body, { status })` throws for them. */
+const NULL_BODY_STATUSES: ReadonlySet<number> = new Set([101, 204, 205, 304])
+
 /** The owning pubkey the registrar recorded for a name, or null if the name is unclaimed. */
 export async function ownerPubkeyFor(env: RelayEnv, name: string): Promise<string | null> {
   const raw = await env.CLAIMS.get(`claim:${name}`)
@@ -289,6 +292,13 @@ export class Board {
           end: () => void writer.close().catch(() => {}),
         }
       )
+      // A null-body status takes no body at all — the Response constructor throws on one, even an
+      // empty stream — so close the writer and answer with null. A browser revalidating a page it
+      // still holds (the back button, above all) gets a 304, and before this that 304 became a 504.
+      if (NULL_BODY_STATUSES.has(response.status)) {
+        void writer.close().catch(() => {})
+        return new Response(null, visitorResponseInit(response.status, response.headers))
+      }
       // An inline body is the whole response, so write it and close. Otherwise the writer stays open
       // for chunks still to come — for the board's event feed, that is the normal case and it never
       // closes at all.

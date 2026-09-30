@@ -151,6 +151,18 @@ try {
       res.end(body);
       return;
     }
+    if (req.url?.startsWith("/cached")) {
+      // A revalidation, which is what a browser's back button sends for a page it still holds.
+      if (req.headers["if-none-match"] === '"v1"') { res.writeHead(304, { etag: '"v1"' }); res.end(); return; }
+      res.writeHead(200, { "content-type": "text/plain", etag: '"v1"', "content-length": "6" });
+      res.end("CACHED");
+      return;
+    }
+    if (req.url?.startsWith("/empty")) {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
     res.writeHead(200, { "content-type": "text/plain", "content-length": "13", "x-board": "yes" });
     res.end("BOARD-REACHED");
   });
@@ -198,6 +210,17 @@ try {
   const compressed = await fetch(at("ada", "/compressed"), { headers: { "accept-encoding": "br" } });
   const inflated = await compressed.text().catch((error) => `<${error.message}>`);
   check("a brotli body the board encoded arrives encoded ONCE", inflated === "BOARD-COMPRESSED", JSON.stringify(inflated.slice(0, 40)));
+
+  // A NULL-BODY status. The Response constructor throws for 101/204/205/304 given any body, even an
+  // empty stream, so a revalidated page came back as a 504 that read "The board did not answer" — on
+  // a phone, every time the back button reused a cached page (2026-09-30).
+  const fresh = await fetch(at("ada", "/cached"));
+  check("a cacheable page arrives with its etag", fresh.status === 200 && fresh.headers.get("etag") === '"v1"', `HTTP ${fresh.status}`);
+  await fresh.arrayBuffer();
+  const revalidated = await fetch(at("ada", "/cached"), { headers: { "if-none-match": '"v1"' } });
+  check("a revalidation the board answers 304 reaches the visitor AS 304", revalidated.status === 304, `HTTP ${revalidated.status} ${revalidated.status === 304 ? "" : await revalidated.text()}`);
+  const empty = await fetch(at("ada", "/empty"), { method: "POST" });
+  check("a 204 from the board reaches the visitor as 204", empty.status === 204, `HTTP ${empty.status} ${empty.status === 204 ? "" : await empty.text()}`);
 
   // The seam that a request/response relay would fail: an SSE body has to arrive as it is produced.
   const stream = await fetch(at("ada", "/events"));
