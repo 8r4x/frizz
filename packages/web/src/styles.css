@@ -625,7 +625,6 @@ a[href] {
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
 }
-.mobile-tab-inactive { opacity: var(--inactive-mark-opacity); }
 .sidebar-row-dim { opacity: var(--sidebar-dim-opacity); }
 .sidebar-row-dim:hover, .sidebar-row-dim:focus-within { opacity: var(--row-dim-hover-opacity); }
 .mobile-row-dim { opacity: var(--mobile-dim-opacity); }
