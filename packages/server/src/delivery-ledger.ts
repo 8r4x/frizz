@@ -310,13 +310,22 @@ export function recordDeliveryFailure(
   items[index] = {
     ...items[index],
     state: failure.retryable ? "sending" : "failed",
-    error: failure.error,
+    error: deliveryErrorLine(failure.error),
     ...(failure.retryable ? { retryable: true } : {}),
     updatedAt: now,
   }
   if (!failure.retryable) delete items[index].retryable
   storage.setDeliveryLedger(slug, serializeDeliveryLedger(trimLedger(items)))
   return true
+}
+
+// What the operator reads under the failed bubble: the error's FIRST line, bounded. A broker that died
+// during a cold resume reports its daemon's whole stack trace (measured: ~1.2KB, eight frames of file
+// paths), and the row holds this for as long as the failure stands. The first line carries the cause.
+export const DELIVERY_ERROR_MAX_CHARS = 300
+export function deliveryErrorLine(error: string): string {
+  const line = error.split("\n", 1)[0].trim() || "Delivery failed"
+  return line.length > DELIVERY_ERROR_MAX_CHARS ? `${line.slice(0, DELIVERY_ERROR_MAX_CHARS - 1)}…` : line
 }
 
 /** The operator dismissed a failed send (or took its text back into the prompt box). Only a `failed`

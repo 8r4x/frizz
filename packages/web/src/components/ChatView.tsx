@@ -3158,8 +3158,13 @@ function FailedSendRow({ deliveryId, text, rawText, error }: { deliveryId: strin
   const button = "rounded-md border border-border-strong bg-panel-2/60 px-2.5 py-1 text-[12px] font-medium text-fg/80 outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60 disabled:opacity-45 disabled:hover:bg-panel-2/60 disabled:hover:text-fg/80"
   return (
     <div data-failed-send={deliveryId} className="mt-1 flex flex-col items-end gap-1.5">
-      <div role="alert" className="text-right text-[12px] leading-snug text-danger-soft [overflow-wrap:anywhere]">
-        Not delivered{error ? ` — ${error}` : ""}
+      {/* LEFT-aligned inside a right-justified column: a short error hugs the bubble's right edge like
+          any one-liner here, and a long one fills the bubble's width as an ordinary paragraph instead of
+          a ragged-left block. */}
+      <div role="alert" className="text-left text-[12px] leading-snug text-danger-soft [overflow-wrap:anywhere]">
+        {/* The first line only: the server already trims, and this keeps an older row's stack trace off
+            the screen too. */}
+        Not delivered{error ? ` — ${error.split("\n", 1)[0]}` : ""}
       </div>
       {slug && (
         <div className="flex items-center gap-1.5">

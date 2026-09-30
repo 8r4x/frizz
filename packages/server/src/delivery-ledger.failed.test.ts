@@ -248,3 +248,16 @@ test("an OLDER identical message never hides a failed send", () => {
   assert.equal(out.length, 2)
   assert.equal(out[1].deliveryState, "failed")
 })
+
+test("the kept error is its first line, bounded — not a daemon's stack trace", () => {
+  const l = ledger()
+  try {
+    beginDelivery(l.storage, "t", { id: "d-1", text: "a" })
+    const trace = "Claude broker exited before it became ready (exit code 1): Claude executable is not executable\n    at validateExecutablePath (/x/claude-agent-sdk.ts:1933:11)\n    at runClaudeBroker (/x/claude-agent-broker.ts:164:19)"
+    recordDeliveryFailure(l.storage, "t", "d-1", { error: trace, retryable: false })
+    assert.equal(l.items()[0].error, "Claude broker exited before it became ready (exit code 1): Claude executable is not executable")
+    beginDelivery(l.storage, "t", { id: "d-2", text: "b" })
+    recordDeliveryFailure(l.storage, "t", "d-2", { error: "x".repeat(1_000), retryable: false })
+    assert.equal(l.items()[1].error!.length, 300)
+  } finally { l.dispose() }
+})

@@ -1277,6 +1277,29 @@ test("dismissFailedFollowUp removes a failed send and nothing else", async () =>
   h.storage.close()
 })
 
+// Codex shared the gap: its ledger entry, too, was written only after `bridge.followUp` returned. The
+// write-ahead wraps every runtime branch, so a codex send that throws is kept exactly like a Claude one.
+test("a codex follow-up whose delivery throws is kept as a failed send too", async () => {
+  const h = harness()
+  const slug = "codex-kept"
+  h.storage.upsertSession(row(slug))
+  h.storage.setBackend(slug, "codex")
+  h.storage.setCodexRuntime(slug, "app-server")
+  ;(h.ctx as { codexAppServer?: unknown }).codexAppServer = {
+    binding: () => ({ state: "active", currentTurnId: null }),
+    turnLiveness: () => undefined,
+    resumeOwnedSession: async () => {},
+    followUp: async () => { throw new Error("turn/start timed out") },
+  }
+  const error = await h.router.followUp
+    .handler({ input: { slug, sessionId: `sid-${slug}`, message: "rebase and push", deliveryId: "d-codex" } })
+    .then(() => null, (e: unknown) => e)
+  assert.equal((error as { deliveryKept?: unknown }).deliveryKept, true)
+  const [kept] = parseDeliveryLedger(h.storage.getSession(slug)?.delivery_ledger)
+  assert.deepEqual([kept.state, kept.text, kept.error], ["failed", "rebase and push", "turn/start timed out"])
+  h.storage.close()
+})
+
 test("followUp leaves `exited` alone when the bridge refuses the send", async () => {
   const { h, slug } = restartHarness()
   h.storage.setExited(slug, true)
