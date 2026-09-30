@@ -17,6 +17,7 @@ import { threadLinkView } from "./thread-links.ts"
 import { normalizeObservedThreadModel } from "./backend/thread-profiles.ts"
 import { claudeModelStanding } from "./backend/claude-model-upgrade.ts"
 import type { Tailer, SessionTelemetry, FenceView } from "./tailer.ts"
+import { firstTextLine } from "./tailer.ts"
 import type { InteractionChange } from "./interaction-store.ts"
 import { frizzDirExists } from "./frizz.ts"
 import { githubStatusKey, parseIssueRef, parsePrRef, readAwaitingPark, readGithubIssueStatusBook, readGithubStatusBook, GITHUB_ISSUE_STATUS_SETTING, GITHUB_STATUS_SETTING, type GithubIssueStatusBook, type GithubStatusBook } from "./awaiting.ts"
@@ -1539,7 +1540,8 @@ function sessionThreadView(
   const failedTele: SessionTelemetry | undefined = nativeFailure ? {
     subAgents: [], bgShells: [], ...rawTele,
     turn: "idle", permPrompt: false, pendingQuestion: false, pendingAsk: undefined, apiFault: true, providerError,
-    lastAssistant: providerError?.message, lastAssistantAt: providerError?.at,
+    lastAssistant: providerError?.message, lastAssistantLine: firstTextLine(providerError?.message), lastAssistantAt: providerError?.at,
+    liveTool: undefined,
     lastFence: undefined, lastAssistantAllDone: false,
   } : rawTele
   const done = supersededDone || providerError ? undefined : registeredDoneFence(registries.done.get(row.slug), rawTele?.lastUserAt)
@@ -1637,6 +1639,8 @@ function sessionThreadView(
     unread: row.unread === 1,
     archived,
     lastAssistant: tele?.lastAssistant,
+    lastAssistantLine: tele?.lastAssistantLine,
+    liveTool: tele?.liveTool,
     spawnedAt: row.spawned_at,
     lastActivityAt: tele?.lastActivityAt,
     lastAssistantAt: tele?.lastAssistantAt,
@@ -1779,6 +1783,7 @@ function foreignThreadView(sessionId: string, tele: SessionTelemetry, backend: "
     unread: false,
     archived: false,
     lastAssistant: tele.lastAssistant,
+    lastAssistantLine: tele.lastAssistantLine,
     lastActivityAt: tele.lastActivityAt,
     lastAssistantAt: tele.lastAssistantAt,
     lastUserAt: tele.lastUserAt,

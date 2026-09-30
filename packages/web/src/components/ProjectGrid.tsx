@@ -550,11 +550,11 @@ function AddProjectDialog({
  * the accent and its Active band in muted. Adding, renaming and removing a project stay on the desktop —
  * the list has no menus, and the phantom "Add a project" card does not render.
  *
- * THE COUNTS ARE THE DESKTOP RAIL'S (`projectsRailCounts`, the same query key the rail polls): `queued`
- * is the project's queue — everything waiting on the human, which is what the rail's accent badge says —
- * and `running` its Active band. The board's own header counts ASKS alone ("3 need you"), which is a
- * narrower set; the rail counts carry no per-project ask count, so the two numbers can differ when a
- * project has rested handoffs that are not questions.
+ * THE COUNTS RIDE THE DESKTOP RAIL'S QUERY (`projectsRailCounts`, the same key the rail polls), but the
+ * accent number is `asks`, not the rail's `queued`: the threads waiting on a human answer, counted with
+ * `boardAskThread` — the rule behind the board header's "3 need you" — so tapping a row lands on a board
+ * whose header repeats it. `queued` would also count rested handoffs that ask nothing, and the accent
+ * means "awaiting you". `running` is the Active band, as on the rail.
  *
  * The gear opens Settings, which is mounted HERE on this page: the board's <App/> is what normally hosts
  * it, and <App/> does not render on `/`.
@@ -603,9 +603,9 @@ function MobileProjectList({ projects, home }: { projects: readonly ProjectCard[
                       {project.stale ? "Directory is missing" : shortPath(project.path, home)}
                     </span>
                   </span>
-                  {c && (c.queued > 0 || c.running > 0) ? (
+                  {c && (c.asks > 0 || c.running > 0) ? (
                     <span data-mobile-project-counts className="flex shrink-0 items-baseline gap-2.5 whitespace-nowrap text-[13px] text-muted">
-                      {c.queued > 0 ? <span className="font-bold tabular-nums text-accent">{c.queued}</span> : null}
+                      {c.asks > 0 ? <span className="font-bold tabular-nums text-accent">{c.asks}</span> : null}
                       {c.running > 0 ? <span className="tabular-nums">{c.running} working</span> : null}
                     </span>
                   ) : null}

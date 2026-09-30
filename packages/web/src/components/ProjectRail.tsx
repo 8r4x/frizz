@@ -5,7 +5,7 @@ import { House, Plus } from "lucide-react"
 import { Link, useNavigate } from "react-router"
 import { useSnapshot } from "valtio"
 import type { ProjectCard, ProjectRailCounts } from "@frizz/shared"
-import { activeBandThread, PROJECT_ICON_EXTENSIONS } from "@frizz/shared"
+import { activeBandThread, boardAskThread, PROJECT_ICON_EXTENSIONS } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { queued } from "../groups.ts"
 import { asThreads } from "../hooks.ts"
@@ -531,7 +531,7 @@ function useRailCounts(currentSlug: string | undefined, projects: readonly Proje
   // while the sidebar had already moved. Hooks cannot be conditional, hence the empty list.
   const overlaid = useOptimisticallyArchived(useOptimisticallySteered(board ? asThreads(board.threads) : []))
   const threads = currentSlug !== undefined && board ? overlaid : undefined
-  const live = threads && { queued: threads.filter(queued).length, running: threads.filter(activeBandThread).length }
+  const live = threads && { queued: threads.filter(queued).length, running: threads.filter(activeBandThread).length, asks: threads.filter(boardAskThread).length }
   const currentId = currentSlug === undefined ? undefined : projects.find((project) => project.slug === currentSlug)?.id
   return (project) => (project.id === currentId && live ? live : polled.data?.[project.id])
 }

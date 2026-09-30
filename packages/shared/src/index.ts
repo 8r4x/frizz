@@ -2592,6 +2592,18 @@ export const DropOwnLinkResult = z.object({ dropped: z.boolean() }).strict()
 export type DropOwnLinkResult = z.infer<typeof DropOwnLinkResult>
 
 // One sidebar row: frizz board thread + runtime overlay.
+/**
+ * The in-flight tool call a board row can name: the tool, the model's own one-line `description` (a
+ * Bash call's), and the target the input reveals (a path, a pattern, a command's first line). A subset
+ * of TranscriptToolCall, so the web labels it with the transcript's own `toolActivityLabel`.
+ */
+export const LiveTool = z.object({
+  name: z.string(),
+  desc: z.string().optional(),
+  detail: z.string().optional(),
+})
+export type LiveTool = z.infer<typeof LiveTool>
+
 export const ThreadView = z.object({
   id: ThreadSlug, // slug; filename is <slug>.md
   title: z.string(),
@@ -2624,6 +2636,15 @@ export const ThreadView = z.object({
   unread: z.boolean(),
   archived: z.boolean(), // user hid the row from the nav; respawn/resume un-archives
   lastAssistant: z.string().optional(), // trimmed preview of last assistant text
+  // The FIRST non-empty line of that same text, markdown intact and newlines honoured (capped) — the
+  // handoff's verdict line ("**Fixed** — …"), which `lastAssistant` cannot give back because its preview
+  // collapses every newline to a space. The phone board's rested row reads it. Optional so old
+  // snapshots parse.
+  lastAssistantLine: z.string().optional(),
+  // The newest tool call the agent has issued and not yet had a result for (Claude session threads),
+  // in the shape `toolActivityLabel` reads, so a list row can say "Running the focused tests" with the
+  // gerund the chat's working indicator shows. Absent between calls, at rest, and for other backends.
+  liveTool: LiveTool.optional(),
   spawnedAt: z.string().optional(), // ISO8601
   lastActivityAt: z.string().optional(), // ISO8601, from jsonl tail — ANY record (incl. sub-agent/system)
   // ISO8601 of the agent's OWN last output (Claude: last assistant record; Codex: turn-end/final text).
@@ -3080,6 +3101,91 @@ export function inActiveBand(t: ThreadView): boolean {
 export function activeBandThread(t: ThreadView): boolean {
   if (t.kind !== "session" || t.foreign === true) return false
   return sectionOf(t) === "active" && inActiveBand(t)
+}
+
+// Moved here from web/src/groups.ts (which re-exports it) on 2026-09-30 so the SERVER can count a
+// project's asks for the phone's projects list with the rule the board's "N need you" uses.
+// A thread "needs action" when it is genuinely waiting on the human — and ONLY once the agent has
+// actually come to rest on that wait. A mid-turn thread is still working; surfacing it as a card
+// gives an empty "no ask" card because the ask text lands only when the turn ends. These sort to top.
+export function needsAction(t: ThreadView): boolean {
+  // A TERMINAL thread (done/dismissed) NEVER cards — no exceptions. The thread file is the source
+  // of truth, and a thread whose own status says the work is over has by definition nothing waiting
+  // on the human. (An earlier "done-but-unread = card until acknowledged" rule violated this and
+  // was explicitly overruled by the maintainer: a done thread must never appear in the queue.)
+  if (t.status === "done" || t.status === "dismissed") return false
+  // THE OPERATOR'S OWN PARK COMES FIRST, exactly as the server orders it (deriveNeedsYou checks
+  // futureSnooze ahead of every ask gate). Without it this predicate promoted rows the server had
+  // already dequeued — a snoozed thread with an unanswered ask sorted to the top of the attention order
+  // and led the mobile asks-first list, with no card behind it to open. Same pair of guards as
+  // sessionIndicatorKind, for the same reasons.
+  if (futureSnoozedUntil(t) !== undefined && isSnoozed(t)) return false
+  // Paused on an interactive permission prompt: the process is parked waiting on the human's answer.
+  if (t.runtime === "perm-prompt") return true
+  // Frozen at a native AskUserQuestion TUI dialog (safety net for pre-contract / adopted sessions that
+  // bypass the thread-file ask channel). Unlike the chat/needs-human nets below, NO rest-gate: the ask
+  // text lives in the tool_use input (tailer-captured) and is available even while the turn reads
+  // "running" (the session is blocked mid-tool_use), so it should card the moment it appears.
+  if (t.pendingAsk) return true
+  // The DECLARED awaiting-you channel: humanBlocked is re-derived server-side from `status:
+  // needs-human` — the first-class "awaiting a human" state and THE queue definition. TWO gates:
+  //   • NOT mid-turn (running/spawning): the worker writes needs-human MID-TURN (~150ms after the
+  //     file hits disk), but the visible ask text lands with the final message only when the turn
+  //     comes to rest — counting it early yields a card with no visible ask.
+  //   • A SESSION EXISTS (runtime !== "none"): the queue is strictly "agent work paused on the
+  //     human" (maintainer, 2026-07-09: with no agent it makes no sense for a thread to ever show
+  //     up inside the queue). A needs-human thread worked OUTSIDE frizz (frizz classic, hand
+  //     edits) has no transcript to card — it stays visible in the SIDEBAR (yellow awaiting-you
+  //     dot), and its click-through composite (doc + kick-off composer) is where it gets read and
+  //     acted on. `exited` still cards: that agent RAN and asked here — the ask is in its transcript.
+  if (t.humanBlocked && t.runtime !== "none" && t.runtime !== "running" && t.runtime !== "spawning") return true
+  // DERIVED safety net behind the declared needs-human channel: a worker that asked the human a
+  // question IN CHAT (a ```question block in its final message) but never flipped its thread file to
+  // needs-human — the board would otherwise see {active, humanBlocked:false, turn-idle} and show
+  // nothing. Same rest-gate: only once the agent is off-turn (else the ask text hasn't landed).
+  if (t.pendingQuestion && t.runtime !== "running" && t.runtime !== "spawning") return true
+  // A REGISTERED question (open thread_question rows on the view) is the same ask through the durable
+  // channel — the server queues it once at rest (deriveNeedsYou's openQuestions), and this predicate
+  // must agree so the mobile asks-first ordering and the attention sort count it. Same rest-gate as the
+  // fence net above: the worker keeps working after registering, and the card lands at its rest.
+  if ((t.questions?.length ?? 0) > 0 && t.runtime !== "running" && t.runtime !== "spawning") return true
+  // CRASH / STALL net (replaces the old `unread`-gated clause — `unread` no longer drives anything).
+  // A thread whose status still claims WORK IN FLIGHT (active or planning) but whose backing agent
+  // PROCESS is gone — `exited` (session row present, worker process dead) or `none` (registry lost the row)
+  // — is a crash/stall the human must see. Deliberately SCOPED to the in-flight work statuses, because
+  // "an agent died MID-WORK" is exactly active/planning:
+  //   • `blocked` is a MACHINE-wait — its agent is LEGITIMATELY absent (waiting on revalidate_at /
+  //     blocking_threads), and a killed/rebooted session (the workers die → every spawned thread goes
+  //     exited/none) must NOT card it or steal its timer/threads glyph (Nav short-circuits on
+  //     needsAction before those glyphs). blocked never cards — that's the spec.
+  //   • `needs-human` with a session already cards via the humanBlocked clause above (session-less
+  //     needs-human deliberately does NOT card — see that clause); `done`/`dismissed` are excluded
+  //     by the terminal guard; `planned` is not-yet-started backlog.
+  // No fight with the humanBlocked clause: this net requires status active/planning, which
+  // needs-human never is; and its `none` case requires spawnedAt (a session RAN then vanished from
+  // the registry — a real crash), which a never-spawned thread lacks.
+  // Also gated on `spawnedAt` (a NEVER-spawned item never "died mid-work") and `!archived` (a hidden
+  // thread never cards, even if its archive→done write lost a race).
+  if (
+    (t.status === "active" || t.status === "planning") &&
+    (t.runtime === "exited" || t.runtime === "none") &&
+    t.spawnedAt &&
+    !t.archived
+  )
+    return true
+  return false
+}
+
+/**
+ * An ASK on the board: a queue row (the Rested/Active section, or the pinned shelf the phone folds into
+ * the top of it) that is waiting on the human by `needsAction`. The phone board's "N need you" and the
+ * phone projects list's accent count are both this, so the two cannot disagree. Narrower than
+ * `queuedThread`, which also counts a rested handoff that asks nothing.
+ */
+export function boardAskThread(t: ThreadView): boolean {
+  if (t.kind === "session" && t.foreign === true) return false
+  const pinned = t.kind === "session" && typeof t.pinnedAt === "string"
+  return (pinned || sectionOf(t) === "active") && needsAction(t)
 }
 
 // STRUCTURED board error — a machine-readable companion to the legacy `errors: string[]` so the
@@ -5151,10 +5257,15 @@ export type ProjectCard = z.infer<typeof ProjectCard>
  *
  * Two numbers rather than their sum because the tooltip splits them, and the spinner reads `running`
  * alone. A project absent from the map has no board open on this server — no badge, not a zero.
+ *
+ * `asks` is the phone's number, not the rail's: the threads waiting on a human ANSWER (`boardAskThread`,
+ * the board header's "N need you"), a subset of `queued` that leaves out rested handoffs. The phone's
+ * projects list draws it in the accent; the desktop rail does not read it.
  */
 export const ProjectRailCounts = z.object({
   queued: z.number().int().nonnegative(),
   running: z.number().int().nonnegative(),
+  asks: z.number().int().nonnegative(),
 })
 export type ProjectRailCounts = z.infer<typeof ProjectRailCounts>
 

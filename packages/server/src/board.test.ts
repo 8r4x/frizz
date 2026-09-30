@@ -1610,7 +1610,7 @@ test("the External band lists only RESTED foreign sessions, and drops one the mo
   }
   const storage = createStorage(join(dir, "ui.db"), "p")
   const telemetry = new Map<string, SessionTelemetry>([
-    ["rested-terminal", tele({ turn: "idle", aiTitle: "Debug a flaky test", lastAssistant: "done for now", lastAssistantAt: LATER })],
+    ["rested-terminal", tele({ turn: "idle", aiTitle: "Debug a flaky test", lastAssistant: "done for now", lastAssistantLine: "done for now", lastAssistantAt: LATER })],
     ["spinning-terminal", tele({ turn: "in-flight", aiTitle: "Refactor the parser" })],
   ])
   const tailer = {
@@ -1634,6 +1634,7 @@ test("the External band lists only RESTED foreign sessions, and drops one the mo
     assert.equal(rested?.title, "Debug a flaky test")
     assert.equal(rested?.aiTitle, "Debug a flaky test")
     assert.equal(rested?.lastAssistant, "done for now")
+    assert.equal(rested?.lastAssistantLine, "done for now")
     // Only rested rows are emitted, so this is the only truthful runtime.
     assert.equal(rested?.runtime, "turn-idle")
     // None of the row-derived state exists for a session with no row, and none of it is invented.
@@ -1818,6 +1819,36 @@ test("board exposes a typed providerFault from tailer auth telemetry — categor
     assert.deepEqual(thread.providerFault, { backend: "claude", category: "authentication_rejected" })
     const clean = (await board.snapshot()).threads.find((candidate) => candidate.id === "auth-fault")!
     assert.equal(JSON.stringify(clean).includes("401"), false, "no raw provider text rides the snapshot")
+  } finally {
+    board.stop()
+    storage.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// The phone board's second line: the live tool while a call runs, and the handoff's real first line.
+test("board carries the live tool and the handoff's first line from the tailer onto the view", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-board-row-line-"))
+  const project: Project = { dir, id: "board-row-line", name: "fixture", label: "fixture", stateDir: dir, cwdSlug: "fixture" }
+  const storage = createStorage(join(dir, "ui.db"), "p")
+  storage.upsertSession(row({ slug: "live", thread_name: "frizz-live", backend: "claude" }))
+  const tailer = {
+    get: (slug: string) => (slug === "live"
+      ? tele({ turn: "in-flight", liveTool: { name: "Bash", desc: "Running the focused tests" }, lastAssistant: "**Fixed** — green. - one", lastAssistantLine: "**Fixed** — green." })
+      : undefined),
+    foreignIds: () => [],
+    subAgent: () => undefined,
+    forget: () => {},
+    start: () => {},
+    stop: () => {},
+    tick: () => {},
+  } satisfies Tailer
+  const board = createBoard(project, storage, new Bus(), tailer, "row-line-boot")
+  try {
+    const thread = (await board.snapshot()).threads.find((candidate) => candidate.id === "live")!
+    assert.deepEqual(thread.liveTool, { name: "Bash", desc: "Running the focused tests" })
+    assert.equal(thread.lastAssistantLine, "**Fixed** — green.")
+    assert.equal(thread.lastAssistant, "**Fixed** — green. - one")
   } finally {
     board.stop()
     storage.close()
