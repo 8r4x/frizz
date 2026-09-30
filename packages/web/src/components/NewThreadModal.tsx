@@ -16,17 +16,19 @@ import { handleDialogEscape } from "../lib/selectOverlay.ts"
 import { draftKey, draftStore, useDraft, useProjectDir } from "../lib/drafts.ts"
 import { parseAccountAlias } from "../lib/signIn.ts"
 import { PROMPT_CONTROL_TYPOGRAPHY_CLASS } from "../lib/promptControlTypography.ts"
+import { useIsMobile } from "../lib/mobile.ts"
+import { useBoard } from "../hooks.ts"
+import { projectIdentity } from "./Sidebar.tsx"
+import { X } from "lucide-react"
 
 // THE dispatch prompt box — composer + quiet selects row — shared by every surface that can start a
 // thread: the queue's inline section and the anywhere-modal. There is no title field — the server
 // derives a fallback and Claude names the session itself (ai-title), which the UI prefers for display.
-export function DispatchForm({
-  autoFocus,
-  onDispatched,
-}: {
-  autoFocus?: boolean
-  onDispatched?: () => void
-}) {
+//
+// The form's STATE and its dispatch live in useDispatchForm, so the phone's full-screen new-thread page
+// (PhoneNewThreadPage, below) runs the identical drafts, profile, sign-in gate, errors and pending
+// preview — only the layout around them differs.
+function useDispatchForm(onDispatched?: () => void) {
   // The one durable new-thread profile, shared with the GitHub picker's own selector.
   const { resolved, codexList, claudeList, acpList, loadError: profileLoadError, saveProfile } = useDispatchProfile()
   // A settings write still in flight — a compaction window picked in the model picker a moment ago —
@@ -206,33 +208,8 @@ export function DispatchForm({
     )
   }, [resolved, codexList, claudeList, acpList, profileLoadError, saveProfile])
 
-  return (
-    <div className="w-full flex flex-col gap-3">
-      <Composer
-        surface="newComposer"
-        autoFocus={autoFocus}
-        value={prompt}
-        onChange={setPrompt}
-        onSubmit={submit}
-        placeholder="Describe the task…"
-        minHeight={96}
-        maxHeight={340}
-        busy={dispatch.isPending || savingSettings}
-        footer={footer}
-        leftAction={githubTriggerVisible ? <GithubTrigger /> : undefined}
-      />
-      {dispatch.isError && (
-        <span className="px-0.5 text-[11px] text-danger truncate">{(dispatch.error as Error).message}</span>
-      )}
-      {pendingDispatch && (
-        <div data-pending-dispatch role="status" className="rounded-lg border border-border bg-panel-2 px-3 py-2.5">
-          <div className="flex items-center gap-2 text-[11px] text-muted">
-            <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-accent" aria-hidden="true" />
-            <span>Starting thread…</span>
-          </div>
-          <p className="mt-1 line-clamp-2 whitespace-pre-wrap text-[12px] leading-relaxed text-fg">{pendingDispatch}</p>
-        </div>
-      )}
+  const accountModals = (
+    <>
       {signInFor && (
         <SignInModal
           backend={signInFor}
@@ -246,6 +223,133 @@ export function DispatchForm({
         />
       )}
       {logoutFor && <LogoutConfirmModal backend={logoutFor} onClose={() => setLogoutFor(null)} />}
+    </>
+  )
+
+  return {
+    prompt,
+    setPrompt,
+    submit,
+    busy: dispatch.isPending || savingSettings,
+    footer,
+    githubTriggerVisible,
+    error: dispatch.isError ? (dispatch.error as Error).message : null,
+    pendingDispatch,
+    accountModals,
+  }
+}
+
+export function DispatchForm({
+  autoFocus,
+  onDispatched,
+}: {
+  autoFocus?: boolean
+  onDispatched?: () => void
+}) {
+  const form = useDispatchForm(onDispatched)
+  return (
+    <div className="w-full flex flex-col gap-3">
+      <Composer
+        surface="newComposer"
+        autoFocus={autoFocus}
+        value={form.prompt}
+        onChange={form.setPrompt}
+        onSubmit={form.submit}
+        placeholder="Describe the task…"
+        minHeight={96}
+        maxHeight={340}
+        busy={form.busy}
+        footer={form.footer}
+        leftAction={form.githubTriggerVisible ? <GithubTrigger /> : undefined}
+      />
+      {form.error && (
+        <span className="px-0.5 text-[11px] text-danger truncate">{form.error}</span>
+      )}
+      {form.pendingDispatch && <PendingDispatch prompt={form.pendingDispatch} />}
+      {form.accountModals}
+    </div>
+  )
+}
+
+function PendingDispatch({ prompt, className = "" }: { prompt: string; className?: string }) {
+  return (
+    <div data-pending-dispatch role="status" className={`rounded-lg border border-border bg-panel-2 px-3 py-2.5 ${className}`}>
+      <div className="flex items-center gap-2 text-[11px] text-muted">
+        <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-accent" aria-hidden="true" />
+        <span>Starting thread…</span>
+      </div>
+      <p className="mt-1 line-clamp-2 whitespace-pre-wrap text-[12px] leading-relaxed text-fg">{prompt}</p>
+    </div>
+  )
+}
+
+// THE PHONE'S NEW-THREAD PAGE (approved phone design, 2026-09-30, "New thread"). Full screen, because a
+// new-thread screen never appears without the keyboard, and a card at the top of a blurred board left
+// the prompt a third of the screen. × closes; "Start" in the header sends, disabled until there is text;
+// the prompt fills the page at 17px; the tool row — attach, the model chip, the GitHub picker — rides
+// on the keyboard. Start returns to the board when the server has the thread, as the dialog does.
+function PhoneNewThreadPage({ onDispatched }: { onDispatched: () => void }) {
+  const form = useDispatchForm(onDispatched)
+  const board = useBoard()
+  const identity = projectIdentity(board)
+  const projectName = identity.state === "verified" ? identity.repo : identity.state === "local" ? identity.name : ""
+  const [uploading, setUploading] = useState(false)
+  const canStart = form.prompt.trim().length > 0 && !form.busy && !uploading
+  return (
+    <div data-phone-new-thread className="flex h-full min-h-0 flex-col">
+      <header className="flex min-h-[56px] shrink-0 items-center gap-0.5 border-b border-border py-1 pl-1 pr-2">
+        <RadixDialog.Close asChild>
+          <button
+            type="button"
+            aria-label="Close"
+            data-phone-new-thread-close
+            className="flex size-[44px] shrink-0 items-center justify-center rounded-full text-fg/90 active:bg-hover"
+          >
+            <X size={21} strokeWidth={2.1} />
+          </button>
+        </RadixDialog.Close>
+        <div className="min-w-0 flex-1 pl-0.5 leading-[1.25]">
+          <RadixDialog.Title className="truncate text-[16.5px] font-semibold tracking-[-0.01em] text-fg">New thread</RadixDialog.Title>
+          {projectName && <div className="truncate text-[13px] text-muted">{projectName}</div>}
+        </div>
+        <button
+          type="button"
+          data-phone-start
+          // Keep the caret in the prompt: a failed start restores the draft into a field still focused.
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={form.submit}
+          disabled={!canStart}
+          className="relative flex h-[36px] shrink-0 items-center rounded-full bg-fg px-4 text-[15px] font-semibold text-bg after:absolute after:inset-x-0 after:-inset-y-[4px] after:content-[''] disabled:opacity-35"
+        >
+          Start
+        </button>
+      </header>
+      {form.error && <div className="shrink-0 px-[18px] pt-2 text-[13px] text-danger">{form.error}</div>}
+      {form.pendingDispatch && <PendingDispatch prompt={form.pendingDispatch} className="mx-3 mt-3 shrink-0" />}
+      <Composer
+        surface="newComposer"
+        autoFocus
+        value={form.prompt}
+        onChange={form.setPrompt}
+        onSubmit={form.submit}
+        placeholder="Describe the task…"
+        minHeight={120}
+        maxHeight={100_000}
+        busy={form.busy}
+        onUploadingChange={setUploading}
+        phone={{
+          layout: "page",
+          // `[&>*]:flex-initial`: the shared footer strip is `flex-1` for the desktop box, which here
+          // would shove "Issue or PR" to the far edge instead of beside the model chip.
+          tools: (
+            <div className="flex min-w-0 items-center gap-2 [&>*]:flex-initial">
+              {form.footer}
+              {form.githubTriggerVisible && <GithubTrigger variant="phoneChip" />}
+            </div>
+          ),
+        }}
+      />
+      {form.accountModals}
     </div>
   )
 }
@@ -253,6 +357,7 @@ export function DispatchForm({
 // The anywhere-modal behind the pill button: same form in a centered dialog. Esc closes (captured
 // here BEFORE the composer's own Escape-blurs handler can swallow it).
 export function NewThreadDialog({ onClose }: { onClose: () => void }) {
+  const isMobile = useIsMobile()
   const contentRef = useRef<HTMLDivElement>(null)
   // Frizz opens this dialog by writing store state, not through RadixDialog.Trigger. Capture the real
   // opener during the mount render so close can restore it explicitly.
@@ -285,13 +390,20 @@ export function NewThreadDialog({ onClose }: { onClose: () => void }) {
             event.preventDefault()
             contentRef.current?.querySelector<HTMLTextAreaElement>("textarea")?.focus({ preventScroll: true })
           }}
-          // TOP-ANCHORED ON A PHONE. Vertically centred, this dialog sits at ~420pt on a 844pt screen —
-          // which is under the keyboard the moment its textarea takes focus, and the composer is the
-          // entire point of the dialog. Above the phone breakpoint nothing changes.
-          className="fixed left-1/2 top-1/2 z-50 w-[640px] max-w-[86vw] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-panel p-5 shadow-2xl shadow-shadow-ink/50 outline-none max-[700px]:top-[calc(env(safe-area-inset-top)+56px)] max-[700px]:w-[calc(100vw-24px)] max-[700px]:max-w-none max-[700px]:translate-y-0"
+          // A PAGE ON A PHONE: full screen, under the device's top inset (PhoneNewThreadPage). Above the
+          // phone breakpoint nothing changes.
+          className={isMobile
+            ? "fixed inset-0 z-50 flex flex-col bg-bg pt-[env(safe-area-inset-top)] outline-none"
+            : "fixed left-1/2 top-1/2 z-50 w-[640px] max-w-[86vw] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-panel p-5 shadow-2xl shadow-shadow-ink/50 outline-none max-[700px]:top-[calc(env(safe-area-inset-top)+56px)] max-[700px]:w-[calc(100vw-24px)] max-[700px]:max-w-none max-[700px]:translate-y-0"}
         >
-          <RadixDialog.Title className="mb-1 text-[14px] font-medium">New thread</RadixDialog.Title>
-          <DispatchForm autoFocus onDispatched={onClose} />
+          {isMobile ? (
+            <PhoneNewThreadPage onDispatched={onClose} />
+          ) : (
+            <>
+              <RadixDialog.Title className="mb-1 text-[14px] font-medium">New thread</RadixDialog.Title>
+              <DispatchForm autoFocus onDispatched={onClose} />
+            </>
+          )}
         </RadixDialog.Content>
       </RadixDialog.Portal>
     </RadixDialog.Root>

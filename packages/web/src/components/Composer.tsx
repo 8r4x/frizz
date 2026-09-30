@@ -1,5 +1,5 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
-import { ArrowUp, FileText, Loader2, Paperclip, X } from "lucide-react"
+import { createContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react"
+import { ArrowUp, FileText, Loader2, Paperclip, Plus, X } from "lucide-react"
 import { ATTACHMENT_ACCEPT, ATTACHMENT_MAX_BYTES, isAllowedAttachmentName, type ThreadSkill } from "@frizz/shared"
 import { showToast } from "../store.ts"
 import { joinComposerValue, splitComposerValue } from "../lib/imagePaths.ts"
@@ -10,6 +10,7 @@ import { RAIL_ACTION_OFFSET, RAIL_PAPERCLIP_OFFSET, RAIL_PAPERCLIP_PLAIN_OFFSET,
 import { apiBase } from "../lib/base-path.ts"
 import { localImageUrl } from "../lib/markdownTargets.ts"
 import { basename } from "../lib/paths.ts"
+import { useKeyboardInset } from "../lib/keyboardInset.ts"
 
 // The shared prompt composer (the pattern the user called "perfect"): ONE rounded bordered box
 // holding a borderless auto-growing textarea plus a small round accent send button hovering INSIDE
@@ -68,6 +69,52 @@ const SKILL_SOURCE_LABEL: Record<NonNullable<ThreadSkill["source"]>, string> = {
 // a numbered `[^1]` in between read as plumbing — 2026-09-03: "worse than just rendering the chip
 // inline").
 
+// THE PHONE LAYOUTS (below the 700px breakpoint; the caller decides, with useIsMobile). Same draft,
+// same attachment intake, same keyboard rules, same send — only the shell around the textarea differs.
+//
+//   "bar"  — a thread's bottom bar (the approved phone design, 2026-09-30). At rest it is ONE row: a
+//            round + (attach), a pill field, and one verb on the right. The verb follows the draft: with
+//            text it is Send; with none it is whatever the caller passes as `idlePrimary` (the thread's
+//            Done), or a disabled ↑. Focus or text opens the field into a box whose second row carries
+//            the + , the caller's `tools` (the model chip) and the verb. `override` is the seam for a
+//            bar that is not a prompt at all — see PhoneBarApi.
+//   "page" — the new-thread page: the textarea fills the space it is given, and the tool row (+ and
+//            `tools`) sits under it. The page's own header carries the send.
+//
+// Both ride the software keyboard: a spacer under the bar, sized by useKeyboardInset, lifts it onto
+// the keyboard while the panel above shrinks.
+export interface PhoneBarApi {
+  /** Switch the bar back to the prompt and focus it (opens the keyboard: call it from a tap). */
+  editReply: () => void
+}
+
+export type PhoneComposerLayout =
+  | {
+      layout: "bar"
+      tools?: ReactNode
+      // The verb when the draft is empty. `compact` is true inside the open box's toolbar (36px),
+      // false in the resting row (42px).
+      idlePrimary?: (compact: boolean) => ReactNode
+      // THE ANSWER SEAM. When set, the resting bar renders this INSTEAD of its row — a thread with open
+      // questions shows [keyboard] + "Answer N questions" there. The textarea stays mounted (hidden),
+      // so `editReply` can focus it inside the same tap and iOS still raises the keyboard; once the
+      // field has focus or text, the ordinary prompt row returns, and the override comes back when it
+      // is empty and blurred again.
+      override?: (api: PhoneBarApi) => ReactNode
+      // Long-press (≈500ms) on Send. Only passed where interrupt-and-send is allowed
+      // (canInterruptAndSend); without it a long press is an ordinary send.
+      onLongPressSend?: () => void
+    }
+  | { layout: "page"; tools?: ReactNode }
+
+const LONG_PRESS_MS = 500
+
+// HOLDING THE BAR OPEN. The open box's toolbar is only there while the field has focus or text — but a
+// control in it that opens a sheet (the model chip) closes the keyboard first, which blurs an empty
+// field, which would unmount the toolbar and the sheet it just opened along with it. A toolbar control
+// calls `hold(true)` for as long as its sheet is up, and the bar stays open until it lets go.
+export const PhoneBarHoldContext = createContext<((held: boolean) => void) | null>(null)
+
 // Auto-grow: reset to auto, then snap to content height clamped at maxHeight.
 function snapHeight(el: HTMLTextAreaElement, maxHeight: number): void {
   el.style.height = "auto"
@@ -90,6 +137,8 @@ export function Composer({
   contextTokens,
   slashSuggest,
   onInterruptSubmit,
+  phone,
+  onUploadingChange,
 }: {
   value: string
   onChange: (v: string) => void
@@ -136,6 +185,11 @@ export function Composer({
   // needs no message payload because the send is already in the provider's queue. The shortcut stays
   // because it is a real send path with muscle memory behind it — only the picture was wrong.
   onInterruptSubmit?: () => void
+  // A phone layout (see PhoneComposerLayout). Absent everywhere above the phone breakpoint.
+  phone?: PhoneComposerLayout
+  // For a surface whose send lives OUTSIDE this box (the phone's new-thread page puts Start in its
+  // header): an upload in flight must hold that send too, as it holds Enter and ↑ here.
+  onUploadingChange?: (uploading: boolean) => void
 }) {
   const taRef = useRef<HTMLTextAreaElement>(null)
   const contextRef = useRef<HTMLDivElement>(null)
@@ -532,36 +586,11 @@ export function Composer({
     // Arrow keys just move the caret — no boundary semantics (the nav walk they used to drive is gone).
   }
 
-  return (
-    // Focused = the accent border: the visual handoff from the nav chevron to the box.
-    // While a file drags over, the border dashes and a hint overlay appears (screenshot intake).
-    <div
-      className={`group relative rounded-xl border bg-bg transition-colors focus-within:border-accent ${
-        dragging ? "border-dashed border-accent" : "border-border"
-      }`}
-      onDragOver={(e) => {
-        if ([...e.dataTransfer.items].some((i) => i.kind === "file")) {
-          e.preventDefault()
-          setDragging(true)
-        }
-      }}
-      onDragLeave={() => setDragging(false)}
-      onDrop={(e) => {
-        e.preventDefault()
-        setDragging(false)
-        void takeFiles(e.dataTransfer.files)
-      }}
-    >
-      {dragging && (
-        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-bg/80 text-[12px] text-muted">
-          Drop file to attach
-        </div>
-      )}
-      {/* The skills menu, floated ABOVE the box (the composer lives at the bottom of its surface, so
-          up is the direction with room). Rows are text-only — a name and its one-line description —
-          which keeps this out of icon-ink territory entirely. Mousedown is prevented on every row for
-          the same reason as the send button: choosing a suggestion must never blur the textarea. */}
-      {suggestOpen && (
+  // The skills menu, floated ABOVE the box (the composer lives at the bottom of its surface, so up is
+  // the direction with room). Rows are text-only — a name and its one-line description — which keeps
+  // this out of icon-ink territory entirely. Mousedown is prevented on every row for the same reason as
+  // the send button: choosing a suggestion must never blur the textarea. Shared by every layout.
+  const suggestMenu = suggestOpen ? (
         <div
           ref={suggestListRef}
           data-slash-menu
@@ -602,7 +631,250 @@ export function Composer({
             </button>
           ))}
         </div>
+  ) : null
+
+  // ── The phone layouts ────────────────────────────────────────────────────────────────────────────
+  // Hooks first and unconditionally, so a window that crosses the breakpoint keeps its hook order.
+  const [focused, setFocused] = useState(false)
+  const [held, setHeld] = useState(false)
+  const phoneRootRef = useRef<HTMLDivElement>(null)
+  const keyboardInset = useKeyboardInset(phoneRootRef, Boolean(phone))
+  const pressTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const longPressedRef = useRef(false)
+  useEffect(() => () => clearTimeout(pressTimerRef.current), [])
+  const onUploadingChangeRef = useRef(onUploadingChange)
+  onUploadingChangeRef.current = onUploadingChange
+  useEffect(() => { onUploadingChangeRef.current?.(uploading) }, [uploading])
+
+  if (phone) {
+    const canSend = hasContent && !busy && !uploading
+    // The textarea's type is 16px on a phone, not the mockup's 15.5: iOS Safari zooms the whole page
+    // into any focused field set below 16px, and the desktop's 13px would do exactly that.
+    const page = phone.layout === "page"
+    // THE BAR opens (a box with a toolbar) while the field has focus or anything in it, and is a single
+    // row otherwise. The textarea is the SAME element in both — every child before it keeps its slot (a
+    // `false` holds one) — so opening the box never remounts it and never costs the caret.
+    const expanded = !page && (focused || held || hasContent || attachments.length > 0)
+    // Resting, the field is a 42px pill: 40px of textarea inside its 1px border, one 20px line.
+    const typeClass = page
+      ? "px-[18px] py-[14px] text-[17px] leading-[25px]"
+      : expanded
+        ? "px-3 pt-[10px] pb-1 text-[16px] leading-[22px]"
+        : "px-[14px] py-[10px] text-[16px] leading-[20px]"
+    const textareaBox = page ? { minHeight, maxHeight } : expanded ? { minHeight: 44, maxHeight: 176 } : { minHeight: 40, maxHeight: 40 }
+    const fileInput = (
+      <input
+        ref={fileRef}
+        type="file"
+        multiple
+        accept={ATTACHMENT_ACCEPT}
+        className="hidden"
+        onChange={(e) => {
+          void takeFiles(e.target.files)
+          e.target.value = "" // reset so re-picking the same file fires change again
+        }}
+      />
+    )
+    // The + is the paperclip's own path: the same hidden file input, the same intake.
+    const attachButton = (size: 36 | 42) => (
+      <button
+        type="button"
+        data-phone-attach
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => fileRef.current?.click()}
+        disabled={busy || uploading}
+        title="Attach files"
+        aria-label="Attach files"
+        className={`relative flex shrink-0 items-center justify-center rounded-full border border-border-strong bg-panel text-fg active:bg-hover disabled:opacity-45 ${
+          size === 42 ? "size-[42px]" : "size-[36px] after:absolute after:-inset-[4px] after:content-['']"
+        }`}
+      >
+        {uploading ? <Loader2 size={17} strokeWidth={2.2} className="animate-spin" /> : <Plus size={size === 42 ? 19 : 17} strokeWidth={2.2} />}
+      </button>
+    )
+    const textarea = (
+      <div className={page ? "relative flex flex-1 flex-col" : "relative"}>
+        {backdropSegments && (
+          <div
+            ref={contextRef}
+            aria-hidden
+            data-composer-context-backdrop
+            className={`pointer-events-none absolute inset-0 select-none overflow-hidden whitespace-pre-wrap [overflow-wrap:break-word] ${typeClass} text-transparent`}
+          >
+            {backdropSegments}
+          </div>
+        )}
+        <textarea
+          id={id}
+          ref={taRef}
+          data-1p-ignore
+          onScroll={backdropSegments ? syncContextScroll : undefined}
+          data-surface={surface}
+          data-claims-escape
+          value={prose}
+          autoFocus={autoFocus}
+          disabled={busy}
+          onChange={(e) => setProse(e.target.value)}
+          onKeyDown={onKeyDown}
+          onFocus={() => setFocused(true)}
+          onBlur={() => setFocused(false)}
+          onPaste={(e) => {
+            const files = [...e.clipboardData.items].filter((i) => i.kind === "file").map((i) => i.getAsFile()!).filter(Boolean)
+            if (files.length) {
+              e.preventDefault()
+              void takeFiles(files)
+            }
+          }}
+          placeholder={placeholder}
+          rows={1}
+          spellCheck={false}
+          style={textareaBox}
+          // `flex-1` on the page: the textarea's snapped height is its basis, and it grows to fill the
+          // page, so a tap anywhere on the blank page below the prompt lands in it.
+          className={`relative block w-full resize-none bg-transparent ${typeClass} text-fg outline-none placeholder:text-faint scrollbar-none disabled:opacity-60 ${page ? "flex-1" : ""}`}
+        />
+      </div>
+    )
+    const attachmentRow = attachments.length > 0 && (
+      <div className={`flex flex-wrap gap-1.5 ${page ? "px-[18px] pb-3" : "px-3 pb-1"}`}>
+        {attachments.map((a, i) => (
+          <AttachmentChip
+            key={`${a.path}-${i}`}
+            attachment={a}
+            disabled={busy}
+            onRemove={() => setPaths(attachmentPaths.filter((_, j) => j !== i))}
+          />
+        ))}
+      </div>
+    )
+    // Under the bar: the strip the keyboard covers (0 without one), else the device's home-indicator
+    // inset. Inside this root, so the panel above shrinks rather than the bar floating over it.
+    const keyboardSpacer = keyboardInset > 0 ? <div aria-hidden data-keyboard-spacer style={{ height: keyboardInset }} /> : null
+
+    if (page) {
+      return (
+        <div ref={phoneRootRef} data-phone-composer="page" className={`flex min-h-0 flex-1 flex-col ${keyboardInset > 0 ? "" : "pb-[env(safe-area-inset-bottom)]"}`}>
+          <div className="relative flex min-h-0 flex-1 flex-col overflow-y-auto scrollbar-none">
+            {suggestMenu}
+            {textarea}
+            {attachmentRow}
+          </div>
+          <div data-phone-tool-row className="flex min-w-0 shrink-0 items-center gap-2 px-2.5 py-2">
+            {attachButton(36)}
+            {phone.tools}
+          </div>
+          {fileInput}
+          {keyboardSpacer}
+        </div>
+      )
+    }
+
+    const override = !expanded && phone.override ? phone.override({ editReply: () => taRef.current?.focus() }) : null
+    const sendButton = (compact: boolean) => (
+      <button
+        type="button"
+        data-phone-send
+        // Keep the caret: pressing Send must not blur the field (the desktop send's own rule).
+        onMouseDown={(e) => e.preventDefault()}
+        onContextMenu={(e) => e.preventDefault()}
+        onPointerDown={() => {
+          longPressedRef.current = false
+          clearTimeout(pressTimerRef.current)
+          if (!canSend || !phone.onLongPressSend) return
+          const fire = phone.onLongPressSend
+          pressTimerRef.current = setTimeout(() => {
+            longPressedRef.current = true
+            navigator.vibrate?.(12)
+            fire()
+          }, LONG_PRESS_MS)
+        }}
+        onPointerUp={() => clearTimeout(pressTimerRef.current)}
+        onPointerLeave={() => clearTimeout(pressTimerRef.current)}
+        onPointerCancel={() => clearTimeout(pressTimerRef.current)}
+        onClick={() => {
+          // The long press already sent; the click that ends it must not send again.
+          if (longPressedRef.current) {
+            longPressedRef.current = false
+            return
+          }
+          onSubmit()
+        }}
+        disabled={!canSend}
+        title={phone.onLongPressSend ? "Send · hold to interrupt and send now" : "Send"}
+        aria-label="Send"
+        // The ↑ is solid whenever it is the verb; with nothing to send it is the same disc, dimmed.
+        // `[-webkit-touch-callout:none]` + `select-none`: a long press must not raise iOS's callout.
+        className={`relative flex shrink-0 select-none items-center justify-center rounded-full bg-fg text-bg [-webkit-touch-callout:none] disabled:opacity-35 ${
+          compact ? "size-[36px] after:absolute after:-inset-[4px] after:content-['']" : "size-[42px]"
+        }`}
+      >
+        {busy ? <Loader2 size={compact ? 17 : 19} strokeWidth={2.4} className="animate-spin" /> : <ArrowUp size={compact ? 17 : 19} strokeWidth={2.4} />}
+      </button>
+    )
+    const primary = (compact: boolean) => (hasContent ? sendButton(compact) : (phone.idlePrimary?.(compact) ?? sendButton(compact)))
+
+    return (
+      <div ref={phoneRootRef} data-phone-composer="bar" data-phone-composer-open={expanded ? "" : undefined} className="relative bg-bg">
+        <div className={`px-2.5 pt-2 ${keyboardInset > 0 ? "pb-2.5" : "pb-[max(10px,env(safe-area-inset-bottom))]"}`}>
+          {override && <div data-phone-bar-override className="flex min-w-0 items-end gap-2">{override}</div>}
+          <div
+            // Hidden, not unmounted, under an override: `editReply` focuses this textarea inside the
+            // tap that asked for it, which is what makes iOS raise the keyboard at all.
+            className={override ? "pointer-events-none absolute h-0 w-0 overflow-hidden opacity-0" : "flex min-w-0 items-end gap-2"}
+          >
+            {!expanded && attachButton(42)}
+            <div
+              className={`relative min-w-0 flex-1 border border-border-strong bg-panel ${
+                expanded ? "rounded-[20px] pb-2" : "rounded-[21px]"
+              }`}
+            >
+              {suggestMenu}
+              {textarea}
+              {expanded && attachmentRow}
+              {expanded && (
+                <div data-phone-composer-toolbar className="flex min-w-0 items-center gap-2 px-2 pt-1">
+                  {attachButton(36)}
+                  <PhoneBarHoldContext.Provider value={setHeld}>{phone.tools}</PhoneBarHoldContext.Provider>
+                  <span className="flex-1" />
+                  {primary(true)}
+                </div>
+              )}
+            </div>
+            {!expanded && primary(false)}
+          </div>
+          {fileInput}
+        </div>
+        {keyboardSpacer}
+      </div>
+    )
+  }
+
+  return (
+    // Focused = the accent border: the visual handoff from the nav chevron to the box.
+    // While a file drags over, the border dashes and a hint overlay appears (screenshot intake).
+    <div
+      className={`group relative rounded-xl border bg-bg transition-colors focus-within:border-accent ${
+        dragging ? "border-dashed border-accent" : "border-border"
+      }`}
+      onDragOver={(e) => {
+        if ([...e.dataTransfer.items].some((i) => i.kind === "file")) {
+          e.preventDefault()
+          setDragging(true)
+        }
+      }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={(e) => {
+        e.preventDefault()
+        setDragging(false)
+        void takeFiles(e.dataTransfer.files)
+      }}
+    >
+      {dragging && (
+        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-bg/80 text-[12px] text-muted">
+          Drop file to attach
+        </div>
       )}
+      {suggestMenu}
       {/* The textarea and its marker backdrop share one box: the wrapper is a plain block (no layout
           change from the bare textarea), the mirror fills it behind the transparent-backgrounded
           textarea, and the padding/typography class string is IDENTICAL on both by construction —

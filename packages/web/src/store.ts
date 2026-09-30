@@ -173,7 +173,7 @@ export const store = proxy({
   vtReturnTarget: null as string | null,
   // Transient bottom-center toast (e.g. "Steer failed …" when an eager reply is rejected). `id` bumps per call so
   // repeat toasts re-trigger the fade. Rendered by <Toaster>; null when nothing is showing.
-  toast: null as { id: number; text: string; spinner?: boolean; sticky?: boolean; duration?: number; link?: { label: string; slug: string } } | null,
+  toast: null as { id: number; text: string; spinner?: boolean; sticky?: boolean; duration?: number; link?: { label: string; slug: string }; action?: ToastAction } | null,
   // The /full page's SPLIT file viewer. True only while StandaloneThreadPage is mounted; while it is,
   // a `.md` click renders BESIDE the thread (the thread column slides left) instead of as an overlay
   // drawer — the whole point of /full is seeing the transcript, and a sheet over it defeated that.
@@ -204,7 +204,13 @@ export function closeGithubPicker(): void {
 }
 
 let toastSeq = 0
-export function showToast(text: string, opts?: { spinner?: boolean; sticky?: boolean; duration?: number; link?: { label: string; slug: string } }) {
+// A toast's own verb — "Undo" on the phone's Done. `run` is called once, and the toast clears with it.
+export interface ToastAction {
+  label: string
+  run: () => void
+}
+
+export function showToast(text: string, opts?: { spinner?: boolean; sticky?: boolean; duration?: number; link?: { label: string; slug: string }; action?: ToastAction }) {
   store.toast = { id: ++toastSeq, text, ...opts }
 }
 

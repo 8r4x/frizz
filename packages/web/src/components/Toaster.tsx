@@ -6,8 +6,8 @@ import { store, pushDrawer } from "../store.ts"
 // Minimal toast (no dep): rises in at the BOTTOM RIGHT, holds, then sinks back down and fades.
 // Each showToast bumps the id, which re-arms the timer so a repeat message (the same failure twice
 // running, say) flashes again. Variants: `spinner` (in-flight feel), `sticky` (no auto-hide — replaced by the
-// next toast, e.g. "Starting agent…" → the started confirmation), and `link` (a button that opens
-// the named thread in the side drawer).
+// next toast, e.g. "Starting agent…" → the started confirmation), `link` (a button that opens
+// the named thread in the side drawer), and `action` (a button that runs the caller's own verb).
 export function Toaster() {
   const snap = useSnapshot(store)
   const toast = snap.toast
@@ -24,7 +24,7 @@ export function Toaster() {
     if (!toast) return
     setVisible(true)
     if (toast.sticky) return
-    const t = setTimeout(() => setVisible(false), toast.duration ?? (toast.link ? 5000 : 1600))
+    const t = setTimeout(() => setVisible(false), toast.duration ?? (toast.link || toast.action ? 5000 : 1600))
     return () => clearTimeout(t)
   }, [toast?.id])
 
@@ -56,6 +56,22 @@ export function Toaster() {
             className="pointer-events-auto shrink-0 rounded-md border border-border px-2 py-0.5 text-[12px] text-fg/90 transition-colors hover:bg-panel-2"
           >
             {toast.link.label}
+          </button>
+        )}
+        {/* The toast's own verb (the phone's "Undo" after Done). Same pill as the link above, and the
+            same rule: only this button takes pointer events, never the strip. */}
+        {toast.action && (
+          <button
+            data-toast-action
+            onClick={() => {
+              const action = toast.action!
+              store.toast = null
+              action.run()
+            }}
+            // Clickable only while the toast shows: a faded-out Undo must not still undo.
+            className={`${visible ? "pointer-events-auto" : ""} shrink-0 rounded-md border border-border px-2 py-0.5 text-[12px] text-fg/90 transition-colors hover:bg-panel-2`}
+          >
+            {toast.action.label}
           </button>
         )}
       </div>
