@@ -111,7 +111,7 @@ export function InteractionStack({
           key={interaction.id}
           record={interaction}
           autoFocus={autoFocusFirst && index === 0}
-          sole={interactions.length === 1}
+          siblings={interactions}
         />
       ))}
     </section>
@@ -139,15 +139,15 @@ function InteractionQuestionCard({
   record,
   questions,
   autoFocus,
-  sole,
+  siblings,
 }: {
   record: InteractionRecord
   questions: NonNullable<ReturnType<typeof interactionQuestions>>
   autoFocus: boolean
-  sole: boolean
+  siblings: readonly InteractionRecord[]
 }) {
   const qc = useQueryClient()
-  const turn = useTurnRelease(record.owner.threadSlug, sole)
+  const turn = useTurnRelease(record, siblings)
   const cardRef = useRef<HTMLElement>(null)
   const responseIds = useRef(new Map<string, string>())
   const projectDir = useProjectDir()
@@ -218,7 +218,7 @@ function InteractionQuestionCard({
     responseIds.current.set(signature, responseId)
     // The answer releases the blocked turn, so the rail row moves to the running band now rather than
     // when the tailer next sees the turn advance — see steerOnDecision.
-    turn.release()
+    turn.release(true)
     mutation.mutate({ decisionId: answerDecision.id, values, responseId })
   }
   const setText = (entry: (typeof questions)[number], text: string) => {
@@ -297,20 +297,21 @@ function InteractionQuestionCard({
 export function InteractionCard({
   record,
   autoFocus = false,
-  sole = false,
+  siblings,
 }: {
   record: InteractionRecord
   autoFocus?: boolean
-  // The ONLY request this thread has pending. Only then does answering it release the turn — see
-  // useTurnRelease.
-  sole?: boolean
+  // Every request this thread has pending, this one included — what decides whether answering this one
+  // releases the turn (useTurnRelease). Absent ⇒ this is the only one.
+  siblings?: readonly InteractionRecord[]
 }) {
   // A QUESTION renders as the shared question card, not as this authorization chrome. Anything that
   // cannot be expressed as a question (a numeric or secret prompt) falls through to the typed form
   // below rather than silently dropping an input the operator still has to fill.
   const asQuestions = useMemo(() => interactionQuestions(record), [record])
-  if (asQuestions) return <InteractionQuestionCard record={record} questions={asQuestions} autoFocus={autoFocus} sole={sole} />
-  return <InteractionApprovalCard record={record} autoFocus={autoFocus} sole={sole} />
+  const all = siblings ?? [record]
+  if (asQuestions) return <InteractionQuestionCard record={record} questions={asQuestions} autoFocus={autoFocus} siblings={all} />
+  return <InteractionApprovalCard record={record} autoFocus={autoFocus} siblings={all} />
 }
 
 // A RESPONSE TO A BLOCKED TURN IS A STEER. The provider is mid-turn, parked on this request, and every
@@ -326,22 +327,37 @@ function steerOnDecision(decision: CanonicalInteractionDecision): boolean {
 // THE ROW AND THE CARD MOVE TOGETHER. The steer puts the rail row in Running, so the queue card has to
 // leave on the same click — a row in Running with a card still in the queue breaks the rail's one
 // invariant (groups.inActiveBand), and it is the same dissolve a registered answer or a composer steer
-// makes. Only for the thread's SOLE pending request: with two out, answering one leaves the turn blocked
-// on the other, and both the steer and the dismissal would be a claim the server has to take back.
-// Null context on the thread page, where there is no card to dismiss.
-function useTurnRelease(slug: string, sole: boolean) {
+// makes. Null context on the thread page, where there is no card to dismiss.
+//
+// ONLY THE LAST OPEN REQUEST RELEASES THE TURN. With two out, answering one leaves the turn blocked on the
+// other, so the steer and the dismissal wait for the response that clears the last of them. "Open" is
+// judged at the click, not from the list: the list refetches only after a response lands, so answering
+// two in quick succession would otherwise see the first still pending and never move the row. A request
+// is settled for this purpose once THIS browser has responded to it (any copy of the card — the queue
+// card and the drawer share the module-level set) or the server already reports it sending.
+const respondedInteractions = new Set<string>()
+const releasedThreads = new Set<string>()
+
+function useTurnRelease(record: InteractionRecord, siblings: readonly InteractionRecord[]) {
   const queueDismiss = useContext(QueueDismissContext)
-  const released = useRef(false)
+  const slug = record.owner.threadSlug
   return {
-    release: () => {
-      if (!sole) return
-      released.current = true
+    // Every response, whatever its decision, stops this request being one the turn waits on; `steer`
+    // says whether the decision lets the turn run on (see steerOnDecision).
+    release: (steer: boolean) => {
+      respondedInteractions.add(record.id)
+      if (!steer) return
+      const lastOpen = siblings.every((i) => i.id === record.id || respondedInteractions.has(i.id) || i.delivery?.effect === "sending")
+      if (!lastOpen) return
+      releasedThreads.add(slug)
       markSteered(slug)
       queueDismiss?.dismiss()
     },
+    // A failed response puts its request back, and with it any release a later response made on the
+    // strength of it: the turn is still blocked on this one.
     rollback: () => {
-      if (!released.current) return
-      released.current = false
+      respondedInteractions.delete(record.id)
+      if (!releasedThreads.delete(slug)) return
       clearSteered(slug)
       queueDismiss?.cancel()
     },
@@ -351,14 +367,14 @@ function useTurnRelease(slug: string, sole: boolean) {
 function InteractionApprovalCard({
   record,
   autoFocus = false,
-  sole,
+  siblings,
 }: {
   record: InteractionRecord
   autoFocus?: boolean
-  sole: boolean
+  siblings: readonly InteractionRecord[]
 }) {
   const qc = useQueryClient()
-  const turn = useTurnRelease(record.owner.threadSlug, sole)
+  const turn = useTurnRelease(record, siblings)
   const headingId = useId()
   const cardRef = useRef<HTMLElement>(null)
   const responseIds = useRef(new Map<string, string>())
@@ -551,7 +567,7 @@ function InteractionApprovalCard({
     const signature = interactionDecisionSignature(decision.id, values)
     const responseId = responseIds.current.get(signature) ?? newResponseId()
     responseIds.current.set(signature, responseId)
-    if (steerOnDecision(decision)) turn.release()
+    turn.release(steerOnDecision(decision))
     mutation.mutate({ decision, values, responseId })
   }
 
