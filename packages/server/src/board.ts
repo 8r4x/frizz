@@ -865,6 +865,36 @@ function hasFreshDelivery(row: SessionRow, processGone: boolean): boolean {
   return parseDeliveryLedger(row.delivery_ledger).some((d) => d.state === "pending" || d.state === "enqueued" || d.state === "delivered")
 }
 
+/** How long a message on its way to the worker keeps its row SPINNING (see deriveDeliveryInFlight). A
+ *  broker send lands in a second or two and an answer's wake in a few; a codex rollout send can take
+ *  minutes to hours to show up in the transcript (board's own measurement: 8 of 75 over 60s), and a
+ *  spinner that long is a claim of motion nobody can see. Past this the row keeps its excusal and wears
+ *  its true at-rest mark. */
+export const DELIVERY_IN_FLIGHT_SPIN_MS = 60_000
+
+/** THE HUMAN'S MESSAGE IS ON ITS WAY AND THE TURN HAS NOT STARTED YET — a follow-up in the delivery
+ *  ledger the transcript has not reflected, or a registered answer whose wake has not landed. The queue
+ *  already excuses both (deriveNeedsYou); this is the same fact exported, so every tab draws the row as
+ *  working rather than as an at-rest thread sitting in the Running band. The browser that SENT the
+ *  message already does this for 12s on its own (web lib/steering.ts); this is what reaches every other
+ *  tab, a reload, and a delivery slower than that hint. Only at rest and only once the queue has let the
+ *  thread go: a crash, a live ask or anything else deriveNeedsYou still queues keeps its own mark. */
+export function deriveDeliveryInFlight(
+  row: SessionRow,
+  runtime: RuntimeState,
+  needsYou: boolean,
+  deliveryProcessGone: boolean,
+  answerInFlight: boolean,
+  nowMs = Date.now(),
+): boolean {
+  if (needsYou || (runtime !== "turn-idle" && runtime !== "exited")) return false
+  if (answerInFlight) return true
+  if (deliveryProcessGone) return false
+  return parseDeliveryLedger(row.delivery_ledger).some((d) =>
+    (d.state === "pending" || d.state === "enqueued" || d.state === "delivered") && nowMs - Date.parse(d.at) < DELIVERY_IN_FLIGHT_SPIN_MS
+  )
+}
+
 export function deriveNeedsYou(
   row: SessionRow,
   tele: SessionTelemetry | undefined,
@@ -1551,7 +1581,9 @@ function sessionThreadView(
   const state = effectiveSessionState(row, registeredLegacyTerminal)
   const archived = state === "archived"
   const limitPause = resolveLimitPause(row, tele, nowMs)
-  const needsYou = archived ? false : deriveNeedsYou(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, true, deliveryProcessGone, github, registeredPrWatches, armedTimerIds, armedWatches, questions.length, answerAwaitingDelivery(questionRows, rawTele?.lastUserAt, nowMs))
+  const answerInFlight = answerAwaitingDelivery(questionRows, rawTele?.lastUserAt, nowMs)
+  const needsYou = archived ? false : deriveNeedsYou(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, true, deliveryProcessGone, github, registeredPrWatches, armedTimerIds, armedWatches, questions.length, answerInFlight)
+  const deliveryInFlight = !archived && deriveDeliveryInFlight(row, runtime, needsYou, deliveryProcessGone, answerInFlight, nowMs)
   const awaitingBackground = archived ? false : deriveAwaitingBackground(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, deliveryProcessGone, github, registeredPrWatches, armedTimerIds, armedWatches, questions.length)
   // A worker that exited with work still outstanding — a turn in flight, OR a sub-agent still reading
   // "running" (its parent is gone, so it cannot actually be live) — is a crash/stall, not a clean
@@ -1609,6 +1641,7 @@ function sessionThreadView(
     pendingQuestion: tele?.pendingQuestion ?? false,
     questions,
     answersInFlight: inFlightAnswers,
+    deliveryInFlight: deliveryInFlight || undefined,
     lastUserAt: tele?.lastUserAt,
     // Runtime provider-auth rejection (claude-auth plan): only the typed category travels — the raw
     // error/provider text never leaves the server. Drives the trusted sign-in recovery card in ChatView.

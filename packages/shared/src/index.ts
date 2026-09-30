@@ -2679,6 +2679,11 @@ export const ThreadView = z.object({
    *  same card and the swap is invisible. Absent whenever there is nothing in flight, which is almost
    *  always — it exists for the seconds between the human sending and the worker being handed it. */
   answersInFlight: z.string().optional(),
+  /** The human's message — a follow-up or a registered answer — is on its way to the worker and the turn
+   *  has not started yet (board.deriveDeliveryInFlight). The queue has already let the thread go; this
+   *  tells the rail to draw it as working in every tab, not only the one that sent it (web
+   *  lib/steering.ts). Absent otherwise. */
+  deliveryInFlight: z.boolean().optional(),
   // ISO8601 of the newest REAL user interaction (answer/steer/dispatch) — the chronological listing
   // sort key. Optional; the listing falls back to spawnedAt when absent (a dispatch IS an interaction).
   lastUserAt: z.string().optional(),
