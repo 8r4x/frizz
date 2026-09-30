@@ -1214,8 +1214,10 @@ export interface SchedulerDeps {
   fetchGithubReview?: (ref: PrRef) => Promise<GithubReviewActivity[] | GithubReviewFetchResult | undefined>
   log?: (msg: string) => void
   // After `resume` has handed a wake to the worker's runtime: is the process that took it still there?
-  // The broker transport is a socket frame with no reply, and a cold resume that dies at startup takes
-  // the frame with it — so "resume returned" is SENT, not delivered. Answering "alive" or "dead" lets the
+  // A broker daemon now ACKNOWLEDGES the input (input-ack-v1), so `resume` returning means the session
+  // queued it — but a daemon forked by an older build only proves the frame was written, and a cold
+  // resume that dies at startup takes its queued input with it either way — so "resume returned" is
+  // still SENT, not delivered. Answering "alive" or "dead" lets the
   // scheduler hold the wake as sent and confirm or re-send it later; "unknown" (or no hook at all) keeps
   // the old behaviour, delivered on return. See deliverDue and reconcileOutbox.
   wakeRuntimeState?: (slug: string, sessionId: string) => "alive" | "dead" | "unknown"
