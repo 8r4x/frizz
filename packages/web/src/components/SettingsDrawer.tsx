@@ -13,7 +13,9 @@ import { SaveStatus, useSettingsDraft, type SaveState } from "../hooks/useSettin
 import { useIsMobile } from "../lib/mobile.ts"
 import { SNOOZE_PRESETS, isSnoozePreset } from "../lib/snooze.ts"
 import { useSupervisorStatus } from "../api/supervisorStatus.ts"
+import { isRemoteSession } from "../api/signOut.ts"
 import { QuotaMeters } from "./QuotaBar.tsx"
+import { SignOutThisDeviceRow } from "./SignOutThisDeviceRow.tsx"
 import { SheetHeader } from "./ui/SheetHeader.tsx"
 import { Select } from "./ui/Select.tsx"
 import { SettingsField } from "./SettingsField.tsx"
@@ -296,7 +298,8 @@ function MobileSettingsPage({
   const { connection } = useSnapshot(store)
   const { queueOrder, snoozePreset } = useSnapshot(prefs)
   const conn = CONNECTION_WORD[connection]
-  const version = useSupervisorStatus().data?.version
+  const supervisor = useSupervisorStatus()
+  const version = supervisor.data?.version
   return (
     <div
       data-mobile-settings-page
@@ -371,10 +374,15 @@ function MobileSettingsPage({
           ) : null}
         </MobileSection>
 
-        {/* ── THIS DEVICE ──────────────────────────────────────────────────────────────────────────────
-            The mount point for the "This device" section ("Sign out this device", which ends only this
-            browser's own session). Another slice builds it; mount it here, above the version line, as
-            <MobileSection label="This device">…</MobileSection>. */}
+        {/* THIS DEVICE — only on a tab that holds a remote session. The row itself renders nothing on the
+            operator's own loopback tab, so the heading has to follow the same rule or it would label an
+            empty section. Not a MobileSection: the row draws its own top and bottom rules. */}
+        {isRemoteSession(supervisor.data) ? (
+          <section>
+            <h2 className="m-0 px-[18px] pb-1.5 pt-[18px] text-[12.5px] font-semibold leading-[17px] text-muted">This device</h2>
+            <SignOutThisDeviceRow />
+          </section>
+        ) : null}
 
         {version ? (
           <div data-mobile-version className="px-[18px] py-[14px] text-[12.5px] text-faint">Frizz {version}</div>
