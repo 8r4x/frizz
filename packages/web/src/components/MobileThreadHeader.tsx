@@ -45,7 +45,10 @@ export function MobileThreadHeader({ slug, onClose, onStatusApplied }: { slug: s
     <header
       data-thread-header
       data-mobile-thread-header
-      className="flex min-h-14 shrink-0 items-center gap-0.5 border-b border-border bg-panel py-1 pl-1 pr-1.5"
+      // `pl-1` / `pr-[5px]` are measured: the ← paints 14.5px of its 21px glyph and the ⋯ 16px, so the
+      // mockup's 4px / 6px put their ink 18.75px and 20px from the screen edges; 5px on the right brings
+      // the pair within a pixel of each other (scripts/ink-gaps.mjs, dsf 4, sans).
+      className="flex min-h-14 shrink-0 items-center gap-0.5 border-b border-border bg-panel py-1 pl-1 pr-[5px]"
     >
       <button
         type="button"
