@@ -24,6 +24,7 @@ import { snoozePresetInstant, snoozePresetLabel } from "../lib/snooze.ts"
 import { agentSuffix, liveAgentCount, rowSecondLine, wakeAt } from "../lib/mobileBoardRow.ts"
 import { projectIdentity } from "./Sidebar.tsx"
 import { StatusListView } from "./StatusListView.tsx"
+import { ThreadActionsSheet } from "./MobileThreadActionsSheet.tsx"
 
 // THE PHONE'S BOARD — a header, three text tabs, ONE list, and a "New thread" button.
 //
@@ -269,6 +270,57 @@ function SwipeRow({
   )
 }
 
+// LONG-PRESS A ROW FOR ITS ACTIONS — the thread's own ⋯ sheet, opened from the board, so every verb a
+// swipe offers (and the ones it does not) has a tap-and-hold path too. No gesture is the only way to an
+// action (the approved design's rule).
+//
+// The press is cancelled by anything that says the finger meant something else: a move past the slop (a
+// scroll, or the swipe claiming the row), the finger lifting, the browser cancelling the pointer. When it
+// DOES fire, the click the lift would otherwise deliver is swallowed, or the row would also open.
+const LONG_PRESS_MS = 500
+const LONG_PRESS_SLOP = 8
+
+function useLongPress(onLongPress: () => void) {
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const origin = useRef<{ x: number; y: number } | null>(null)
+  const fired = useRef(false)
+  const cancel = () => {
+    if (timer.current) clearTimeout(timer.current)
+    timer.current = null
+    origin.current = null
+  }
+  return {
+    onPointerDown: (e: React.PointerEvent) => {
+      if (e.pointerType === "mouse" && e.button !== 0) return
+      fired.current = false
+      origin.current = { x: e.clientX, y: e.clientY }
+      if (timer.current) clearTimeout(timer.current)
+      timer.current = setTimeout(() => {
+        timer.current = null
+        fired.current = true
+        // A short tick where the platform offers one (Android); iOS Safari has no vibration API.
+        navigator.vibrate?.(10)
+        onLongPress()
+      }, LONG_PRESS_MS)
+    },
+    onPointerMove: (e: React.PointerEvent) => {
+      const o = origin.current
+      if (o && Math.hypot(e.clientX - o.x, e.clientY - o.y) > LONG_PRESS_SLOP) cancel()
+    },
+    onPointerUp: cancel,
+    onPointerCancel: cancel,
+    onPointerLeave: cancel,
+    onClickCapture: (e: React.MouseEvent) => {
+      if (!fired.current) return
+      fired.current = false
+      e.preventDefault()
+      e.stopPropagation()
+    },
+    // The platform's own hold gesture (iOS's callout, Android's context menu) would race the sheet.
+    onContextMenu: (e: React.MouseEvent) => e.preventDefault(),
+  }
+}
+
 /**
  * One thread, full width: the mark, the title with its right-hand reading, and one line under it.
  *
@@ -287,13 +339,16 @@ function MobileThreadRow({
   last,
   openSwipe,
   onOpenSwipe,
+  onLongPress,
 }: {
   t: ThreadView
   tab: Tab
   last?: boolean
   openSwipe: boolean
   onOpenSwipe: (open: boolean) => void
+  onLongPress: () => void
 }) {
+  const press = useLongPress(onLongPress)
   const snoozePreset = useSnapshot(prefs).snoozePreset
   const now = useNowMs()
   const kind = sessionIndicatorKind(t)
@@ -350,7 +405,10 @@ function MobileThreadRow({
       >
       <button
         data-mobile-thread-row={t.id}
+        {...press}
         onClick={() => openThread(t.id)}
+        // No callout, no text selection: a hold on a row is the actions gesture, not a copy.
+        style={{ WebkitTouchCallout: "none", WebkitUserSelect: "none", userSelect: "none" }}
         className="flex w-full items-start gap-3 px-4 py-[11px] text-left active:bg-hover"
       >
         <span className="flex h-[21px] shrink-0 items-center justify-center">
@@ -443,6 +501,8 @@ export function MobileBoard() {
   const [tab, setTab] = useState<Tab>("queue")
   // ONE row open at a time — two half-open rows read as a rendering fault.
   const [openSwipe, setOpenSwipe] = useState<string | null>(null)
+  // The thread whose actions sheet a long-press opened, if any.
+  const [actionsFor, setActionsFor] = useState<string | null>(null)
   // Both optimistic overlays, exactly as the rail composes them: a just-sent steer pulls a row into the
   // running reading and a just-clicked Mark-as-done drops it into Done, each folded in BEFORE any band
   // is derived — so a row's appearance and its band always land together.
@@ -559,6 +619,10 @@ export function MobileBoard() {
                 last={i === rows.length - 1}
                 openSwipe={openSwipe === t.id}
                 onOpenSwipe={(open) => setOpenSwipe(open ? t.id : null)}
+                onLongPress={() => {
+                  setOpenSwipe(null)
+                  setActionsFor(t.id)
+                }}
               />
             ))}
           </div>
@@ -576,6 +640,7 @@ export function MobileBoard() {
         <Plus size={20} strokeWidth={2.4} />
         New thread
       </button>
+      {actionsFor ? <ThreadActionsSheet slug={actionsFor} onClose={() => setActionsFor(null)} /> : null}
     </div>
   )
 }
