@@ -1,5 +1,5 @@
 import * as RadixDialog from "@radix-ui/react-dialog"
-import { useEffect, useRef, useState } from "react"
+import { useContext, useEffect, useRef, useState } from "react"
 import { Check, ChevronDown, Loader2 } from "lucide-react"
 import {
   profileGridDisplayParts,
@@ -11,6 +11,7 @@ import {
   type ProfileGridSelection,
 } from "../lib/profileGrid.ts"
 import type { ProfileGridUpgrade } from "./ProfileGridSelector.tsx"
+import { PhoneBarHoldContext } from "./Composer.tsx"
 
 // THE PHONE'S MODEL AND EFFORT PICKER — a bottom sheet in place of the desktop's grid popover.
 //
@@ -109,7 +110,7 @@ export function MobileModelSheet({
           }`}
         >
           <div className="mx-auto mt-[10px] h-[4px] w-[36px] shrink-0 rounded-full bg-muted/35" />
-          <div className="min-h-0 overflow-y-auto pt-2">
+          <div className="min-h-0 overflow-y-auto pt-2 scrollbar-none">
             <RadixDialog.Title className="px-[18px] pb-2.5 pt-1 text-[16px] font-semibold text-fg">Model</RadixDialog.Title>
             {groups.map((group, gi) => (
               <div key={group.id} role="radiogroup" aria-label={group.label}>
@@ -127,8 +128,9 @@ export function MobileModelSheet({
                         gi > 0 && oi === 0 ? "border-t border-border" : ""
                       }`}
                     >
-                      {/* The provider names its group once, in a muted column the model names align past. */}
-                      <span className="w-[62px] shrink-0 truncate text-[12.5px] text-muted">{oi === 0 ? group.label : ""}</span>
+                      {/* The provider names its group once, in a muted column the model names align past —
+                        wide enough for "Claude Code" whole at this size. */}
+                      <span className="w-[78px] shrink-0 truncate text-[12.5px] text-muted">{oi === 0 ? group.label : ""}</span>
                       <span className="min-w-0 flex-1 truncate text-[15.5px] text-fg">
                         <ModelName option={option} />
                       </span>
@@ -143,7 +145,10 @@ export function MobileModelSheet({
             )}
             <div className="px-[18px] pb-1.5 pt-4 text-[16px] font-semibold text-fg">Effort</div>
             {checkedOption && checkedOption.efforts.length > 0 ? (
-              <div role="radiogroup" aria-label="Effort" className="flex flex-wrap gap-1.5 px-[18px] pb-1 pt-1.5">
+              // ONE row, as the design draws it. A provider with a ceiling offers six levels, which is wider
+            // than the phone at a tappable size, so the row scrolls sideways rather than wrapping — the
+            // clipped last chip is the cue that there is more.
+            <div role="radiogroup" aria-label="Effort" className="flex gap-1.5 overflow-x-auto px-[18px] pb-1.5 pt-1.5 scrollbar-none">
                 {checkedOption.efforts.map((effort) => {
                   const on = draft.effort === effort
                   return (
@@ -156,7 +161,7 @@ export function MobileModelSheet({
                       // Picking an effort is the last choice the sheet holds, so it commits and closes.
                       onClick={() => close({ ...draft, effort })}
                       // 36px of chip, 44px of target: the hit area reaches 4px past each edge.
-                      className={`relative inline-flex h-[36px] items-center rounded-full border px-[13px] text-[14px] after:absolute after:inset-x-0 after:-inset-y-[4px] after:content-[''] ${
+                      className={`relative inline-flex h-[36px] shrink-0 items-center rounded-full border px-[13px] text-[14px] after:absolute after:inset-x-0 after:-inset-y-[4px] after:content-[''] ${
                         on ? "border-fg bg-fg font-semibold text-bg" : "border-border-strong text-muted active:bg-hover"
                       }`}
                     >
@@ -227,10 +232,17 @@ export function PhoneProfileSelector({
   runningModelLabel?: string
   upgrade?: ProfileGridUpgrade
 }) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpenState] = useState(false)
+  // Inside the thread bar's toolbar, keep the bar open while the sheet is up (PhoneBarHoldContext).
+  const hold = useContext(PhoneBarHoldContext)
+  const setOpen = (next: boolean) => {
+    setOpenState(next)
+    hold?.(next)
+  }
   useEffect(() => {
-    if (disabled) setOpen(false)
+    if (disabled && open) setOpen(false)
   }, [disabled])
+  useEffect(() => () => hold?.(false), [hold])
   const { name, edition, effort } = profileGridDisplayParts(groups, value, placeholder, runningModelLabel)
   const isPending = Boolean(pending?.model || pending?.effort)
   return (

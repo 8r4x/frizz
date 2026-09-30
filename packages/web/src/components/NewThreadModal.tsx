@@ -339,11 +339,13 @@ function PhoneNewThreadPage({ onDispatched }: { onDispatched: () => void }) {
         onUploadingChange={setUploading}
         phone={{
           layout: "page",
+          // `[&>*]:flex-initial`: the shared footer strip is `flex-1` for the desktop box, which here
+          // would shove "Issue or PR" to the far edge instead of beside the model chip.
           tools: (
-            <>
+            <div className="flex min-w-0 items-center gap-2 [&>*]:flex-initial">
               {form.footer}
               {form.githubTriggerVisible && <GithubTrigger variant="phoneChip" />}
-            </>
+            </div>
           ),
         }}
       />

@@ -41,11 +41,16 @@ export function PhoneDoneButton({ thread, compact }: { thread: ThreadView; compa
         onClick={() => void complete(false)}
         disabled={pending}
         aria-label="Mark as done"
-        className={`flex shrink-0 items-center justify-center gap-1.5 rounded-full bg-fg font-semibold text-bg disabled:opacity-45 ${
+        className={`flex shrink-0 items-center justify-center gap-1 rounded-full bg-fg font-semibold text-bg disabled:opacity-45 ${
           compact ? "relative h-[36px] pl-[11px] pr-[14px] text-[14px] after:absolute after:inset-x-0 after:-inset-y-[4px] after:content-['']" : "h-[42px] pl-[13px] pr-[16px] text-[15px]"
         }`}
       >
-        {pending && !hold ? <Loader2 aria-hidden size={compact ? 15 : 17} className="animate-spin" /> : <Check aria-hidden size={compact ? 15 : 17} strokeWidth={2.6} />}
+        {/* The check's ink sits in the upper part of its box (its path spans y 6–17 of 24), so centred
+            as a box it rode 1.6px above the cap band of "Done" in sans at 15px (measured at dsf 8,
+            2026-09-30). 0.1em takes it down onto the band at either size. */}
+        {pending && !hold
+          ? <Loader2 aria-hidden size={compact ? 15 : 17} className="animate-spin" />
+          : <Check aria-hidden size={compact ? 15 : 17} strokeWidth={2.6} className="translate-y-[0.1em]" />}
         Done
       </button>
       <Dialog

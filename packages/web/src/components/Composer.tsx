@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react"
+import { createContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { ArrowUp, FileText, Loader2, Paperclip, Plus, X } from "lucide-react"
 import { ATTACHMENT_ACCEPT, ATTACHMENT_MAX_BYTES, isAllowedAttachmentName, type ThreadSkill } from "@frizz/shared"
 import { showToast } from "../store.ts"
@@ -108,6 +108,12 @@ export type PhoneComposerLayout =
   | { layout: "page"; tools?: ReactNode }
 
 const LONG_PRESS_MS = 500
+
+// HOLDING THE BAR OPEN. The open box's toolbar is only there while the field has focus or text — but a
+// control in it that opens a sheet (the model chip) closes the keyboard first, which blurs an empty
+// field, which would unmount the toolbar and the sheet it just opened along with it. A toolbar control
+// calls `hold(true)` for as long as its sheet is up, and the bar stays open until it lets go.
+export const PhoneBarHoldContext = createContext<((held: boolean) => void) | null>(null)
 
 // Auto-grow: reset to auto, then snap to content height clamped at maxHeight.
 function snapHeight(el: HTMLTextAreaElement, maxHeight: number): void {
@@ -630,6 +636,7 @@ export function Composer({
   // ── The phone layouts ────────────────────────────────────────────────────────────────────────────
   // Hooks first and unconditionally, so a window that crosses the breakpoint keeps its hook order.
   const [focused, setFocused] = useState(false)
+  const [held, setHeld] = useState(false)
   const phoneRootRef = useRef<HTMLDivElement>(null)
   const keyboardInset = useKeyboardInset(phoneRootRef, Boolean(phone))
   const pressTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
@@ -647,7 +654,7 @@ export function Composer({
     // THE BAR opens (a box with a toolbar) while the field has focus or anything in it, and is a single
     // row otherwise. The textarea is the SAME element in both — every child before it keeps its slot (a
     // `false` holds one) — so opening the box never remounts it and never costs the caret.
-    const expanded = !page && (focused || hasContent || attachments.length > 0)
+    const expanded = !page && (focused || held || hasContent || attachments.length > 0)
     // Resting, the field is a 42px pill: 40px of textarea inside its 1px border, one 20px line.
     const typeClass = page
       ? "px-[18px] py-[14px] text-[17px] leading-[25px]"
@@ -686,7 +693,7 @@ export function Composer({
       </button>
     )
     const textarea = (
-      <div className={page ? "relative flex min-h-full flex-1 flex-col" : "relative"}>
+      <div className={page ? "relative flex flex-1 flex-col" : "relative"}>
         {backdropSegments && (
           <div
             ref={contextRef}
@@ -747,7 +754,7 @@ export function Composer({
     if (page) {
       return (
         <div ref={phoneRootRef} data-phone-composer="page" className={`flex min-h-0 flex-1 flex-col ${keyboardInset > 0 ? "" : "pb-[env(safe-area-inset-bottom)]"}`}>
-          <div className="relative flex min-h-0 flex-1 flex-col overflow-y-auto">
+          <div className="relative flex min-h-0 flex-1 flex-col overflow-y-auto scrollbar-none">
             {suggestMenu}
             {textarea}
             {attachmentRow}
@@ -827,7 +834,7 @@ export function Composer({
               {expanded && (
                 <div data-phone-composer-toolbar className="flex min-w-0 items-center gap-2 px-2 pt-1">
                   {attachButton(36)}
-                  {phone.tools}
+                  <PhoneBarHoldContext.Provider value={setHeld}>{phone.tools}</PhoneBarHoldContext.Provider>
                   <span className="flex-1" />
                   {primary(true)}
                 </div>
