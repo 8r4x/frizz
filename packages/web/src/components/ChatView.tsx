@@ -3835,6 +3835,11 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
   const doneThreadRef = useRef<ThreadViewData | null>(null)
   if (canAct && fenceThread) doneThreadRef.current = fenceThread
   const doneThread = canAct && fenceThread ? fenceThread : doneThreadRef.current
+  // ON A PHONE THE CARD CARRIES NO VERB. The button below exists to be redundant with the lifecycle
+  // footer; the phone has no footer, and its bottom bar's Done (PhoneDoneButton) is that stable control —
+  // so the card's copy would only draw the same verb twice, one above the other (the 2026-09-30 capture of
+  // the phone thread flagged exactly that, and the approved design draws the card without it).
+  const isMobile = useIsMobile()
   if (fenceKind === "done") {
     return (
       // NEUTRAL tone — the green splash stood out as the only saturated color in the UI (maintainer
@@ -3843,8 +3848,8 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
         {html && <LinkedHtml className={`md-body${wrap ? ` ${QUEUE_WRAP}` : ""}`} html={html} />}
         {/* A white "Mark as done" button, deliberately redundant with the stable lifecycle footer — the
             same completion mutation, styled as the primary (light-on-dark) verb. Only shown when the
-            thread can actually take the action. */}
-        {doneThread && (
+            thread can actually take the action, and never on a phone (see `isMobile` above). */}
+        {doneThread && !isMobile && (
           <CardActions>
             <StateButton
               thread={doneThread}
