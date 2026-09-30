@@ -190,6 +190,7 @@ export function StateButton({
   onDismissCancel,
   className = "rounded-md border border-border-strong bg-panel-2/60 px-2.5 py-1 text-[12px] text-fg/80 hover:bg-panel-2 hover:text-fg",
   iconClassName = "",
+  iconSize = 12,
 }: {
   thread: ThreadView
   onArchived?: () => void
@@ -206,6 +207,9 @@ export function StateButton({
   // keeps its own 12px scale and needs none; the in-card copy runs at the shared 11px card-action
   // scale and passes ICON_LABEL_NUDGE. Neither surface should guess on the other's behalf.
   iconClassName?: string
+  // The Check's size. 12 on both desktop surfaces; the phone's ⋯ sheet draws it as a list row, where
+  // every row's icon is 19px.
+  iconSize?: number
 }) {
   // Disables the instant it's clicked. On success we DON'T reset it: the card is dissolving, so the
   // button stays disabled (still reading "Mark as done", no spinner) for the whole fade-out rather
@@ -272,7 +276,7 @@ export function StateButton({
         onMouseDown={(event) => event.preventDefault()}
         className={`flex items-center gap-1 font-medium outline-none transition-colors focus-visible:ring-1 focus-visible:ring-focus-ink-60 disabled:opacity-45 ${className}`}
       >
-        <Check size={12} className={iconClassName} />
+        <Check size={iconSize} className={iconClassName} />
         Mark as done
       </button>
       <Dialog

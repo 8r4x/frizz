@@ -1,9 +1,8 @@
 import { useState } from "react"
 import { Plug } from "lucide-react"
 import type { ThreadView } from "@frizz/shared"
-import { rpc } from "../api/rpc.ts"
-import { showToast } from "../store.ts"
 import { HEADER_ICON_CLASS } from "../lib/headerIcon.ts"
+import { offersReloadPlugins, reloadThreadPlugins } from "../lib/threadMaintenance.ts"
 import { Tooltip } from "./Tooltip.tsx"
 
 // Re-read this worker's plugin closure — hooks, skills, agent profiles, MCP servers — INTO the running
@@ -25,24 +24,13 @@ import { Tooltip } from "./Tooltip.tsx"
 export function ReloadPluginsButton({ thread }: { thread: ThreadView }) {
   const [busy, setBusy] = useState(false)
 
-  if (thread.kind !== "session" || thread.foreign) return null
-  if (thread.claudeRuntime !== "broker") return null
-  if (thread.runtime === "exited") return null
+  // The conditions above, in lib/threadMaintenance so the phone's ⋯ sheet offers exactly the same.
+  if (!offersReloadPlugins(thread)) return null
 
   async function reload() {
     setBusy(true)
     try {
-      const r = await rpc.reloadThreadPlugins({ slug: thread.id, sessionId: thread.sessionId ?? "" })
-      // Report what CHANGED, not "done": the operator's question is "did my edit land?", and a bare
-      // success toast answers it no better than silence.
-      const parts = [`${r.plugins} plugin${r.plugins === 1 ? "" : "s"}`, `${r.commands} skill${r.commands === 1 ? "" : "s"}`, `${r.agents} agent${r.agents === 1 ? "" : "s"}`]
-      // An MCP change is the one with a real cost — the provider re-reads the whole conversation
-      // instead of using its prompt cache — so it is named rather than folded into the counts.
-      const mcp = r.mcpServers.length ? ` · MCP: ${r.mcpServers.join(", ")}` : ""
-      const errors = r.errorCount ? ` · ${r.errorCount} load error${r.errorCount === 1 ? "" : "s"}` : ""
-      showToast(`Reloaded ${parts.join(", ")}${mcp}${errors}`)
-    } catch (error) {
-      showToast((error instanceof Error ? error.message : "Plugin reload failed").slice(0, 120))
+      await reloadThreadPlugins(thread)
     } finally {
       setBusy(false)
     }

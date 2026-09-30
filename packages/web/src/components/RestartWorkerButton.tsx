@@ -5,6 +5,7 @@ import type { ThreadView } from "@frizz/shared"
 import { restartWorker } from "../lib/restartWorker.ts"
 import { useDevFrizzBuild } from "../lib/devBuild.ts"
 import { HEADER_ICON_CLASS } from "../lib/headerIcon.ts"
+import { offersRestartWorker } from "../lib/threadMaintenance.ts"
 import { Tooltip } from "./Tooltip.tsx"
 
 // "Restart worker" — replace this thread's live `claude` process, keeping the conversation.
@@ -48,12 +49,11 @@ export function RestartWorkerButton({ thread }: { thread: ThreadView }) {
   const [busy, setBusy] = useState(false)
   const devBuild = useDevFrizzBuild()
 
-  if (!devBuild) return null
-  if (thread.kind !== "session" || thread.foreign) return null
-  // Only a broker-hosted Claude worker has a "same conversation, fresh process" restart; a Codex turn
-  // lives in the app-server and an ACP session in its agent's own child (see lib/restartWorker.ts).
-  if (thread.backend === "codex" || thread.backend === "acp") return null
-  if (thread.runtime === "exited") return null
+  // Dev build, owned session, a Claude worker (only a broker-hosted one has a "same conversation, fresh
+  // process" restart; a Codex turn lives in the app-server and an ACP session in its agent's own child —
+  // see lib/restartWorker.ts), and a live process. Stated in lib/threadMaintenance so the phone's ⋯ sheet
+  // offers exactly the same.
+  if (!offersRestartWorker(thread, devBuild)) return null
 
   return (
     <Tooltip label="Restart worker — same conversation, fresh process on current tooling" side="top">

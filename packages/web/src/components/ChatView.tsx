@@ -57,6 +57,7 @@ import { isVisualizationThemeAck, visualizationThemeMessage } from "../lib/visua
 import { canAdoptThread } from "../lib/adoption.ts"
 import { THREAD_HEADER_CLASS, THREAD_HEADER_CONTROLS_CLASS, THREAD_HEADER_TITLE_CLASS } from "../lib/threadHeaderLayout.ts"
 import { ThreadActionBar } from "./ThreadActionBar.tsx"
+import { MobileThreadHeader } from "./MobileThreadHeader.tsx"
 import { HeaderActions } from "./HeaderActions.tsx"
 import { ThreadLifecycleFooter, StateButton } from "./ThreadLifecycleFooter.tsx"
 import { ThreadTitle } from "./ThreadTitle.tsx"
@@ -208,19 +209,30 @@ export function withoutLiveTranscriptBackgroundTools(messages: readonly ChatMess
 // canonical `scratch.md`. That document is gone (see dispatch.ts), and a tab strip whose only job was
 // to reach it is a control that now points at nothing — so the toggle, the Radix tab shell it needed,
 // and the per-thread persisted tab preference all go with it. The thread is its conversation.
+//
+// ON A PHONE (below 700px, in the drawer — the only way a phone opens a thread) the chrome is the phone's
+// own (mockup v2 §2): a 56px MobileThreadHeader in place of the two-row header and its icon strip, and NO
+// lifecycle footer — Snooze, Goal, the context reading and the maintenance verbs moved into the header's
+// ⋯ sheet, and the one lifecycle verb that matters at rest belongs to the bottom bar. The /full page (no
+// `onClose`) keeps the desktop chrome on every width; a phone never links to it.
 export function ThreadView({ slug, onStatusApplied, onClose, virtualized = false, showReturnToQueue = false }: { slug: string; onStatusApplied?: () => void; onClose?: () => void; virtualized?: boolean; showReturnToQueue?: boolean }) {
   const board = useBoard()
   const thread = threadBySlug(board, slug)
+  const phone = useIsMobile() && onClose !== undefined
   return (
     <div className="flex-1 min-h-0 flex flex-col">
-      <ThreadHeader slug={slug} onStatusApplied={onStatusApplied} onClose={onClose} showReturnToQueue={showReturnToQueue} />
-      <ChatView slug={slug} virtualized={virtualized} />
-      {thread && <ThreadLifecycleFooter thread={thread} sticky safeArea onArchived={onStatusApplied} />}
+      {phone ? (
+        <MobileThreadHeader slug={slug} onClose={onClose} onStatusApplied={onStatusApplied} />
+      ) : (
+        <ThreadHeader slug={slug} onStatusApplied={onStatusApplied} onClose={onClose} showReturnToQueue={showReturnToQueue} />
+      )}
+      <ChatView slug={slug} virtualized={virtualized} phone={phone} />
+      {thread && !phone && <ThreadLifecycleFooter thread={thread} sticky safeArea onArchived={onStatusApplied} />}
     </div>
   )
 }
 
-function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean }) {
+function ChatView({ slug, virtualized, phone = false }: { slug: string; virtualized: boolean; phone?: boolean }) {
   const board = useBoard()
   const thread = threadBySlug(board, slug)
   // ANSWERED registered questions stay in the transcript, greyed, where their open card stood (see
@@ -436,6 +448,7 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
           earlierError={earlierError}
           loadEarlier={() => void loadEarlier()}
           jumpOverlay={jumpOverlay}
+          openAtLastMessage={phone && !running}
         />
       ) : (
       <>
@@ -619,7 +632,9 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
         <ThreadActionBar
           slug={slug}
           onTerminal={copyTerminalCommand}
-          ops={<BackgroundOpsStrip slug={slug} transcriptShells={liveTranscriptShells} className="px-1 pt-1.5" />}
+          // The phone draws no ops rows under the prompt (mockup v2 §2): a sub-agent is already a row
+          // in the transcript and on the board, and the registered files and links are the ⋯ sheet's.
+          ops={phone ? undefined : <BackgroundOpsStrip slug={slug} transcriptShells={liveTranscriptShells} className="px-1 pt-1.5" />}
         />
       </div>
     </div>
@@ -637,6 +652,11 @@ const READER_GESTURE_MS = 700
 // has to outlive the commit — but it must stay far under READER_GESTURE_MS, since a reader who scrolls
 // during it should win the moment it ends.
 const ANCHOR_RESTORE_MS = 250
+
+// How long the phone's open-at-the-last-message landing holds its row at the pane top while the rows
+// around it measure (see VirtualizedThreadTranscript's initial scroll). A cold open measures every row
+// from its estimate, and markdown, code and images keep settling for several frames after mount.
+const OPEN_AT_MESSAGE_HOLD_MS = 900
 
 // Opt-in drift diagnostic: `localStorage["frizz.debugScroll"] = "1"`, then reload.
 //
@@ -827,6 +847,7 @@ function VirtualizedThreadTranscript({
   earlierError,
   loadEarlier,
   jumpOverlay,
+  openAtLastMessage = false,
 }: {
   slug: string
   transcriptRef: React.RefObject<HTMLDivElement | null>
@@ -856,6 +877,9 @@ function VirtualizedThreadTranscript({
   earlierError: string | null
   loadEarlier: () => void
   jumpOverlay: HTMLElement | null
+  // The phone opens a thread at rest on the START of its last message rather than the end of it — see
+  // the initial-scroll effect below. Read once, when the transcript first lands.
+  openAtLastMessage?: boolean
 }) {
   const projectDir = useProjectDir()
   const coalescedActivityMessages = useMemo(() => coalesceToolActivityMessages(messages), [messages])
@@ -1053,6 +1077,7 @@ function VirtualizedThreadTranscript({
   const readerAnchorRef = useRef<{ rowKey: string; viewportTop: number } | null>(null)
   const firstMessageKeyRef = useRef<string | undefined>(undefined)
   const anchorRestoreUntilRef = useRef(0)
+  const openHoldFrameRef = useRef(0)
 
   const requestEarlier = useCallback(() => {
     const scroller = transcriptRef.current
@@ -1108,7 +1133,54 @@ function VirtualizedThreadTranscript({
     const anchor = handoff?.candidates
       .map((candidate) => ({ candidate, index: rows.findIndex((row) => row.kind === "message" && row.message.sourceId === candidate.sourceId) }))
       .find((hit) => hit.index >= 0)
+    // THE PHONE OPENS A RESTED THREAD AT THE TOP OF ITS LAST MESSAGE (mockup v2, "Behaviour a still frame
+    // cannot show"). A handoff is written verdict-first, and on a 390pt screen a 40-line one opened at the
+    // tail puts the reader on its last bullet with the verdict 30 lines up. So at rest the phone lands the
+    // top of the newest thing the agent SAID at the top of the pane; a running thread still opens on the
+    // tail, where the live line is. `lastAgentIdx` is that message (lastAssistantIndex skips frizz's own
+    // event rows); if it draws no row of its own — a fence-only rest the resting card states — the last
+    // assistant row before it stands in, and with none the tail is still the answer. The fullscreen
+    // hand-off above outranks this: it is the reader's own place, carried over.
+    const lastMessageRow = !anchor && openAtLastMessage && lastAgentIdx >= 0
+      ? rows.reduce((found, row, index) => (row.kind === "message" && row.messageIndex <= lastAgentIdx && row.message.role === "assistant" && row.message.kind !== "event" ? index : found), -1)
+      : -1
     let frame = requestAnimationFrame(() => {
+      if (!anchor && lastMessageRow >= 0) {
+        // The fullscreen hand-off's two steps and its hold, aimed at a row's top instead of a remembered
+        // screen height: mount the row, release tail-follow, then re-align every frame while the rows
+        // around it correct from their estimates. The hold is longer than the hand-off's because nothing
+        // above this row has ever been measured on a cold open; a touch on the scroller ends it at once.
+        const rowKey = rows[lastMessageRow].key
+        virtualizer.scrollToIndex(lastMessageRow, { align: "start", behavior: "instant" })
+        followingTailRef.current = false
+        setAtEnd(false)
+        tailReadyRef.current = true
+        const until = performance.now() + OPEN_AT_MESSAGE_HOLD_MS
+        anchorRestoreUntilRef.current = until
+        // Its own frame chain, NOT `frame`: this effect re-runs (and cancels `frame`) whenever the row
+        // count moves, which on a cold open it does while the hold is still needed. Only unmount ends it.
+        const hold = () => {
+          const scroller = transcriptRef.current
+          if (!scroller || performance.now() >= until || performance.now() < readerScrollUntilRef.current) {
+            anchorRestoreUntilRef.current = 0
+            openHoldFrameRef.current = 0
+            // A last message shorter than the pane cannot reach its top: the landing clamps at the
+            // bottom, which IS the tail — so say so, or "Jump to latest" would sit over a reader who is
+            // already there until something else happened to re-run the tail reconciliation.
+            if (scroller && scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop <= TAIL_FOLLOW_PX) {
+              followingTailRef.current = true
+              tailHeightRef.current = scroller.scrollHeight
+              setAtEnd(true)
+            }
+            return
+          }
+          const row = scroller.querySelector<HTMLElement>(`[data-transcript-row-key="${CSS.escape(rowKey)}"]`)
+          if (row) scroller.scrollTop += row.getBoundingClientRect().top - scroller.getBoundingClientRect().top
+          openHoldFrameRef.current = requestAnimationFrame(hold)
+        }
+        hold()
+        return
+      }
       if (!anchor) {
         virtualizer.scrollToEnd({ behavior: "instant" })
         setAtEnd(true)
@@ -1140,6 +1212,7 @@ function VirtualizedThreadTranscript({
     })
     return () => cancelAnimationFrame(frame)
   }, [alignToScreenTop, rows.length, slug, transcriptKey, virtualizer])
+  useEffect(() => () => cancelAnimationFrame(openHoldFrameRef.current), [])
 
   useLayoutEffect(() => {
     const anchor = pendingPrependAnchorRef.current
