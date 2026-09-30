@@ -176,7 +176,7 @@ import { projectRetiredBackgroundOps, retiredOpsFor } from "./transcript.ts"
 import { clearProjectIcon, customIconPath, findById, forgetProject, ICON_SCAN_VERSION, listProjects, moveProjectDirectory, renameProject, reorderProjects, setProjectIcon, type RegistryEntry } from "./project-registry.ts"
 import { basename, dirname } from "node:path"
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
-import { activeBandThread, ProjectCard, ProjectRailCounts, PROJECT_ICON_EXTENSIONS, PROJECT_ICON_MAX_BASE64_CHARS, queuedThread } from "@frizz/shared"
+import { activeBandThread, boardAskThread, ProjectCard, ProjectRailCounts, PROJECT_ICON_EXTENSIONS, PROJECT_ICON_MAX_BASE64_CHARS, queuedThread } from "@frizz/shared"
 import { imageDimensions } from "./image-header.ts"
 import { homedir } from "node:os"
 import { chosenProjectRoot, ensureProjectIdFile, existingProjectId, isHomeDirectory, writeProjectIdFile } from "./project-root.ts"
@@ -3600,7 +3600,8 @@ export function createRouter(ctx: AppContext) {
     }),
 
     /**
-     * Each project's queue size and Active-band size, keyed by project id — the rail's badges.
+     * Each project's queue size and Active-band size, keyed by project id — the rail's badges — plus its
+     * ask count (`boardAskThread`), which only the phone's projects list reads.
      *
      * The rail draws ONE yellow badge per project whose number is the SUM, with a spinner lapping it
      * while `running` is non-zero, and its tooltip splits the two (issue #41: which projects still
@@ -3634,6 +3635,7 @@ export function createRouter(ctx: AppContext) {
             counts[project.id] = {
               queued: threads.filter(queuedThread).length,
               running: threads.filter(activeBandThread).length,
+              asks: threads.filter(boardAskThread).length,
             }
           } catch {
             // A board that is stopping mid-walk (its project is being deactivated) is a project with

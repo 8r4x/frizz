@@ -1,4 +1,4 @@
-import type { LimitWindow, PermissionMode, ProviderError } from "@frizz/shared"
+import type { LimitWindow, LiveTool, PermissionMode, ProviderError } from "@frizz/shared"
 import type { FenceView, SubAgentView, BgShellView, PendingAskData, TurnState } from "../tailer.ts"
 
 // A turn cut off by an exhausted SUBSCRIPTION window, as a backend's fold observed it. Carries only
@@ -99,6 +99,10 @@ export interface NormalizedTail {
   lastActivityAt?: string
   lastAssistantAt?: string // ISO8601 of the agent's OWN last output (rest time; excludes sub-agent/system bumps)
   lastAssistant?: string
+  // The first non-empty line of the same text, newlines honoured — see FoldState.lastAssistantLine.
+  lastAssistantLine?: string
+  // The newest tool call awaiting its result (Claude only) — see TailState.liveTools in tailer.ts.
+  liveTool?: LiveTool
   aiTitle?: string
   lastUserAt?: string
   lastUserText?: string // latest genuine human message (used to confirm wake-token delivery)
@@ -149,6 +153,10 @@ export interface FoldState {
   lastActivityAt?: string // ISO8601 of the latest timestamped event (ANY line, incl. sub-agent/system)
   lastAssistantAt?: string // ISO8601 of the agent's OWN last output — the rest-time key (see NormalizedTail)
   lastAssistant?: string // ~200-char preview of the latest assistant text
+  // The first non-empty line of that same text, markdown intact — the handoff's verdict line. The
+  // preview above cannot give it back: it collapses newlines to spaces, and its every reader (the
+  // notification bodies, the tests pinning the flat shape) wants that. Set with it, always.
+  lastAssistantLine?: string
   aiTitle?: string // the backend's own session auto-title (latest non-empty wins)
   // A backend may carry one in-band auto-title candidate on its first finalized response. Recording
   // that first final lets a backend distinguish a later recovery signal from an initial title; only a

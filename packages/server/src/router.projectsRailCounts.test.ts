@@ -7,7 +7,7 @@ import type { AppContext } from "./context.ts"
 import type { BoardManager } from "./board.ts"
 import type { Project } from "./project.ts"
 
-// The rail's badges: each open project's queue and Active band. Handlers are lazy, so the stub carries only what `createRouter` resolves up
+// The rail's badges: each open project's queue and Active band, plus the asks the phone's projects list shows. Handlers are lazy, so the stub carries only what `createRouter` resolves up
 // front plus this procedure's one dependency: `activeTenants`, the server's view of which projects are
 // open in this process and their boards.
 function harness(activeTenants: AppContext["activeTenants"], own?: { project: Project; board: BoardManager }) {
@@ -39,9 +39,9 @@ test("counts the queue of every open project, keyed by id, and leaves out one th
     { project: project("d"), board: { snapshot: async () => { throw new Error("board stopped") } } as unknown as BoardManager },
   ])
   assert.deepEqual(await router.projectsRailCounts.handler({ input: undefined }), {
-    a: { queued: 2, running: 1 },
-    b: { queued: 1, running: 0 },
-    c: { queued: 0, running: 0 },
+    a: { queued: 2, running: 1, asks: 0 },
+    b: { queued: 1, running: 0, asks: 0 },
+    c: { queued: 0, running: 0, asks: 0 },
   })
 })
 
@@ -64,10 +64,38 @@ test("counts the Active band as running — the rows the sidebar spins below the
       ]),
     },
   ])
-  assert.deepEqual(await router.projectsRailCounts.handler({ input: undefined }), { p: { queued: 1, running: 3 } })
+  assert.deepEqual(await router.projectsRailCounts.handler({ input: undefined }), { p: { queued: 1, running: 3, asks: 0 } })
 })
 
 test("without a tenant map (a test context, a one-project server) it answers for its own project alone", async () => {
   const router = harness(undefined, { project: project("solo"), board: board([session(true), session(false, { runtime: "running" })]) })
-  assert.deepEqual(await router.projectsRailCounts.handler({ input: undefined }), { solo: { queued: 1, running: 1 } })
+  assert.deepEqual(await router.projectsRailCounts.handler({ input: undefined }), { solo: { queued: 1, running: 1, asks: 0 } })
+})
+
+// The phone's projects list shows ASKS in the accent — the board header's "N need you" — not the queue,
+// which also counts a rested handoff that asks the human nothing.
+test("counts asks with the board's own rule: waiting on an answer, at rest, in the queue", async () => {
+  const future = new Date(Date.now() + 3_600_000).toISOString()
+  const question = [{ id: "q1", askedAt: future, spec: { question: "SQLite or JSON?", kind: "question" } }]
+  const router = harness(() => [
+    {
+      project: project("p"),
+      board: board([
+        session(true, { status: "active", runtime: "turn-idle", questions: question } as Partial<ThreadView>), // a registered question
+        session(true, { status: "active", runtime: "turn-idle", pendingAsk: { questions: [] } } as Partial<ThreadView>), // a native ask
+        session(true, { status: "active", runtime: "perm-prompt" }), // a permission prompt
+        session(true, { status: "active", runtime: "turn-idle", pinnedAt: future, questions: question } as Partial<ThreadView>), // pinned still asks
+        // Not asks: a rested handoff (queued, but it asks nothing), a question still mid-turn, a question
+        // the operator snoozed, one on an archived thread, and a terminal the human owns.
+        session(true, { status: "active", runtime: "turn-idle" }),
+        session(false, { status: "active", runtime: "running", questions: question } as Partial<ThreadView>),
+        session(false, { status: "active", runtime: "turn-idle", snoozedUntil: future, questions: question } as Partial<ThreadView>),
+        session(false, { status: "active", runtime: "exited", state: "archived", questions: question } as Partial<ThreadView>),
+        session(true, { status: "active", runtime: "turn-idle", foreign: true, questions: question } as Partial<ThreadView>),
+      ]),
+    },
+  ])
+  const counts = await router.projectsRailCounts.handler({ input: undefined })
+  assert.equal(counts.p?.asks, 4)
+  assert.equal(counts.p?.queued, 5, "the queue is wider than the asks")
 })

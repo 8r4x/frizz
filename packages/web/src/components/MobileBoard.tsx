@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from "react"
 import { useSnapshot } from "valtio"
 import { AlarmClock, ArrowLeft, Check, Clock, Hourglass, Plus, Settings as SettingsIcon } from "lucide-react"
-import { activeBandThread, type ThreadView } from "@frizz/shared"
+import { activeBandThread, boardAskThread, type ThreadView } from "@frizz/shared"
 import { openThread, store } from "../store.ts"
 import { asThreads, useBoard } from "../hooks.ts"
 import { prefs } from "../lib/prefs.ts"
@@ -306,7 +306,8 @@ function MobileThreadRow({
   const inMotion = t.runtime === "running" || t.runtime === "spawning" || kind === "working" || kind === "background"
   const wakes = tab === "snoozed" ? spanUntil(wakeAt(t, now), now) : null
   const right = tab === "snoozed" ? (wakes ? `wakes ${wakes}` : null) : inMotion ? null : ageSpan(at, now)
-  const line = rowSecondLine(t, kind, inMotion, now)
+  const projectDir = useSnapshot(store).board?.projectDir
+  const line = rowSecondLine(t, kind, inMotion, now, projectDir)
   const agents = agentSuffix(liveAgentCount(t))
   return (
     <div className={kind === "snoozed" ? "mobile-row-dim" : undefined}>
@@ -463,7 +464,9 @@ export function MobileBoard() {
     // of `snoozed`/`inactive` — by sectionThreads, so without this it would render nowhere).
     return [...sections.pinned, ...asks, ...rest]
   }, [sections.pinned, sections.active])
-  const askCount = queue.filter(needsAction).length
+  // Counted with `boardAskThread` — the queue rows `needsAction` calls asks — which is also what the server
+  // counts for the projects list's accent number, so the list and this header cannot disagree.
+  const askCount = useMemo(() => all.filter(boardAskThread).length, [all])
   // "Working" is the maintainer's ACTIVE band — the rows that are spinning — counted with the predicate
   // the desktop rail's badge uses (activeBandThread), so the phone and the rail cannot disagree.
   const working = useMemo(() => all.filter(activeBandThread).length, [all])
