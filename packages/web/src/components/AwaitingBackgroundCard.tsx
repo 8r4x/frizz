@@ -676,9 +676,11 @@ export function BgShellRow({ shell, slug, now, testId }: {
 // rather than as a disabled control.
 export function TimerRow({ watch, now }: { watch: ThreadWatchView; now: number }) {
   const fireMs = Date.parse(watch.timer?.fireAt ?? "")
-  // "fires in 34m", counting down live off the card's shared clock. A due-but-undelivered timer (the
-  // scheduler's tick is seconds behind the instant) says "firing…" rather than a 0s countdown or a
-  // negative one — the same present-progressive the PR row uses for its own gap ("Checking…").
+  // "fires in 34m", counting down live off the card's shared clock. A due-but-undelivered timer says
+  // "firing…" rather than a 0s countdown or a negative one — the same present-progressive the PR row uses
+  // for its own gap ("Checking…"). That gap is usually a scheduler tick, but it can run to minutes: a
+  // timer wake is not exempt from the quiet window after a handoff (wake-store.ts), and the row settles
+  // only once the delivery is confirmed.
   const status = !Number.isFinite(fireMs) ? "armed" : fireMs > now ? `fires in ${formatCompactElapsed(fireMs - now)}` : "firing…"
   return (
     <WaitRow

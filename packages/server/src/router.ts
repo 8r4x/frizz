@@ -2721,6 +2721,9 @@ export function createRouter(ctx: AppContext) {
           fireAtMs: Date.parse(input.fireAt),
           createdAtMs: Date.now(),
         })
+        // So the rail shows the new timer at once, as addOwnPrWatch does for a PR, rather than at the
+        // next tailer change or the board's 15s reconcile.
+        ctx.board.refresh()
         return { id, fireAt: input.fireAt, timers: armedTimerViews(input.slug) }
       },
     }),
@@ -2732,6 +2735,7 @@ export function createRouter(ctx: AppContext) {
         // Scoped to the caller's own slug in storage, so an id belonging to another thread cannot be
         // cancelled even if a worker somehow learned it.
         const cancelled = ctx.storage.cancelThreadTimer(input.slug, input.id, Date.now())
+        if (cancelled) ctx.board.refresh()
         return { cancelled, timers: armedTimerViews(input.slug) }
       },
     }),
@@ -2866,8 +2870,11 @@ export function createRouter(ctx: AppContext) {
         // forgotten what it holds and is being careful — and a duplicate would mean two wakes per event,
         // which reads to the operator as the watcher misfiring. Per KIND as well as ref: an issue and a
         // PR cannot share a number in one repo, so the same number registered both ways is a mistake
-        // the probe catches on whichever one is wrong, never two watchers on one thing.
-        const existing = armed.find((w) => w.kind === kind && w.owner === ref.owner && w.repo === ref.repo && w.number === ref.number)
+        // the probe catches on whichever one is wrong, never two watchers on one thing. CASE-BLIND on
+        // owner and repo, as GitHub is: `acme/app#391` and `Acme/App#391` are one PR, and matching them
+        // exactly put two rows on the rail and two wakes on every event.
+        const sameName = (a: string, b: string) => a.toLowerCase() === b.toLowerCase()
+        const existing = armed.find((w) => w.kind === kind && sameName(w.owner, ref.owner) && sameName(w.repo, ref.repo) && w.number === ref.number)
         const target = `${ref.owner}/${ref.repo}#${ref.number}`
         if (existing) {
           // The ORIGINAL expiry, which this call left alone — the re-registration is a no-op and must
