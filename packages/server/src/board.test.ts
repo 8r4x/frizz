@@ -1174,6 +1174,11 @@ test("a rested broker thread whose daemon died holding live sub-agents surfaces 
   assert.equal(orphaned.runtime, "exited", "a dead daemon holding work is a stall, not an idle rest")
   assert.equal(orphaned.needsYou, true, "so the thread reaches the human instead of being excused forever")
   assert.equal(orphaned.crashed, true, "and it cards as stalled — its children died with the process")
+  // The rail must say the same: the child is not spinning, and there is nothing to stop.
+  assert.equal(orphaned.subAgents[0].state, "stale", "a dead daemon's child is not shown running")
+  assert.equal(orphaned.subAgents[0].stoppable, undefined, "and offers no stop control")
+  assert.equal(healthy.subAgents[0].state, "running", "control: a live daemon's child still runs")
+  assert.equal(healthy.subAgents[0].stoppable, true)
 
   // AND IT MUST NOT WEAR OFF. Measured against the real fold: a child whose owner died reads `running`
   // for SUBAGENT_STALE_MS and `stale` for ever after. Keying the stall on `running` alone therefore

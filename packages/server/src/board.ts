@@ -284,6 +284,17 @@ function hasUnretiredOwnAgents(tele: SessionTelemetry | undefined): boolean {
 //
 // Only RUNNING rows are marked: a stale/rested row's × means "clear this from the list", which needs no
 // provider control and works everywhere. The flag answers "can this be KILLED", not "can this be clicked".
+// A DEAD BROKER DAEMON TOOK ITS SUB-AGENTS WITH IT — they are in-process children of that process — so a
+// child the fold still reads `running` is shown `stale` in the VIEW. The fold only ages one out after
+// SUBAGENT_STALE_MS of silence, and until then the rail spun a child (and offered to stop it) beside a
+// thread the same view carded as crashed. View-only on purpose: `crashed`, `headlessLostWork` and the
+// queue read the raw telemetry above, which is where that meaning lives. (Shells need none of this:
+// bgShellViews already empties on a dead owner.)
+function orphanedAgents(agents: ThreadView["subAgents"], ownerGone: boolean): ThreadView["subAgents"] {
+  if (!ownerGone) return agents
+  return agents.map((agent) => (agent.state === "running" ? { ...agent, state: "stale" } : agent))
+}
+
 function stampStoppable(agents: ThreadView["subAgents"], row: SessionRow): ThreadView["subAgents"] {
   if (!isBrokerClaudeRow(row)) return agents
   return agents.map((agent) => (agent.state === "running" ? { ...agent, stoppable: true } : agent))
@@ -1629,7 +1640,7 @@ function sessionThreadView(
     spawnedAt: row.spawned_at,
     lastActivityAt: tele?.lastActivityAt,
     lastAssistantAt: tele?.lastAssistantAt,
-    subAgents: stampStoppable(tele?.subAgents ?? [], row),
+    subAgents: stampStoppable(orphanedAgents(tele?.subAgents ?? [], deliveryProcessGone), row),
     bgShells: stampStoppableShells(tele?.bgShells ?? [], row),
     links: (registries.links.get(row.slug) ?? []).map(threadLinkView),
     // ONE SOURCE: the FENCE. Both kinds are derived from what the worker wrote — `prs:` entries

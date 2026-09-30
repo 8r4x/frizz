@@ -1315,6 +1315,35 @@ test("tailer: a shell's view carries the runtime's own background-task id, not j
   assert.equal(shell?.id, "toolu_sh", "…alongside the launch id, which is what the two copies of a row reconcile on")
 })
 
+// A MONITOR HAS NO OUTPUT FILE — its events reach the worker as notifications — so its row must not offer
+// a drill-in that can only ever read "No output yet.". A background Bash beside it keeps its drill-in.
+test("tailer: a Monitor's shell row is marked output-unavailable; a background Bash's is not", () => {
+  const h = harness()
+  h.storage.upsertSession(row())
+  const lines = [
+    IN_FLIGHT,
+    JSON.stringify(monitorUse("toolu_mon", "Watch PR checks", "gh pr checks 443 --watch")),
+    JSON.stringify(resultText("toolu_mon", "Monitor started (task mon12, timeout 3600000ms). You will be notified on each event.")),
+    JSON.stringify(bashBg("toolu_sh", "Watch CI", "gh run watch")),
+  ]
+  fixture(h.logDir, "sid", lines)
+  const t = createTailer({
+    project: { cwdSlug: "x" } as Project,
+    storage: h.storage,
+    bus: h.bus,
+    onChange: () => h.changes.n++,
+    now: () => h.clock.ms,
+    paneDead: () => h.dead.v,
+    sessionLogDir: h.logDir,
+    mtimeMs: () => Date.parse("2026-07-01T00:00:02.000Z"),
+  })
+  h.clock.ms = Date.parse("2026-07-01T00:01:00.000Z")
+  t.tick()
+  const shells = t.get("t")?.bgShells ?? []
+  assert.equal(shells.find((s) => s.id === "toolu_mon")?.outputUnavailable, true)
+  assert.equal(shells.find((s) => s.id === "toolu_sh")?.outputUnavailable, undefined)
+})
+
 test("tailer: a dead pane clears its background shells — a shell cannot outlive the agent process", () => {
   const h = harness()
   h.storage.upsertSession(row())

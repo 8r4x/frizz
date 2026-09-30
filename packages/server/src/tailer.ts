@@ -453,6 +453,10 @@ interface SubAgentEntry {
   // Transcript SCHEMA of `outputFile` when it isn't Claude's own JSONL. A codex sub-agent's output file
   // is the CHILD's codex rollout, which the drill-in drawer must parse with the codex reader instead.
   outputFormat?: "codex"
+  // A `Monitor`, which is a shell op with NO output file: its ack names only a task ("Monitor started
+  // (task …)"), and every event it produces arrives as a notification to the worker. Its row therefore
+  // carries no drill-in — the drawer could only ever say "No output yet." for the Monitor's whole life.
+  monitor?: true
   // The RUNTIME task id (Bash "…with ID: <id>", Monitor "(task <id>…)", Agent "agentId: <id>"), parsed
   // from the launch ack. This is the ONE identifier a `TaskStop` references (its `input.task_id`) and
   // it also rides every natural completion notification as `<task-id>` — so it is the correlation key
@@ -495,6 +499,8 @@ export interface BgShellView {
   /** The runtime's own background-task handle — the id the MODEL was given, and therefore the one a
    *  `shell` watcher is registered against. Full contract on the shared schema. */
   taskId?: string
+  /** No output file to drill into — a Monitor (see SubAgentEntry.monitor), or a codex exec. */
+  outputUnavailable?: boolean
 }
 
 /** A background shell that has FINISHED, in the shape the scheduler's watcher pass matches against.
@@ -1070,7 +1076,7 @@ function trackDispatches(state: TailState, rec: Record): void {
       state.subAgents.set(id, { kind: "agent", toolUseId: id, label: desc ?? "sub-agent", startedAt, subagentType, outputFile })
     } else if ((b.name === "Bash" && input.run_in_background === true) || b.name === "Monitor") {
       const command = typeof input.command === "string" ? input.command : previous?.command
-      state.subAgents.set(id, { kind: "shell", toolUseId: id, label: desc ?? shellSummary(input.command), startedAt, command, outputFile, taskId: previous?.taskId })
+      state.subAgents.set(id, { kind: "shell", toolUseId: id, label: desc ?? shellSummary(input.command), startedAt, command, outputFile, taskId: previous?.taskId, ...(b.name === "Monitor" ? { monitor: true as const } : {}) })
     } else if (b.name === "Bash") {
       // A FOREGROUND Bash — not a background op, and normally none of this map's business. But Claude
       // Code auto-backgrounds one that outlives its `timeout`, and only the RESULT says so, so park the
@@ -2975,7 +2981,7 @@ export function createTailer(deps: TailerDeps): Tailer {
       // positively confirmed nobody is running. `ToolStatusMeta` and the drawer have rendered a "stale"
       // shell all along; nothing ever produced one, because this was a literal "running".
       const shellState = shellIsGone(e) ? "stale" as const : "running" as const
-      out.push({ label: e.label, startedAt: e.startedAt, state: shellState, id: e.toolUseId, ...(e.taskId ? { stoppable: true, taskId: e.taskId } : {}), ...(lastActivityAt ? { lastActivityAt } : {}) })
+      out.push({ label: e.label, startedAt: e.startedAt, state: shellState, id: e.toolUseId, ...(e.taskId ? { stoppable: true, taskId: e.taskId } : {}), ...(lastActivityAt ? { lastActivityAt } : {}), ...(e.monitor ? { outputUnavailable: true } : {}) })
     }
     return out
   }
