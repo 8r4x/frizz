@@ -35,7 +35,7 @@ async function mouseClick(page: Page, selector: string, i = 0) {
 
 // Which option rows of the card wear the selection border, by index.
 const selectedRows = (page: Page, card: string) =>
-  page.$$eval(`${card} [data-question-option]`, (ns) => ns.flatMap((n, i) => (n.classList.contains("border-accent") ? [i] : [])))
+  page.$$eval(`${card} [data-question-option]`, (ns) => ns.flatMap((n, i) => (n.classList.contains("border-selection-border") ? [i] : [])))
 const boxFocused = (page: Page, card: string) =>
   page.$eval(`${card} textarea[data-surface='questionAnswer']`, (ta) => document.activeElement === ta)
 

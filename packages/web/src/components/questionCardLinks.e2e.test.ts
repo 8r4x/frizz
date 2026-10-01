@@ -119,7 +119,7 @@ test("references inside a question card are live, and clicking one does not pick
     })
     await page.mouse.click(a0.x, a0.y)
     assert.deepEqual(await chips(page), [0])
-    assert.equal(await page.$eval(A, (n) => n.classList.contains("border-accent")), true)
+    assert.equal(await page.$eval(A, (n) => n.classList.contains("border-selection-border")), true)
     // And the "Recommended" badge is part of the row's hit area too.
     await mouseClick(page, `${A} .float-right`)
     assert.deepEqual(await chips(page), [0, 0])
@@ -141,6 +141,49 @@ test("references inside a question card are live, and clicking one does not pick
     await page.waitForSelector(`${option(ro, 0)} a[href='https://github.com/colinhacks/frizz/issues/482']`)
     await mouseClick(page, `${option(ro, 0)} a[href='https://github.com/colinhacks/frizz/issues/482']`)
     assert.equal((await page.evaluate(() => (window as Window & { __anchors?: string[] }).__anchors))?.length, 3)
+
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test("the copy button on a code block inside an option copies, and does not pick the option", { skip: !baseUrl, timeout: 60_000 }, async () => {
+  const { browser, page, errors } = await launch()
+  try {
+    await page.goto(`${baseUrl}/question-links-fixture.html`, { waitUntil: "networkidle0" })
+    const A = option("[data-case='code']", 0)
+    const copyButton = `${A} .md-code-copy`
+    await page.waitForSelector(copyButton)
+    // Record what reaches the clipboard rather than reading the real one, which headless Chrome gates.
+    await page.evaluate(() => {
+      const w = window as Window & { __copied?: string[] }
+      w.__copied = []
+      navigator.clipboard.writeText = async (text: string) => { w.__copied!.push(text) }
+    })
+    const codeChips = () => page.evaluate(() => (window as Window & { __codeChips?: number[] }).__codeChips ?? [])
+
+    // The glyph only shows on hover, so hover the block first, exactly as a person reaching for it does.
+    await page.hover(`${A} .md-code pre`)
+    // A hit-test, not a DOM query: the button is always in the markup, and it is on top only if the
+    // raised `pre` beside it did not paint over it.
+    const onTop = await page.$eval(copyButton, (b) => {
+      const r = b.getBoundingClientRect()
+      return document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2) === b
+    })
+    assert.equal(onTop, true)
+
+    await mouseClick(page, copyButton)
+    assert.deepEqual(await page.evaluate(() => (window as Window & { __copied?: string[] }).__copied), ["nub run build && nub run test"])
+    assert.equal(await page.$eval(copyButton, (b) => b.classList.contains("is-copied")), true)
+    assert.deepEqual(await codeChips(), [])
+
+    // The code itself is still part of the row: a click on it picks the option.
+    await page.mouse.click(...await page.$eval(`${A} .md-code pre`, (n) => {
+      const r = n.getBoundingClientRect()
+      return [r.left + 12, r.top + r.height / 2] as [number, number]
+    }))
+    assert.deepEqual(await codeChips(), [0])
 
     assert.deepEqual(errors, [])
   } finally {

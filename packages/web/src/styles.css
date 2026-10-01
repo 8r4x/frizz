@@ -1066,6 +1066,12 @@ a[href] {
   position: relative;
   z-index: 1;
 }
+/* …and the block's copy button rides one layer above THAT. It overlays the `pre`'s corner as a sibling
+   in `.md-code`, which makes no stacking context, so at its base `z-index: auto` the raised `pre` painted
+   over it: the glyph still showed on hover, but the click landed on the code and picked the option. */
+[data-question-option] .md-body .md-code-copy {
+  z-index: 2;
+}
 /* Block chrome INSIDE an answer chip sits on a bg that changes with the chip's state — the card's own
    panel-2 when neutral, accent/10 when selected, elevated on hover — so the prose surface's OPAQUE
    fills fail in both directions: a panel-2 code chip or table header is invisible on the neutral chip
