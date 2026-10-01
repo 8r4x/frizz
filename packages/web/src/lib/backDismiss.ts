@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 
 // BACK CLOSES THE SHEET FIRST — a phone's back gesture (Android's edge swipe, the browser's own button)
 // must dismiss whatever is floating over the page before it leaves the page. The thread under a phone
@@ -22,12 +22,30 @@ import { useCallback, useEffect, useRef } from "react"
 //   · NEVER POP AN ENTRY THAT IS NOT OURS. Every `back()` is guarded on the tag still being on top, so a
 //     navigation that already replaced it (the thread closing under the sheet) is not answered with a
 //     second, wrong step back.
-let seq = 0
+//
+// The drawer layers that stack over a phone thread (the file reader, the frizz doc, a sub-agent, a
+// background shell) take an entry the same way — `useBackClosesLayer` below — so Back peels them one at
+// a time too. They share this file's tag and counter, so every entry either kind pushes is ordered
+// against every other.
+//
+// The counter starts at the clock rather than at 0 because history.state OUTLIVES a reload: an entry
+// tagged 5 by the previous document is still in the stack, and a fresh count from 1 would read it as
+// pushed ABOVE this document's layers.
+let seq = Date.now()
 
-type SheetHistoryState = { frizzSheet?: number } | null
+type LayerHistoryState = { frizzLayer?: number } | null
 
 function currentToken(): number | undefined {
-  return (history.state as SheetHistoryState)?.frizzSheet
+  return (history.state as LayerHistoryState)?.frizzLayer
+}
+
+// One same-URL entry carrying the router's state (so react-router sees the location it already has)
+// plus a fresh tag. Returns the tag.
+function pushLayerEntry(): number {
+  const token = ++seq
+  const base = history.state && typeof history.state === "object" ? history.state : {}
+  history.pushState({ ...base, frizzLayer: token }, "")
+  return token
 }
 
 export function useBackDismiss(onDismissed: () => void): (then?: () => void) => void {
@@ -51,10 +69,8 @@ export function useBackDismiss(onDismissed: () => void): (then?: () => void) => 
   }, [])
 
   useEffect(() => {
-    const token = ++seq
+    const token = pushLayerEntry()
     tokenRef.current = token
-    const base = history.state && typeof history.state === "object" ? history.state : {}
-    history.pushState({ ...base, frizzSheet: token }, "")
     const onPop = () => {
       if (currentToken() !== token) finish()
     }
@@ -78,4 +94,79 @@ export function useBackDismiss(onDismissed: () => void): (then?: () => void) => 
     history.back()
     fallbackRef.current = setTimeout(finish, 400)
   }, [finish])
+}
+
+/**
+ * BACK CLOSES THE DRAWER FIRST — the same rule for a drawer-stack layer on the phone.
+ *
+ * A thread layer has a history entry of its own because it has a URL (lib/router pushes one per opened
+ * thread). The layers that stack over it do not: a reader opened from the Files and links sheet, the
+ * frizz doc, a sub-agent's transcript, a background shell. With no entry of their own, Back popped the
+ * THREAD's entry and closed the thread and the reader over it in one step. So each of those layers
+ * pushes one tagged same-URL entry while it is open (the `useBackDismiss` entry above, the same tag),
+ * and closes when the history moves below it.
+ *
+ * Unlike the bottom sheet, a drawer is also closed by paths that never see this hook — its ×, Escape,
+ * the store unwinding the stack for a lateral open — so it does not route every close through Back.
+ * It watches its own `closing` flag instead, and when the layer starts to close with its entry still on
+ * top, it takes the entry off. That step is DEFERRED a task and re-checked: a close that is part of a
+ * navigation (another thread opening pushes its own URL in the same turn) has put a newer entry on top
+ * by then, and a `back()` would pop THAT one. The entry is left behind in that case as one dead step,
+ * which is the lesser harm.
+ *
+ * "Below it" is a token comparison, not an equality: a reader stacked over another reader pushed a
+ * newer entry, and Back from the top one must close it and leave the one under it alone.
+ *
+ * `enabled` is read once, at open: the phone is where this belongs (a desktop drawer never had an
+ * entry, and the desktop's history must not change); a window resized across the breakpoint while a
+ * drawer is up keeps the behaviour it opened with.
+ */
+export function useBackClosesLayer(enabled: boolean, closing: boolean, close: () => void): void {
+  const [active] = useState(enabled)
+  const closeRef = useRef(close)
+  closeRef.current = close
+  const closingRef = useRef(closing)
+  closingRef.current = closing
+  const tokenRef = useRef(0)
+  // Set once this layer has asked for its entry to be popped, so the close path and the unmount path
+  // (which arrive one task apart when reduced motion removes the layer at once) never pop twice.
+  const poppedRef = useRef(false)
+
+  const popLater = useCallback((onlyWhileClosing: boolean) => {
+    const token = tokenRef.current
+    window.setTimeout(() => {
+      if (poppedRef.current || (onlyWhileClosing && !closingRef.current)) return
+      if (currentToken() !== token) return
+      poppedRef.current = true
+      history.back()
+    }, 0)
+  }, [])
+
+  useEffect(() => {
+    if (!active) return
+    tokenRef.current = pushLayerEntry()
+    const onPop = () => {
+      const current = currentToken()
+      if (current === undefined || current < tokenRef.current) closeRef.current()
+    }
+    window.addEventListener("popstate", onPop)
+    return () => {
+      window.removeEventListener("popstate", onPop)
+      popLater(false)
+    }
+  }, [active, popLater])
+
+  useEffect(() => {
+    if (!active || !tokenRef.current) return
+    if (closing) {
+      popLater(true)
+      return
+    }
+    // A rapid re-open cancelled the close after the entry had already gone: take a fresh one.
+    const current = currentToken()
+    if (poppedRef.current || current === undefined || current < tokenRef.current) {
+      poppedRef.current = false
+      tokenRef.current = pushLayerEntry()
+    }
+  }, [active, closing, popLater])
 }
