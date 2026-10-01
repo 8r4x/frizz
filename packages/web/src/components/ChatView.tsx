@@ -223,7 +223,7 @@ export function ThreadView({ slug, onStatusApplied, onClose, virtualized = false
   return (
     <div className="flex-1 min-h-0 flex flex-col">
       {phone ? (
-        <MobileThreadHeader slug={slug} onClose={onClose} onStatusApplied={onStatusApplied} />
+        <MobileThreadHeader slug={slug} onClose={onClose} />
       ) : (
         <ThreadHeader slug={slug} onStatusApplied={onStatusApplied} onClose={onClose} showReturnToQueue={showReturnToQueue} />
       )}

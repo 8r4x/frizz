@@ -1,6 +1,7 @@
 import type { CompletionHold, ThreadView } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { closeDrawersById, openThread, showToast, store } from "../store.ts"
+import { appPushedCurrentEntry } from "./router.ts"
 import { displayTitle, needsAction, sectionThreads } from "../groups.ts"
 import { prefs } from "./prefs.ts"
 import { archivingAtNow, clearArchived, markArchived, optimisticallyArchived } from "./optimisticArchive.ts"
@@ -44,9 +45,22 @@ export function nextThreadNeedingYou(
 }
 
 // Leave the thread just filed: open the next one that needs you, or close back to the board.
-function advanceFrom(slug: string): void {
+//
+// THROUGH HISTORY, NOT AROUND IT. When the app pushed the filed thread's entry (the usual case: it was
+// opened from the board), that entry is POPPED first — exactly what the header's ← does — and the next
+// thread then opens from the board's entry. Closing the drawer directly instead makes the router REPLACE
+// the thread's entry with the board, leaving two board entries, so the next Back does nothing visible;
+// and opening the next thread on top of the filed one would make Back return to a thread already done.
+// Either way the history reads board → next, and Back from the next thread lands on the board. A cold
+// deep link (nothing of ours to pop) keeps the direct path.
+export function leaveFiledThread(slug: string): void {
   const threads = (store.board?.threads ?? []) as ThreadView[]
   const next = nextThreadNeedingYou(threads, slug)
+  if (appPushedCurrentEntry()) {
+    if (next) window.addEventListener("popstate", () => setTimeout(() => openThread(next.id), 0), { once: true })
+    history.back()
+    return
+  }
   if (next) {
     openThread(next.id)
     return
@@ -85,7 +99,7 @@ export async function markDoneAndAdvance(thread: ThreadView, opts: { terminateLi
   const title = displayTitle(thread)
   const filed = () => {
     markArchived(slug)
-    advanceFrom(slug)
+    leaveFiledThread(slug)
     showToast(`“${title}” marked done`, { action: { label: "Undo", run: () => void undoMarkDone(slug) } })
   }
   if (optimistic) filed()

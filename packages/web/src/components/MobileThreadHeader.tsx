@@ -3,6 +3,7 @@ import { ArrowLeft, MoreHorizontal } from "lucide-react"
 import { useBoard, useTranscript } from "../hooks.ts"
 import { threadBySlug } from "../store.ts"
 import { appPushedCurrentEntry } from "../lib/router.ts"
+import { leaveFiledThread } from "../lib/mobileTriage.ts"
 import { displayTitle } from "../groups.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { MOBILE_STATE_WORD, mobileThreadAge, mobileThreadState, turnStartedAt } from "../lib/mobileThread.ts"
@@ -32,7 +33,7 @@ import { ThreadActionsSheet, useModelEffortLabel } from "./MobileThreadActionsSh
 // Everything the icon strip and the lifecycle footer held — Snooze, Goal, the registered files, Rename,
 // Copy link, and Retry / Restart worker / Reload plugins where the header offers them — is in the ⋯
 // sheet (ThreadActionsSheet).
-export function MobileThreadHeader({ slug, onClose, onStatusApplied }: { slug: string; onClose: () => void; onStatusApplied?: () => void }) {
+export function MobileThreadHeader({ slug, onClose }: { slug: string; onClose: () => void }) {
   const board = useBoard()
   const thread = threadBySlug(board, slug)
   const [sheetOpen, setSheetOpen] = useState(false)
@@ -88,7 +89,9 @@ export function MobileThreadHeader({ slug, onClose, onStatusApplied }: { slug: s
       >
         <MoreHorizontal size={21} strokeWidth={2.1} />
       </button>
-      {sheetOpen && <ThreadActionsSheet slug={slug} onClose={() => setSheetOpen(false)} onArchived={onStatusApplied} />}
+      {/* Mark as done from the sheet leaves the thread the way the bottom bar's Done does — the next
+          thread that needs you, or back to the board — not the desktop close (lib/mobileTriage). */}
+      {sheetOpen && <ThreadActionsSheet slug={slug} onClose={() => setSheetOpen(false)} onArchived={() => leaveFiledThread(slug)} />}
     </header>
   )
 }
