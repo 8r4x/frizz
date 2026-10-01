@@ -576,6 +576,11 @@ export function Composer({
       })
     }
     if (e.key === "Escape" && !e.nativeEvent.isComposing) {
+      // On the /full page the key is not ours: Escape there always leaves fullscreen (DrawerStack's
+      // `onEscapeAtRest`), and a blur first would make the reader press it twice with nothing visible
+      // happening the first time. The draft is persisted, so the drawer or card it lands in shows it.
+      // A drawer opened OVER /full is portaled outside this column and still climbs out below.
+      if (e.currentTarget.closest("[data-standalone-thread]")) return
       // Climb out: blur the textarea and STOP the event — the same physical keypress must not also
       // reach App's window handler and pop a drawer. The NEXT Esc, at rest, unwinds normally.
       // Mid-IME-composition Esc is the IME's own cancel — leave it to the editor, don't blur.
@@ -898,8 +903,8 @@ export function Composer({
           data-1p-ignore
           onScroll={backdropSegments ? syncContextScroll : undefined}
           data-surface={surface}
-          // Escape here BLURS (onKeyDown below); the enclosing ThreadSheet reads this to leave the
-          // key to us instead of dismissing itself on the same press.
+          // Escape here BLURS (onKeyDown below; on /full it leaves fullscreen instead); the enclosing
+          // ThreadSheet reads this to leave the key to us instead of dismissing itself on the same press.
           data-claims-escape
           value={prose}
           autoFocus={autoFocus}
