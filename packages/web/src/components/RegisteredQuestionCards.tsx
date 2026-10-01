@@ -31,6 +31,7 @@ import { ROOT_PATH, liveQuestionNodes, nodeAnswered, registeredAnswer, settledQu
 import { AnswersCard } from "./AnswersCard.tsx"
 import { QueueDismissContext } from "./ChatView.tsx"
 import { QuestionBlockCard } from "./QuestionBlockCard.tsx"
+import { CompactQuestionList, usePhoneQuestions } from "./PhoneQuestionCards.tsx"
 
 function errorText(error: unknown): string {
   const message = error instanceof Error ? error.message : "The answer could not be sent."
@@ -53,6 +54,10 @@ export interface RegisteredAnswering {
   dismissing: boolean
   /** Send EVERY staged answer on the thread — placed or at an anchor, this rest's or an older one. */
   submit: () => void
+  /** The same send, then `onSent` once the server has accepted it. The phone sheet's optional note
+   *  rides this: it goes to the worker as an ordinary follow-up AFTER the answers are stored, so the
+   *  answers payload stays byte-for-byte the desktop's. */
+  submitThen: (onSent: () => void) => void
   staged: number
   sending: boolean
   error: string | undefined
@@ -137,7 +142,7 @@ export function useRegisteredAnswering(thread: ThreadView | undefined): Register
     onError: (cause) => setError(errorText(cause)),
   })
 
-  const submit = () => {
+  const submit = (onSent?: () => void) => {
     if (!slug || staged.length === 0 || send.isPending) return
     setError(undefined)
     // Local truth FIRST, then the network — the ordering every other send on this card obeys, and the
@@ -160,7 +165,7 @@ export function useRegisteredAnswering(thread: ThreadView | undefined): Register
       ...(prev ?? []).filter((s) => !ids.has(s.id)),
       ...stagedPairs.map(({ q, answer }): SettledQuestion => ({ id: q.id, spec: q.spec, askedAt: q.askedAt, settledAt, answer, pending: true })),
     ])
-    send.mutate(staged)
+    send.mutate(staged, onSent ? { onSuccess: () => onSent() } : undefined)
   }
 
   return {
@@ -202,7 +207,8 @@ export function useRegisteredAnswering(thread: ThreadView | undefined): Register
     },
     dismiss: (id) => dismiss.mutate(id),
     dismissing: dismiss.isPending,
-    submit,
+    submit: () => submit(),
+    submitThen: (onSent) => submit(onSent),
     staged: staged.length,
     sending: send.isPending,
     error,
@@ -311,8 +317,11 @@ export function RegisteredAnsweringProvider({ thread, children }: { thread: Thre
  *  surface's shared state through context, or the one a stack hands it. */
 export function RegisteredQuestionCard({ q, answering: given }: { q: RegisteredQuestionView; answering?: RegisteredAnswering }) {
   const shared = useContext(RegisteredAnsweringContext)
+  const phone = usePhoneQuestions()
   const a = given ?? shared
   if (!a || !a.slug) return null
+  // On the phone thread page the card is a reading surface; the sheet answers it (PhoneQuestionCards).
+  if (phone) return <CompactQuestionList questions={[q]} />
   const nodes = liveQuestionNodes(q.spec, a.answersOf(q))
   const card = (node: (typeof nodes)[number]) => (
     <QuestionBlockCard
@@ -418,6 +427,7 @@ export function RegisteredQuestionStack({
   const shared = useContext(RegisteredAnsweringContext)
   const own = useRegisteredAnswering(shared ? undefined : thread)
   const a = shared ?? own
+  const phone = usePhoneQuestions()
 
   // THE ANSWER, ALREADY SENT AND NOT YET IN THE WORKER'S HANDS. Answering stores the row; a wake hands
   // it over a moment later (deliberately — an answer given while the worker's process is down has to
@@ -431,11 +441,28 @@ export function RegisteredQuestionStack({
   // is invisible. Dimmed while it is in flight, exactly like an optimistic follow-up bubble. The caller
   // also decides when it has become a SECOND copy of a card the transcript is already drawing, which is
   // the whole reason the rows arrive as a prop rather than off the thread — see unrenderedAnswers.
-  if (!slug || (questions.length === 0 && !showSend)) {
+  // ON THE PHONE THREAD PAGE there is no per-stack Send — the bottom bar's Answer opens the sheet that
+  // sends — so a stack whose questions were all placed in the prose above has nothing of its own to draw.
+  if (!slug || (questions.length === 0 && (!showSend || phone))) {
     if (!slug || !inFlight?.length) return null
     return (
       <section data-answers-in-flight aria-label="Your answer, on its way to the worker" className={`flex min-w-0 flex-col items-end ${className}`}>
         <AnswersCard answers={inFlight} queued />
+      </section>
+    )
+  }
+
+  if (phone) {
+    return (
+      <section
+        data-registered-questions
+        aria-label={`${questions.length} question${questions.length === 1 ? "" : "s"} waiting for an answer`}
+        className={`flex min-w-0 flex-col gap-3 ${className}`}
+      >
+        <CompactQuestionList questions={questions} />
+        {/* The sheet closes on Send, so a refusal has to surface HERE, beside the questions it restored. */}
+        {a.error && <div role="alert" className="break-words text-[13px] leading-snug text-danger-soft">{a.error}</div>}
+        {a.sending && <div role="status" aria-live="polite" className="text-[13px] leading-snug text-muted">Sending…</div>}
       </section>
     )
   }
