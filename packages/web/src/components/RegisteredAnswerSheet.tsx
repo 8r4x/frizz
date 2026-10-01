@@ -1,11 +1,8 @@
 import { useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react"
-import { useQueryClient } from "@tanstack/react-query"
 import { Check } from "lucide-react"
 import type { AskedOption, RegisteredQuestionView } from "@frizz/shared"
 import { useBackDismiss } from "../lib/backDismiss.ts"
 import { answerSteps, answerSummary, firstOpenStep, oneLineDescription, stepAfter, stepAfterPick, type AnswerStep } from "../lib/answerSheet.ts"
-import { draftKey, draftStore, useDraft, useProjectDir } from "../lib/drafts.ts"
-import { sendEagerFollowUp } from "../lib/eagerComposerSubmission.ts"
 import { useKeyboardInset } from "../lib/keyboardInset.ts"
 import { nodeAnswered } from "../lib/registeredQuestion.ts"
 import { useMarkdownHtml } from "../lib/useMarkdown.ts"
@@ -285,8 +282,6 @@ function StepFooter({ a, step, first, writing, onBack, onNext }: {
 // ── the review ───────────────────────────────────────────────────────────────────────────────────
 
 function ReviewStep({ a, steps, onChange }: { a: RegisteredAnswering; steps: readonly AnswerStep[]; onChange: (key: string) => void }) {
-  const projectDir = useProjectDir()
-  const [note, setNote] = useDraft(draftKey.answerNote(projectDir, a.slug!))
   const rows = steps.map((s) => ({ s, said: answerSummary(s.spec, a.answerFor(s.q, s.path)) }))
   const count = rows.filter((r) => r.said !== null).length
   return (
@@ -305,53 +300,19 @@ function ReviewStep({ a, steps, onChange }: { a: RegisteredAnswering; steps: rea
           </button>
         ))}
       </div>
-      <div className="px-[18px] pt-2.5">
-        <NoteField value={note} onChange={setNote} />
-      </div>
     </div>
   )
 }
 
-function NoteField({ value, onChange }: { value: string; onChange: (value: string) => void }) {
-  const ref = useRef<HTMLTextAreaElement>(null)
-  useLayoutEffect(() => {
-    const el = ref.current
-    if (!el) return
-    el.style.height = "auto"
-    el.style.height = `${el.scrollHeight + el.offsetHeight - el.clientHeight}px`
-  }, [value])
-  return (
-    <textarea
-      ref={ref}
-      data-answer-note
-      data-1p-ignore
-      data-claims-escape
-      rows={1}
-      aria-label="Add a note (optional)"
-      value={value}
-      placeholder="Add a note (optional)"
-      onChange={(e) => onChange(e.target.value)}
-      className="block max-h-[30vh] w-full resize-none overflow-y-auto rounded-[12px] border border-border-strong bg-transparent px-3 py-[11px] text-[16px] leading-[22px] text-fg outline-none placeholder:text-faint focus:border-fg/40"
-    />
-  )
-}
-
 function ReviewFooter({ a, onSent }: { a: RegisteredAnswering; onSent: () => void }) {
-  const queryClient = useQueryClient()
-  const projectDir = useProjectDir()
-  const slug = a.slug!
   const send = () => {
-    const key = draftKey.answerNote(projectDir, slug)
-    const note = draftStore.get(key).trim()
     // THE ANSWERS GO EXACTLY AS THE DESKTOP SENDS THEM (one answerQuestions call over every staged
-    // answer). The note is not part of that payload — the RPC has no field for it, and folding it into
-    // an answer's text would change what the worker reads as the answer — so it follows as an ordinary
-    // follow-up, the thing "type a note in the composer" used to be, once the answers are stored.
-    a.submitThen(() => {
-      if (!note) return
-      draftStore.set(key, "")
-      sendEagerFollowUp(queryClient, slug, note)
-    })
+    // answer). There is deliberately NO note field here, though the approved mockup drew one: the RPC has
+    // no field for it, folding it into an answer's text would change the answer, and sent as a follow-up
+    // it RACES the answers — the server stores them and the scheduler delivers them, while a follow-up
+    // goes straight to the worker, so the note reached the worker first on a seeded thread. A word about
+    // the answers is a reply, which the bar's keyboard button sends after them.
+    a.submit()
     // Nothing advances after a send (unlike Done): the worker resumes on this thread.
     onSent()
   }

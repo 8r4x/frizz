@@ -54,10 +54,6 @@ export interface RegisteredAnswering {
   dismissing: boolean
   /** Send EVERY staged answer on the thread — placed or at an anchor, this rest's or an older one. */
   submit: () => void
-  /** The same send, then `onSent` once the server has accepted it. The phone sheet's optional note
-   *  rides this: it goes to the worker as an ordinary follow-up AFTER the answers are stored, so the
-   *  answers payload stays byte-for-byte the desktop's. */
-  submitThen: (onSent: () => void) => void
   staged: number
   sending: boolean
   error: string | undefined
@@ -142,7 +138,7 @@ export function useRegisteredAnswering(thread: ThreadView | undefined): Register
     onError: (cause) => setError(errorText(cause)),
   })
 
-  const submit = (onSent?: () => void) => {
+  const submit = () => {
     if (!slug || staged.length === 0 || send.isPending) return
     setError(undefined)
     // Local truth FIRST, then the network — the ordering every other send on this card obeys, and the
@@ -165,7 +161,7 @@ export function useRegisteredAnswering(thread: ThreadView | undefined): Register
       ...(prev ?? []).filter((s) => !ids.has(s.id)),
       ...stagedPairs.map(({ q, answer }): SettledQuestion => ({ id: q.id, spec: q.spec, askedAt: q.askedAt, settledAt, answer, pending: true })),
     ])
-    send.mutate(staged, onSent ? { onSuccess: () => onSent() } : undefined)
+    send.mutate(staged)
   }
 
   return {
@@ -208,7 +204,6 @@ export function useRegisteredAnswering(thread: ThreadView | undefined): Register
     dismiss: (id) => dismiss.mutate(id),
     dismissing: dismiss.isPending,
     submit: () => submit(),
-    submitThen: (onSent) => submit(onSent),
     staged: staged.length,
     sending: send.isPending,
     error,
