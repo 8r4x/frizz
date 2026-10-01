@@ -110,6 +110,9 @@ export const draftKey = {
   // asked it (that is the whole point of it being a row), and a half-typed answer must survive the
   // worker restarting under it.
   question: (projectDir: string | undefined, slug: string, id: string, path: string) => `question:${projectDraftScope(projectDir)}:${encodeURIComponent(slug)}:${encodeURIComponent(id)}:${encodeURIComponent(path)}`,
+  // The phone answer sheet's optional note (RegisteredAnswerSheet's review step). One per thread, not per
+  // question: it is a word to the worker about the whole set of answers, and it goes as a follow-up.
+  answerNote: (projectDir: string | undefined, slug: string) => `answer-note:${projectDraftScope(projectDir)}:${encodeURIComponent(slug)}`,
   // There is no `settings:` key: the Settings drawer autosaves, so the server IS its draft store. A
   // sessionStorage mirror could only ever hold the ~500ms of typing the debounce has not written yet,
   // and it outlived the save — a stale entry that reappeared over the stored value on the next open.

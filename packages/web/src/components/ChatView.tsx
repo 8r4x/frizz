@@ -39,6 +39,8 @@ import { WakeDivider } from "./WakeDivider.tsx"
 import { useLiveAnswering, type LiveAnswering } from "../lib/answering.ts"
 import { useIsMobile } from "../lib/mobile.ts"
 import { MobileAnswerSheet } from "./MobileAnswerSheet.tsx"
+import { PhoneAnswerBar, PhoneQuestionsContext, type PhoneQuestions } from "./PhoneQuestionCards.tsx"
+import { RegisteredAnswerSheet } from "./RegisteredAnswerSheet.tsx"
 import { sendEagerFollowUp } from "../lib/eagerComposerSubmission.ts"
 import { limitResumeClock } from "../lib/activityTime.ts"
 import { useUnqueueFollowUp, useUnqueueSupported } from "../lib/unqueueFollowUp.ts"
@@ -241,6 +243,13 @@ function ChatView({ slug, virtualized, phone = false }: { slug: string; virtuali
   // never draws as both.
   const settledQuestions = useSettledQuestions(thread)
   const openQuestions = useMemo(() => openQuestionsOf(thread, settledQuestions), [thread, settledQuestions])
+  // ON A PHONE the registered cards are read-only and answering is a sheet (PhoneQuestionCards,
+  // RegisteredAnswerSheet), opened from the bottom bar's "Answer". Null off the phone page.
+  const phoneQuestions = useMemo<PhoneQuestions | null>(
+    () => (phone ? { numberOf: (id) => openQuestions.findIndex((q) => q.id === id) + 1 } : null),
+    [phone, openQuestions],
+  )
+  const [answerSheetOpen, setAnswerSheetOpen] = useState(false)
   const running = thread?.runtime === "running" || thread?.runtime === "spawning"
   const copyTerminalCommand = useCopyTerminalCommand(slug)
 
@@ -390,6 +399,7 @@ function ChatView({ slug, virtualized, phone = false }: { slug: string; virtuali
   return (
     <ThreadSlugContext.Provider value={slug}>
     <RegisteredAnsweringProvider thread={thread}>
+    <PhoneQuestionsContext.Provider value={phoneQuestions}>
     <div
       data-drawer-scroll-ready={q.isPending ? "false" : "true"}
       className="flex-1 min-h-0 flex flex-col overflow-hidden outline-none"
@@ -636,9 +646,14 @@ function ChatView({ slug, virtualized, phone = false }: { slug: string; virtuali
           // The phone draws no ops rows under the prompt (mockup v2 §2): a sub-agent is already a row
           // in the transcript and on the board, and the registered files and links are the ⋯ sheet's.
           ops={phone ? undefined : <BackgroundOpsStrip slug={slug} transcriptShells={liveTranscriptShells} className="px-1 pt-1.5" />}
+          phoneBarOverride={phone && openQuestions.length > 0
+            ? (api) => <PhoneAnswerBar count={openQuestions.length} onAnswer={() => setAnswerSheetOpen(true)} onReply={api.editReply} />
+            : undefined}
         />
       </div>
+      {phone && answerSheetOpen && <RegisteredAnswerSheet questions={openQuestions} onClose={() => setAnswerSheetOpen(false)} />}
     </div>
+    </PhoneQuestionsContext.Provider>
     </RegisteredAnsweringProvider>
     </ThreadSlugContext.Provider>
   )
