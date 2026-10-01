@@ -2,6 +2,7 @@ import { useMemo, useState } from "react"
 import { ArrowLeft, MoreHorizontal } from "lucide-react"
 import { useBoard, useTranscript } from "../hooks.ts"
 import { threadBySlug } from "../store.ts"
+import { appPushedCurrentEntry } from "../lib/router.ts"
 import { displayTitle } from "../groups.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { MOBILE_STATE_WORD, mobileThreadAge, mobileThreadState, turnStartedAt } from "../lib/mobileThread.ts"
@@ -12,11 +13,17 @@ import { ThreadActionsSheet, useModelEffortLabel } from "./MobileThreadActionsSh
 // cannot use (copy a terminal command, open fullscreen) or reaches more easily from a list. This is one
 // 56px row: ← back, the title, a subtitle that says where the thread stands, and ⋯ for everything else.
 //
-// ← IS TODAY'S ×. Same `onClose` the drawer passes — the animated close, the same URL unwind — only the
-// glyph and the corner changed. It does NOT take the drawer's initial focus the way × did
-// (`data-dialog-initial-focus`): a programmatically focused button matches :focus-visible, so the page
-// opened with a lit circle around ←. Focus falls back to the sheet itself, which draws nothing. The browser's own Back does the same thing through the history entry
-// opening the thread pushed (lib/router).
+// ← IS THE PLATFORM'S BACK. When the app pushed the thread's history entry (it was opened from the
+// board, or anywhere else in this session) it pops that entry — `history.back()` — and the router's
+// popstate unwinds the drawer exactly as the browser's own Back or Android's edge swipe would. Reusing
+// the desktop ×'s close here instead REPLACED the thread's entry with the board, which left two board
+// entries in a row, so the next Back did nothing visible. Only a thread that arrived by a cold link (the
+// entry the document loaded on — nothing of ours below it) closes the ×'s way and lands on the board.
+// See `appPushedCurrentEntry` in lib/router.
+//
+// It does NOT take the drawer's initial focus the way × did (`data-dialog-initial-focus`): a
+// programmatically focused button matches :focus-visible, so the page opened with a lit circle around ←.
+// Focus falls back to the sheet itself, which draws nothing.
 //
 // The subtitle leads with the STATE because that is what a phone reader opens a thread to learn:
 // "Needs you" in the accent (the one thing the accent is for), "Working" in the live green while a turn
@@ -54,7 +61,10 @@ export function MobileThreadHeader({ slug, onClose, onStatusApplied }: { slug: s
         type="button"
         aria-label="Back"
         data-mobile-thread-back
-        onClick={onClose}
+        onClick={() => {
+          if (appPushedCurrentEntry()) history.back()
+          else onClose()
+        }}
         className="flex size-11 shrink-0 items-center justify-center rounded-full text-fg/90 outline-none active:bg-hover focus-visible:bg-hover"
       >
         <ArrowLeft size={21} strokeWidth={2.1} />

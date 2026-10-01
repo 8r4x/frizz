@@ -1,4 +1,4 @@
-import { useRef } from "react"
+import { useMemo, useRef } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { ExternalLink } from "lucide-react"
 import { showToast } from "../store.ts"
@@ -6,11 +6,12 @@ import { rpc } from "../api/rpc.ts"
 import { useLiveLocalFile } from "../hooks.ts"
 import { copyTextToClipboard } from "../lib/clipboard.ts"
 import { useInnerHtml } from "../lib/innerHtml.ts"
-import { LOCAL_FILE_POLL_MS, localFileQuery } from "../lib/localFileQuery.ts"
+import { LOCAL_FILE_POLL_MS, highlightedSource, localFileQuery } from "../lib/localFileQuery.ts"
 import { useLocalFileCodeLinks } from "../lib/localFileCode.ts"
 import { useMarkdownHtml } from "../lib/useMarkdown.ts"
 import { splitFrontmatter } from "../lib/frontmatter.ts"
-import { localFileDir } from "../lib/markdownTargets.ts"
+import { isLocalMarkdownFile, localFileDir } from "../lib/markdownTargets.ts"
+import { useIsMobile } from "../lib/mobile.ts"
 import { CodeBody } from "./CodeBody.tsx"
 import { Sheet } from "./ui/Sheet.tsx"
 import { SheetHeader } from "./ui/SheetHeader.tsx"
@@ -82,11 +83,20 @@ export function MarkdownDrawer({ id, path, title, depth, widthDepth }: { id: num
   const resolved = body.data?.path ?? path
   // Frontmatter is shown as metadata, not rendered as prose — see lib/frontmatter.ts for the heading
   // it became otherwise. It opens every MDX blog post and every skill file, so this is the common case.
-  const { front, body: source } = splitFrontmatter(body.data?.markdown ?? "")
+  // (A non-markdown file — the phone's source view, below — skips the markdown pipeline entirely.)
+  const markdown = isLocalMarkdownFile(path)
+  const { front, body: source } = splitFrontmatter(markdown ? body.data?.markdown ?? "" : "")
   const html = useMarkdownHtml(source, { baseDir: localFileDir(resolved), asDocument: true })
   const inner = useInnerHtml(html)
   const ref = useRef<HTMLDivElement>(null)
   useLocalFileCodeLinks(ref, html)
+  // ON A PHONE this drawer is the reader for EVERY file (lib/local-file-links: the desktop opener would
+  // launch it on the machine Frizz runs on). A file that is not markdown has no rendered form, so it
+  // shows as highlighted source — the /full split viewer's source view, same read, same highlighter.
+  // The desktop never opens a non-markdown path here, so none of this reaches it.
+  const phone = useIsMobile()
+  const raw = body.data?.markdown ?? ""
+  const sourceHtml = useInnerHtml(useMemo(() => (markdown ? "" : highlightedSource(resolved, raw)), [markdown, raw, resolved]))
 
   return (
     <Sheet id={id} depth={depth} widthDepth={widthDepth}>
@@ -102,28 +112,51 @@ export function MarkdownDrawer({ id, path, title, depth, widthDepth }: { id: num
               <div className="text-[13px] text-muted">Loading…</div>
             ) : body.error ? (
               // The gate's own words — "outside Frizz's trusted roots", "was not found" — say more than
-              // a generic failure would, and the footer still offers the desktop opener.
+              // a generic failure would, and (on the desktop) the footer still offers the desktop opener.
               <div className="text-[13px] text-danger-90">Couldn’t read this file: {(body.error as Error).message}</div>
+            ) : !markdown ? (
+              raw ? (
+                <pre
+                  data-file-source
+                  className="hljs whitespace-pre-wrap break-words bg-transparent font-mono-keep text-[12px] leading-5 text-fg/90"
+                  style={{ tabSize: 2 }}
+                  dangerouslySetInnerHTML={sourceHtml}
+                />
+              ) : (
+                <div className="text-[13px] text-muted">This file is empty.</div>
+              )
             ) : html ? (
               <>
                 {front && <Frontmatter source={front} />}
                 <div ref={ref} className="md-body" dangerouslySetInnerHTML={inner} />
                 {body.data?.truncated && (
                   <p className="mt-4 border-t border-border/60 pt-3 text-[12px] text-muted">
-                    This file is too long to render in full — everything above the cut is shown. Open it to read the rest.
+                    This file is too long to render in full — everything above the cut is shown.{phone ? "" : " Open it to read the rest."}
                   </p>
                 )}
               </>
             ) : (
               <div className="text-[13px] text-muted">This file is empty.</div>
             )}
+            {!markdown && !body.isLoading && !body.error && body.data?.truncated && (
+              <p className="mt-4 border-t border-border/60 pt-3 text-[12px] text-muted">
+                This file is too long to show in full — everything above the cut is shown.
+              </p>
+            )}
           </div>
-          <div
-            className="shrink-0 flex items-center justify-end gap-1.5 border-t border-border/60 bg-panel px-5 pt-3"
-            style={FOOTER_STYLE}
-          >
-            <OpenAction path={resolved} />
-          </div>
+          {/* The desktop-opener footer is not offered on the phone: its Open launches the file on the
+              machine Frizz runs on, not on the phone in the reader's hand. The safe-area pad it carried
+              moves to the page so the last line still clears the home indicator. */}
+          {phone ? (
+            <div aria-hidden className="shrink-0" style={{ height: "env(safe-area-inset-bottom)" }} />
+          ) : (
+            <div
+              className="shrink-0 flex items-center justify-end gap-1.5 border-t border-border/60 bg-panel px-5 pt-3"
+              style={FOOTER_STYLE}
+            >
+              <OpenAction path={resolved} />
+            </div>
+          )}
         </>
       )}
     </Sheet>

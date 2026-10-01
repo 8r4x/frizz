@@ -1,7 +1,8 @@
 import { rpc } from "../api/rpc.ts"
 import { openFilePanel, pushMarkdownDrawer, showToast, store } from "../store.ts"
 import { copyTextToClipboard } from "./clipboard.ts"
-import { isLocalMarkdownFile } from "./markdownTargets.ts"
+import { isLocalMarkdownFile, localImageUrl } from "./markdownTargets.ts"
+import { isMobileViewport } from "./mobile.ts"
 
 // One delegated listener covers every sanitized markdown surface (chat, the doc drawer, and
 // drawers). It never follows file:// or an accidental same-origin pathname: only explicit data
@@ -61,7 +62,8 @@ function imageFailureHandler(): (event: Event) => void {
 
 // Act on a vetted local path: a `.md` file is prose Frizz can render itself, so it opens in the built-in
 // reader instead of launching an editor; everything else goes to the server, which realpath-gates it and
-// hands it to the opener the `localFileOpener` setting names. The decision lives HERE, in the one place
+// hands it to the opener the `localFileOpener` setting names — except on a phone, where nothing leaves
+// the browser (below). The decision lives HERE, in the one place
 // every local-path activation passes through, rather than in each producer — markdown links, resolved
 // inline-code paths, attachment chips, the Codex file rows and the tool-header path links all get the
 // same routing from this single branch. An image is excluded: those have a viewer of their own.
@@ -79,6 +81,16 @@ export function openLocalPath(path: string, image = false): void {
   // to an editor for a look. Outside it — the board — the desktop opener remains the answer for code.
   if (!image && store.splitFileViewer) {
     openFilePanel(path)
+    return
+  }
+  // ON A PHONE the desktop opener is the wrong machine: it launches an editor on the computer Frizz runs
+  // on, which from a phone is somewhere else entirely, and the tap appears to do nothing. So every file
+  // opens in Frizz's own reader instead — the same drawer a `.md` gets, showing the file as highlighted
+  // source (MarkdownDrawer) — and an image opens in the browser, the phone's own image viewer, through
+  // the route that already serves it to the transcript.
+  if (isMobileViewport()) {
+    if (image) window.open(localImageUrl(path), "_blank", "noopener")
+    else pushMarkdownDrawer(path)
     return
   }
   void open(path, image)
