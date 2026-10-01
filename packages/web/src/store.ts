@@ -124,7 +124,7 @@ export const store = proxy({
   sidebarCollapsed: { active: false, snoozed: true, inactive: true, external: true } as Record<"active" | "snoozed" | "inactive" | "external", boolean>,
   // The SIDE-DRAWER STACK — arbitrary depth. `thread` layers are full thread views (the Open-thread
   // sheet); `doc` layers are the frizz-document markdown; `markdown` layers are the built-in reader for
-  // a `.md` FILE on disk, opened from any link to one; `subagent` and `shell` layers are read-only
+  // a `.md` FILE on disk, opened from any link to one (on a phone, for any file — as source); `subagent` and `shell` layers are read-only
   // operation drill-ins that overlay a thread. A drill-in within one thread's family
   // (its doc, its sub-agents) stacks OVER the previous layer (higher z, slight inset); any lateral open
   // REPLACES the layers it doesn't stack over (one drawer at a time — see openOrRaiseDrawer). Esc /
@@ -422,6 +422,8 @@ function flashQueueCard(slug: string, root: HTMLElement): void {
 // desktop opener. Every link to one routes here (lib/local-file-links.ts): agent prose citing a repo
 // doc, an inline-code path that resolved to one, an attached `.md`. `path` is the absolute POSIX path
 // the server will re-gate; the basename is the header title. Queue drawers are deduped on path.
+// On a phone EVERY file opens here, not only `.md` — the desktop opener would launch it on the machine
+// Frizz runs on — and the drawer shows anything that is not markdown as source (MarkdownDrawer).
 export function pushMarkdownDrawer(path: string): void {
   // On /full the reader is a SPLIT PANEL beside the thread, not a sheet over it — route every
   // markdown open there while that page is mounted, stacking links from the transcript AND reader.
