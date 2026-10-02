@@ -309,7 +309,7 @@ export function frizzMcpEnv(mcp: FrizzMcp): Record<string, string> {
 }
 
 // Frizz mounts NO browser. The only MCP server it injects into a worker is the unified `frizz`
-// server above (claude: an inline `--mcp-config` in dispatch.ts; codex: `-c` TOML overrides on the
+// server above (claude: a `--mcp-config` file in dispatch.ts; codex: `-c` TOML overrides on the
 // app-server argv in codex-mcp.ts). A `chrome-devtools` mount used to ride every dispatch on both
 // backends, together with a lazy proxy in `cc-worker/bin/` that answered `tools/list` from a
 // committed schema snapshot; all of it was removed 2026-08-26. Two reasons: its 29 tool schemas cost
