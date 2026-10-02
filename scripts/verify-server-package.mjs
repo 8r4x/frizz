@@ -253,7 +253,9 @@ try {
     evidence.listenerSamples = samples; assert.ok(samples > 0)
     restartRequested = false
     await page.reload({ waitUntil: "networkidle2" })
-    await page.hover('button[aria-label="Restart Frizz"]')
+    // The update installed the newest version the registry offers, so the button is in its greyed
+    // "up to date" state (1ea81aa1, 2026-09-25), not the plain "Restart Frizz" one.
+    await page.hover('button[aria-label="Frizz is up to date"]')
     await page.waitForSelector("#update-restart-popover", { visible: true })
     await until("updated version in browser", () => page.$eval("#update-restart-popover .font-mono", (el, version) => el.textContent.replace(/^Server /, "") === version, currentVersion))
     const popover = await page.$("#update-restart-popover")
