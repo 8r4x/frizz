@@ -487,9 +487,10 @@ export function safeQuestionAnswer(raw: string | null): QuestionAnswer | undefin
  *  2026-08-27). This is what fills it: the human's own answer, from the registry, at 50% until the worker
  *  actually has it.
  *
- *  SPENT BY THE WORKER RECEIVING IT, not by the outbox claiming it. `delivered` is set at ENQUEUE, which
- *  is a whole delivery ahead of the transcript, so keying on it would reopen the same hole a second
- *  wide. The newest USER record is the honest test — frizz's delivery IS one — and it is the same test
+ *  SPENT BY THE WORKER RECEIVING IT, as the transcript shows it. `delivered` is the OUTBOX's verdict on
+ *  the carrying wake (scheduler.evalQuestionAnswers) and can lead the transcript — a daemon's
+ *  acknowledgement files the wake before the record lands — so keying on it would reopen the same hole
+ *  a moment wide. The newest USER record is the honest test — frizz's delivery IS one — and it is the same test
  *  `registeredDoneFence` uses for the same reason. A dismissal alone shows nothing: nobody is being
  *  woken for it, so there is no arrival to bridge to — UNLESS `wakeOnDismissals` says one is. On an
  *  AUTONOMOUS thread (a Goal armed on rest — the exact gate evalQuestionAnswers wakes on) the
@@ -522,8 +523,9 @@ export function answersInFlight(rows: readonly ThreadQuestionRow[], lastUserAt: 
 /** How long a stored answer excuses its thread from the queue while the wake carrying it has not landed.
  *  The delivery normally lands within seconds (answerQuestions kicks the scheduler at once); a worker
  *  that has to be resumed first takes longer. The cap is what keeps the excusal honest: a wake the
- *  outbox EXHAUSTS never produces the user record that ends it, and without a bound that thread would
- *  sit out of the queue, answered and unwoken, with nothing on screen to say so. */
+ *  outbox EXHAUSTS never produces the user record that ends it — the answer stays undelivered and is
+ *  offered again later (scheduler ANSWER_REOFFER_BACKOFF_MS), but not soon — and without a bound that
+ *  thread would sit out of the queue, answered and unwoken, with nothing on screen to say so. */
 export const ANSWER_IN_FLIGHT_EXCUSAL_MS = 60_000
 
 /** Has the human answered a registered question that the worker has not received yet, recently enough

@@ -962,6 +962,23 @@ function isQuestionAnswerFenceId(fenceId: string): boolean {
   return fenceId.startsWith(`${QUESTION_ANSWER_FENCE_PREFIX}:`)
 }
 
+/** HOW LONG A FAILED BATCH OF ANSWERS WAITS before it is offered again with nothing to say the worker can
+ *  take it now. An answer is only `delivered` once the wake carrying it lands (evalQuestionAnswers), so a
+ *  wake that exhausts its attempts leaves the answer undelivered rather than spent — and something has to
+ *  decide when to try again. A restart of this server or a turn the worker ran since the failure opens
+ *  the gate at once (each is evidence the runtime that refused it has changed); this is the floor for a
+ *  thread where neither happens, so a transient failure — the 2026-09-30 broker resume race was one —
+ *  costs the human half an hour rather than the answer. One retry round is the outbox's own attempt cap
+ *  (`maxDeliveryAttempts`), so a permanently broken runtime pays that many attempts per window, not a
+ *  loop on every tick. */
+export const ANSWER_REOFFER_BACKOFF_MS = 30 * 60_000
+
+/** The reason the outbox records on a row `deliveryContext` superseded — the session moved, or the thread
+ *  was archived — as opposed to a delivery `resume` abandoned. evalQuestionAnswers reads it: a batch of
+ *  answers superseded this way before anything crossed the transport is re-offered at once, because
+ *  nothing about the runtime refused it. */
+const CONTEXT_SUPERSEDED = "the exact awaiting fence or session was superseded"
+
 /** How often a registered watcher re-reads GitHub, per PR. The fence poller's floor, for the same
  *  reason: this is somebody else's API and the answer changes on a human's timescale. */
 const PR_WATCH_POLL_MS = 60_000
@@ -1264,6 +1281,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   const confirmGraceMs = Math.max(1, deps.confirmGraceMs ?? 60_000)
   const deliveryBatchSize = Math.max(0, deps.deliveryBatchSize ?? 50)
   const deliveryOwner = randomUUID()
+  // When this scheduler came up: a failed delivery older than this was refused by a previous process, and
+  // a restart is the usual place a broken runtime gets fixed (answerReofferDue).
+  const startedAtMs = now()
   const outbox = createWakeDeliveryStore(deps.storage.scope, { quietWindowMs: deps.wakeQuietWindowMs ?? WAKE_QUIET_WINDOW_MS })
 
   const reviewFailures = new Map<string, { signature: string; loggedAt: number; suppressed: number }>()
@@ -3186,8 +3206,24 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
    *  a thread with nothing but dismissals simply keeps them queued — the worker sees them gone in its
    *  own `ask` read-back.
    *
-   *  Marked delivered at ENQUEUE, not at receipt, because the outbox is itself durable (wake_delivery in
-   *  SQLite) and owns retry from there. "Delivered" here means handed to the channel that cannot lose it.
+   *  MARKED DELIVERED WHEN THE WORKER HAS IT, not when the outbox does (2026-10-01). This used to flip
+   *  `delivered` at ENQUEUE, on the reasoning that the outbox is durable and owns retry from there — but
+   *  the outbox's retry is capped, and a wake that exhausts its attempts is filed and forgotten. On
+   *  2026-09-30 four answers on one thread were flagged delivered and never reached its worker (a broker
+   *  resume race, fixed in 0dc073b7); had every attempt failed, nothing anywhere would ever have offered
+   *  them again. Now each settlement records the wake carrying it (`delivery_id`), `delivered` flips only
+   *  when that wake reaches the outbox's `delivered` state (settleQuestionAnswers), and a settlement whose
+   *  wake ended any other way is offered again:
+   *    - IN FLIGHT (its wake pending or leased): skipped, so a second answer on the same thread is its
+   *      own wake and never re-carries the first — the double-send the enqueue-time flag used to prevent.
+   *    - LANDED but not yet marked (a process that died between the outbox's confirm and the mark): marked
+   *      here.
+   *    - FAILED (exhausted, abandoned, or superseded): offered again under a NEW fence id (the old one
+   *      is spent — the outbox dedupes on it), when there is a reason to think it can land now. A wake
+   *      superseded before it crossed the transport (the session moved; the thread was archived and is
+   *      back) goes at once; a wake the runtime refused waits for this process to be newer than the
+   *      failure, for the worker to have run a turn since, or for ANSWER_REOFFER_BACKOFF_MS. A brand-new
+   *      settlement on the thread is a delivery opportunity too: the failed ones ride it.
    */
   function evalQuestionAnswers(nowMs: number): void {
     const bySlug = new Map<string, ThreadQuestionRow[]>()
@@ -3196,11 +3232,33 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       list.push(q)
       bySlug.set(q.thread_slug, list)
     }
-    for (const [slug, rows] of bySlug) {
+    for (const [slug, settled] of bySlug) {
       const row = deps.storage.getSession(slug)
       // An archived thread is told nothing, and its rows stay undelivered: reopening it should still
       // hand the worker what the human said, rather than having spent it on a thread nobody was reading.
       if (!row || row.state === "archived" || row.archived === 1) continue
+      // Sort each settlement by what its last offer came to. `rows` is what this pass may offer.
+      const rows: ThreadQuestionRow[] = []
+      const failed: WakeDelivery[] = []
+      let fresh = false
+      let reofferDue = false
+      for (const q of settled) {
+        if (!q.delivery_id) {
+          rows.push(q)
+          fresh = true
+          continue
+        }
+        const carrier = outbox.get(q.delivery_id)
+        if (carrier?.state === "pending" || carrier?.state === "leased") continue
+        if (carrier?.state === "delivered") {
+          deps.storage.markSettlementDelivered(q.id)
+          continue
+        }
+        rows.push(q)
+        if (carrier && !failed.some((d) => d.id === carrier.id)) failed.push(carrier)
+        if (!carrier || answerReofferDue(carrier, row, nowMs)) reofferDue = true
+      }
+      if (rows.length === 0 || (!fresh && !reofferDue)) continue
       const answers: QuestionAnswer[] = []
       const dismissed: QuestionDismissal[] = []
       // The ids are kept alongside for the delivery key ONLY. The MESSAGE names each dismissed question
@@ -3231,10 +3289,18 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // rather than `dismissed` is what keeps that row from silently disappearing.
       const cancelledCount = dismissedIds.length
       // One delivery per BATCH, keyed by the ids in it, so a second answer on the same thread is its own
-      // piece of news rather than a duplicate deduped away.
-      const fenceId = questionAnswerFenceId([...answers.map((a) => a.questionId), ...dismissedIds])
+      // piece of news rather than a duplicate deduped away. A RE-OFFER keys on the failed deliveries too:
+      // the outbox dedupes on the fence id, and the failed row still holds the plain one.
+      const fenceId = questionAnswerFenceId([
+        ...answers.map((a) => a.questionId), ...dismissedIds,
+        ...rows.flatMap((q) => (q.delivery_id ? [`after:${q.delivery_id}`] : [])),
+      ])
       const deliveryId = wakeDeliveryId(row.slug, row.session_id, fenceId)
-      if (outbox.get(deliveryId)) continue
+      // CLAIM THE ROWS BEFORE THE WAKE EXISTS. A process that dies between the two leaves rows naming a
+      // delivery the outbox never had — read above as a failed one that never crossed the transport,
+      // and re-offered at once. The other order would leave a wake whose landing marks nothing.
+      for (const q of rows) deps.storage.assignSettlementDelivery(q.id, deliveryId)
+      const reoffer = failed.length > 0 || rows.some((q) => q.delivery_id)
       const item = outbox.enqueue({
         id: deliveryId,
         slug: row.slug,
@@ -3245,14 +3311,44 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           answers.length === 0 ? questionsCancelledWakeMessage(cancelledCount) : questionAnswerMessage(answers, dismissed),
           deps.tailer.get(row.slug)?.lastAssistantAt,
         ),
-        reason: answers.length === 0
+        reason: (answers.length === 0
           ? `${cancelledCount} question(s) cancelled — autonomous`
-          : `${answers.length} question answer(s)${cancelledCount ? ` + ${cancelledCount} dismissed` : ""}`,
+          : `${answers.length} question answer(s)${cancelledCount ? ` + ${cancelledCount} dismissed` : ""}`)
+          + (reoffer ? " — offered again: the last wake carrying them did not land" : ""),
       }, nowMs).delivery
-      for (const q of rows) deps.storage.markSettlementDelivered(q.id)
       log(`waker: queued ${row.slug} — ${item.reason}`)
       checkpoint("after-enqueue", item)
     }
+  }
+
+  /** May a batch of answers whose last wake FAILED be offered again now? See evalQuestionAnswers. */
+  function answerReofferDue(carrier: WakeDelivery, row: SessionRow, nowMs: number): boolean {
+    // Nothing crossed the transport and nothing about the runtime refused it: the session moved under
+    // the queued wake, or the thread was archived and is back (the caller already skips archived rows).
+    if (carrier.state === "superseded" && carrier.sentAt === null && carrier.lastError?.startsWith(CONTEXT_SUPERSEDED)) return true
+    const failedAt = carrier.terminalAt ?? carrier.updatedAt
+    // This process never tried it. A restart is where a broken binary, credential or config gets fixed.
+    if (failedAt < startedAtMs) return true
+    // The worker ran a turn after the failure — a human steer reached it, say — so the runtime that
+    // refused the wake takes input again.
+    const tele = deps.tailer.get(row.slug)
+    const ranAt = Math.max(Date.parse(tele?.lastAssistantAt ?? "") || 0, Date.parse(tele?.lastUserAt ?? "") || 0)
+    if (ranAt > failedAt) return true
+    return nowMs - failedAt >= ANSWER_REOFFER_BACKOFF_MS
+  }
+
+  // Mark the settlements an answers wake carried as RECEIVED — the one place `thread_question.delivered`
+  // flips (evalQuestionAnswers). Called from every path that files a wake as delivered.
+  function settleQuestionAnswers(item: WakeDelivery): void {
+    if (!isQuestionAnswerFenceId(item.fenceId)) return
+    deps.storage.markSettlementsDeliveredBy(item.id)
+  }
+
+  // Said, because nothing else says it: the outbox files a failed wake and moves on, and the answers it
+  // carried now wait for evalQuestionAnswers to offer them again.
+  function noteAnswersUndelivered(item: WakeDelivery): void {
+    if (!isQuestionAnswerFenceId(item.fenceId)) return
+    log(`waker: answers for ${item.slug} stay UNDELIVERED — offered again once this server restarts, the worker runs a turn, or ${Math.round(ANSWER_REOFFER_BACKOFF_MS / 60_000)}m pass`)
   }
 
   function evalTimers(nowMs: number): void {
@@ -3562,7 +3658,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         continue
       }
       if (context === "superseded") {
-        outbox.supersede(item.id, nowMs, "the exact awaiting fence or session was superseded")
+        outbox.supersede(item.id, nowMs, CONTEXT_SUPERSEDED)
         settleSnooze(item)
         continue
       }
@@ -3582,6 +3678,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
             settleRestPrompt(item)
             settleCompactPrompt(item)
             settleTimer(item)
+            settleQuestionAnswers(item)
             settleSignoffNudge(item)
             log(`waker: delivered ${item.slug} — ${item.reason}${item.attempts > 1 ? ` (on attempt ${item.attempts})` : ""}`)
           }
@@ -3597,6 +3694,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           settleSnooze(item)
           settleTimer(item)
           log(`waker: delivery EXHAUSTED for ${item.slug} after ${recovered.attempts} attempts — ${recovered.lastError ?? "unknown error"}`)
+          noteAnswersUndelivered(item)
         } else {
           log(`waker: wake LOST for ${item.slug} — ${item.reason}: the worker's process died before it read it; sending again (attempt ${item.attempts} of ${maxDeliveryAttempts} spent)`)
         }
@@ -3628,6 +3726,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         settleSnooze(item)
         settleTimer(item)
         log(`waker: delivery EXHAUSTED for ${item.slug} after ${recovered.attempts} attempts — ${recovered.lastError ?? "unknown error"}`)
+        noteAnswersUndelivered(item)
       }
     }
   }
@@ -3640,6 +3739,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     settleRestPrompt(item)
     settleCompactPrompt(item)
     settleTimer(item)
+    settleQuestionAnswers(item)
   }
 
   // ---- THE MERGE: ONE THREAD, ONE TURN --------------------------------------------------------------
@@ -3680,7 +3780,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         continue
       }
       if (context === "superseded") {
-        outbox.supersede(sibling.id, now(), "the exact awaiting fence or session was superseded before delivery")
+        outbox.supersede(sibling.id, now(), `${CONTEXT_SUPERSEDED} before delivery`)
         settleSnooze(sibling)
         continue
       }
@@ -3754,7 +3854,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         continue
       }
       if (context === "superseded") {
-        outbox.supersede(item.id, now(), "the exact awaiting fence or session was superseded before delivery")
+        outbox.supersede(item.id, now(), `${CONTEXT_SUPERSEDED} before delivery`)
         settleSnooze(item)
         continue
       }
@@ -3802,6 +3902,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
             settleTimer(d)
           }
           log(`waker: delivery ABANDONED for ${item.slug} (terminal, no retry): ${message}`)
+          for (const d of frame) noteAnswersUndelivered(d)
           continue
         }
         // A thrown non-terminal operation can still be ambiguous (for example, text reached the worker
