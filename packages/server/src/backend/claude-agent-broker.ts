@@ -349,11 +349,11 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
             const detail = error instanceof Error ? error.message : String(error)
             if (requestId) write(sock, { t: "input-result", requestId, error: detail })
             // NAME THE MESSAGE. The prefix alone told frizz that *something* was thrown away, which is
-            // one grep better than silence but still leaves the ledger unable to act: it cannot tombstone
+            // one grep better than silence but still leaves the ledger unable to act: it cannot act on
             // a row it cannot identify, so a refused send sat at `enqueued` for the full hour
             // `ageDeliveries` grants a queue entry — pretending to be held by a daemon that had in fact
             // refused it. The id is the DELIVERY id frizz opened the ledger row under, so carrying it here
-            // is what lets the server retire exactly that row and hand the operator their text back.
+            // is what lets the server mark exactly that row failed, its text on screen for a retry.
             // Ids only, never the text — same rule as the `input received` line above.
             const droppedId = typeof message?.id === "string" ? ` id=${message.id}` : ""
             const diagnostic = { kind: "stderr" as const, message: `${CLAUDE_INPUT_DROP_DIAGNOSTIC_PREFIX}:${droppedId} ${detail}`, truncated: false }
