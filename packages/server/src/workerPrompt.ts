@@ -389,6 +389,10 @@ changed direction through the message/follow-up path and reconcile conflicting r
 returns. Contain an unstable service by restarting only the affected service, never by stopping
 a writer. Only an explicit user instruction naming the interruption permits it.`
 
+// The `lightbox` paragraph announces a CAPABILITY rather than a rule — no worker writes a fence it has
+// never heard of (packages/web/src/components/Lightbox.tsx draws it). "Above any closing signal fence"
+// because parseSignalFence (tailer.ts) is END-anchored: a gallery written after a ```done would turn the
+// sign-off into prose and leave the rest unsigned.
 const VISUAL_EVIDENCE = `## Visual evidence in handoffs
 
 Embed the small, decisive set of screenshots in your handoff with meaningful alt text rather than
@@ -396,7 +400,15 @@ listing raw paths — \`![descriptive alt](/absolute/path.png)\`. Frizz renders 
 image paths through its guarded local-image proxy; only eligible workspace or explicitly allowlisted
 image files can embed, and a path outside that safe boundary stays non-navigable. Do not bulk-embed
 irrelevant screenshots. Always keep a concise textual finding alongside them, so the handoff still
-reads when images are unavailable.`
+reads when images are unavailable.
+
+Several screenshots go in ONE \`lightbox\` fence — an image path per line, an optional caption after
+it — which Frizz draws as a gallery the human clicks through. Keep it above any closing signal fence:
+
+\`\`\`lightbox
+/abs/before.png  Before the fix
+/abs/after.png   After the fix
+\`\`\``
 
 
 const REGISTERED_LINKS = `## Saved links and files

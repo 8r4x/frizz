@@ -588,6 +588,14 @@ image files can embed, and a path outside that safe boundary stays non-navigable
 irrelevant screenshots. Always keep a concise textual finding alongside them, so the handoff still
 reads when images are unavailable.
 
+Several screenshots go in ONE `lightbox` fence — an image path per line, an optional caption after
+it — which Frizz draws as a gallery the human clicks through. Keep it above any closing signal fence:
+
+```lightbox
+/abs/before.png  Before the fix
+/abs/after.png   After the fix
+```
+
 ## Saved links and files
 
 Use `mcp__frizz__link` with `label` and `target` for a dev server, working document, report or download

@@ -2,6 +2,7 @@ import { proxy } from "valtio"
 import type { BoardSnapshot, ThreadView, BoardDelta } from "@frizz/shared"
 import { applyBoardDelta } from "@frizz/shared"
 import type { ComposerContextItem } from "./lib/composerContext.ts"
+import type { LightboxImage } from "./lib/lightbox.ts"
 import { disarmFullscreenMorph } from "./lib/fullscreenMorph.ts"
 import { closeDrawerAnimated, focusDrawer } from "./lib/overlays.ts"
 import { isPageScrollLocked, pageScrollY, requestScrollAfterUnlock } from "./lib/pageScrollLock.ts"
@@ -174,6 +175,11 @@ export const store = proxy({
   // Transient bottom-center toast (e.g. "Steer failed …" when an eager reply is rejected). `id` bumps per call so
   // repeat toasts re-trigger the fade. Rendered by <Toaster>; null when nothing is showing.
   toast: null as { id: number; text: string; spinner?: boolean; sticky?: boolean; duration?: number; link?: { label: string; slug: string }; action?: ToastAction } | null,
+  // The open image LIGHTBOX — one ```lightbox gallery's pictures and which of them is on screen. Here
+  // rather than in the gallery's own state because the gallery is a transcript row: the virtualizer
+  // unmounts it once it scrolls out of the window, and a worker still writing below a gallery the
+  // human is looking through scrolls it there. Rendered by <LightboxHost>; null when closed.
+  lightbox: null as { images: LightboxImage[]; index: number } | null,
   // The /full page's SPLIT file viewer. True only while StandaloneThreadPage is mounted; while it is,
   // a `.md` click renders BESIDE the thread (the thread column slides left) instead of as an overlay
   // drawer — the whole point of /full is seeing the transcript, and a sheet over it defeated that.
@@ -212,6 +218,23 @@ export interface ToastAction {
 
 export function showToast(text: string, opts?: { spinner?: boolean; sticky?: boolean; duration?: number; link?: { label: string; slug: string }; action?: ToastAction }) {
   store.toast = { id: ++toastSeq, text, ...opts }
+}
+
+export function openLightbox(images: LightboxImage[], index: number): void {
+  if (images.length === 0) return
+  store.lightbox = { images, index: Math.min(Math.max(index, 0), images.length - 1) }
+}
+
+export function closeLightbox(): void {
+  store.lightbox = null
+}
+
+// Step to a neighbouring picture. It stops at either end rather than wrapping: the overlay counts
+// "3 / 3", and a wrap would make the next press read as a jump back to the start.
+export function stepLightbox(delta: number): void {
+  const box = store.lightbox
+  if (!box) return
+  box.index = Math.min(Math.max(box.index + delta, 0), box.images.length - 1)
 }
 
 // ── drawer stack ─────────────────────────────────────────────────────────────────────────────────
@@ -579,6 +602,7 @@ export function resetProjectState() {
   store.showSettings = false
   store.showNewThread = false
   store.showGithubPicker = false
+  store.lightbox = null
 }
 
 // STARTUP seed only (App fires an rpc.board() to paint before SSE connects). Unlike setBoard this must

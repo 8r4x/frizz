@@ -110,6 +110,7 @@ import { buildVirtualTranscriptMessageRows, earlierLoadGate, nextTailFollow, TAI
 import { withoutRedundantRestDividers } from "../lib/restDividers.ts"
 import { coalesceToolActivityMessages, editedFileCount, historicalToolActivityMessages, isPictureTool, isSettledAsk, isToolActivityException, liveRuntimeStartedAt, liveToolActivityRun, liveToolActivityTail, settledToolActivityLabel, thinkingToolActivityLabel, toolActivityLabel, toolActivityStampAt } from "../lib/toolActivity.ts"
 import { CodexDirectiveCard, MermaidDiagram } from "./CodexRichOutput.tsx"
+import { LightboxGallery } from "./Lightbox.tsx"
 import { META_CARD_STEP, PICTURE_STEP, STEP, USER_TAIL_EXTRA, VSpace } from "./rhythm.tsx"
 
 // Answer types moved to lib/questionBlocks.ts (shared by the queue card, the thread view, and the
@@ -3540,6 +3541,7 @@ export const Message = memo(function Message({ m, answering, dense, paired, text
               : p.kind === "visualization" ? <InlineVisualization key={partKey} file={p.file} />
               : p.kind === "directive" ? <CodexDirectiveCard key={partKey} directive={p.directive} />
               : p.kind === "mermaid" ? <MermaidDiagram key={partKey} source={p.source} />
+              : p.kind === "lightbox" ? <LightboxGallery key={partKey} entries={p.entries} />
               : <ProseHtml key={partKey} md={p.text} wrap={dense} />,
             )
           }

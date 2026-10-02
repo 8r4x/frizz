@@ -7,6 +7,7 @@ import { StandaloneThreadPage } from "./components/StandaloneThreadPage.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
 import { GithubHovercards } from "./components/GithubHovercards.tsx"
 import { Toaster } from "./components/Toaster.tsx"
+import { LightboxHost } from "./components/Lightbox.tsx"
 import { applyPath, registerNavigate } from "./lib/router.ts"
 import { innerPath } from "./lib/base-path.ts"
 import { feedIsBoundTo, rebindProject } from "./api/socket.ts"
@@ -64,6 +65,9 @@ function RootLayout() {
           is exactly the page that could never show one. Fixed-positioned, so it is inert until a
           toast exists. */}
       <Toaster />
+      {/* The image viewer a ```lightbox gallery opens (components/Lightbox.tsx). Hosted here rather
+          than by the gallery, which is a virtualized transcript row that can unmount under it. */}
+      <LightboxHost />
       {/* ALSO hosted by the layout, and for the same reason: prose carrying `#123` renders on the
           board, in a drawer and on the standalone `/thread/<slug>/full` page alike, and one delegated
           listener at the root covers all three. Inert until a pointer rests on a reference. */}
@@ -179,6 +183,7 @@ function StandaloneRoute() {
           copy-a-code-block control — whose only feedback is a toast, which until now had nowhere to
           go here. Skipping the rail does not mean skipping the feedback. */}
       <Toaster />
+      <LightboxHost />
     </>
   )
 }
