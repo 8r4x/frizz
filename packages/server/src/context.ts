@@ -26,6 +26,7 @@ resumeThread,
 } from "./resume.ts"
 import { createClaudeBackend } from "./backend/claude.ts"
 import { createCodexBackend, codexSandbox } from "./backend/codex.ts"
+import { readCodexModels } from "./backend/codex-models.ts"
 import { createAcpBackend } from "./backend/acp-transcript.ts"
 import { createAcpBridge, type AcpBridge } from "./backend/acp-bridge.ts"
 import { readClaudePreflightAuth, readCodexAuthState, readCodexBinaryState } from "./backend/auth-status.ts"
@@ -866,6 +867,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     storage,
     bus,
     backendFor,
+    codexModels: () => readCodexModels(undefined, opts.codexVersion),
     onChange: () => board.refresh(),
     onTranscriptChange: (slugs) => transcriptChange.emit(slugs),
     // The SDK's own reading of a headless broker session: its turn (so the fold's 5s unknown-stop_reason

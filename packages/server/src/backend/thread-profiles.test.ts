@@ -8,6 +8,7 @@ import {
   threadProfileOptions,
   validateThreadProfile,
 } from "./thread-profiles.ts"
+import type { CodexModel } from "@frizz/shared"
 
 test("thread profile catalogues expose complete provider-owned pairs", () => {
   for (const backend of ["claude", "codex"] as const) {
@@ -53,6 +54,22 @@ test("observed model normalization accepts only the current provider's identitie
   assert.equal(normalizeObservedThreadModel("claude", "claude-sonnet-5-5"), "sonnet")
   assert.equal(normalizeObservedThreadModel("claude", "gpt-5.5"), undefined)
   assert.equal(normalizeObservedThreadModel("codex", "sonnet"), undefined)
+})
+
+test("Codex profile helpers share an explicitly version-checked catalogue", () => {
+  const models: CodexModel[] = [{
+    slug: "gpt-compatible",
+    displayName: "GPT Compatible",
+    defaultEffort: "medium",
+    efforts: ["medium", "high"],
+  }]
+  assert.equal(normalizeObservedThreadModel("codex", "gpt-compatible", models), "gpt-compatible")
+  assert.doesNotThrow(() => validateThreadProfile("codex", "gpt-compatible", "high", models))
+  assert.deepEqual(resolveRollbackProfile("codex", "gpt-compatible", "", models), {
+    model: "gpt-compatible",
+    effort: "medium",
+  })
+  assert.throws(() => validateThreadProfile("codex", "gpt-5.5", "high", models), /Unsupported codex/)
 })
 
 // LOAD-BEARING since the spawn edge started requesting the 1M window: every Claude dispatch of a

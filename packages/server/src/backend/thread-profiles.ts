@@ -93,8 +93,13 @@ export function threadProfileOptions(
   throw new Error("This thread has an unknown backend; its runtime profile cannot be changed")
 }
 
-export function validateThreadProfile(backend: unknown, model: string, effort: string): void {
-  const catalogue = threadProfileOptions(backend)
+export function validateThreadProfile(
+  backend: unknown,
+  model: string,
+  effort: string,
+  codexModels?: readonly CodexModel[],
+): void {
+  const catalogue = threadProfileOptions(backend, undefined, codexModels)
   const option = catalogue.options.find((candidate) => candidate.model === model)
   if (!option || !option.efforts.includes(effort)) {
     throw new Error(`Unsupported ${catalogue.backend} model/effort pair: ${model} / ${effort}`)
@@ -108,8 +113,13 @@ export function validateThreadProfile(backend: unknown, model: string, effort: s
 // left such a thread permanently unable to change its model. Reconstruct the missing half from the
 // catalogue's default effort (exactly what a fresh dispatch of that model would use) so the rollback
 // stays launchable. An unknown MODEL still fails closed: there is no entry to rebuild a pair from.
-export function resolveRollbackProfile(backend: unknown, model: string, effort: string): { model: string; effort: string } {
-  const catalogue = threadProfileOptions(backend)
+export function resolveRollbackProfile(
+  backend: unknown,
+  model: string,
+  effort: string,
+  codexModels?: readonly CodexModel[],
+): { model: string; effort: string } {
+  const catalogue = threadProfileOptions(backend, undefined, codexModels)
   const option = catalogue.options.find((candidate) => candidate.model === model)
   if (!option || !option.efforts.includes(option.defaultEffort)) {
     // Name the absent half explicitly: this pair comes from stored/observed state rather than a grid
@@ -119,9 +129,15 @@ export function resolveRollbackProfile(backend: unknown, model: string, effort: 
   return { model: option.model, effort: option.efforts.includes(effort) ? effort : option.defaultEffort }
 }
 
-export function normalizeObservedThreadModel(backend: unknown, model: string): string | undefined {
+export function normalizeObservedThreadModel(
+  backend: unknown,
+  model: string,
+  codexModels?: readonly CodexModel[],
+): string | undefined {
   const value = model.trim()
-  if (backend === "codex") return threadProfileOptions(backend).options.some((option) => option.model === value) ? value : undefined
+  if (backend === "codex") {
+    return threadProfileOptions(backend, undefined, codexModels).options.some((option) => option.model === value) ? value : undefined
+  }
   if (backend === "claude") {
     const exact = CLAUDE_THREAD_PROFILES.find((option) => option.model === value)
     if (exact) return exact.model

@@ -108,12 +108,12 @@ const trusted = new Map<string, CodexModel[]>()
 export function readCodexModels(
   codexHome = defaultCodexHome(),
   expectedClientVersion?: string,
+  nowMs = Date.now(), // injectable clock: the live-reader retention contract is tested without a 5s sleep
 ): CodexModel[] {
   const path = cachePath(codexHome)
   const key = `${path}\0${expectedClientVersion}`
   const hit = memo.get(key)
-  const now = Date.now()
-  if (hit && now - hit.at < TTL_MS) return hit.models
+  if (hit && nowMs - hit.at < TTL_MS) return hit.models
   let models: CodexModel[]
   try {
     const raw = readFileSync(path, "utf8")
@@ -124,6 +124,6 @@ export function readCodexModels(
   } catch {
     models = trusted.get(key) ?? CODEX_MODELS_FALLBACK // absent / unreadable cache
   }
-  memo.set(key, { at: now, models })
+  memo.set(key, { at: nowMs, models })
   return models
 }

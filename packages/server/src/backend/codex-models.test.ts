@@ -248,7 +248,34 @@ test("a foreign Codex client's cache cannot make the pinned runtime's models dis
     CODEX_MODELS_FALLBACK,
     "a cold server degrades to the shared catalogue rather than the foreign writer's partial list",
   )
-  assert.ok(CODEX_MODELS_FALLBACK.some((model) => model.slug === "gpt-6-sol"))
+  assert.ok(CODEX_MODELS_FALLBACK.some((model) => model.slug === "gpt-6.1-sol"))
+})
+
+test("readCodexModels: retains the last compatible catalogue after a foreign writer replaces the cache", () => {
+  const home = mkdtempSync(join(tmpdir(), "codex-models-trusted-"))
+  const path = join(home, "models_cache.json")
+  try {
+    writeFileSync(path, REAL_CACHE)
+    const compatible = readCodexModels(home, "0.144.1", 0)
+    writeFileSync(path, JSON.stringify({
+      client_version: "0.154.0",
+      models: [{
+        slug: "gpt-5.5",
+        display_name: "GPT-5.5",
+        default_reasoning_level: "medium",
+        supported_reasoning_levels: [{ effort: "medium" }],
+        visibility: "list",
+        priority: 1,
+      }],
+    }))
+    assert.deepEqual(
+      readCodexModels(home, "0.144.1", 5_001),
+      compatible,
+      "the live reader, not only the pure parser, carries the trusted list across a foreign write",
+    )
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
 })
 
 test("the window pair rides each model when the cache carries it, and is simply absent when it does not", () => {
