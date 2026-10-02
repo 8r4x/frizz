@@ -298,7 +298,13 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
     (error) => shutdown(0, "event-pump-failed", error instanceof Error ? error.message : String(error)),
   )
 
-  const armIdle = () => { if (client) return; clearTimeout(idleTimer); idleTimer = setTimeout(() => shutdown(0, "idle-timeout"), IDLE_EXIT_MS) }
+  // Never once shut down. shutdown() clears this timer and then destroys the attached client, and that
+  // socket's 'close' lands a tick LATER — its handler below nulls `client` and calls back in here. Without
+  // the `closed` check that re-armed a fresh, REF'D six-hour timer on a daemon already torn down. The
+  // standalone daemon exits straight past it, but the embedded form (every broker in the tests) has no
+  // exit: each such timer held the test process open, so claude-agent-broker.test.ts passed every test
+  // and then never exited (measured 2026-10-01: twelve live `armIdle` timers once the last test ended).
+  const armIdle = () => { if (client || closed) return; clearTimeout(idleTimer); idleTimer = setTimeout(() => shutdown(0, "idle-timeout"), IDLE_EXIT_MS) }
 
   const server = net.createServer((sock) => {
     client = sock; clearTimeout(idleTimer)
