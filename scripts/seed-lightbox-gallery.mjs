@@ -2,12 +2,12 @@
 // screenshots as ONE gallery the human can click through (packages/web/src/components/Lightbox.tsx).
 //
 // Each message is one layout the gallery has to get right, read off REAL files through the real
-// /local-image route (a fixture page cannot load them — an <img> is not a fetch, so a stub never sees
-// it): a captioned before/after pair; three widths of one page, whose shapes differ wildly and must sit
-// in one row at their real aspect ratios; one picture alone, which must match a bare framed picture; and
-// a long set in every line shape the grammar accepts, one of whose files is MISSING. The last message
-// closes on a ```done fence BELOW its gallery, the order the worker contract asks for, so the card and
-// the gallery are checked together.
+// /local-image route (a plain vite has none, so the fixture's e2e test intercepts it and draws
+// stand-ins): a captioned before/after pair; three widths of one page, whose shapes differ wildly and
+// must sit in one row at their real aspect ratios; one picture alone, which must match a bare framed
+// picture; and a long set in every line shape the grammar accepts, one of whose files is MISSING. The
+// last message closes on a ```done fence BELOW its gallery, the order the worker contract asks for, so
+// the card and the gallery are checked together.
 //
 // `--shots` is a directory holding desktop-a.png and desktop-b.png (1440×900), phone.png (375×812),
 // tablet.png (768×1024) and wide.png (1600×600). Any screenshots at those shapes will do; the stack's own
@@ -15,7 +15,7 @@
 //
 // Follows the frizz-stack recipe: a session row + a JSONL the REAL tailer reads.
 //
-// Usage: nub scripts/seed-lightbox-gallery.mjs --home=/abs/temp-home --shots=/abs/dir [--slug=x]
+// Usage: nub scripts/seed-lightbox-gallery.mjs --home=/abs/temp-home --shots=/abs/dir [--slug=x] [--cwd=/abs/project]
 import { execFileSync } from "node:child_process"
 import { existsSync, mkdirSync, writeFileSync } from "node:fs"
 import { join, resolve } from "node:path"
@@ -24,9 +24,9 @@ import { resolveSandboxDb, sessionProjectColumns } from "./lib/sandbox-db.mjs"
 const flags = Object.fromEntries(
   process.argv.slice(2).filter((a) => a.startsWith("--")).map((a) => a.replace(/^--/, "").split("=")),
 )
-const { home, cwd = "/Users/colinmcd94/Documents/projects/frizz" } = flags
+const { home, cwd = process.cwd() } = flags
 if (!home || !flags.shots) {
-  console.error("usage: nub scripts/seed-lightbox-gallery.mjs --home=/abs/temp-home --shots=/abs/dir")
+  console.error("usage: nub scripts/seed-lightbox-gallery.mjs --home=/abs/temp-home --shots=/abs/dir [--cwd=/abs/project]")
   process.exit(1)
 }
 const shots = resolve(flags.shots)
