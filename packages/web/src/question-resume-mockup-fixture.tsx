@@ -610,7 +610,7 @@ const SPECS: Spec[] = [
     pick: true,
     title: "Cards stay where they were asked; a line on the prompt box counts them and sends",
     note: "Nothing in the transcript moves. A line docked on the prompt box says how many questions are open, steps between them (the arrows scroll to each card and flash it), opens a list on a click, and carries the one Send with a count of what is answered. On the queue card the asking rest is outside the card, so there the cards come to the bottom with the sentence that set them up (as in C), and the line counts and sends. It is the desktop form of the phone's bottom bar, and the same line the queue-card mockup already uses for pending comments.",
-    good: ["The cards keep their context, and the transcript reads as history.", "The ask is on screen at any scroll position, not only at the bottom.", "Send and the count are always on screen, so an answer given far up does not need a scroll back down.", "Fresh questions look as they do today: the line replaces the Send button under the cards."],
+    good: ["The cards keep their context, and the transcript reads as history.", "Most resumes are wakes; with this, a wake that rests again adds its message and moves nothing.", "The ask is on screen at any scroll position, not only at the bottom.", "Send and the count are always on screen, so an answer given far up does not need a scroll back down.", "Fresh questions look as they do today: the line replaces the Send button under the cards."],
     bad: ["New chrome on the prompt box.", "Answering an old question on the thread page means a jump up, then a jump back.", "A question above the loaded window needs earlier history to load before the jump."],
   },
   {
@@ -635,7 +635,7 @@ const SPECS: Spec[] = [
     title: "The worker asks again in its new handoff",
     note: "A contract and server change. When a thread rests with a question still open from an earlier rest, Frizz holds the rest until the new handoff places that question again (with a marker) or withdraws it. Today's marker code already moves the card into the new handoff. Can combine with A as the fallback when a worker does not comply.",
     good: ["The best context: the worker rewrites the setup for what has changed (\"now about 6 seconds rather than 40\").", "Forces a stale question to be withdrawn rather than left to rot."],
-    bad: ["One extra worker turn whenever it forgets, and repeated prose on every wake (a PR watcher can wake a thread many times).", "The cards still move, once per rest."],
+    bad: ["Workers placed a carried question again on their own for only 14% of them, so this needs a forced extra turn at most rests.", "Repeated prose on every wake: one question here outlived 35 rests, and D would ask it 35 times.", "The cards still move, once per rest."],
   },
 ]
 
@@ -646,6 +646,19 @@ const TABLE: { label: string; cells: Record<Option, string> }[] = [
   { label: "Queue card", cells: { today: "Cards at the bottom", dock: "Cards at the bottom, with setup", pointer: "Rows open in place", carry: "Cards with setup", replace: "Cards in the new handoff" } },
   { label: "Worker contract", cells: { today: "Says the card stays put (false)", dock: "True as written", pointer: "True as written", carry: "Must change", replace: "Must change, plus a rest check" } },
   { label: "Cost", cells: { today: "—", dock: "Web, medium", pointer: "Web, small", carry: "Web, small", replace: "Server + contract + a worker turn" } },
+]
+
+// Measured 2026-10-01 over ~/.frizz/ui.db `thread_question` and each thread's Claude transcript (Codex
+// threads skipped): a REST is a turn boundary in the transcript, a WAKE carries Frizz's trailing
+// `<!-- frizz-wake:… -->` comment or is a task notification. Method and examples are in the thread's
+// scratch report, not in the repo.
+const DATA: [string, string][] = [
+  ["Still open at one or more later rests", "331 of 867 (38%) — 53 of them at six or more; one at 35"],
+  ["What resumed the thread first", "A Frizz wake for 72% (CI or PR 86, sub-agent finished 61, background command 39, scheduled prompt 24, other 30); the human typing for 28%"],
+  ["Rests that carried a question over", "774 — 248 of them with two or more open, and 146 of those mixed questions from different rests (largest: 11)"],
+  ["Questions placed with a marker", "284 (33%) — 189 of them mid-prose, 95 at the end"],
+  ["Carried questions the worker placed again later", "45 of 331 (14%); 219 (66%) were never mentioned again"],
+  ["Carried questions that ended withdrawn", "42%, against 33% for questions settled at their own rest"],
 ]
 
 function Page() {
@@ -663,7 +676,20 @@ function Page() {
         <div className="mt-2 max-w-[920px] space-y-2 text-[13px] leading-[20px] text-muted">
           <p>A worker asks two questions inside its handoff. The thread then resumes without an answer — the human replies about something else, or Frizz wakes the worker — and the worker rests again. Today both cards leave the handoff and stack at the bottom, under a message about something else.</p>
           <p>The move exists for a reason. On 2026-08-31 (“Why was this able to come to rest without a proper handoff?”) and 2026-09-13 (“How did this thread pause without a sign-off?”), the cards stayed at the old rest and the newest rest showed no ask. Every option below keeps the newest rest visibly owing an answer.</p>
-          <p>A contributing cause: the worker contract says “Frizz draws every open question at the rest it was asked”, which is false at rest. So a worker never places an old question again in a later handoff.</p>
+          <p>A contributing cause: the worker contract says “Frizz draws every open question at the rest it was asked”, which is false at rest. So a worker rarely places an old question again in a later handoff.</p>
+        </div>
+        <div className="mt-5 max-w-[920px]">
+          <h2 className="mb-2 text-[13px] font-medium text-fg/90">How often it happens — the 867 questions Claude workers asked on this machine since 2026-09-11</h2>
+          <table className="w-full border-collapse text-[12.5px] leading-[18px]">
+            <tbody>
+              {DATA.map(([fact, value]) => (
+                <tr key={fact} className="border-b border-border/60 align-top">
+                  <td className="py-1.5 pr-6 text-muted">{fact}</td>
+                  <td className="py-1.5 text-fg/90">{value}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       </header>
       <nav className="sticky top-0 z-50 border-y border-border bg-bg/95 backdrop-blur">
