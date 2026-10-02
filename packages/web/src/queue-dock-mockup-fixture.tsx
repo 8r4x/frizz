@@ -1062,7 +1062,7 @@ function Page() {
         </Section>
 
         <Section id="bottom" title="1 · The end of a card" note="The same card — one live sub-agent, two shells, a PR watch, a file and a link — scrolled to its end. Today that is six rows under the prompt box plus the strip under them.">
-          <Candidate letter="" title="Today" note="Prompt box, six ⤷ rows, then the context pie and the goal on the left of the lifecycle strip.">
+          <Candidate letter="" title="Today" note={`Prompt box, six ${CHILD_ARROW} rows, then the context pie and the goal on the left of the lifecycle strip.`}>
             <CardEnd data={CACHE} layout="today" height={600} />
           </Candidate>
           <Candidate letter="B" pick title="Verbs in the header" note="The bottom edge is one line of counts and the prompt box. Snooze and Mark as done sit in the header with Retry and the other thread verbs, so the card's verbs all live on the one edge that is always on screen.">
@@ -1076,7 +1076,7 @@ function Page() {
           </Candidate>
         </Section>
 
-        <Section id="activity" title="2 · Live ops, condensed" note="Counts at the prompt box's upper right, in the marks the ⤷ rows already use: a yellow dot for an agent, a blue one for a shell, the pull-request mark for a PR watch, file and link icons. Hover for the rows themselves, in the same ⤷ grammar as today.">
+        <Section id="activity" title="2 · Live ops, condensed" note={`Counts at the prompt box's upper right, in the marks the ${CHILD_ARROW} rows already use: a yellow dot for an agent, a blue one for a shell, the pull-request mark for a PR watch, file and link icons. Hover for the rows themselves, in the same ${CHILD_ARROW} grammar as today.`}>
           <Candidate letter="i" title="Six live ops, at rest" note="One line, whatever the count.">
             <CardEnd data={CACHE} layout="header" height={460} />
           </Candidate>
