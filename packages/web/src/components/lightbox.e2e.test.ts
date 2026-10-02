@@ -3,11 +3,12 @@ import test from "node:test"
 import { crc32, deflateSync } from "node:zlib"
 
 // Runtime coverage for the ```lightbox fence (components/Lightbox.tsx): the gallery's justified rows,
-// the viewer's paging and dismissal, and the two things only a browser settles — that an Escape the
+// the viewer's paging and dismissal, and the three things only a browser settles — that an Escape the
 // viewer handled never reaches the page (where it would unwind a drawer or leave the fullscreen page),
-// and that focus comes back to the picture that opened it. Skipped unless a Vite URL serving the
-// fixtures is provided: start `vite` in packages/web and set FRIZZ_LIGHTBOX_E2E_URL to its origin (or
-// run `nub run test:e2e`, which does both).
+// that focus comes back to the picture that opened it, and that a phone's Back closes the viewer
+// rather than leaving the page. Skipped unless a Vite URL serving the fixtures is provided: start
+// `vite` in packages/web and set FRIZZ_LIGHTBOX_E2E_URL to its origin (or run `nub run test:e2e`,
+// which does both).
 //
 // The pictures are drawn HERE. A plain Vite has no /_frizz/local-image route, so the test intercepts it
 // and answers with a PNG of the size the fixture's path names; `missing` paths get the real route's 404.
@@ -38,11 +39,14 @@ function png(width: number, height: number): Buffer {
   ])
 }
 
-async function launch() {
+const DESKTOP = { width: 1000, height: 900, deviceScaleFactor: 1 }
+const PHONE = { width: 390, height: 844, deviceScaleFactor: 1, isMobile: true, hasTouch: true }
+
+async function launch(viewport: typeof DESKTOP | typeof PHONE = DESKTOP) {
   const { default: puppeteer } = await import("puppeteer")
   const browser = await puppeteer.launch({ headless: "new", args: ["--no-sandbox", "--force-color-profile=srgb"] })
   const page = await browser.newPage()
-  await page.setViewport({ width: 1000, height: 900, deviceScaleFactor: 1 })
+  await page.setViewport(viewport)
   const errors: string[] = []
   // The deliberately missing picture's 404 is the one expected failure.
   page.on("console", (m) => { if (m.type() === "error" && !/404/.test(m.text())) errors.push(m.text()) })
@@ -163,6 +167,24 @@ test("a click on the backdrop closes the viewer, and a click on the picture does
     const stage = (await (await page.$("[data-lightbox-stage]"))!.boundingBox())!
     await page.mouse.click(stage.x + 8, stage.y + stage.height - 8)
     await page.waitForFunction(() => !document.querySelector("[data-lightbox]"))
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test("on a phone, Back closes the viewer and leaves the page where it was", { skip: !baseUrl, timeout: 120_000 }, async () => {
+  const { browser, page, errors } = await launch(PHONE)
+  try {
+    const url = page.url()
+    const depth = await page.evaluate(() => history.length)
+    await (await page.$("[data-fixture-message='1'] [data-lightbox-tile]"))!.tap()
+    await page.waitForSelector("[data-lightbox]")
+    // The viewer holds a history entry of its own, so Back pops that rather than the page's.
+    assert.equal(await page.evaluate(() => history.length), depth + 1)
+    await page.evaluate(() => history.back())
+    await page.waitForFunction(() => !document.querySelector("[data-lightbox]"))
+    assert.equal(page.url(), url, "Back closed the viewer, not the page")
     assert.deepEqual(errors, [])
   } finally {
     await browser.close()
