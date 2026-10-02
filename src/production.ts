@@ -544,6 +544,9 @@ async function runSupervisor(port: number, token: string, onPrepared: () => void
     // here is triggered from a browser tab or by a crash, so without this the foreground process is
     // the last place to learn what happened to it.
     onActivity: (event) => renderSupervisorActivity(activityReadout, event),
+    // Every child leaves the terminal as it found it at its own fork, and the first one was forked
+    // before the keyboard went raw — so without this R stopped working after the first update.
+    onChildExit: () => paneHost?.reclaim(),
     updateRestart: async () => {
       previous = active;
       try {

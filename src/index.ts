@@ -477,6 +477,9 @@ async function runSupervisor(
       // Frizz and Update Frizz are clicked in a browser and a control-plane crash is clicked by
       // nobody, so without this the foreground process is the last place to learn what happened.
       onActivity: (event) => renderSupervisorActivity(activityReadout, event),
+      // Every child leaves the terminal as it found it at its own fork, and the first one was forked
+      // before the keyboard went raw — so without this R stopped working after the first restart.
+      onChildExit: () => paneHost?.reclaim(),
     });
     // The supervisor is listening now, so a code minted here is immediately redeemable.
     remote = createRemoteController({ host: supervisor, port, log: logger, say: (message) => console.error(`frizz: ${message}`) });

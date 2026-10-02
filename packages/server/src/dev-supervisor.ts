@@ -184,6 +184,12 @@ export interface DevSupervisorOptions {
   error?: (line: string) => void
   /** Lifecycle beats for the foreground launcher's terminal. See SupervisorActivity. */
   onActivity?: (event: SupervisorActivity) => void
+  /**
+   * A control-plane child exited, for any reason. The child shares the launcher's terminal, and Node
+   * resets that terminal to the settings it saw at its own start as it exits — so a launcher holding
+   * raw mode has to put it back here (PaneHost.reclaim).
+   */
+  onChildExit?: () => void
 }
 
 export interface DevSupervisor {
@@ -521,6 +527,7 @@ class Supervisor implements DevSupervisor {
   private readonly logLine: (line: string) => void
   private readonly errorLine: (line: string) => void
   private readonly onActivity?: (event: SupervisorActivity) => void
+  private readonly onChildExit?: () => void
   /** Suppresses activity beats until the first boot has settled; until then the readout owns the terminal. */
   private booted = false
   /** When the restart currently in flight began, so its "ready" beat can report a duration. */
@@ -591,6 +598,7 @@ class Supervisor implements DevSupervisor {
     this.logLine = opts.log ?? ((line) => frizzLog.info("supervisor", stripPrefix(line)))
     this.errorLine = opts.error ?? ((line) => frizzLog.error("supervisor", stripPrefix(line)))
     this.onActivity = opts.onActivity
+    this.onChildExit = opts.onChildExit
     this.updateRestart = opts.updateRestart
     this.updateMode = opts.updateMode ?? "durableReexec"
     this.commitUpdate = opts.commitUpdate
@@ -1168,6 +1176,11 @@ class Supervisor implements DevSupervisor {
         settleSpawn(false)
       })
       child.once("exit", (code, signal) => {
+        try {
+          this.onChildExit?.()
+        } catch {
+          // A launcher whose terminal is gone must never take the board down with it.
+        }
         if (this.child === child) {
           this.child = null
           this.childPort = undefined
