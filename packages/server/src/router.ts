@@ -202,14 +202,7 @@ export function validateGithubDispatchProfile(
   // itself (refusing an agent that is not on PATH) — there is no model/effort catalogue to check.
   if (input.backend === "acp") return
   if (input.effort === undefined) throw new Error(`Unsupported ${input.backend} model/effort pair: ${input.model} / (no effort)`)
-  if (input.backend === "codex" && codexModels) {
-    const option = codexModels.find((model) => model.slug === input.model)
-    if (!option?.efforts.includes(input.effort)) {
-      throw new Error(`Unsupported codex model/effort pair: ${input.model} / ${input.effort}`)
-    }
-    return
-  }
-  validateThreadProfile(input.backend, input.model, input.effort)
+  validateThreadProfile(input.backend, input.model, input.effort, codexModels)
 }
 
 export function githubDispatcherRequest(
