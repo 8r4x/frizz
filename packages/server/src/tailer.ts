@@ -1696,6 +1696,18 @@ function notificationText(rec: Record): string | undefined {
   return undefined
 }
 
+// The <event> a Monitor's OWN timeout emits — status-less and the only record of its end, so a parser
+// that misses it leaves the Monitor "running" forever. Claude Code has two spellings and picks one behind
+// a flag (read from the 2.1.280 binary): the legacy `[Monitor timed out — re-arm if needed.]`, and the
+// default `[Monitor expired after 30m with 2 events delivered. Re-arm it …]` (or `… with no events
+// delivered …`). Matching only the legacy one left every expired Monitor pending: on lando
+// `we-ve-got-to-start-working` one expired 2026-09-30 still read "running · 45h" two days later, and its
+// pinned copy at the transcript tail folded the thread's sign-off out of the queue card. The tailer's live
+// chip and the transcript projection both read this one predicate.
+export function isMonitorTimeoutEvent(block: string): boolean {
+  return block.includes("<event>[Monitor timed out") || block.includes("<event>[Monitor expired after")
+}
+
 function trackCompletions(state: TailState, rec: Record): void {
   const raw = notificationText(rec)
   if (!raw || !raw.includes("<task-notification>")) return
@@ -1725,8 +1737,9 @@ function trackCompletions(state: TailState, rec: Record): void {
     // Key STRICTLY on the sentinel: ordinary Monitor progress events also have <event> and no <status>,
     // so "missing status ⇒ terminal" would retire every live monitor on its first event. The sentinel
     // is harness-emitted prose and could drift — same fragility as the launch-ack strings we already
-    // depend on ("Command running in background with ID:", "Monitor started (task").
-    const monitorTimedOut = block.includes("<event>[Monitor timed out")
+    // depend on ("Command running in background with ID:", "Monitor started (task"). It HAS drifted
+    // once — see isMonitorTimeoutEvent.
+    const monitorTimedOut = isMonitorTimeoutEvent(block)
     const terminal: "completed" | "failed" | "killed" | undefined =
       status === "completed" || status === "failed" || status === "killed" ? status : status === "stopped" || monitorTimedOut ? "killed" : undefined
     if (!terminal) continue
