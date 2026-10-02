@@ -332,8 +332,11 @@ function isWithin(path: string, root: string): boolean {
   return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
 }
 
-function ignoredDevPath(path: string): boolean {
-  const parts = resolve(path).split(sep)
+/** `relPath` is relative to the watch root that admitted the event, so only segments INSIDE the checkout
+ *  can mark it generated. A checkout that itself lives under one of these names — a worktree in
+ *  `~/.cache/…` — is still source; judged on the absolute path, every file in it was ignored. */
+function ignoredDevPath(relPath: string): boolean {
+  const parts = relPath.split(sep)
   const name = parts.at(-1) ?? ""
   return parts.some((part) => GENERATED_DIRS.has(part) || part === "fixtures" || part.endsWith(".fixtures"))
     || /\.(?:test|spec)\.[^.]+$/.test(name)
@@ -348,12 +351,12 @@ export function classifyDevChange(path: string, roots = defaultDevWatchRoots()):
   const absolute = resolve(path)
   const root = roots.find((candidate) => isWithin(absolute, resolve(candidate)))
   if (!root) return null
-  if (ignoredDevPath(absolute)) return null
-
-  const name = basename(absolute)
   // `watchRoots` is a public test/embedding seam. Resolve package ownership against the root that
   // actually admitted this event rather than the source checkout captured at module-import time.
   const relToWorkspace = relative(resolve(root), absolute)
+  if (ignoredDevPath(relToWorkspace)) return null
+
+  const name = basename(absolute)
   const parts = relToWorkspace.split(sep)
   const packageName = parts[0] === "packages" ? parts[1] : undefined
   if (name === "package.json" && parts.length === 3 && packageName && CHILD_PACKAGE_METADATA.has(packageName)) {

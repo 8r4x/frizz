@@ -84,6 +84,12 @@ test("dev supervisor classifies runtime and launcher/config changes without touc
     "child",
     "custom roots classify against their own workspace rather than the source checkout",
   )
+  // The ignore list names directories INSIDE a checkout, never the path TO one: a worktree in
+  // ~/.cache/… is still source. Judged on the absolute path, every file in it was dropped.
+  const cachedRoot = join(tmpdir(), ".cache", "frizz-worktree")
+  assert.equal(classifyDevChange(join(cachedRoot, "packages", "server", "src", "router.ts"), [cachedRoot]), "child")
+  assert.equal(classifyDevChange(join(cachedRoot, "src", "index.ts"), [cachedRoot]), "launcher")
+  assert.equal(classifyDevChange(join(cachedRoot, "packages", "server", "src", ".cache", "generated.ts"), [cachedRoot]), null)
 })
 
 test("dev child inherits the complete environment and adds only the child markers", () => {
