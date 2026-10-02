@@ -2622,7 +2622,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       //
       // `fetchPr` REMAINS THE FALLBACK, and it is not vestigial: an injected fetcher (every scheduler
       // test that predates this) returns activity with no `pr`, and so does a response frizz cannot
-      // interpret. Falling back there keeps a watcher polling rather than going quiet on a shape
+      // interpret, or a rollup longer than one page that it could not read to the end. Falling back
+      // there keeps a watcher polling rather than going quiet on a shape
       // surprise — which is the failure mode this whole source exists to prevent. It runs through
       // `prStatusFallback` because it is the poll's only subprocess and a batch fails all at once; see
       // PR_STATUS_FALLBACK_LIMIT.
