@@ -195,7 +195,9 @@ try {
   let currentVersion = server.manifest.version
   if (update) {
     const api = createRpcClient(base)
-    await api.mutate("settingsSet", { ...await api.query("settingsGet"), font: "sans" })
+    // A machine-level setting with no visual effect. This was `font` until that key left Settings on
+    // 2026-09-19; the schema strips a stored `font`, so the check below failed on every update after it.
+    await api.mutate("settingsSet", { ...await api.query("settingsGet"), localFileOpener: "copy" })
     let thread, daemon
     const started = join(project, "worker-started"), finished = join(project, "worker-finished"), resumed = join(project, "worker-resumed")
     if (worker) {
@@ -231,7 +233,7 @@ try {
     assert.equal(ownerAddress().pid, owner.pid)
     assert.equal(ownerAddress().port, publicPort)
     assert.ok(alive(owner.pid))
-    assert.equal((await api.query("settingsGet")).font, "sans", "settings survive server update")
+    assert.equal((await api.query("settingsGet")).localFileOpener, "copy", "settings survive server update")
     currentVersion = update.manifest.version
     evidence.update = { status: updated, child: next, owner: ownerAddress(), selection: selected(), integrity: update.integrity }
     if (worker) {
