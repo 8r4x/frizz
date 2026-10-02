@@ -4,6 +4,8 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 import { parseCodexModelsCache, readCodexModels, CODEX_MODELS_FALLBACK } from "./codex-models.ts"
+import { CODEX_MODELS_FALLBACK_VERSION } from "@frizz/shared"
+import { CODEX_APP_SERVER_SUPPORTED_VERSION } from "./codex-app-server.ts"
 
 // A REAL snippet of ~/.codex/models_cache.json (codex-cli 0.144.1, fields verbatim; the gpt-6-astra
 // entry is the codex-cli 0.153.2 bundled shape, 2026-09-04, and gpt-6-sol the 0.155.1 one, 2026-09-22).
@@ -139,6 +141,10 @@ const REAL_CACHE = JSON.stringify({
       model_messages: { persistent_instructions: "## Overview\nYou are now in persistent mode…" },
     },
   ],
+})
+
+test("the degraded catalogue is re-read whenever Frizz's pinned Codex runtime moves", () => {
+  assert.equal(CODEX_MODELS_FALLBACK_VERSION, CODEX_APP_SERVER_SUPPORTED_VERSION)
 })
 
 test("parseCodexModelsCache: lists visible models priority-ASC with EXACT per-model effort sets", () => {

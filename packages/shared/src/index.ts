@@ -151,6 +151,7 @@ export type ClaudeModel = z.infer<typeof ClaudeModel>
 // rewriting the machine-wide cache made a model visible in one tab and unavailable in another.
 // Keep the order/defaults in step with the pinned runtime's catalogue when that runtime moves.
 // Re-read from codex-cli 0.160.0 on 2026-10-01; defaults vary by model generation.
+export const CODEX_MODELS_FALLBACK_VERSION = "0.160.0"
 export const CODEX_MODELS_FALLBACK: CodexModel[] = [
   { slug: "gpt-6.1-sol", displayName: "GPT-6.1 Sol", defaultEffort: "low", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"] },
   { slug: "gpt-6-astra", displayName: "GPT-6 Astra", defaultEffort: "medium", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"] },
