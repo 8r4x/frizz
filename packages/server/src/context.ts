@@ -230,11 +230,15 @@ export interface AppContext {
   // Same seam for Codex: the resolved app-server/backend executable, so codex logout targets
   // the binary frizz actually runs rather than whatever "codex" is first on PATH.
   codexBin?: string
+  // Exact only for Frizz's provisioned runtime. An explicit/PATH override is unknown and leaves the
+  // shared Codex cache ungated; see backend/codex-models.ts.
+  codexVersion?: string
 }
 
 export interface ContextOptions {
   claudeBin?: string // injectable dispatch executable (tests use a stand-in)
   codexBin?: string // injectable app-server executable; unused unless the bridge flag is enabled
+  codexVersion?: string // exact provisioned runtime version; undefined for an override/PATH fallback
   // startServer pins the owner-verified project before any SQLite/tailer/scheduler initialization.
   project?: Project
   /**
@@ -1086,5 +1090,6 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     launchProjectId: opts.launchProjectId,
     claudeBin: opts.claudeBin,
     codexBin: opts.codexBin,
+    codexVersion: opts.codexVersion,
   }
 }

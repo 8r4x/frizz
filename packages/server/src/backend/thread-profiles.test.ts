@@ -114,3 +114,18 @@ test("a running Claude thread's profile rows take their edition labels from the 
   ])
   assert.deepEqual(threadProfileOptions("claude").options.map((option) => option.label), ["Fable", "Opus", "Sonnet", "Haiku"])
 })
+
+test("a running Codex thread's profile rows use the runtime-compatible catalogue", () => {
+  const { options } = threadProfileOptions("codex", undefined, [{
+    slug: "gpt-compatible",
+    displayName: "GPT Compatible",
+    defaultEffort: "high",
+    efforts: ["medium", "high"],
+  }])
+  assert.deepEqual(options, [{
+    model: "gpt-compatible",
+    label: "GPT Compatible",
+    defaultEffort: "high",
+    efforts: ["medium", "high"],
+  }])
+})
