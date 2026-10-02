@@ -6,8 +6,11 @@ import {
   ArrowUp, Check, ChevronDown, ChevronLeft, ChevronUp, FileText, Maximize2, MessageSquare, MessageSquarePlus,
   Paperclip, Pencil, Plus, RefreshCw, Trash2, X,
 } from "lucide-react"
-import type { ChatMessage } from "./hooks.ts"
 import { Message, withMessageSpacers } from "./components/ChatView.tsx"
+import {
+  boxesOf, fullText, HIGHLIGHT_CSS, HIGHLIGHTS, inUi, MESSAGES, NOTE, offsetsToRange, paints, rangeToOffsets, repaint,
+  S1, S2, S3, SEEDS, trimmed, wireText, type Box, type PaintKind, type Seed,
+} from "./inline-comments-mockup-kit.ts"
 import { VSpace } from "./components/rhythm.tsx"
 import { BoxSpinner, STATUS_BOX } from "./components/BoxSpinner.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
@@ -26,112 +29,13 @@ import "./styles.css"
 // fixture messages. The header, prompt box and lifecycle footer are copies of ThreadHeader / Composer /
 // ThreadLifecycleFooter, because most of what is drawn here are states those components cannot reach.
 //
-// Highlights are painted with the CSS Custom Highlight API, not <mark> elements: agent prose is innerHTML
-// React owns, and a wrapper spliced into its text nodes would be torn out on the next render. A Range over
-// the existing text survives, and so does the anchor it is stored as — character offsets over the
-// transcript's own text, skipping this sheet's UI (`data-ic-ui`). That is also the honest implementation
-// route, which is why the sheet uses it rather than faking it.
+// The transcript data, the anchors and the highlight engine live in inline-comments-mockup-kit.ts, shared
+// with queue-dock-mockup-fixture.
 //
 //   http://localhost:5478/inline-comments-mockup-fixture.html   (?theme=light for the light palette)
 const params = new URLSearchParams(location.search)
 document.documentElement.dataset.font = "sans"
 document.documentElement.dataset.theme = params.get("theme") === "light" ? "light" : "dark"
-// The prose renderer asks the server to turn inline-code file paths into links. This sheet has no server
-// behind it (it also opens from file://), so those lookups answer "not found" locally instead of erroring.
-const serverFetch = window.fetch.bind(window)
-window.fetch = (input, init) =>
-  (input instanceof Request ? input.url : String(input)).includes("/_frizz/") ? Promise.resolve(new Response("", { status: 404 })) : serverFetch(input, init)
-
-// ── the transcript every frame shows ──────────────────────────────────────────────────────────────
-
-function prose(sourceId: string, lines: string[]): ChatMessage {
-  const text = lines.join("\n")
-  return { sourceId, role: "assistant", tools: [], text, parts: [{ kind: "text", text }] }
-}
-
-const MESSAGES: ChatMessage[] = [
-  {
-    sourceId: "u1",
-    role: "user",
-    tools: [],
-    parts: [],
-    text: "The resolver cache hands back the wrong module when two packages share a name. Find out why and fix it.",
-  },
-  {
-    sourceId: "a1",
-    role: "assistant",
-    text: "",
-    tools: [],
-    parts: [
-      { kind: "text", text: "Reading the resolver and its cache first." },
-      {
-        kind: "tools",
-        tools: [
-          { name: "Read", detail: "src/resolver/cache.ts" },
-          { name: "Grep", detail: "cacheKey" },
-          { name: "Read", detail: "src/resolver/index.ts" },
-          { name: "Bash", detail: "nub run test resolver", desc: "Run the resolver tests" },
-        ],
-      },
-    ],
-  },
-  prose("a2", [
-      "Found it. `src/resolver/cache.ts` keys every entry on the **package name** alone, so `@acme/utils` and a nested `utils` both land on the key `utils`. Whichever resolves first wins, and every later lookup gets the wrong module.",
-      "",
-      "The plan:",
-      "",
-      "1. Key the cache on the normalized id — the package name plus its resolved directory.",
-      "2. Drop the `byName` fast path, since it is the thing that collides.",
-      "3. Add a regression test with two packages that share a name.",
-  ]),
-  {
-    sourceId: "a3",
-    role: "assistant",
-    text: "",
-    tools: [],
-    parts: [
-      { kind: "text", text: "The change itself is one line:\n\n```ts\nconst key = `${pkg.name}@${realpath(pkg.dir)}`\n```" },
-      {
-        kind: "tools",
-        tools: [
-          { name: "Edit", detail: "src/resolver/cache.ts" },
-          { name: "Edit", detail: "src/resolver/index.ts" },
-          { name: "Write", detail: "src/resolver/resolver.test.ts" },
-          { name: "Bash", detail: "nub run test", desc: "Run the full suite" },
-        ],
-      },
-    ],
-  },
-  prose("a4", [
-      "Done.",
-      "",
-      "- Fixed the cache collision in `src/resolver/cache.ts` — the lookup now keys on the normalized id.",
-      "- Removed the `byName` fast path.",
-      "- Added a regression test; `nub run test` is green: 412 passed, 1 skipped.",
-      "- Bumped `CACHE_VERSION` to 7, so the first run after this rebuilds the cache from scratch.",
-  ]),
-]
-
-interface Seed { quote: string; text: string; status?: Status }
-
-const S1: Seed = { quote: "Removed the byName fast path", text: "Put it back, keyed on the normalized id too — it saves about 40ms on a cold start." }
-const S2: Seed = { quote: "412 passed, 1 skipped", text: "Which test is skipped, and why? Nothing in this suite should skip." }
-const S3: Seed = { quote: "Bumped CACHE_VERSION to 7", text: "Do not bump the version — that makes every user rebuild their cache. Migrate the old keys instead." }
-const SEEDS = [S1, S2, S3]
-const NOTE = "Approach looks right. Three things before you call it done:"
-
-// What the worker reads. The prompt box text is the note on top; the comments follow in TRANSCRIPT order
-// (not the order they were written), each opening with the passage it is about as a blockquote — the
-// shape ⌘I's selected context already uses (lib/composerContext.ts), so a quote reads as quotation in
-// the transcript too.
-function wireText(note: string, items: readonly { quote: string; text: string }[]): string {
-  const quoted = (q: string) => q.split("\n").map((line) => `> ${line}`).join("\n")
-  const blocks = items.map((it) => `${quoted(it.quote)}\n\n${it.text}`)
-  const head = `Comments on the transcript (${items.length}) — each quotes the passage it is about:`
-  return [note.trim(), items.length ? `${head}\n\n${blocks.join("\n\n")}` : ""].filter(Boolean).join("\n\n")
-}
-
-// ── anchors: character offsets over the transcript's text ───────────────────────────────────────────
 
 type Placement = "inline" | "margin" | "pins" | "chips"
 type CountStyle = "strip" | "badge" | "label" | "header" | "none"
@@ -150,113 +54,6 @@ interface Comment {
   sentIn?: string
 }
 interface SentReview { id: string; note: string; items: { id: string; quote: string; text: string }[]; queued: boolean }
-interface Box { left: number; top: number; width: number; height: number }
-
-function inUi(node: Node | null): boolean {
-  const el = node && (node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement)
-  return Boolean(el?.closest("[data-ic-ui]"))
-}
-
-function textNodes(root: HTMLElement): Text[] {
-  const out: Text[] = []
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
-    acceptNode: (n) => (inUi(n) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
-  })
-  for (let n = walker.nextNode(); n; n = walker.nextNode()) out.push(n as Text)
-  return out
-}
-
-function rangeToOffsets(root: HTMLElement, r: Range): [number, number] | null {
-  let pos = 0
-  let start = -1
-  let end = -1
-  for (const t of textNodes(root)) {
-    const len = t.data.length
-    if (r.intersectsNode(t)) {
-      if (start < 0) start = pos + (r.startContainer === t ? r.startOffset : 0)
-      end = pos + (r.endContainer === t ? r.endOffset : len)
-    }
-    pos += len
-  }
-  return start < 0 || end <= start ? null : [start, end]
-}
-
-function offsetsToRange(root: HTMLElement, start: number, end: number): Range | null {
-  let pos = 0
-  let started = false
-  const r = document.createRange()
-  for (const t of textNodes(root)) {
-    const len = t.data.length
-    if (!started && start < pos + len) {
-      r.setStart(t, start - pos)
-      started = true
-    }
-    if (started && end <= pos + len) {
-      r.setEnd(t, end - pos)
-      return r
-    }
-    pos += len
-  }
-  return null
-}
-
-function fullText(root: HTMLElement): string {
-  return textNodes(root).map((t) => t.data).join("")
-}
-
-/** Trim whitespace off a selection's ends, so a triple-click does not quote a trailing newline. */
-function trimmed(root: HTMLElement, [start, end]: [number, number]): [number, number] {
-  const text = fullText(root)
-  while (start < end && /\s/.test(text[start])) start++
-  while (end > start && /\s/.test(text[end - 1])) end--
-  return [start, end]
-}
-
-function boxesOf(root: HTMLElement, r: Range): Box[] {
-  const o = root.getBoundingClientRect()
-  return [...r.getClientRects()]
-    // A range across blocks also reports the blocks' own border boxes; keep the line boxes.
-    .filter((b) => b.width > 0.5 && b.height > 0.5 && b.height < 48)
-    .map((b) => ({ left: b.left - o.left, top: b.top - o.top, width: b.width, height: b.height }))
-}
-
-// One registry per paint kind, shared by every frame on the sheet (CSS.highlights is per-document).
-type PaintKind = "sent" | "pending" | "fakesel" | "draft" | "active"
-const PAINT_ORDER: PaintKind[] = ["sent", "pending", "fakesel", "draft", "active"]
-const HIGHLIGHTS = typeof CSS !== "undefined" && "highlights" in CSS && typeof Highlight !== "undefined"
-const paints = new Map<string, Partial<Record<PaintKind, Range[]>>>()
-function repaint() {
-  if (!HIGHLIGHTS) return
-  PAINT_ORDER.forEach((kind, i) => {
-    const h = new Highlight(...[...paints.values()].flatMap((p) => p[kind] ?? []))
-    h.priority = i
-    CSS.highlights.set(`ic-${kind}`, h)
-  })
-}
-
-const SHEET_CSS = `
-::highlight(ic-pending) {
-  background-color: color-mix(in srgb, var(--color-accent) 13%, transparent);
-  text-decoration: underline;
-  text-decoration-color: color-mix(in srgb, var(--color-accent) 70%, transparent);
-  text-decoration-thickness: 1.5px;
-}
-::highlight(ic-draft), ::highlight(ic-active) {
-  background-color: color-mix(in srgb, var(--color-accent) 30%, transparent);
-  text-decoration: underline;
-  text-decoration-color: var(--color-accent);
-  text-decoration-thickness: 2px;
-}
-::highlight(ic-sent) {
-  text-decoration: underline dotted;
-  text-decoration-color: color-mix(in srgb, var(--color-muted) 80%, transparent);
-  text-decoration-thickness: 1.5px;
-}
-::highlight(ic-fakesel) { background-color: color-mix(in srgb, var(--color-accent) 22%, transparent); }
-[data-ic-root] { text-underline-offset: 0.24em; }
-[data-ic-slot] { margin-top: 8px; }
-`
-
 // ── the pieces a pending comment can wear ───────────────────────────────────────────────────────────
 
 const GHOST_BUTTON = "rounded-md px-2 py-1 text-[12px] text-muted transition-colors hover:bg-panel-2 hover:text-fg"
@@ -1300,7 +1097,7 @@ function Page() {
   }, [theme])
   return (
     <main className="min-h-screen bg-bg pb-24 text-fg">
-      <style>{SHEET_CSS}</style>
+      <style>{HIGHLIGHT_CSS}</style>
       <header className="mx-auto max-w-[1500px] px-8 pb-6 pt-9">
         <h1 className="text-[22px] font-semibold tracking-tight">Inline comments on the transcript</h1>
         <p className="mt-1.5 max-w-[860px] text-[13px] leading-[20px] text-muted">
