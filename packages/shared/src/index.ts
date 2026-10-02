@@ -2229,7 +2229,7 @@ export function questionFencesLive(spawnedAt: string | number | undefined | null
 // contract it started with, so a worker dispatched before this cut never heard of the key and keeps the
 // per-wait rules. An unknown dispatch instant reads as LEGACY for the same reason — the old rules are the
 // ones a worker that never saw the key can satisfy.
-export const NEEDS_INPUT_REQUIRED_AT = "2026-10-02T00:00:00Z"
+export const NEEDS_INPUT_REQUIRED_AT = "2026-10-02T00:48:00Z"
 
 /** Does this thread's worker decide its own queue placement with `needs_input:` — was it dispatched at or
  *  after NEEDS_INPUT_REQUIRED_AT? */
