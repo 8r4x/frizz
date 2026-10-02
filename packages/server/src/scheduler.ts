@@ -1,8 +1,8 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { createHash, randomUUID } from "node:crypto"
-import { PARK_CORRECTION_NAMES_LEAD, PARK_CORRECTION_QUESTION_LEAD, PARK_CORRECTION_RETIRED_LEAD, interruptEndedSubAgentsMessage, type InterruptEndedSubAgent, parkExpiredWakeMessage, parkFinishedWakeMessage, prWatchExpiredWakeMessage, ownWatchExpiredWakeMessage, questionAnswerMessage, questionsCancelledWakeMessage, type QuestionAnswer, type QuestionDismissal, RETIRED_AWAITING_REPLACEMENT, retiredAwaitingKindsIn, compactionPromptMessage, limitResumeSteer, limitModelSwitchSteer, formatGithubWakeSteer, GithubWakeItem, type GithubWatchStatus, type GithubIssueStatus, prWatchWakeMessage, issueWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, liveOpsLines, wakeDeliveryToken, wakeTimeHeader, stripWakeTimeHeader, type QuotaSnapshot } from "@frizz/shared"
-import { GITHUB_ISSUE_STATUS_SETTING, GITHUB_STATUS_SETTING, parkExpiresAt, parkIsHonoured, readAwaitingPark, unaccountedItems, type LiveActivity } from "./awaiting.ts"
+import { awaitingNeedsInput, needsInputRequired, PARK_CORRECTION_NAMES_LEAD, PARK_CORRECTION_NEEDS_INPUT_LEAD, PARK_CORRECTION_QUESTION_LEAD, PARK_CORRECTION_RETIRED_LEAD, interruptEndedSubAgentsMessage, type InterruptEndedSubAgent, parkExpiredWakeMessage, parkFinishedWakeMessage, prWatchExpiredWakeMessage, ownWatchExpiredWakeMessage, questionAnswerMessage, questionsCancelledWakeMessage, type QuestionAnswer, type QuestionDismissal, RETIRED_AWAITING_REPLACEMENT, retiredAwaitingKindsIn, compactionPromptMessage, limitResumeSteer, limitModelSwitchSteer, formatGithubWakeSteer, GithubWakeItem, type GithubWatchStatus, type GithubIssueStatus, prWatchWakeMessage, issueWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, liveOpsLines, wakeDeliveryToken, wakeTimeHeader, stripWakeTimeHeader, type QuotaSnapshot } from "@frizz/shared"
+import { GITHUB_ISSUE_STATUS_SETTING, GITHUB_STATUS_SETTING, liveActivityOf, parkExpiresAt, parkIsHonoured, readAwaitingPark, unaccountedItems } from "./awaiting.ts"
 import type { PrWatchRow, SessionRow, Storage, ThreadQuestionRow } from "./storage.ts"
 import type { Tailer } from "./tailer.ts"
 import type { SessionTelemetry } from "./tailer.ts"
@@ -689,35 +689,6 @@ function restMessageIsSignedOff(
   // source whose message is about fences.
   if (tele.lastFence?.kind === "awaiting") return true
   return threadSaidDone(storage, slug, tele, armedAt)
-}
-
-/** What frizz can actually see running for this thread, in the shape `unaccountedItems` checks against.
- *
- *  A shell and a sub-agent each answer to THREE handles, because the fence names whichever string the
- *  worker was shown: the runtime id it was handed ("Command running in background with ID: bzvtnt3ig";
- *  "agentId: a01b2d20b32feab11" in the Agent launch ack), the launch tool_use id, or the label it reads
- *  back in its own transcript. The runtime id is the one a worker actually has — the tool_use id never
- *  appears in its context — and until 2026-08-28 a sub-agent answered to only the latter two, so a
- *  worker that named the id it was handed was bumped "nothing by that name", then re-fenced with the id
- *  the correction printed and asked why there were two. Refusing a
- *  correct-but-label-shaped name would make the fence unusable for the case it exists for. */
-function liveActivityOf(
-  tele: Pick<SessionTelemetry, "bgShells" | "subAgents">,
-  registeredPrWatches: ReadonlySet<string>,
-  armedTimerIds: ReadonlySet<string>,
-  registeredIssueWatches: ReadonlySet<string> = new Set(),
-): LiveActivity {
-  const shells = new Set<string>()
-  for (const sh of tele.bgShells ?? []) {
-    if (sh.state !== "running") continue
-    for (const h of [sh.taskId, sh.id, sh.label]) if (h) shells.add(h)
-  }
-  const agents = new Set<string>()
-  for (const a of tele.subAgents ?? []) {
-    if (a.state !== "running") continue
-    for (const h of [a.taskId, a.id, a.label]) if (h) agents.add(h)
-  }
-  return { shells, agents, timers: armedTimerIds, prs: registeredPrWatches, issues: registeredIssueWatches }
 }
 
 /** The rest parked on a wait THIS TRIGGER CANNOT ADVANCE: an `awaiting` fence naming a durable wake the
@@ -1993,6 +1964,13 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // into what this pass reads as a bare one — so the nudge took the rest ("you rested without a
       // fence", to a worker whose question frizz itself had just cancelled) and the Goal stood down for
       // it. The armed-rest flag scopes it to exactly the threads whose dismissals wake on their own.
+      //
+      // EXCEPT A WATCH, UNDER THE `needs_input:` CONTRACT (2026-10-01). A registration says WHEN the
+      // worker wakes; it cannot say whether the human is needed meanwhile, and on a thread dispatched at
+      // or after NEEDS_INPUT_REQUIRED_AT that answer lives only in the fence. So a rest behind a `watch`
+      // with no fence is a bare rest there — it queues (board.needsInputQueues), and this teaches the
+      // fence that would have kept it out.
+      const needsInput = needsInputRequired(row.spawned_at)
       const questionRows = deps.storage.listThreadQuestions(row.slug)
       if (
         tele.lastFence ||
@@ -2000,7 +1978,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         registeredDoneFence(deps.storage.getThreadDone(row.slug), tele.lastUserAt) !== undefined ||
         questionRows.some((q) => q.state === "open") ||
         answersInFlight(questionRows, tele.lastUserAt, row.recurring_on_rest === 1 && Boolean(row.recurring_prompt?.trim())) !== undefined ||
-        deps.storage.listThreadWatches(row.slug, { armedOnly: true }).length > 0
+        (!needsInput && deps.storage.listThreadWatches(row.slug, { armedOnly: true }).length > 0)
       ) {
         if ((row.signoff_nudges ?? 0) > 0) deps.storage.resetSignoffNudges(row.slug)
         continue
@@ -2054,7 +2032,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
             .map((w) => ({ id: `${w.owner}/${w.repo}#${w.number}`, label: `${w.owner}/${w.repo}#${w.number}` })),
           issues: deps.storage.listPrWatches(row.slug, { armedOnly: true }).filter((w) => w.kind === "issue")
             .map((w) => ({ id: `${w.owner}/${w.repo}#${w.number}`, label: `${w.owner}/${w.repo}#${w.number}` })),
-        }), spokeAt),
+        }, needsInput), spokeAt),
         reason: "rested without signing off",
       }, nowMs).delivery
       log(`waker: queued ${row.slug} — ${item.reason}`)
@@ -2181,8 +2159,51 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // cause by correcting. Guarded on a non-zero count so this is a transition, not a write on every
       // tick, exactly as the sign-off nudge's reset is. It deliberately does NOT `continue`: an honoured
       // park can still have run out, and that bump is owed.
-      if (parkIsHonoured(park, live) && (row.park_bumps ?? 0) > 0) deps.storage.resetParkBumps(row.slug)
-      if (dead.length === 0 && !expired && !nameless) continue
+      //
+      // NO ANSWER (2026-10-01). A worker dispatched under the `needs_input:` contract owes every park an
+      // answer to "does the human need to look now?" (NEEDS_INPUT_REQUIRED_AT in @frizz/shared). A fence
+      // without one — or with a value that is neither `true` nor `false` — is not a park frizz may honour
+      // (the board queues the thread: needsInputParkHolds), so it does not give the allowance back either:
+      // a worker that keeps leaving the line out would otherwise reset its own cap on every rest.
+      const unanswered = needsInputRequired(row.spawned_at) && awaitingNeedsInput(tele.lastFence.hints) === null
+      if (parkIsHonoured(park, live) && !unanswered && (row.park_bumps ?? 0) > 0) deps.storage.resetParkBumps(row.slug)
+      if (dead.length === 0 && !expired && !nameless) {
+        // The answer is corrected only once the ITEMS are right. A fence that names dead work or none is
+        // told about that first — adding `needs_input:` would not make it a park, and a worker waiting on
+        // nothing should end in ```done or a question, not be taught one more line of a fence it should
+        // not be writing. Counted against PARK_BUMP_MAX like every other correction, keyed on the rest.
+        if (!unanswered || (row.park_bumps ?? 0) >= PARK_BUMP_MAX) continue
+        const fenceId = parkFenceId("needs-input", spokeAt)
+        const deliveryId = wakeDeliveryId(row.slug, row.session_id, fenceId)
+        if (outbox.get(deliveryId)) continue
+        // Quoted back when the worker wrote SOMETHING, so it sees the exact value frizz could not read.
+        const written = tele.lastFence.hints.find((h) => h.kind === "needs_input")?.value
+        const message = [
+          `${PARK_CORRECTION_NEEDS_INPUT_LEAD}\`needs_input: true\` or \`needs_input: false\`${written ? ` (it says \`needs_input: ${written}\`)` : ""}, so frizz did not park it — your thread is in the human's queue.`,
+          "",
+          "Every ```awaiting fence answers one question: does the human need to look NOW?",
+          "",
+          "- `needs_input: false` — nothing for them yet. The thread stays out of their queue until the work",
+          "  wakes you, and the fence alone is the whole message: no write-up.",
+          "- `needs_input: true` — they can act on something now while the work runs. The thread goes into",
+          "  their queue, and the prose under `---` says what to look at.",
+          "",
+          "Re-send the same fence with that line added.",
+        ].join("\n")
+        const item = outbox.enqueue({
+          id: deliveryId,
+          slug: row.slug,
+          sessionId: row.session_id,
+          fenceId,
+          hintKey: fenceId,
+          message: `${message}\n\n${wakeTimeHeader(nowMs, spokeAt)}`,
+          reason: "awaiting fence gives no needs_input answer",
+        }, nowMs).delivery
+        deps.storage.countParkBump(row.slug, fenceId)
+        log(`waker: queued ${row.slug} — ${item.reason}`)
+        checkpoint("after-enqueue", item)
+        continue
+      }
       // No `for:` at all is a MALFORMED fence rather than a wrong one, and the sign-off nudge teaches the
       // whole grammar in one message — a better teacher than a correction aimed at one line.
       if (park.forMs === null && !nameless) continue
