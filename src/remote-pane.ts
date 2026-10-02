@@ -1,7 +1,7 @@
 import { isAnonymousClaimName } from "@frizz/shared";
 import { qrAreaOf, renderQrLines } from "@frizz/server/qr";
 import type { AccessLink } from "./access-pane.ts";
-import { ALT_SCREEN_OFF, ALT_SCREEN_ON, CLEAR, DIM, HIDE_CURSOR, RESET, SHOW_CURSOR } from "./access-pane.ts";
+import { ALT_SCREEN_OFF, ALT_SCREEN_ON, CLEAR, DIM, fitScreen, HIDE_CURSOR, type OptionalLine, RESET, SHOW_CURSOR } from "./access-pane.ts";
 import { type CloudConfig, describeCloudConfig, isClaimedConfig, isExternalConfig, normalizeHostname } from "./cloud.ts";
 import type { Pane } from "./pane-host.ts";
 import type { CloudflaredProbe, GithubProbe, TailscaleProbe } from "./remote-detect.ts";
@@ -119,11 +119,13 @@ export function createRemotePane(options: RemotePaneOptions): Pane {
   let cloudflared: CloudflaredProbe | "pending" | null = null;
   let tailscale: TailscaleProbe | "pending" | null = null;
 
-  const write = (lines: string[]) => {
+  // Every screen is indented two columns under a blank top line, and never scrolls (see fitScreen):
+  // the top line is the first thing a short window drops.
+  const write = (lines: Array<string | OptionalLine>) => {
     if (!open) return;
     output.write(CLEAR);
-    output.write("\n");
-    for (const line of lines) output.write(`  ${line}\n`);
+    const indented = lines.map((line) => (typeof line === "string" ? `  ${line}` : { ...line, text: `  ${line.text}` }));
+    output.write(fitScreen([{ text: "", drop: 0 }, ...indented], output.rows, output.columns));
   };
 
   const check = (ok: boolean, text: string) => (ok ? `${text} ✓` : text);
@@ -167,20 +169,29 @@ export function createRemotePane(options: RemotePaneOptions): Pane {
       return;
     }
     if (s.name === "done") {
-      const lines = [s.message, ""];
-      if (s.link) {
-        const note = "Scan to sign in on a phone. Single use, expires in 5 minutes. Press L later for another.";
-        // The window minus every other row this screen writes (write() adds a leading blank line and a
-        // two-column indent), each at the height it wraps to, plus the row the cursor ends on. A terminal
-        // that does not draw block elements itself gets the glyph-free code when that fits (see qr.ts).
-        const width = output.columns ?? 80;
-        const wrapped = (text: string) => Math.max(1, Math.ceil((text.length + 2) / width));
-        const frame = 1 + wrapped(s.message) + 1 + 1 + wrapped(s.link.url) + 1 + wrapped(note) + 1 + 1 + 1;
-        for (const row of renderQrLines(s.link.url, { area: qrAreaOf(output, { indent: 2, rows: frame }) })) lines.push(row);
-        lines.push("", s.link.url, "", `${DIM}${note}${RESET}`);
+      if (!s.link) {
+        write([s.message, "", `${DIM}press any key to return${RESET}`]);
+        return;
       }
-      lines.push("", `${DIM}press any key to return${RESET}`);
-      write(lines);
+      const note = `${DIM}Scan to sign in on a phone. Single use, expires in 5 minutes. Press L later for another.${RESET}`;
+      // The code gets the window minus the message, the URL and the way back, the one blank below it,
+      // and the indent. A terminal that does not draw block elements itself gets the glyph-free code
+      // when that fits (see qr.ts). A shorter window then sheds the blank lines and the note before
+      // the code can scroll (see fitScreen).
+      const width = output.columns ?? 80;
+      const wrapped = (text: string) => Math.max(1, Math.ceil((text.length + 2) / width));
+      const qr = renderQrLines(s.link.url, { area: qrAreaOf(output, { indent: 2, rows: wrapped(s.message) + 1 + wrapped(s.link.url) + 1 }) });
+      write([
+        s.message,
+        { text: "", drop: 4 },
+        ...qr,
+        { text: "", drop: 6 },
+        s.link.url,
+        { text: "", drop: 2 },
+        { text: note, drop: 5 },
+        { text: "", drop: 3 },
+        `${DIM}press any key to return${RESET}`,
+      ]);
       return;
     }
     write([`Could not apply that: ${s.message}`, "", `${DIM}press any key to go back${RESET}`]);
