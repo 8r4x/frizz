@@ -83,6 +83,12 @@ import "./styles.css"
 //                      prose anchored the fold's close and collapsed the conclusion by default. The
 //                      done-carrying message must survive (textOnly, its call folded and counted), the
 //                      divider must sit ABOVE it, and the registered done card must draw at the tail.
+//   ?variant=pinnedtail THE PHANTOM RUN (2026-10-02, lando `we-ve-got-to-start-working`): two real runs,
+//                      then the server's PINNED copy of a Monitor still `pending` from an earlier turn,
+//                      appended after the final rest. Walked as a third run, it made the run the agent
+//                      signed off in a MIDDLE run and folded the whole write-up behind "1 more round".
+//                      The pin must belong to no run: no middle divider, the final write-up in full, and
+//                      the pinned card still drawn at the foot.
 //
 // AND `?src=<url>` REPLAYS A REAL THREAD through the card, overriding the variant. Point it at a dump of
 // the server's own `threadTranscript` reply and the card renders the actual bytes that produced a report,
@@ -667,9 +673,45 @@ const donetail: TranscriptMessage[] = [
   withId(boundaryEvent("rest", "Agent rested")),
 ]
 
+// The pin is the server's own shape (latestTranscriptWindow): a tools-only assistant record carrying the
+// still-pending background call, pointing back at the launch message that scrolled out of the window.
+const pinnedMonitor = tool("Monitor", {
+  status: "pending",
+  backgroundState: "background",
+  shellId: "toolu_pinned_monitor",
+  detail: "tail -f build.log | grep --line-buffered -E 'EXIT=|FAILED'",
+  desc: "Watching the engine build",
+})
+
+const pinnedtail: TranscriptMessage[] = [
+  { sourceId: "u-cur", role: "user", text: "Make Jest work, build the docs site, and set up Zed.", tools: [], parts: [] },
+  withId(asst("Starting the three tasks in parallel.", [
+    tool("Agent", { detail: "Setting up Zed" }),
+    tool("Bash", { detail: "nub run build", desc: "Building the engine" }),
+  ])),
+  withId(asst("", [tool("Bash", { detail: "nub --test", desc: "Running the suite" })])),
+  withId(asst("Jest and the docs site are committed. The Zed helper still runs.")),
+  withId(boundaryEvent("rest", "Agent rested")),
+  withId(boundaryEvent("wake", "Background task «Setting up Zed» finished")),
+  withId(asst("Status: the Zed section is written. Now I commit it.", [tool("Read", { detail: "lab/nextjs/.zed/settings.json" })])),
+  withId(asst("", [tool("Bash", { detail: "git commit -am 'docs: Zed setup'", desc: "Committing the Zed section" })])),
+  withId(asst("Everything is done in five commits on local `main`: Jest, the docs site, and the Zed setup.")),
+  withId(boundaryEvent("rest", "Agent rested")),
+  {
+    sourceId: "pinned-bg:demo",
+    pinnedFromSourceId: "m-launch-scrolled-out",
+    role: "assistant",
+    text: "",
+    tools: [pinnedMonitor],
+    parts: [{ kind: "tools" as const, tools: [pinnedMonitor] }],
+    at: new Date(Date.now() - 45 * 3_600_000).toISOString(),
+  },
+]
+
 const messages =
   replay?.messages ??
-  (variant === "donetail" ? donetail
+  (variant === "pinnedtail" ? pinnedtail
+  : variant === "donetail" ? donetail
   : variant === "goalwakes" ? goalwakes
   : variant === "prwakes" ? prwakes
   : variant === "single" ? single

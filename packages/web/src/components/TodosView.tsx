@@ -902,6 +902,14 @@ const QueueCard = memo(function QueueCard({ thread, leaving, frozen, onResolve, 
   // and this card's own render predicates. The walk itself is pure — see lib/queueCollapse.
   const collapseSteps = useMemo(() => messages.map((m, g) => {
     if (!m || m.queued || messageRendersNothing(m, hidesAwaiting(g))) return { skip: true }
+    // A PINNED background op (`pinnedFromSourceId`) is the server's synthetic copy of a still-pending
+    // launch whose own message scrolled out of the latest window, appended AFTER the real tail
+    // (latestTranscriptWindow). It belongs to no run, and walking it as one minted a phantom run behind
+    // the agent's final rest: three "runs" put the run the agent signed off in into the MIDDLE, and
+    // collapseMiddleRuns swallowed the whole sign-off behind "1 more round" (maintainer 2026-10-02, lando
+    // `we-ve-got-to-start-working`: a Monitor left `pending` two days earlier hid a 5,163-char write-up).
+    // Skipped here, it renders on the ordinary path at the foot of the card, exactly where it sat before.
+    if (m.pinnedFromSourceId) return { skip: true }
     // THE REST DIVIDER: dropped by the render loop outright, expanded or not (see below) — the card's own
     // premise, so it may not anchor a run's opening or closing prose and may not count as a hidden step,
     // since expanding reveals nothing where it stood. It is still the CUT: `closes` ends the run whose

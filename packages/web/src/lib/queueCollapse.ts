@@ -176,7 +176,8 @@ export function opensQueueSegment(m: CollapseMsgLike): boolean {
  *  (they need the transcript schema and the card's own render predicates); this stays pure so the walk
  *  itself is unit-testable. */
 export interface CollapseStep {
-  /** Contributes nothing to the card at all — a queued send, or a message that renders nothing. */
+  /** Belongs to no run — a queued send, a message that renders nothing, or a PINNED background op the
+   *  server appended after the real tail (it renders, but outside every fold). */
   skip?: boolean
   /** Contributes visible PROSE, so it can anchor a segment's opening or closing row. */
   text?: boolean

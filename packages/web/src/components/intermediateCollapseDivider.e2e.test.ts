@@ -467,3 +467,43 @@ test("successive wake hairlines stand at one pitch, however many deliveries carr
     await browser.close()
   }
 })
+
+// A PINNED BACKGROUND OP BELONGS TO NO RUN. When a background call is still `pending` and its launch has
+// scrolled out of the latest window, the server appends a synthetic copy after the real tail so the
+// running task stays visible (latestTranscriptWindow). The card walked that copy as a run of its own —
+// a third run behind the final rest — so the run the agent actually signed off in became a MIDDLE run
+// and the whole sign-off folded behind "1 more round" (maintainer 2026-10-02, lando
+// `we-ve-got-to-start-working`: a Monitor left `pending` two days earlier hid a 5,163-char write-up).
+test("a pinned background op after the final rest does not push the sign-off into the middle fold", {
+  skip: !baseUrl,
+  timeout: 120_000,
+}, async () => {
+  const { browser, page, errors } = await launch()
+  try {
+    await page.goto(variant("pinnedtail"), { waitUntil: "networkidle0" })
+    await page.waitForSelector(SEL, { timeout: 10_000 })
+    const ladder = await page.$$eval("[data-wake-divider]", (ns) =>
+      ns.map((n) => `${n.getAttribute("data-wake-divider")}: ${(n as HTMLElement).innerText.replace(/\s+/g, " ").trim()}`),
+    )
+    // Two real runs, two folds, and the completion that woke the second between them. No middle.
+    assert.deepEqual(
+      ladder,
+      [
+        "intermediate-summary: 3 tool calls · Click to expand",
+        "event: Background task «Setting up Zed» finished",
+        "intermediate-summary: 2 tool calls · Click to expand",
+      ],
+      `two runs, each with its own fold, and no middle, got ${ladder.join(" | ")}`,
+    )
+    const card = await page.evaluate(() => document.body.innerText)
+    assert.match(card, /Jest and the docs site are committed/, "the first run's rest")
+    assert.match(card, /Everything is done in five commits/, "the sign-off the agent rested on renders in full")
+    // The pin still draws, at the foot of the card where the server put it.
+    const order = await page.$$eval("[data-transcript-source-id]", (ns) => ns.map((n) => n.getAttribute("data-transcript-source-id")))
+    assert.equal(order.at(-1), "pinned-bg:demo", `the pinned card renders last, got ${order.join(", ")}`)
+
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
