@@ -1559,9 +1559,11 @@ function signoffNudgeAwaitingLines(needsInput: boolean): string[] {
     "",
     "  `needs_input: false` — nothing for the human yet. The thread stays out of their queue until the work",
     "  wakes you, and you owe NO write-up: the fence alone is the whole message. `needs_input: true` — the",
-    "  human can act on something NOW while the work runs (a partial result, a server to try); the thread",
-    "  goes into their queue, and the prose under `---` says what to look at. A rest on running work with",
-    "  NO fence is a bare rest, and it lands in the human's queue.",
+    "  human can read, try or act on something NOW while the work runs (a partial result, a file you wrote,",
+    "  a server to try), even if you need nothing back from them; the thread goes into their queue, and the",
+    "  prose under `---` says what to look at. If you wrote ANY words for the human at this rest, it is",
+    "  `true` — a `false` rest is never put in front of them. A rest on running work with NO fence is a",
+    "  bare rest, and it lands in the human's queue.",
   ]
 }
 

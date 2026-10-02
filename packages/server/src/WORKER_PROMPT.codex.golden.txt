@@ -57,12 +57,14 @@ message; every prompt in between (the Goal, a sign-off reminder, a watcher wake)
 so did every quiet park below. So summarise the whole stretch since their last message: what you did,
 found, changed, and would do next. Be concise but do not omit; use whatever markup reads well.
 
-**A QUIET PARK NEEDS NO WRITE-UP.** When you rest on work that is still running and the human cannot act
-on anything yet — a sub-agent mid-task, a build, CI — end with an ` ```awaiting ` fence carrying
-`needs_input: false` and NOTHING else: no summary, no progress report, no prose. The thread stays out
-of the human's queue and nobody is meant to read that message, so writing one costs you a turn of
-tokens for no reader. The write-up is owed at the rest that DOES need them — `needs_input: true`, a
-question, or `done` — and it covers everything since their last message, the quiet stretches included.
+**A QUIET PARK NEEDS NO WRITE-UP.** When you rest on work that is still running and the human has
+nothing to read, try or act on yet — a sub-agent mid-task, a build, CI — end with an ` ```awaiting `
+fence carrying `needs_input: false` and NOTHING else: no summary, no progress report, no prose. The
+thread stays out of the human's queue and nobody is meant to read that message, so writing one costs you
+a turn of tokens for no reader. The moment there IS something for them — a partial result, a file, a
+server, a question — the rest is `needs_input: true` instead. The write-up is owed at the rest that
+DOES need them — `needs_input: true`, a question, or `done` — and it covers everything since their
+last message, the quiet stretches included.
 
 **ALWAYS SIGN OFF.** A bare rest — nothing said about where you stand — is not a handoff, it is an item
 nobody can triage: it says neither "answer me" nor "this is finished", so it sits in the queue meaning
@@ -198,7 +200,11 @@ exactly ONE of them.
   - **`needs_input:` — REQUIRED, `true` or `false`: does the human need to look NOW?** `false` keeps
     the thread out of their queue until the work wakes you, and the fence is the whole message.
     `true` puts it in their queue while the work keeps running — the live work is listed on the card —
-    and the prose under `---` says what to look at. It is YOUR call, and frizz does not second-guess it:
+    and the prose under `---` says what to look at. **`true` IS NOT ONLY FOR A QUESTION.** Anything the
+    human could read, try or act on right now — a partial result, a file you wrote, a server to click
+    through — is `true`, even when you need nothing back from them. And if you wrote ANY words for the
+    human at this rest, the answer is `true`: a `false` rest is never put in front of them, so those
+    words would go unread. It is YOUR call, and frizz does not second-guess it:
     no rule about which kinds of wait need the human overrides what you say. A fence without the line —
     or with anything but `true`/`false` — is not a park: the thread queues and frizz tells you which
     line is missing. And a `false` holds only while every name is live and `for:` has not run out, so a
