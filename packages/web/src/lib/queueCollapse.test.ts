@@ -257,6 +257,20 @@ test("a run RESUMED by a bare rest folds on the same strength — the rested mes
   assert.equal(segmentFolds(seg), true)
 })
 
+// The render loop hangs a lone-prose run's divider on that one message, and this is what says which side.
+test("hiddenBeforeOpen says which side of a lone prose message the hidden work sat on", () => {
+  const before = queueCollapseSegments([w(), t(2), t(1), p()], 0)[0]
+  assert.equal(before.open, before.close)
+  assert.equal(before.hiddenBeforeOpen, true, "worked, then wrote")
+  const after = queueCollapseSegments([w(), p(1), t(2)], 0)[0]
+  assert.equal(after.open, after.close)
+  assert.equal(after.hiddenBeforeOpen, false, "wrote, then worked — its own batched calls run after its text")
+  // The waker draws its hairline above the run; it is on screen, not hidden work before the prose.
+  const woken = queueCollapseSegments([x(), p(), r(), c(), p(), t(3)], 1)[1]
+  assert.equal(woken.waker, 3)
+  assert.equal(woken.hiddenBeforeOpen, false)
+})
+
 // Today's rule, kept deliberately: a lone agent turn has nothing intermediate, and a divider standing
 // between the human's ask and the only answer reads as the card withholding the answer.
 test("the FIRST run does NOT fold when one message both opens and closes it", () => {

@@ -507,3 +507,39 @@ test("a pinned background op after the final rest does not push the sign-off int
     await browser.close()
   }
 })
+
+// ONE MESSAGE CAN BE BOTH ANCHORS. A resumed run folds even when a single prose message opens and closes
+// it, but the divider was only ever emitted at a row AFTER the opening prose — and in that run every such
+// row is hidden. Its calls vanished with no divider standing in for them. The lone message now takes the
+// divider itself, on the side the hidden work happened.
+test("a resumed run with one prose message still draws its fold, on the side the work happened", {
+  skip: !baseUrl,
+  timeout: 120_000,
+}, async () => {
+  const { browser, page, errors } = await launch()
+  try {
+    for (const [v, expected] of [
+      ["loneprose", ["event", "intermediate-summary: 2 tool calls · Click to expand", "lone-prose"]],
+      ["loneproseafter", ["event", "lone-prose", "intermediate-summary: 2 tool calls · Click to expand"]],
+    ] as const) {
+      await page.goto(variant(v), { waitUntil: "networkidle0" })
+      await page.waitForSelector('[data-transcript-source-id="lone-prose"]', { timeout: 10_000 })
+      // Document order of the resumed run: its waker hairline, the fold, and the lone message.
+      const order = await page.$$eval('[data-wake-divider], [data-transcript-source-id="lone-prose"]', (ns) =>
+        ns.map((n) => {
+          const kind = n.getAttribute("data-wake-divider")
+          if (kind === "intermediate-summary") return `${kind}: ${(n as HTMLElement).innerText.replace(/\s+/g, " ").trim()}`
+          return kind ?? n.getAttribute("data-transcript-source-id")
+        }),
+      )
+      assert.deepEqual(
+        order,
+        ["intermediate-summary: 1 tool call · Click to expand", ...expected],
+        `${v}: the first run's fold, then the resumed run in order, got ${order.join(" | ")}`,
+      )
+    }
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})

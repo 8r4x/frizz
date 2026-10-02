@@ -222,6 +222,12 @@ export interface CollapseSegment {
    *  some other way: on the human's ask, on a scheduler wake that draws its own hairline already, or on
    *  the agent simply carrying on. A completion sitting anywhere ELSE in the run is chatter and folds. */
   waker: number
+  /** A hidden step sits BEFORE the opening prose. Only the render loop's lone-prose case reads it: when
+   *  one message both opens and closes a folding run there is no second prose row to hang the divider
+   *  on, and this says which side of that message the hidden work happened on — above it when the agent
+   *  worked and then wrote, below it when it wrote and then worked (a message's own batched calls run
+   *  after its text, so they alone put the divider below). */
+  hiddenBeforeOpen: boolean
 }
 
 /** Split `[from .. end]` into one segment per run. The wake and rest messages themselves are excluded —
@@ -249,11 +255,11 @@ export function queueCollapseSegments(steps: readonly CollapseStep[], from: numb
     if (s.opens === true) {
       close()
       resumed = true
-      current = { start: i + 1, end: i, open: -1, close: -1, steps: 0, tools: 0, resumed: true, waker: -1 }
+      current = { start: i + 1, end: i, open: -1, close: -1, steps: 0, tools: 0, resumed: true, waker: -1, hiddenBeforeOpen: false }
       continue
     }
     const opening = current === undefined
-    if (!current) current = { start: i, end: i, open: -1, close: -1, steps: 0, tools: 0, resumed, waker: -1 }
+    if (!current) current = { start: i, end: i, open: -1, close: -1, steps: 0, tools: 0, resumed, waker: -1, hiddenBeforeOpen: false }
     // A COMPLETION that opens a RESUMED run is what re-invoked the agent, and is the run's waker. The
     // `resumed` guard is what keeps a completion arriving during the human's own first turn — the agent
     // launched a task and it finished while the agent kept working — from being read as a wake.
@@ -273,7 +279,9 @@ export function queueCollapseSegments(steps: readonly CollapseStep[], from: numb
       const s = steps[i]
       if (s.skip === true || s.survives === true) continue
       if (i === seg.open || i === seg.close || i === seg.waker) continue
-      if (s.countable === true) seg.steps++
+      if (s.countable !== true) continue
+      seg.steps++
+      if (i < seg.open) seg.hiddenBeforeOpen = true
     }
   }
   return segments

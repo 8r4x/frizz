@@ -89,6 +89,11 @@ import "./styles.css"
 //                      signed off in a MIDDLE run and folded the whole write-up behind "1 more round".
 //                      The pin must belong to no run: no middle divider, the final write-up in full, and
 //                      the pinned card still drawn at the foot.
+//   ?variant=loneprose / loneproseafter  A RESUMED run whose ONE prose message both opens and closes it.
+//                      It folds (segmentFolds), but no row after its opening prose ever reached the
+//                      divider, so its calls vanished with nothing standing in for them. The divider must
+//                      draw ABOVE the lone message when the work came first (`loneprose`), and BELOW it
+//                      when the agent wrote and then worked (`loneproseafter`).
 //
 // AND `?src=<url>` REPLAYS A REAL THREAD through the card, overriding the variant. Point it at a dump of
 // the server's own `threadTranscript` reply and the card renders the actual bytes that produced a report,
@@ -708,9 +713,33 @@ const pinnedtail: TranscriptMessage[] = [
   },
 ]
 
+// The lone message carries a fixed id so the test can read the divider's side of it in document order.
+const loneProse = (workFirst: boolean): TranscriptMessage[] => [
+  { sourceId: "u-cur", role: "user", text: "Take #6440 to merge-readiness.", tools: [], parts: [] },
+  withId(asst("Reading the PR before I touch anything.", [
+    tool("Bash", { detail: "gh pr view 6440 --json title,body,files", desc: "Reading the PR" }),
+  ])),
+  withId(asst("Both findings are fixed and pushed.")),
+  withId(boundaryEvent("rest", "Agent rested")),
+  withId(boundaryEvent("wake", "Background task «Re-running the suite» finished")),
+  ...(workFirst
+    ? [
+        withId(asst("", [tool("Read", { detail: "target/test-output.log" })])),
+        withId(asst("", [tool("Bash", { detail: "gh pr checks 6440", desc: "Reading the check runs" })])),
+        { ...asst("The suite is green on the new head."), sourceId: "lone-prose" },
+      ]
+    : [
+        { ...asst("The suite is green. Recording the head and re-checking mergeability.", [tool("Bash", { detail: "git log -1", desc: "Recording the head" })]), sourceId: "lone-prose" },
+        withId(asst("", [tool("Bash", { detail: "gh pr view 6440 --json mergeable", desc: "Re-checking mergeability" })])),
+      ]),
+  withId(boundaryEvent("rest", "Agent rested")),
+]
+
 const messages =
   replay?.messages ??
-  (variant === "pinnedtail" ? pinnedtail
+  (variant === "loneprose" ? loneProse(true)
+  : variant === "loneproseafter" ? loneProse(false)
+  : variant === "pinnedtail" ? pinnedtail
   : variant === "donetail" ? donetail
   : variant === "goalwakes" ? goalwakes
   : variant === "prwakes" ? prwakes

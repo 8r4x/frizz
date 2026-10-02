@@ -1518,7 +1518,16 @@ const QueueCard = memo(function QueueCard({ thread, leaving, frozen, onResolve, 
                   // Anchoring on `!isFirst` puts it against the hidden span's END instead, which is what it
                   // is a summary OF. With no lifted message in between, the first non-opening row IS the
                   // closing prose and the divider lands exactly where it used to.
-                  if (!isFirst && segIdx !== undefined && !barEmitted.has(segIdx)) {
+                  //
+                  // ONE MESSAGE CAN BE BOTH ANCHORS. A resumed run folds even when a single prose message
+                  // opens and closes it (segmentFolds), and then no row after the opening prose ever
+                  // reaches this point: every hidden row returned above, and the closing prose IS the
+                  // opening one. The run's calls vanished with no divider standing in for them. That lone
+                  // message takes the divider itself — above it when the hidden work came first, below it
+                  // when the agent wrote and then worked (CollapseSegment.hiddenBeforeOpen).
+                  const loneProse = isFirst && isLast
+                  const emitBar = () => {
+                    if (segIdx === undefined || barEmitted.has(segIdx)) return
                     if (prevTailIsMeta !== null) out.push(<VSpace key={`im-space-${segIdx}`} h={STEP} />)
                     out.push(
                       <IntermediateSummary
@@ -1530,6 +1539,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, frozen, onResolve, 
                     prevTailIsMeta = false
                     barEmitted.add(segIdx)
                   }
+                  if (!isFirst || (loneProse && seg.hiddenBeforeOpen)) emitBar()
                   // A first/last message that is pure batched tool calls (no prose) contributes no row —
                   // its calls are already folded into the divider — so skip it and leave no dangling spacer.
                   if (!messageHasRenderableText(m, hidesAwaiting(globalIdx))) return
@@ -1542,6 +1552,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, frozen, onResolve, 
                   )
                   // Text-only → the row ends in prose (tool band dropped), so the next gap is a full STEP.
                   prevTailIsMeta = false
+                  if (loneProse) emitBar()
                   flushQuestions(globalIdx)
                   return
                 }
