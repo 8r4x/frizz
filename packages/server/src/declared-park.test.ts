@@ -26,6 +26,10 @@ import { createStorage, type SessionRow } from "./storage.ts"
 
 const AT = "2026-08-14T00:00:00.000Z"
 const NOW = Date.parse("2026-08-14T00:05:00.000Z")
+// Up here, above every test that reads it: node:test starts the FIRST test the moment `test()` is called,
+// while this module is still evaluating, so a `const` declared below that test is in its temporal dead
+// zone when the test body runs ("Cannot access 'LIVE_SHELL' before initialization").
+const LIVE_SHELL = { label: "the suite", startedAt: "2026-08-15T11:59:00.000Z", state: "running" as const, id: "toolu_x", taskId: "bzvtnt3ig" }
 
 type Shell = SessionTelemetry["bgShells"][number]
 type Agent = SessionTelemetry["subAgents"][number]
@@ -271,8 +275,6 @@ function parkHarness(hints: FenceView["hints"], opts: { shells?: any[]; agents?:
   const state = () => storage.db.prepare("SELECT fence_id, state FROM wake_delivery WHERE thread_slug = ?").all(slug) as { fence_id: string; state: string }[]
   return { s, storage, queued, state, sent, close: () => { void s.stop(); storage.close(); rmSync(dir, { recursive: true, force: true }) } }
 }
-
-const LIVE_SHELL = { label: "the suite", startedAt: "2026-08-15T11:59:00.000Z", state: "running" as const, id: "toolu_x", taskId: "bzvtnt3ig" }
 
 test("a park naming something that is NOT running bumps the worker, and says which", async () => {
   const h = parkHarness([

@@ -8,7 +8,7 @@ import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import watcher from "@parcel/watcher"
 import type { BoardSnapshot, ClaudeModel, ThreadView, RuntimeState, ThreadRecurringPrompt, ProviderError } from "@frizz/shared"
-import { AskedQuestionSchema, BoardDiffer, PermissionMode, SnoozeUntil, ThreadSlug, isDirectSubAgent, questionAnswerMessage, questionsCancelledWakeMessage, type AskedQuestion, type PermissionMode as PermissionModeValue, type QuestionAnswer, type QuestionDismissal } from "@frizz/shared"
+import { AskedQuestionSchema, BoardDiffer, PermissionMode, SnoozeUntil, ThreadSlug, awaitingNeedsInput, isDirectSubAgent, needsInputRequired, questionAnswerMessage, questionsCancelledWakeMessage, type AskedQuestion, type PermissionMode as PermissionModeValue, type QuestionAnswer, type QuestionDismissal } from "@frizz/shared"
 import type { Bus } from "./bus.ts"
 import type { Project } from "./project.ts"
 import { isHeadlessRow, isBrokerClaudeRow, sessionTitleLocked, type ThreadQuestionRow } from "./storage.ts"
@@ -20,7 +20,7 @@ import type { Tailer, SessionTelemetry, FenceView } from "./tailer.ts"
 import { firstTextLine } from "./tailer.ts"
 import type { InteractionChange } from "./interaction-store.ts"
 import { frizzDirExists } from "./frizz.ts"
-import { githubStatusKey, parseIssueRef, parsePrRef, readAwaitingPark, readGithubIssueStatusBook, readGithubStatusBook, GITHUB_ISSUE_STATUS_SETTING, GITHUB_STATUS_SETTING, type GithubIssueStatusBook, type GithubStatusBook } from "./awaiting.ts"
+import { githubStatusKey, liveActivityOf, needsInputParkHolds, parseIssueRef, parsePrRef, readAwaitingPark, readGithubIssueStatusBook, readGithubStatusBook, GITHUB_ISSUE_STATUS_SETTING, GITHUB_STATUS_SETTING, type GithubIssueStatusBook, type GithubStatusBook } from "./awaiting.ts"
 import { findByPath } from "./project-registry.ts"
 import { parseDeliveryLedger } from "./delivery-ledger.ts"
 import { effectivePermissionMode, fallbackTitle, resolveLegacyThreadFile } from "./dispatch.ts"
@@ -1005,6 +1005,19 @@ export function deriveNeedsYou(
   // stale ```awaiting fence from the rest BEFORE the kill must not bury it. The operator's own snooze
   // still wins (futureSnooze, checked first), so a card can be parked deliberately.
   if (limitPause) return true
+  // THE WORKER'S OWN ANSWER (2026-10-01). A thread dispatched at or after NEEDS_INPUT_REQUIRED_AT says
+  // with `needs_input:` whether its rest needs the human, and every per-wait rule below is the guess that
+  // answer replaces — so none of them is consulted for it. Placed after every hard gate above: an ask, a
+  // crash, a limit stop and the human's own snooze are facts about the thread, not guesses about a wait.
+  //
+  // AN ANSWER IS HONOURED FROM ANY THREAD, not only a new-contract one. A cold resume re-applies the
+  // CURRENT worker prompt (router followUp / context.ts), so a thread dispatched before the cut can read
+  // the key after an upgrade and start writing it — and a `needs_input: true` it wrote must queue it, where
+  // the legacy park rule would have excused it. The cut decides only whether the answer is REQUIRED.
+  const answered = tele?.lastFence?.kind === "awaiting" && awaitingNeedsInput(tele.lastFence.hints) !== null
+  if (answered || needsInputRequired(row.spawned_at)) {
+    return needsInputQueues(row, tele, runtime, nowMs, excuseLiveOwnWork, registeredPrWatches, armedTimerIds)
+  }
   // Declared parks are STRONGER excusals than the awaiting-background card below, so they are checked
   // first: a worker that declared an awaiting-human fence stays held even if a child of its is still
   // live (it explicitly said what it is waiting on).
@@ -1089,6 +1102,43 @@ export function deriveNeedsYou(
   if (tele?.lastFence?.kind === "done") return true
   // Bare rest is itself the handoff. It remains queued until the human explicitly sends more work,
   // snoozes it, or archives it; merely opening/seeing the thread cannot silently clear the card.
+  return true
+}
+
+// THE QUEUE RULE FOR A THREAD THAT ANSWERS FOR ITSELF — the at-rest tail of deriveNeedsYou for a worker
+// dispatched under the `needs_input:` contract (NEEDS_INPUT_REQUIRED_AT in @frizz/shared). Three rules,
+// where the legacy tail has one per kind of wait:
+//
+//  1. `needs_input: false` on a park frizz can honour keeps the thread OUT of the queue. The rail draws it
+//     in the Active band, as it drew every excused rest before. "Honour" is the scheduler's own reading
+//     (awaiting.needsInputParkHolds): every named item live and the `for:` not yet run out — so a wrong
+//     `false` cannot hide a thread that nothing will wake.
+//  2. Any other rest on running work QUEUES, with the resting card and its event-snooze: `true`, a fence
+//     with no answer (the scheduler bumps it), and a rest with work out and no fence at all (the sign-off
+//     nudge teaches the fence). This is where a live sub-agent, a registered watch and a PR whose CI is
+//     still running used to excuse the thread on frizz's guess; the worker says so now, or it queues.
+//  3. A `done` handoff and a rest with nothing out queue as they always did.
+//
+// `excuseLiveOwnWork` false is deriveAwaitingBackground asking for the FACT, as it does of the legacy
+// tail: rule 1 is the queue's alone, so the card can still say what the thread waits on.
+function needsInputQueues(
+  row: SessionRow,
+  tele: SessionTelemetry | undefined,
+  runtime: RuntimeState,
+  nowMs: number,
+  excuseLiveOwnWork: boolean,
+  registeredPrWatches: ReadonlySet<string>,
+  armedTimerIds: ReadonlySet<string>,
+): boolean {
+  const fence = tele?.lastFence
+  if (
+    excuseLiveOwnWork &&
+    runtime !== "exited" &&
+    fence?.kind === "awaiting" &&
+    // `registeredPrWatches` carries both kinds' refs (see hasParkedPrWatch), so it answers for `issues:` too.
+    needsInputParkHolds(fence.hints, liveActivityOf(tele, registeredPrWatches, armedTimerIds, registeredPrWatches), Date.parse(tele?.lastAssistantAt ?? ""), nowMs)
+  ) return false
+  if (runtime !== "exited" && fence?.kind !== "done" && (hasLiveOwnWork(tele, registeredPrWatches) || hasParkedTimerWatch(tele, armedTimerIds))) return !bgSnoozeArmed(row)
   return true
 }
 
