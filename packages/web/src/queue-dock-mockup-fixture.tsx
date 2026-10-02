@@ -1211,7 +1211,7 @@ function Page() {
           <Candidate letter="ii" title="A goal armed, pointing at it" note="Amber target; the hover shows the goal and when it is sent, as the footer's preview does today. A click opens today's goal panel.">
             <CardEnd data={PRICING} height="fit" force={{ goal: true }} />
           </Candidate>
-          <Candidate letter="iii" title="Pointing at the counts" note="The live ops, one ⤷ row each, opening upward so nothing under the prompt box moves.">
+          <Candidate letter="iii" title="Pointing at the counts" note={`The live ops, one ${CHILD_ARROW} row each, opening upward so nothing under the prompt box moves.`}>
             <CardEnd data={CACHE} height={540} force={{ activity: true }} />
           </Candidate>
         </Section>
