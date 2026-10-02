@@ -1,4 +1,4 @@
-import { renderQrLines } from "@frizz/server/qr";
+import { qrAreaOf, renderQrLines } from "@frizz/server/qr";
 import { installPaneHost, type Pane } from "./pane-host.ts";
 
 /**
@@ -60,11 +60,19 @@ export function createAccessPane(options: AccessPaneOptions): AccessPane {
       : remaining === 0
         ? "This link has expired. Press L for another."
         : `Single use, expires in ${remaining}s.`;
+    const footer = `${status}  Press any other key to close.`;
+    // The code gets the window minus everything else this paint writes: the blank line above it, a
+    // blank and the URL below, a blank and the status, and the line the final newline leaves the cursor
+    // on — the URL and status at the height they wrap to. A terminal that does not draw block elements
+    // itself gets the glyph-free code when that fits (see qr.ts).
+    const width = output.columns ?? 80;
+    const wrapped = (text: string) => Math.max(1, Math.ceil((text.length + 2) / width));
+    const area = qrAreaOf(output, { indent: 2, rows: 1 + 1 + wrapped(shown.url) + 1 + wrapped(footer) + 1 });
     output.write(CLEAR);
     output.write("\n");
-    for (const row of renderQrLines(shown.url)) output.write(`  ${row}\n`);
+    for (const row of renderQrLines(shown.url, { area })) output.write(`  ${row}\n`);
     output.write(`\n  ${shown.url}\n`);
-    output.write(`\n  ${DIM}${status}  Press any other key to close.${RESET}\n`);
+    output.write(`\n  ${DIM}${footer}${RESET}\n`);
   };
 
   return {

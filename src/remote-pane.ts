@@ -1,5 +1,5 @@
 import { isAnonymousClaimName } from "@frizz/shared";
-import { renderQrLines } from "@frizz/server/qr";
+import { qrAreaOf, renderQrLines } from "@frizz/server/qr";
 import type { AccessLink } from "./access-pane.ts";
 import { ALT_SCREEN_OFF, ALT_SCREEN_ON, CLEAR, DIM, HIDE_CURSOR, RESET, SHOW_CURSOR } from "./access-pane.ts";
 import { type CloudConfig, describeCloudConfig, isClaimedConfig, isExternalConfig, normalizeHostname } from "./cloud.ts";
@@ -169,8 +169,15 @@ export function createRemotePane(options: RemotePaneOptions): Pane {
     if (s.name === "done") {
       const lines = [s.message, ""];
       if (s.link) {
-        for (const row of renderQrLines(s.link.url)) lines.push(row);
-        lines.push("", s.link.url, "", `${DIM}Scan to sign in on a phone. Single use, expires in 5 minutes. Press L later for another.${RESET}`);
+        const note = "Scan to sign in on a phone. Single use, expires in 5 minutes. Press L later for another.";
+        // The window minus every other row this screen writes (write() adds a leading blank line and a
+        // two-column indent), each at the height it wraps to, plus the row the cursor ends on. A terminal
+        // that does not draw block elements itself gets the glyph-free code when that fits (see qr.ts).
+        const width = output.columns ?? 80;
+        const wrapped = (text: string) => Math.max(1, Math.ceil((text.length + 2) / width));
+        const frame = 1 + wrapped(s.message) + 1 + 1 + wrapped(s.link.url) + 1 + wrapped(note) + 1 + 1 + 1;
+        for (const row of renderQrLines(s.link.url, { area: qrAreaOf(output, { indent: 2, rows: frame }) })) lines.push(row);
+        lines.push("", s.link.url, "", `${DIM}${note}${RESET}`);
       }
       lines.push("", `${DIM}press any key to return${RESET}`);
       write(lines);

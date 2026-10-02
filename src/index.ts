@@ -4,7 +4,7 @@ import { fileSessionDirectory, loadOrCreateSessionKey } from "@frizz/server/acce
 import {
   establishCloudConfig,
 } from "./cloud.ts";
-import { renderQrLines } from "@frizz/server/qr";
+import { qrAreaOf, renderQrLines } from "@frizz/server/qr";
 import { listSessions, signOutSession } from "./sessions-cli.ts";
 import { SUPERVISOR_ACCESS_CODE_PATH } from "@frizz/server/restart-supervisor";
 import { createAccessPane, type AccessPane } from "./access-pane.ts";
@@ -972,7 +972,9 @@ if (options.link) {
     }
     const { url } = (await response.json()) as { url: string };
     // The QR first: the whole point of a link is to reach a phone, and nobody types forty characters.
-    if (process.stdout.isTTY) for (const row of renderQrLines(url)) console.log(`  ${row}`);
+    // The window gets the glyph-free code when the terminal does not draw block elements itself and it
+    // fits above the blank line, the URL and the prompt that follow it (see qr.ts).
+    if (process.stdout.isTTY) for (const row of renderQrLines(url, { area: qrAreaOf(process.stdout, { indent: 2, rows: 3 }) })) console.log(`  ${row}`);
     console.log(process.stdout.isTTY ? `\n  ${url}` : url);
     process.exit(0);
   }

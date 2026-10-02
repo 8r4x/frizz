@@ -49,7 +49,7 @@ test("L opens a pane with a scannable code, and any other key closes it", () => 
   assert.match(opened, /\x1b\[\?1049h/, "uses the alternate screen, so the QR is not left in scrollback");
   assert.match(opened, /frizz_code=abc/, "prints the URL for anyone who cannot scan");
   assert.match(opened, /Single use, expires in 300s/);
-  assert.match(opened, /▀/, "renders the QR itself");
+  assert.match(opened, /[▀▄]/, "renders the QR itself");
 
   tty.written.length = 0;
   tty.input.emit("data", "x");
