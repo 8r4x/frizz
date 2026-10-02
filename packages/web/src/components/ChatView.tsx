@@ -222,6 +222,11 @@ export function ThreadView({ slug, onStatusApplied, onClose, virtualized = false
   const board = useBoard()
   const thread = threadBySlug(board, slug)
   const phone = useIsMobile() && onClose !== undefined
+  // THE RAIL IS BESIDE THIS THREAD — the /full page's own column (`showReturnToQueue` is passed by
+  // StandaloneThreadPage alone), at a width that draws its side pane. `splitFileViewer` is that width:
+  // the page sets it off the same SPLIT_MIN_PX the `split:` variant shows the pane at. A thread opened
+  // in a drawer over /full is not the rail's thread, so it keeps its own ops strip.
+  const { splitFileViewer } = useSnapshot(store)
   return (
     <div className="flex-1 min-h-0 flex flex-col">
       {phone ? (
@@ -229,13 +234,13 @@ export function ThreadView({ slug, onStatusApplied, onClose, virtualized = false
       ) : (
         <ThreadHeader slug={slug} onStatusApplied={onStatusApplied} onClose={onClose} showReturnToQueue={showReturnToQueue} />
       )}
-      <ChatView slug={slug} virtualized={virtualized} phone={phone} />
+      <ChatView slug={slug} virtualized={virtualized} phone={phone} railBeside={showReturnToQueue && splitFileViewer} />
       {thread && !phone && <ThreadLifecycleFooter thread={thread} sticky safeArea onArchived={onStatusApplied} />}
     </div>
   )
 }
 
-function ChatView({ slug, virtualized, phone = false }: { slug: string; virtualized: boolean; phone?: boolean }) {
+function ChatView({ slug, virtualized, phone = false, railBeside = false }: { slug: string; virtualized: boolean; phone?: boolean; railBeside?: boolean }) {
   const board = useBoard()
   const thread = threadBySlug(board, slug)
   // ANSWERED registered questions stay in the transcript, greyed, where their open card stood (see
@@ -645,7 +650,11 @@ function ChatView({ slug, virtualized, phone = false }: { slug: string; virtuali
           onTerminal={copyTerminalCommand}
           // The phone draws no ops rows under the prompt (mockup v2 §2): a sub-agent is already a row
           // in the transcript and on the board, and the registered files and links are the ⋯ sheet's.
-          ops={phone ? undefined : <BackgroundOpsStrip slug={slug} transcriptShells={liveTranscriptShells} className="px-1 pt-1.5" />}
+          // Nor does /full while its rail stands beside the column (maintainer 2026-10-02: "in the full
+          // screen view we don't need to show … the active shells and subagents and all of that beneath
+          // the prompt box anymore 'cause it's already showing up in the sidebar to the right"). The
+          // rail (FocusRail) lists every row this strip would, its saved links and Codex shells included.
+          ops={phone || railBeside ? undefined : <BackgroundOpsStrip slug={slug} transcriptShells={liveTranscriptShells} className="px-1 pt-1.5" />}
           phoneBarOverride={phone && openQuestions.length > 0
             ? (api) => <PhoneAnswerBar count={openQuestions.length} onAnswer={() => setAnswerSheetOpen(true)} onReply={api.editReply} />
             : undefined}
@@ -4159,6 +4168,7 @@ export function PermPolicyDenialCard({ policy, denies }: { policy: NonNullable<T
 // position under the composer reads as ambient status rather than transcript content). A 30s tick keeps
 // elapsed fresh even when no board push arrives (a steadily-running op changes nothing to re-push).
 // Saved links/files follow their own divider; they keep the strip visible without starting that tick.
+// The /full page draws none of it while its rail is on screen: the rail carries the same rows.
 export function BackgroundOpsStrip({
   slug,
   className = "px-4 pb-2 pt-1",

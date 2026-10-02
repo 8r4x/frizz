@@ -1,9 +1,10 @@
-import { FileDiff, Folder } from "lucide-react"
+import { ExternalLink, FileDiff, FileText, Folder } from "lucide-react"
 import { useEffect, useMemo, useRef } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { useSnapshot } from "valtio"
-import { isDirectSubAgent, type EditedFile, type ThreadView } from "@frizz/shared"
+import { isDirectSubAgent, type EditedFile, type ThreadLinkView, type ThreadView } from "@frizz/shared"
 import { useProjectDir, useTranscript } from "../hooks.ts"
+import { mergeBackgroundShells } from "../lib/childOps.ts"
 import { editedFileTree, flattenEditedFileTree } from "../lib/editedFileTree.ts"
 import { newestFileChangeKey } from "../lib/editedFilesRefresh.ts"
 import { openLocalPath } from "../lib/local-file-links.ts"
@@ -12,6 +13,7 @@ import { useNowMs } from "../lib/liveClock.ts"
 import { prefs } from "../lib/prefs.ts"
 import { PRIMER } from "../lib/primer.ts"
 import { AgentRow, BgShellRow, GithubWatchRow, ON_CAP, TimerRow, WaitGrid, WaitRow, type WaitGroup } from "./AwaitingBackgroundCard.tsx"
+import { transcriptBackgroundShells } from "./ChatView.tsx"
 
 // THE FULLSCREEN PAGE'S OPERATIONAL RAIL — what is going on in this thread, listed beside the transcript
 // (maintainer 2026-08-28): its live sub-agents, its running background shells, the pull requests and
@@ -36,6 +38,13 @@ import { AgentRow, BgShellRow, GithubWatchRow, ON_CAP, TimerRow, WaitGrid, WaitR
 // alone and twenty-two of them read as twenty-two names from nowhere. The tree's rows lay out by FLEX
 // inside one cell of the shared grid rather than as subgrid rows, because a subgrid cannot indent —
 // see ROW_FLEX in AwaitingBackgroundCard — and the file rows are still the card's own WaitRow.
+//
+// IT REPLACES THE OPS STRIP UNDER THE PROMPT BOX while it is on screen (maintainer 2026-10-02: "it's
+// already showing up in the sidebar to the right"), so it has to carry every row that strip did — or
+// hiding the strip hides the row. Two had been the strip's alone: the files and links the worker SAVED
+// for the human (`thread.links`, the same list the phone's ⋯ sheet calls "Files and links"), and a
+// Codex thread's background execs, which reach the page through its transcript rather than the board's
+// shell telemetry — merged here exactly as the strip merges them (mergeBackgroundShells).
 //
 // It floats on the page background and is VERTICALLY CENTERED like the sidebar, rather than pinned to
 // the top — the maintainer's call on the mockup's top-anchored version. The liveness readouts that
@@ -126,6 +135,51 @@ function FileRow({ file, name, depth }: { file: EditedFile; name: string; depth:
   )
 }
 
+// A file or link the worker SAVED for the human (`mcp__frizz__link`). The card's row shape again: the
+// label it was saved under is the name, and the status is the short reading of where it goes — a URL's
+// host, a file's basename — with the full target in the tooltip. Never the whole URL or path: the status
+// track is shared by every row in the grid, so one long target there would truncate every name above it
+// (see WaitGrid's `fit-content(50%)`). A file opens in the page's viewer, a link in a new tab.
+function SavedLinkRow({ link }: { link: ThreadLinkView }) {
+  const client = useQueryClient()
+  if (link.kind === "link") {
+    return (
+      <WaitRow
+        testKind="link"
+        testId={link.id}
+        mark={<ExternalLink size={12} className={`${ON_CAP} text-muted-60`} />}
+        name={link.label}
+        href={link.target}
+        title={link.target}
+        status={urlHost(link.target)}
+      />
+    )
+  }
+  return (
+    <WaitRow
+      testKind="link"
+      testId={link.id}
+      // No ink trim, unlike FileRow's: that row lays out by flex, and this one sits in the shared
+      // subgrid, whose mark track puts every name on one column whatever the glyph inks. Measured
+      // there (ink-gaps, dsf 6): mark→name 8.00px, the shell row's own 8.00; the URL row's 7.67.
+      mark={<FileText size={12} className={`${ON_CAP} text-muted-60`} />}
+      name={link.label}
+      onOpen={() => openLocalPath(link.target)}
+      onPrewarm={() => prewarmLocalFile(client, link.target)}
+      title={link.target}
+      status={link.target.split("/").filter(Boolean).pop() ?? link.target}
+    />
+  )
+}
+
+function urlHost(target: string): string {
+  try {
+    return new URL(target).host || target
+  } catch {
+    return target
+  }
+}
+
 // How long the rail waits after a file-changing edge before it re-reads: a worker's edits come in bursts,
 // and one read after the burst is the whole point.
 const FILES_REFRESH_DEBOUNCE_MS = 1500
@@ -168,7 +222,11 @@ export function FocusRail({ thread }: { thread: ThreadView }) {
   // with work in flight. The card keeps its own set: it counts the results the thread still AWAITS, and
   // a rested child has already delivered its result.
   const agents = (thread.subAgents ?? []).filter((a) => isDirectSubAgent(a) && (a.state === "running" || a.state === "rested"))
-  const shells = (thread.bgShells ?? []).filter((s) => s.state === "running")
+  // The board's shells PLUS the transcript's: a Codex background exec is transcript-native and the board
+  // reports none for it (ChatView.transcriptBackgroundShells). A Claude shell arrives through both, and
+  // the merge reconciles the two on its launch id, so it still draws once.
+  const transcriptShells = useMemo(() => transcriptBackgroundShells(transcript.data?.messages ?? []), [transcript.data?.messages])
+  const shells = mergeBackgroundShells(thread.bgShells ?? [], transcriptShells).filter((s) => s.state === "running")
   // AN ARCHIVED THREAD WATCHES NOTHING, though its registrations stay armed for the day it is reopened:
   // the scheduler neither fires its timers nor polls its PRs and issues (scheduler.ts evalTimers, and the
   // per-watcher liveness skip). Rowed here, a past-due timer read "firing…" forever and a PR row froze on
@@ -189,6 +247,9 @@ export function FocusRail({ thread }: { thread: ThreadView }) {
     { head: "Pull requests", rows: prs.map((w) => <GithubWatchRow key={w.id} watch={w} />) },
     { head: "Issues", rows: issues.map((w) => <GithubWatchRow key={w.id} watch={w} />) },
     { head: "Timers", rows: timers.map((w) => <TimerRow key={w.id} watch={w} now={now} />) },
+    // Saved references, not waits, so they follow every live row. Ahead of the edited files, though:
+    // the worker chose these for the human to keep at hand, and the tree can run to dozens of rows.
+    { head: "Files and links", rows: (thread.links ?? []).map((l) => <SavedLinkRow key={l.id} link={l} />) },
     {
       head: "Edited files",
       // One row of the grid, holding the whole tree (its own column, its own indents).
