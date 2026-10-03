@@ -9,7 +9,7 @@ import type { ServerEvent } from "@frizz/shared"
 import { AwaitingHint, QUESTION_FENCE_RETIRED_AT } from "@frizz/shared"
 import { permMarkerPath, type Project } from "./project.ts"
 import { degradeIfAwaitingAnswer, deriveNeedsYou } from "./board.ts"
-import { parseLine, applyRecord, applyEvent, computeTurn, newTailState, createTailer, defaultBrokerDaemonAlive, hasQuestionBlock, isClaudeAuthErrorText, isRealUserMessage, parseSignalFence, markerDecision, unwrapShellCommand, FOREIGN_FRESH_MS, parseWindowsShellHolderReport, probeShellsAlive, windowsShellHolderCommand } from "./tailer.ts"
+import { parseLine, applyRecord, applyEvent, computeTurn, newTailState, createTailer, defaultBrokerDaemonAlive, hasQuestionBlock, isClaudeAuthErrorText, isRealUserMessage, parseSignalFence, markerDecision, pendingCallDeadline, unwrapShellCommand, FOREIGN_FRESH_MS, parseWindowsShellHolderReport, probeShellsAlive, windowsShellHolderCommand } from "./tailer.ts"
 import { claudeBrokerRecordPath } from "./backend/claude-broker-host.ts"
 import type { AgentBackend, NormalizedEvent } from "./backend/types.ts"
 import { createClaudeBackend } from "./backend/claude.ts"
@@ -1272,6 +1272,75 @@ test("tailer: surfaces running vs stale sub-agents (via injected mtime) and clea
   t.tick()
   assert.deepEqual(t.get("t")?.subAgents, [])
   assert.ok(h.changes.n > before2, "clearing a sub-agent marks the board dirty")
+})
+
+// ---- a child blocked in a wait it SIZED ITSELF (2026-10-03) ----
+//
+// A sub-agent waiting on a Rust build ran `until grep -q '^DONE' …; do sleep 15; done` under
+// `timeout: 3600000`, wrote its tool_use, and then nothing for the hour it asked for — so at minute 15
+// it read "stale", a grey dot beside its working siblings. Shaped from that transcript's tail: the
+// staleness window now opens at the call's own deadline, and ONLY for an unresolved Bash call that
+// names a `timeout`.
+function childBash(id: string, input: { [key: string]: unknown }, at = "2026-07-01T00:00:05.000Z", messageId = "msg_wait") {
+  return JSON.stringify({ type: "assistant", timestamp: at, message: { id: messageId, stop_reason: "tool_use", content: [{ type: "tool_use", id, name: "Bash", input }] } })
+}
+function childResult(id: string, at = "2026-07-01T00:00:06.000Z") {
+  return JSON.stringify({ type: "user", timestamp: at, message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "ok" }] } })
+}
+const HOUR_WAIT = { command: "until grep -q '^DONE' /tmp/gates.log; do sleep 15; done", description: "Wait for the Rust gates to finish", timeout: 3_600_000 }
+
+test("pendingCallDeadline: an unresolved Bash call that names a timeout is blocked until issue + timeout", () => {
+  const issued = Date.parse("2026-07-01T00:00:05.000Z")
+  const thinking = JSON.stringify({ type: "assistant", timestamp: "2026-07-01T00:00:04.000Z", message: { id: "msg_wait", content: [{ type: "thinking", thinking: "…" }] } })
+  const attachment = JSON.stringify({ type: "attachment", timestamp: "2026-07-01T00:00:04.500Z", attachment: { type: "todo_reminder" } })
+  // The exact order the real tail had: the response's thinking record, an attachment, then the call.
+  assert.deepEqual(pendingCallDeadline([childResult("toolu_prev"), thinking, attachment, childBash("toolu_wait", HOUR_WAIT)].join("\n")), { settled: true, deadline: issued + 3_600_000 })
+  assert.deepEqual(pendingCallDeadline([childBash("toolu_wait", HOUR_WAIT), childResult("toolu_wait")].join("\n")), { settled: true }, "a call with its result is over")
+  assert.deepEqual(pendingCallDeadline(childBash("toolu_wait", { command: "cargo build" })), { settled: true }, "no timeout ⇒ the harness bounds it, not this")
+  assert.deepEqual(pendingCallDeadline(childBash("toolu_wait", { ...HOUR_WAIT, timeout: "3600000" })), { settled: true }, "an unusable timeout declares nothing")
+  // Parallel calls in one response: the resolved one says nothing, the pending one sets the deadline.
+  assert.deepEqual(pendingCallDeadline([
+    childBash("toolu_quick", { command: "ls", timeout: 9_999_000 }),
+    childBash("toolu_wait", HOUR_WAIT),
+    childResult("toolu_quick"),
+  ].join("\n")), { settled: true, deadline: issued + 3_600_000 })
+  // An EARLIER message's call cannot still be running once a later message exists.
+  assert.deepEqual(pendingCallDeadline([
+    childBash("toolu_old", HOUR_WAIT, "2026-07-01T00:00:01.000Z", "msg_old"),
+    childBash("toolu_new", { command: "ls" }, "2026-07-01T00:00:05.000Z", "msg_new"),
+  ].join("\n")), { settled: true })
+  // A prompt after the call: the transcript has moved past it.
+  assert.deepEqual(pendingCallDeadline([childBash("toolu_wait", HOUR_WAIT), JSON.stringify({ type: "user", message: { role: "user", content: "go on" } })].join("\n")), { settled: true })
+  // Clamped to the worker's own ceiling (BASH_MAX_TIMEOUT_MS, 24h): no record can buy more.
+  assert.deepEqual(pendingCallDeadline(childBash("toolu_wait", { ...HOUR_WAIT, timeout: 30 * 86_400_000 })), { settled: true, deadline: issued + 86_400_000 })
+  // A window that holds only results (it began after the call's own record) has no verdict to give.
+  assert.deepEqual(pendingCallDeadline(childResult("toolu_other")), { settled: false })
+})
+
+test("tailer: a sub-agent blocked in a Bash wait it sized itself reads running until 15 minutes past that call's deadline", () => {
+  const child = (lines: string[]) => {
+    const h = harness()
+    h.storage.upsertSession(row())
+    const transcript = join(h.logDir, "child.jsonl")
+    writeFileSync(transcript, lines.map((l) => l + "\n").join(""))
+    fixture(h.logDir, "sid", [IN_FLIGHT, JSON.stringify(dispatch("toolu_bg", "child")), JSON.stringify(launch("toolu_bg", transcript))])
+    // The child's last append is its own tool_use record, as on the real tail.
+    const t = makeTailer(h, { mtimeMs: () => Date.parse("2026-07-01T00:00:05.000Z") })
+    return (iso: string) => {
+      h.clock.ms = Date.parse(iso)
+      t.tick()
+      return t.get("t")?.subAgents[0]?.state
+    }
+  }
+
+  const waiting = child([childBash("toolu_wait", HOUR_WAIT)])
+  assert.equal(waiting("2026-07-01T00:20:00.000Z"), "running", "20 minutes into the hour it declared: quiet, not dead")
+  assert.equal(waiting("2026-07-01T01:10:00.000Z"), "running", "past the deadline but inside the window that opens there")
+  assert.equal(waiting("2026-07-01T01:20:00.000Z"), "stale", "15 minutes past its own deadline with nothing written: lost")
+
+  // The controls: the plain clock, unchanged, for every child not blocked in a call that named a timeout.
+  assert.equal(child([childBash("toolu_wait", { command: "cargo build" })])("2026-07-01T00:20:00.000Z"), "stale", "a call that names no timeout keeps the 15-minute clock")
+  assert.equal(child([childBash("toolu_wait", HOUR_WAIT), childResult("toolu_wait")])("2026-07-01T00:20:00.000Z"), "stale", "a wait that already returned buys nothing")
 })
 
 test("tailer: a `stopped` recovery notification clears EVERY orphaned sub-agent through the real tick loop", () => {

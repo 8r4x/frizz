@@ -257,8 +257,10 @@ function hasLiveBackgroundWork(tele: SessionTelemetry | undefined): boolean {
 
 // The same question asked of a thread whose owning process is PROVABLY GONE, where `stale` stops being
 // ambiguous. Everywhere else `stale` means only "we lost this child's completion signal and its
-// transcript has been quiet past the 15-minute ceiling" — it could equally be a finished child whose
-// notification never landed, which is why hasLiveBackgroundWork deliberately counts `running` alone.
+// transcript has been quiet past its window" — 15 minutes, counted from the deadline of the Bash wait it
+// declared when it is blocked in one (tailer.ts pendingCallDeadline). It could equally be a finished
+// child whose notification never landed, which is why hasLiveBackgroundWork deliberately counts
+// `running` alone.
 // Against a dead daemon there is nothing left to be ambiguous about: an Agent child ran IN-PROCESS
 // inside that `claude`, so a still-unretired child of it was lost, full stop.
 //
@@ -287,7 +289,8 @@ function hasUnretiredOwnAgents(tele: SessionTelemetry | undefined): boolean {
 // provider control and works everywhere. The flag answers "can this be KILLED", not "can this be clicked".
 // A DEAD BROKER DAEMON TOOK ITS SUB-AGENTS WITH IT — they are in-process children of that process — so a
 // child the fold still reads `running` is shown `stale` in the VIEW. The fold only ages one out after
-// SUBAGENT_STALE_MS of silence, and until then the rail spun a child (and offered to stop it) beside a
+// SUBAGENT_STALE_MS of silence (or that long past the deadline of a Bash wait it declared, which can
+// be hours away), and until then the rail spun a child (and offered to stop it) beside a
 // thread the same view carded as crashed. View-only on purpose: `crashed`, `headlessLostWork` and the
 // queue read the raw telemetry above, which is where that meaning lives. (Shells need none of this:
 // bgShellViews already empties on a dead owner.)
