@@ -410,34 +410,48 @@ changed direction through the message/follow-up path and reconcile conflicting r
 returns. Contain an unstable service by restarting only the affected service, never by stopping
 a writer. Only an explicit user instruction naming the interruption permits it.`
 
-// The `lightbox` paragraph announces a CAPABILITY rather than a rule — no worker writes a fence it has
-// never heard of (packages/web/src/components/Lightbox.tsx draws it). "Above any closing signal fence"
-// because parseSignalFence (tailer.ts) is END-anchored: a gallery written after a ```done would turn the
-// sign-off into prose and leave the rest unsigned. And not INSIDE one either: its own closing ``` line
-// would close the signal fence early. The two surfaces named after it are the ones a worker cannot see
-// from its own messages — an option's description and a Markdown file draw galleries too
-// (useLightboxIslands). An awaiting fence's body is deliberately not among them: the resting card reads
-// it through capFenceBody's 500 characters, which a few absolute paths outrun.
-const VISUAL_EVIDENCE = `## Visual evidence in handoffs
+// The ONE way a worker shows the human a picture or a video (maintainer 2026-10-03: "this should be the
+// dominant way for agents to be servicing images to the user, and other forms of multimedia … like
+// videos … The agent should be told that, by default, everything is collapsed"). The first paragraph is
+// the fact a worker cannot see from inside its own session: Frizz folds every tool call into a collapsed
+// digest, a picture a tool returned included (web lib/toolActivity.isToolActivityException), so a
+// screenshot it took is on nobody's screen. Until then a worker could reasonably believe its image Read
+// had shown the human the shot, because it once did.
+//
+// Only the fence is taught. A Markdown \`![](…)\` and a bare path line still render, for every transcript
+// written before this, but a second way to do the same thing is a second thing to choose between.
+// SendUserFile is not taught either: it is not in a dispatched worker's tool list, and no transcript on
+// the maintainer's machine has ever called it.
+//
+// "Above any closing signal fence" because parseSignalFence (tailer.ts) is END-anchored: a gallery
+// written after a \`\`\`done would turn the sign-off into prose and leave the rest unsigned. And not INSIDE
+// one either: its own closing \`\`\` line would close the signal fence early. The surfaces named after it
+// are the ones a worker cannot see from its own messages — the done card's registered body, an option's
+// description and a Markdown file draw galleries too (useLightboxIslands). An awaiting fence's body is
+// deliberately not among them: the resting card reads it through capFenceBody's 500 characters, which a
+// few absolute paths outrun. The path advice is the headless-browser skill's: \`/tmp\` is emptied at boot,
+// and a card is read hours or days later.
+const VISUAL_EVIDENCE = `## Showing the human pictures and video
 
-Embed the small, decisive set of screenshots in your handoff with meaningful alt text rather than
-listing raw paths — \`![descriptive alt](/absolute/path.png)\`. Frizz renders eligible absolute local
-image paths through its guarded local-image proxy; only eligible workspace or explicitly allowlisted
-image files can embed, and a path outside that safe boundary stays non-navigable. Do not bulk-embed
-irrelevant screenshots. Always keep a concise textual finding alongside them, so the handoff still
-reads when images are unavailable.
-
-Several screenshots go in ONE \`lightbox\` fence — an image path per line, an optional caption after
-it — which Frizz draws as a gallery the human clicks through. Keep it above any closing signal fence:
+Your tool calls are out of the human's sight: Frizz folds every one into a collapsed row they would
+have to open, a picture a tool returned included — a screenshot you took, an image you read. So nothing
+you LOOK at is on their screen. A picture or a video reaches them only when you put it there, in a
+\`lightbox\` fence: one path per line, an optional caption after it, drawn as a gallery they open, zoom
+into and page through. One file is a fence of one line.
 
 \`\`\`lightbox
 /abs/before.png  Before the fix
 /abs/after.png   After the fix
+/abs/flow.webm   The whole flow, recorded
 \`\`\`
 
-The same fence is a gallery inside an \`mcp__frizz__ask\` option's description — the screens a design
-would ship, beside the choice — and in a Markdown report the human opens in Frizz, where a relative path
-resolves against the report's folder.`
+Pictures are \`.png\`, \`.jpg\`, \`.gif\` or \`.webp\`; videos are \`.mp4\`, \`.webm\` or \`.mov\`, and play in
+the viewer. Show the small, decisive set, from a path that outlives a reboot — your scratch directory,
+never \`/tmp\` — and keep a one-line finding beside it, so the message still reads without it. Keep the
+fence above any closing signal fence, never inside one. The same fence is a gallery in the body of
+\`mcp__frizz__done\`, in an \`mcp__frizz__ask\` option's description — the screens a design would ship,
+beside the choice — and in a Markdown report the human opens in Frizz, where a relative path resolves
+against the report's folder.`
 
 
 const REGISTERED_LINKS = `## Saved links and files
@@ -818,16 +832,7 @@ its outbox and is unaffected:
 - \`mcp__frizz__timer\` is your own alarm clock: \`action: "set"\` with \`prompt\` plus \`in_seconds\` or an
   ISO \`at\`, delivered exactly once, mid-turn, and then gone. You may hold MANY at once; \`action: "list"\`
   shows them and \`action: "cancel"\` withdraws one by id. Use it to come back to something at a specific
-  time — never to poll something a background shell, a sub-agent or a monitor can wake you for.
-
-## Showing the human files and images
-
-\`SendUserFile\` is the preferred way to show IMAGES, and the only reliable one for screenshots under
-your scratch directory. Pass an ARRAY to render several in one captioned block:
-\`SendUserFile({ files: ["/abs/a.png", "/abs/b.png"], caption: "before vs after", status: "proactive" })\`
-— \`"proactive"\` when the human is away and should get a push, else \`"normal"\`. Reach for it eagerly
-whenever you have screenshots worth showing: it renders the whole decisive set inline, which a terminal
-agent cannot do.`,
+  time — never to poll something a background shell, a sub-agent or a monitor can wake you for.`,
   // § Bounded native delegation describes the NATIVE `spawn_agent` surface, which frizz does not
   // configure at all. The only `-c` overrides frizz puts on a codex app-server are the frizz MCP mount
   // and `default_tools_approval_mode` (backend/codex-mcp.ts `codexAppServerArgv`, the single argv
