@@ -23,11 +23,18 @@
 // tablet.png (768×1024) and wide.png (1600×600). Any screenshots at those shapes will do; the stack's own
 // pages, captured with scripts/shot.mjs at `--dsf=1`, are what it was written against.
 //
+// The LAST turn is what a worker's own looking and showing look like since 2026-10-03, when the lightbox
+// became the one way to put media in front of the human: an image `Read` and a `take_screenshot` whose
+// pictures must FOLD into the "Ran N tool calls" digest, a SendUserFile delivery drawn open as a gallery,
+// and a fence that holds a picture and two videos, played through the real route's byte ranges. It needs
+// tour.mp4 and tour.webm in `--shots` too — any short screen recording, H.264 and VP9; without them the
+// turn is skipped.
+//
 // Follows the frizz-stack recipe: a session row + a JSONL the REAL tailer reads.
 //
 // Usage: nub scripts/seed-lightbox-gallery.mjs --home=/abs/temp-home --shots=/abs/dir [--slug=x] [--cwd=/abs/project]
 import { execFileSync } from "node:child_process"
-import { existsSync, mkdirSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join, resolve } from "node:path"
 import { createRpcClient } from "./lib/rpc-client.mjs"
 import { resolveSandboxDb, sessionProjectColumns } from "./lib/sandbox-db.mjs"
@@ -91,6 +98,21 @@ writeFileSync(report, [
   "```",
   "",
 ].join("\n"))
+
+const toolUse = (blocks) => ({
+  parentUuid: null, isSidechain: false, type: "assistant", uuid: uuid(), timestamp: now(), session_id: sessionId, cwd,
+  message: {
+    model: "claude-opus-5", id: `msg_${uuid()}`, type: "message", role: "assistant",
+    content: blocks, stop_reason: "tool_use",
+    usage: { input_tokens: 2, output_tokens: 60 },
+  },
+})
+const toolResults = (results) => ({
+  parentUuid: null, isSidechain: false, type: "user", uuid: uuid(), timestamp: now(), session_id: sessionId, cwd,
+  message: { role: "user", content: results },
+})
+const pngBlock = (path) => ({ type: "image", source: { type: "base64", media_type: "image/png", data: readFileSync(path).toString("base64") } })
+const videos = ["tour.mp4", "tour.webm"].map((name) => join(shots, name)).filter((path) => existsSync(path))
 
 const records = [
   user("TASK:\nShow me the board before and after, at every width."),
@@ -165,6 +187,38 @@ const records = [
   ].join("\n")),
 ]
 
+if (videos.length === 2) {
+  records.push(
+    user("Check the pages again and show me the whole flow."),
+    // The worker LOOKING: two pictures it took to check its own work. Neither may reach the human's
+    // screen — both fold into the digest, one click from their collapsed cards.
+    toolUse([
+      { type: "text", text: "Reading back the captures first." },
+      { type: "tool_use", id: "toolu_lbmedia_read", name: "Read", input: { file_path: shot("desktop-a.png") } },
+      { type: "tool_use", id: "toolu_lbmedia_shot", name: "mcp__chrome-devtools__take_screenshot", input: { fullPage: false } },
+    ]),
+    toolResults([
+      { type: "tool_result", tool_use_id: "toolu_lbmedia_read", content: [pngBlock(shot("desktop-a.png"))] },
+      { type: "tool_result", tool_use_id: "toolu_lbmedia_shot", content: [{ type: "text", text: "Took a screenshot of the current page's viewport." }, pngBlock(shot("phone.png"))] },
+    ]),
+    // The worker SHOWING, the old way: a delivery stays an open card, drawn as a gallery.
+    toolUse([
+      { type: "tool_use", id: "toolu_lbmedia_send", name: "SendUserFile", input: { files: [shot("tablet.png"), shot("wide.png")], caption: "The two pages that changed" } },
+    ]),
+    toolResults([{ type: "tool_result", tool_use_id: "toolu_lbmedia_send", content: "Sent 2 files." }]),
+    // …and the one way: a fence, with the recording in it.
+    assistant([
+      "The whole flow, recorded, beside where it starts:",
+      "",
+      "```lightbox",
+      `${shot("desktop-b.png")}  Where it starts`,
+      `${videos[0]}  The tour, recorded (MP4)`,
+      `${videos[1]}  The same tour (WebM)`,
+      "```",
+    ].join("\n")),
+  )
+}
+
 writeFileSync(join(jsonlDir, `${sessionId}.jsonl`), records.map((r) => JSON.stringify(r)).join("\n") + "\n")
 
 execFileSync("sqlite3", [
@@ -172,7 +226,7 @@ execFileSync("sqlite3", [
   `INSERT OR REPLACE INTO session (${sessionCols}slug, session_id, thread_name, spawned_at, title, title_auto, backend, model, effort, permission_mode, state, unread, exited, archived, rested_at)
    VALUES (${sessionVals}'${slug}', '${sessionId}', 'frizz-${slug}', '${now()}', 'Lightbox galleries', 0, 'claude', 'opus', 'high', 'default', 'open', 1, 0, 0, '${now()}')`,
 ])
-console.log(`seeded ${slug} → ${sessionId} (pair, three widths, single, long set with a missing file, loose pictures, a done card, a report; shots=${shots})`)
+console.log(`seeded ${slug} → ${sessionId} (pair, three widths, single, long set with a missing file, loose pictures, a done card, a report${videos.length === 2 ? ", folded tool pictures, a delivery, a gallery with two videos" : ""}; shots=${shots})`)
 
 if (flags.origin) {
   const api = createRpcClient(flags.origin)
