@@ -485,6 +485,10 @@ it — which Frizz draws as a gallery the human clicks through. Keep it above an
 /abs/after.png   After the fix
 ```
 
+The same fence is a gallery inside an `mcp__frizz__ask` option's description — the screens a design
+would ship, beside the choice — and in a Markdown report the human opens in Frizz, where a relative path
+resolves against the report's folder.
+
 ## Saved links and files
 
 Use `mcp__frizz__link` with `label` and `target` for a dev server, working document, report or download

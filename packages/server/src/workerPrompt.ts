@@ -413,7 +413,11 @@ a writer. Only an explicit user instruction naming the interruption permits it.`
 // The `lightbox` paragraph announces a CAPABILITY rather than a rule — no worker writes a fence it has
 // never heard of (packages/web/src/components/Lightbox.tsx draws it). "Above any closing signal fence"
 // because parseSignalFence (tailer.ts) is END-anchored: a gallery written after a ```done would turn the
-// sign-off into prose and leave the rest unsigned.
+// sign-off into prose and leave the rest unsigned. And not INSIDE one either: its own closing ``` line
+// would close the signal fence early. The two surfaces named after it are the ones a worker cannot see
+// from its own messages — an option's description and a Markdown file draw galleries too
+// (useLightboxIslands). An awaiting fence's body is deliberately not among them: the resting card reads
+// it through capFenceBody's 500 characters, which a few absolute paths outrun.
 const VISUAL_EVIDENCE = `## Visual evidence in handoffs
 
 Embed the small, decisive set of screenshots in your handoff with meaningful alt text rather than
@@ -429,7 +433,11 @@ it — which Frizz draws as a gallery the human clicks through. Keep it above an
 \`\`\`lightbox
 /abs/before.png  Before the fix
 /abs/after.png   After the fix
-\`\`\``
+\`\`\`
+
+The same fence is a gallery inside an \`mcp__frizz__ask\` option's description — the screens a design
+would ship, beside the choice — and in a Markdown report the human opens in Frizz, where a relative path
+resolves against the report's folder.`
 
 
 const REGISTERED_LINKS = `## Saved links and files
