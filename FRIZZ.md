@@ -39,7 +39,7 @@ not a narrative. Open with one of these four tokens, bolded, then the outcome in
 | **Fixed** | done and landed on local `main` | ` ```done ` |
 | **Fixed, except** | landed, but something named is still open | bare rest |
 | **Not fixed** | investigated, nothing landed — say what's next | bare rest |
-| **Needs you** | blocked on a human-owned call | `mcp__frizz__ask`, then rest normally |
+| **Needs you** | blocked on a human-owned call, or on an act only the human can perform | `mcp__frizz__ask` for a call, `mcp__frizz__instruct` for an act, then rest normally |
 
 **None of these apply while the instruction still has parts left — then you do not write up at all,
 you keep working in the same turn.** This table is for a turn that has genuinely ended; reaching for
@@ -54,12 +54,11 @@ when the human asked for X is not progress on X. Two rows above describe INCOMPL
 The token and the sign-off must agree; the sign-off is the glance-level signal and the token is its
 one-line caption. `**Fixed** — the divider now shows the child's description, `749a37b` on `main`.`
 
-**A pending question does not stop a rest, and `mcp__frizz__ask` IS the sign-off.** Register the question, write the `**Needs you**` handoff, and come to rest normally. Frizz draws every open question at the rest it was asked, whether the write-up mentions it or not — the card draws itself, so the handoff carries the reasoning around the ask, never a copy of it (prose that restates a registered question draws nothing, and the free-form ` ```question ` fence is retired — a fence with a question in its body is plain prose, not a card and not a sign-off). To place a registered question inside the prose, write an EMPTY fence naming its id — ` ```question qst_ab12cd34 ` on one line, ` ``` ` on the next; one marker per question, and a question with no marker renders at the tail of the rest. `unask` the ones that no longer matter.
+**A pending question does not stop a rest, and `mcp__frizz__ask` IS the sign-off.** Register the question, write the `**Needs you**` handoff, and come to rest normally. Frizz draws every open question at the rest it was asked, whether the write-up mentions it or not — the card draws itself, so the handoff carries the reasoning around the ask, never a copy of it (prose that restates a registered question draws nothing, and the free-form ` ```question ` fence is retired — a fence with a question in its body is plain prose, not a card and not a sign-off). To place a registered question inside the prose, write an EMPTY fence naming its id — ` ```question qst_ab12cd34 ` on one line, ` ``` ` on the next; one marker per question, and a question with no marker renders at the tail of the rest. `unask` the ones that no longer matter. An open instruction (`mcp__frizz__instruct`, steps the human performs) stands exactly the same way: it is the sign-off, its card draws itself, the human's "Done" or "Couldn't do it" wakes you, and `uninstruct` withdraws it.
 
 **`**Fixed**` is for work that LANDED, not for work you concluded.** An investigation whose output is a recommendation — merge this, decline that, post this comment, pick one of these two — is `**Needs you**`, because the act it recommends is still ahead of it and a ` ```done ` card files the recommendation away unread. Same for a draft you wrote but did not send, and for follow-up work you discovered: DO it first — dispatch a sub-agent, whose result comes back to you, so it lands on your card — and ASK second. `mcp__frizz__spawn_thread` is the LAST resort, for an effort that genuinely cannot ride on your card, because a spawned thread reports only to the maintainer and nothing it learns returns to you or its siblings.
 
-Then, in this order and nothing else: **what the human must do** (a restart, a re-pull, a follow-up
-they own), the **judgment calls** worth catching, and what you deliberately did NOT do. Root cause,
+Then, in this order and nothing else: **what the human must do** (a restart, a re-pull, a follow-up they own — handed over as steps with `mcp__frizz__instruct`, which keeps them on the board until the human reports back, so the prose carries only why), the **judgment calls** worth catching, and what you deliberately did NOT do. Root cause,
 measurements and evidence tables earn their place only when they change what the human does next —
 otherwise they belong in your scratch directory, which is where the durable account lives. A screenshot is
 evidence, not narration: embed the decisive one or two, not the set.
@@ -69,7 +68,7 @@ written twice. The CARD is the ledger — one bullet per deliverable, what shipp
 nothing else. The PROSE is only what a ledger cannot hold: reasoning, caveats, the thing they have to
 do. If a sentence would read the same in either, it belongs in exactly one of them.
 
-**And nothing in a finished handoff points vaguely forward.** "One thing to carry forward…", "a follow-up could…", "someone should add a changelog line before this ships" — a forward-reference parked in a dismissal card is clutter: too weak for anyone to act on, too present to ignore, and archived unread. Every such thought resolves four ways and there is no fifth — do it (a sub-agent reports back to you), ask about it with `mcp__frizz__ask`, spawn it onto its own card as a last resort, or DROP it. What is not worth a card is not worth a sentence. A thing the maintainer must do NOW is not a dangling idea; that is the handoff, and it has its own slot above.
+**And nothing in a finished handoff points vaguely forward.** "One thing to carry forward…", "a follow-up could…", "someone should add a changelog line before this ships" — a forward-reference parked in a dismissal card is clutter: too weak for anyone to act on, too present to ignore, and archived unread. Every such thought resolves four ways and there is no fifth — do it (a sub-agent reports back to you), ask about it with `mcp__frizz__ask`, spawn it onto its own card as a last resort, or DROP it. What is not worth a card is not worth a sentence. A thing the maintainer must do NOW is not a dangling idea either: it goes to them as steps with `mcp__frizz__instruct`, the slot above.
 
 (Written 2026-07-31 after a handoff opened on root cause and buried the verdict under a differential
 table, two screenshots and a decision list — every fact was present and the maintainer still had to
