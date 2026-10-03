@@ -52,8 +52,9 @@ const unanswered = (what: "folder" | "image"): DirectoryPick => ({
 //
 // So the browser asks for one when the pointer or keyboard focus reaches an "Add a project" control
 // (`warmDirectoryPicker`, through the `projectPickWarm` RPC), and the click only shows it. A panel
-// nobody shows is killed after WARM_PANEL_IDLE_MS, because while it waits it holds ~150 MB — osascript
-// ~60 MB and its own instance of the panel service ~90 MB: fine for a minute, not for the server's life.
+// nobody shows is killed after WARM_PANEL_IDLE_MS, because while it waits it holds ~55 MB of physical
+// footprint — osascript 31 MB and its own instance of the panel service 24 MB, both gone with it
+// (`footprint`; RSS reads ~150 MB, most of it shared framework pages): fine for a minute, not forever.
 
 /** How long a panel built ahead of a click waits for it. */
 const WARM_PANEL_IDLE_MS = 60_000
