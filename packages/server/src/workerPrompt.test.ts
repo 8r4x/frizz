@@ -71,7 +71,7 @@ test("the contract teaches ask as the only way to ask, and the empty marker as t
     const c = prompt.replace(/\s+/g, " ")
     assert.match(c, /THERE IS NO `question` FENCE ANY MORE/)
     assert.match(c, /A QUESTION HAS NO FENCE ANY MORE/)
-    assert.match(c, /WAITING ON A PERSON IS A REGISTERED QUESTION/)
+    assert.match(c, /WAITING ON A PERSON TO DECIDE IS A REGISTERED QUESTION/)
     assert.match(c, /AN OPEN REGISTERED QUESTION IS THE HANDBACK/)
     // The marker, taught by example, and its two properties: optional, and one per question.
     assert.match(prompt, /```question qst_ab12cd34\n```/)
@@ -88,5 +88,32 @@ test("the contract teaches ask as the only way to ask, and the empty marker as t
     assert.doesNotMatch(c, /was retired 2026-08-30;\s*a marker you still write draws nothing/)
     assert.doesNotMatch(c, /surface it as a ` ```question `/)
     assert.doesNotMatch(c, /ask a ```question/)
+  }
+})
+
+// STEPS FOR THE HUMAN (2026-10-03) ride the awaiting fence, and the contract has to route to them at the
+// places a worker decides how to hand over — or "what the human must do" stays a sentence in a handoff
+// that nothing tracks and nothing wakes on.
+test("the contract teaches steps: as the wait on a human's act, and routes to it where a worker hands over", () => {
+  for (const backend of ["claude", "codex"] as const) {
+    const prompt = buildWorkerPrompt(backend)
+    const c = prompt.replace(/\s+/g, " ")
+    // Taught by example, in the grammar the parser reads: one `- ` item per step under the key.
+    assert.match(prompt, /```awaiting\n {2}title: Sign in to npm so the release can publish\n {2}steps:\n {4}- Run `npm login --auth-type=web`/)
+    // Its properties: verbatim, names the human (so no other name and no `for:`), always queues, and the
+    // two verbs come back as the human's own reply.
+    assert.match(c, /The `title:` and `steps:` values are the exceptions: frizz reads them verbatim/)
+    assert.match(c, /Steps NAME THE HUMAN as the wait, so the fence needs no other name and no `for:`/)
+    assert.match(c, /it always puts the thread in their queue/)
+    assert.match(c, /\*\*Done\*\* and \*\*Couldn't do it\*\*/)
+    assert.match(c, /\(`steps:` count: they name the human\.\)/)
+    // A decision is still a question; an act is steps — at every place the two used to blur.
+    assert.match(c, /A DECISION you need from them is a question, never a fence/)
+    assert.match(c, /WAITING ON ONE TO ACT IS `steps:`/)
+    assert.match(c, /Once nothing is left to DECIDE and only the human's act remains, the steps go to them under `steps:`/)
+    assert.match(c, /Something the human must DO \("re-pull before you restart"\) is not a dangling idea either: hand it to them under `steps:`/)
+    assert.doesNotMatch(c, /that is the handoff, and it belongs in the prose/)
+    // And the registered first cut is gone from the contract entirely.
+    assert.doesNotMatch(c, /mcp__frizz__instruct|\buninstruct\b/)
   }
 })

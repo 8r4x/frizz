@@ -3102,9 +3102,11 @@ export function createRouter(ctx: AppContext) {
           throw new Error(
             "This thread is running autonomously — decide it yourself and proceed. Its standing " +
             `instruction is:\n\n${goal}\n\nSay which way you went and why in your write-up, so the ` +
-            "human can course-correct. If the call is genuinely theirs — something destructive, " +
-            "irreversible, or an act you are not permitted to take — say so in your final message " +
-            "instead; a thread on autonomous mode is not a thread with no human reading it.",
+            "human can course-correct. If the call is genuinely theirs — something destructive or " +
+            "irreversible — say so in your final message instead; a thread on autonomous mode is not a " +
+            "thread with no human reading it. An ACT only the human can perform (a sign-in, an approval, " +
+            "a button you may not press) is not a call: list it under `steps:` in an ```awaiting fence, " +
+            "which autonomous mode allows.",
           )
         }
         // REFUSED, not stored, and named one fault at a time in the worker's own vocabulary — a shape
