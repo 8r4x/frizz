@@ -2259,8 +2259,9 @@ export function needsInputRequired(spawnedAt: string | number | undefined | null
 // Frizz restart — so a reminder naming it would send that worker to a call that fails. BY DISPATCH
 // INSTANT for the reason QUESTION_FENCE_RETIRED_AT gives, and an unknown instant reads as LEGACY — the
 // reminder it then gets is the one it can satisfy. The instant is no EARLIER than the commit landing on
-// `main`: a worker dispatched before that ran on code that had no tool to give it. (A server still
-// running older code after it can dispatch one too, until it restarts; no instant can see that.)
+// `main`: a worker dispatched before that ran on code that had no tool to give it. (A Frizz still
+// running an older release after it dispatches one too, until it runs a release that carries the tool;
+// no instant can see that.)
 export const INSTRUCT_AVAILABLE_AT = "2026-10-03T21:45:00Z"
 
 /** Was this thread's worker dispatched with `mcp__frizz__instruct` — at or after INSTRUCT_AVAILABLE_AT? */
