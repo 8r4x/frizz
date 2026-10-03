@@ -1509,9 +1509,12 @@ export function liveOpsLines(ops?: SignoffLiveOps, needsInput = false): string[]
 
 /** The reminder for a fenceless rest. `needsInput` is the worker's contract (`needsInputRequired`): a
  *  worker dispatched under the `needs_input:` cut is taught the key, and one dispatched before it is
- *  taught the grammar it can actually satisfy. */
-export function signoffNudgeMessage(ops?: SignoffLiveOps, needsInput = false): string {
-  const base = needsInput ? SIGNOFF_NUDGE_MESSAGE_NEEDS_INPUT : SIGNOFF_NUDGE_MESSAGE
+ *  taught the grammar it can actually satisfy. `instruct` is the same kind of answer for the
+ *  `mcp__frizz__instruct` verb (`instructAvailable`), and is only ever true alongside `needsInput`. */
+export function signoffNudgeMessage(ops?: SignoffLiveOps, needsInput = false, instruct = false): string {
+  const base = needsInput
+    ? (instruct ? SIGNOFF_NUDGE_MESSAGE_INSTRUCT : SIGNOFF_NUDGE_MESSAGE_NEEDS_INPUT)
+    : SIGNOFF_NUDGE_MESSAGE
   const lines = liveOpsLines(ops, needsInput)
   if (lines.length) {
     lines.push("", "An ```awaiting fence names only what you are ACTUALLY waiting on, one such list per kind, plus")
@@ -1567,7 +1570,14 @@ function signoffNudgeAwaitingLines(needsInput: boolean): string[] {
   ]
 }
 
-function signoffNudgeText(needsInput: boolean): string {
+/** The `mcp__frizz__instruct` bullet, for a worker dispatched with the verb (`instructAvailable`). */
+const SIGNOFF_NUDGE_INSTRUCT_LINES = [
+  "- `mcp__frizz__instruct` — the human must PERFORM something you cannot: sign in, approve, merge, press a",
+  "  button you may not. Register the steps, written to be followed cold, then rest normally — an open",
+  "  instruction is the sign-off, and the human's \"Done\" or \"Couldn't do it\" wakes you.",
+]
+
+function signoffNudgeText(needsInput: boolean, instruct = false): string {
   return [
   `${SIGNOFF_NUDGE_MARKER} Nothing about your task has changed, and no new work is being asked of you.`,
   "",
@@ -1601,6 +1611,7 @@ function signoffNudgeText(needsInput: boolean): string {
   "- `mcp__frizz__ask` — you need the human. NOT a fence: the ```question fence is retired, and a fence",
   "  with a question in its body is plain prose. Register it (options with one-line trade-offs, the",
   "  recommended one first), then rest normally — an open registered question is the sign-off.",
+  ...(instruct ? SIGNOFF_NUDGE_INSTRUCT_LINES : []),
   "- `` ```done `` — genuinely FINISHED. A DISMISSAL: the card is filed away and nobody looks again, so",
   "  if anything is still owed, it is not done. Body: 1-3 sentences, then bullets, each opening with a",
   "  **bolded verb phrase**.",
@@ -1634,6 +1645,8 @@ function signoffNudgeText(needsInput: boolean): string {
 export const SIGNOFF_NUDGE_MESSAGE = signoffNudgeText(false)
 /** The same reminder for a worker dispatched under the `needs_input:` contract (NEEDS_INPUT_REQUIRED_AT). */
 export const SIGNOFF_NUDGE_MESSAGE_NEEDS_INPUT = signoffNudgeText(true)
+/** …and for a worker also dispatched with `mcp__frizz__instruct` (INSTRUCT_AVAILABLE_AT). */
+export const SIGNOFF_NUDGE_MESSAGE_INSTRUCT = signoffNudgeText(true, true)
 
 // ---- THE FENCE CORRECTIONS (scheduler SOURCE 12) -------------------------------------------------
 // Frizz refusing a park and telling the worker why: a fence naming something that is not running, a
@@ -2238,6 +2251,21 @@ export function needsInputRequired(spawnedAt: string | number | undefined | null
   const at = typeof spawnedAt === "number" ? spawnedAt : Date.parse(spawnedAt)
   if (!Number.isFinite(at)) return false
   return at >= Date.parse(NEEDS_INPUT_REQUIRED_AT)
+}
+
+// THE `instruct` VERB (2026-10-03) — steps only the human can perform, registered as a row
+// (AskedInstructions). The worker contract teaches it from this instant on, and so does the sign-off
+// reminder: an older worker's MCP server was spawned without the tool, so a reminder naming it would
+// send that worker to a call that fails. BY DISPATCH INSTANT for the reason QUESTION_FENCE_RETIRED_AT
+// gives, and an unknown instant reads as LEGACY — the reminder it then gets is the one it can satisfy.
+export const INSTRUCT_AVAILABLE_AT = "2026-10-03T21:00:00Z"
+
+/** Was this thread's worker dispatched with `mcp__frizz__instruct` — at or after INSTRUCT_AVAILABLE_AT? */
+export function instructAvailable(spawnedAt: string | number | undefined | null): boolean {
+  if (spawnedAt === undefined || spawnedAt === null) return false
+  const at = typeof spawnedAt === "number" ? spawnedAt : Date.parse(spawnedAt)
+  if (!Number.isFinite(at)) return false
+  return at >= Date.parse(INSTRUCT_AVAILABLE_AT)
 }
 
 // WHY A ROW AND NOT A FENCE. A ```question block has the lifetime of the MESSAGE carrying it: the
