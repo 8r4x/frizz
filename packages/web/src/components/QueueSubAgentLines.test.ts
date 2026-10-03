@@ -27,6 +27,8 @@ test("queue cards show BOTH running and stale child work, and no model+effort ta
   assert.match(html, /data-queue-subagents/)
   assert.match(html, /Complete GVS fix differential repro/)
   assert.match(html, /data-running-indicator="queue-subagent"/)
+  // Tagged like the drawer's strip and like the shell/File rows that continue this column on the card.
+  assert.equal(html.match(/frizz-kind-tag[^"]*">AGENT</g)?.length, 2, "every child line carries its AGENT tag")
   // The model+effort tag was DELETED from these lines on 2026-07-27 (maintainer): the profile belongs
   // to the prompt box's own control one line above, not repeated on every child line beneath it.
   assert.doesNotMatch(html, /data-agent-profile/)
