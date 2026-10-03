@@ -133,6 +133,8 @@ workaround — keep the real HOME and isolate only the PROJECT (`--home=$HOME --
 keychain is why a bare temp HOME fails `AUTH_REQUIRED:claude` (the macOS login keychain lives at
 `$HOME/Library/Keychains`, so redirecting HOME hides the credential even though it is user-scoped).
 
+**The same redirect puts a modal dialog on the maintainer's screen.** A process in a sandbox HOME that starts the real `/Applications/Google Chrome.app` — headless or not, typically a worker taking screenshots — makes Chrome store its "Chrome Safe Storage" key, macOS finds no default keychain under that HOME, and the system shows *"Keychain Not Found — A keychain cannot be found to store "Chrome.""* for every Chrome start. The dialog also holds Chrome at exit, so a worker that restarts Chrome opens another (2026-10-03: two harness runs, 13 SecurityAgent processes, maintainer: *"It's shown up hundreds of times"*). Chrome that puppeteer launches is immune, because puppeteer passes `--use-mock-keychain --password-store=basic`. Before a sandbox worker may start real Chrome, symlink `$HOME/Library/Keychains` into the sandbox HOME (`HOME=<sandbox> security default-keychain` must then print the login keychain; a recursive delete of the sandbox removes the link, never its target), or have the worker pass both flags. `log show --last 3h --style compact --predicate 'process == "SecurityAgent"'` tells you whether a dialog fired.
+
 Clean up after yourself: kill the stack by exact PID, kill the leftover `claude` broker processes (find
 them by their `FRIZZ_STATE_DIR=<that project id>` in `ps`), then
 `rm -rf ~/.frizz/projects/<id> <throwaway-repo> ~/.claude/projects/<cwd-slug>`. Do NOT write settings
