@@ -82,3 +82,11 @@ test("only a one-line description is a muted line; a multi-line one is the optio
   assert.equal(oneLineDescription("- one\n- two"), undefined)
   assert.equal(oneLineDescription(undefined), undefined)
 })
+
+// An instruction (`mcp__frizz__instruct`) shares the open list but has nothing to pick: its card answers
+// it in one click, so the sheet never makes a step of it.
+test("an instruction is never a step of the sheet", () => {
+  const ins = view("ins_a", { kind: "instructions", question: "Sign in to npm", steps: ["Run `npm login`."] })
+  assert.deepEqual(answerSteps([ins, POST], staged({})).map((s) => s.key), [stepKey("q2", ROOT_PATH)])
+  assert.deepEqual(answerSteps([ins], staged({})), [])
+})

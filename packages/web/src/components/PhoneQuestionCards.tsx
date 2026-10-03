@@ -1,6 +1,6 @@
 import { createContext, useContext } from "react"
 import { Keyboard } from "lucide-react"
-import type { RegisteredQuestionView } from "@frizz/shared"
+import type { AnswerableQuestion } from "../lib/registeredQuestion.ts"
 import { useMarkdownHtml } from "../lib/useMarkdown.ts"
 import { LinkedHtml } from "./LinkedHtml.tsx"
 
@@ -19,6 +19,9 @@ import { LinkedHtml } from "./LinkedHtml.tsx"
 // would also compact the /full page on a narrow window, which keeps the desktop chrome — and its own
 // per-card Send — on every width. `numberOf` numbers a question by its place among the thread's open
 // questions, so a card placed inside a message and its sibling at the rest still count 1, 2.
+//
+// AN INSTRUCTION IS NOT ONE OF THESE (`mcp__frizz__instruct`, 2026-10-03): it has nothing to pick, so it
+// draws its own interactive card here as on desktop, takes no number, and is not counted by the bar.
 export interface PhoneQuestions {
   numberOf: (id: string) => number
 }
@@ -31,7 +34,7 @@ export function usePhoneQuestions(): PhoneQuestions | null {
 
 /** Several open registered questions in ONE bordered card, a hairline between each — the mockup's
  *  shape for the questions a rest asked together. A placed card (inside a message) is a list of one. */
-export function CompactQuestionList({ questions }: { questions: readonly RegisteredQuestionView[] }) {
+export function CompactQuestionList({ questions }: { questions: readonly AnswerableQuestion[] }) {
   const phone = usePhoneQuestions()
   if (questions.length === 0) return null
   return (
@@ -48,7 +51,7 @@ export function CompactQuestionList({ questions }: { questions: readonly Registe
   )
 }
 
-function CompactQuestion({ q, n }: { q: RegisteredQuestionView; n: number }) {
+function CompactQuestion({ q, n }: { q: AnswerableQuestion; n: number }) {
   const html = useMarkdownHtml(q.spec.question)
   const options = q.spec.options ?? []
   return (

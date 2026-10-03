@@ -1,8 +1,8 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import type { AskedQuestion } from "@frizz/shared"
+import type { AskedInstructions, AskedQuestion } from "@frizz/shared"
 import type { BlockAnswer } from "./questionBlocks.ts"
-import { ROOT_PATH, childPath, liveQuestionNodes, nodeAnswered, registeredAnswer, settledQuestionNodes, toParsedQuestion } from "./registeredQuestion.ts"
+import { ROOT_PATH, childPath, instructionAnswer, isAnswerable, isInstruction, liveQuestionNodes, nodeAnswered, registeredAnswer, settledQuestionNodes, toParsedQuestion } from "./registeredQuestion.ts"
 
 const blank: BlockAnswer = { chosen: null, chosenSet: [], text: "" }
 const pick = (i: number): BlockAnswer => ({ chosen: i, chosenSet: [], text: "" })
@@ -231,4 +231,22 @@ test("free text settles as text with no option chips, and a multi keeps every to
 test("a chosen label the spec no longer names is kept as text rather than lost", () => {
   const nodes = settledQuestionNodes(STORE, { questionId: "qst_a", question: STORE.question, chosen: ["Postgres"] })
   assert.deepEqual(nodes[0].settled, { chosenIdxs: [], text: "Postgres" })
+})
+
+// ---- instructions (`mcp__frizz__instruct`, 2026-10-03) ----
+
+const SIGN_IN: AskedInstructions = { kind: "instructions", question: "Sign in to npm", steps: ["Run `npm login`."] }
+
+test("an instruction is never staged: a typed note does not fold into the question batch", () => {
+  const ins = { id: "ins_a", spec: SIGN_IN }
+  assert.equal(registeredAnswer(ins, new Map([[ROOT_PATH, typed("signed in")]])), undefined)
+  assert.equal(isInstruction({ ...ins, askedAt: "2026-10-03T00:00:00.000Z" }), true)
+  assert.equal(isAnswerable({ ...ins, askedAt: "2026-10-03T00:00:00.000Z" }), false)
+  assert.equal(isAnswerable({ id: "qst_a", spec: STORE, askedAt: "2026-10-03T00:00:00.000Z" }), true)
+})
+
+test("an instruction's reply restates its title, names the outcome, and carries the note only when there is one", () => {
+  const ins = { id: "ins_a", spec: SIGN_IN }
+  assert.deepEqual(instructionAnswer(ins, "Done", "  signed in  "), { questionId: "ins_a", question: "Sign in to npm", chosen: ["Done"], text: "signed in" })
+  assert.deepEqual(instructionAnswer(ins, "Couldn't do it", "   "), { questionId: "ins_a", question: "Sign in to npm", chosen: ["Couldn't do it"] })
 })

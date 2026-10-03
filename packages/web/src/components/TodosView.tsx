@@ -3,6 +3,7 @@ import { useSnapshot } from "valtio"
 import { ChevronsUpDown, Inbox } from "lucide-react"
 import type { ThreadView, BoardSnapshot, RegisteredQuestionView, TranscriptMessage } from "@frizz/shared"
 import { questionFencesLive } from "@frizz/shared"
+import { isAnswerable } from "../lib/registeredQuestion.ts"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { queueCardTargetY, showToast, store } from "../store.ts"
 import { pageScrollY } from "../lib/pageScrollLock.ts"
@@ -1740,8 +1741,9 @@ const QueueCard = memo(function QueueCard({ thread, leaving, frozen, onResolve, 
         // With an open ask the box is the deliberate escape hatch, so say so — otherwise "Reply to the
         // agent…" reads as a second way to answer the question rather than a way around it. A
         // REGISTERED question counts: it is answered on this same card, so with one open the box is the
-        // same escape hatch it is for a fenced one.
-        placeholder={answerable || (thread.questions?.length ?? 0) > 0 ? "Or skip the questions and reply…" : "Reply to the agent…"}
+        // same escape hatch it is for a fenced one. An instruction does not — there is no question to
+        // skip, and a reply beside one is just a reply.
+        placeholder={answerable || (thread.questions ?? []).some(isAnswerable) ? "Or skip the questions and reply…" : "Reply to the agent…"}
         submitOverride={sendMessage}
         ops={
           <>

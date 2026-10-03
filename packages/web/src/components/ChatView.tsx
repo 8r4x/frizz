@@ -81,6 +81,7 @@ import { MessageRow, MessageStamp } from "./MessageTimestamp.tsx"
 import { TRANSCRIPT_META_LABEL_CLASS, transcriptMetaChevronClass } from "../lib/transcriptMetaLabels.ts"
 import { InteractionStack } from "./InteractionCards.tsx"
 import { RegisteredAnsweringProvider, RegisteredQuestionCard, RegisteredQuestionStack, SettledQuestionCard, SettledQuestionStack, openQuestionsOf, useSettledQuestions, type SettledQuestion } from "./RegisteredQuestionCards.tsx"
+import { isAnswerable } from "../lib/registeredQuestion.ts"
 // The shared card chrome and THE question card both live in their own modules now, so every
 // surface can render them without importing the thread view. QuestionBlockCard in particular is
 // shared with the native-AskUserQuestion path, which reaches it through InteractionCards.tsx —
@@ -250,10 +251,13 @@ function ChatView({ slug, virtualized, phone = false, railBeside = false }: { sl
   const settledQuestions = useSettledQuestions(thread)
   const openQuestions = useMemo(() => openQuestionsOf(thread, settledQuestions), [thread, settledQuestions])
   // ON A PHONE the registered cards are read-only and answering is a sheet (PhoneQuestionCards,
-  // RegisteredAnswerSheet), opened from the bottom bar's "Answer". Null off the phone page.
+  // RegisteredAnswerSheet), opened from the bottom bar's "Answer". Null off the phone page. Only the
+  // QUESTIONS go through the sheet: an instruction answers on its own card, so it takes no number, no
+  // step and no place in the bar's count.
+  const answerableQuestions = useMemo(() => openQuestions.filter(isAnswerable), [openQuestions])
   const phoneQuestions = useMemo<PhoneQuestions | null>(
-    () => (phone ? { numberOf: (id) => openQuestions.findIndex((q) => q.id === id) + 1 } : null),
-    [phone, openQuestions],
+    () => (phone ? { numberOf: (id) => answerableQuestions.findIndex((q) => q.id === id) + 1 } : null),
+    [phone, answerableQuestions],
   )
   const [answerSheetOpen, setAnswerSheetOpen] = useState(false)
   const running = thread?.runtime === "running" || thread?.runtime === "spawning"
@@ -656,12 +660,12 @@ function ChatView({ slug, virtualized, phone = false, railBeside = false }: { sl
           // the prompt box anymore 'cause it's already showing up in the sidebar to the right"). The
           // rail (FocusRail) lists every row this strip would, its saved links and Codex shells included.
           ops={phone || railBeside ? undefined : <BackgroundOpsStrip slug={slug} transcriptShells={liveTranscriptShells} className="px-1 pt-1.5" />}
-          phoneBarOverride={phone && openQuestions.length > 0
-            ? (api) => <PhoneAnswerBar count={openQuestions.length} onAnswer={() => setAnswerSheetOpen(true)} onReply={api.editReply} />
+          phoneBarOverride={phone && answerableQuestions.length > 0
+            ? (api) => <PhoneAnswerBar count={answerableQuestions.length} onAnswer={() => setAnswerSheetOpen(true)} onReply={api.editReply} />
             : undefined}
         />
       </div>
-      {phone && answerSheetOpen && <RegisteredAnswerSheet questions={openQuestions} onClose={() => setAnswerSheetOpen(false)} />}
+      {phone && answerSheetOpen && <RegisteredAnswerSheet questions={answerableQuestions} onClose={() => setAnswerSheetOpen(false)} />}
     </div>
     </PhoneQuestionsContext.Provider>
     </RegisteredAnsweringProvider>
