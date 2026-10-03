@@ -150,7 +150,9 @@ function AwaitingBackgroundBanner({ thread, onSnooze, onSnoozeFailed }: {
   onSnooze: () => void // optimistically dismiss the card (fade it out now)
   onSnoozeFailed: () => void // reinstate the card if the server declines
 }) {
-  return <AwaitingBackgroundCard thread={thread} onSnooze={onSnooze} onSnoozeFailed={onSnoozeFailed} />
+  // A STEPS reply leaves the queue the same way: the card fades the instant "Done" is sent, and comes
+  // back if the send fails.
+  return <AwaitingBackgroundCard thread={thread} onSnooze={onSnooze} onSnoozeFailed={onSnoozeFailed} onReplied={onSnooze} onReplyFailed={onSnoozeFailed} />
 }
 
 // Keyboard: a card's inputs are ordinary DOM focus — click in to type, Esc blurs, ⌘/Ctrl-Enter submits

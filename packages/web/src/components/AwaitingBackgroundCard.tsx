@@ -26,12 +26,12 @@
 // and the parent genuinely resumes; measured 15/15 times on a live worker thread, with idle windows as
 // short as 0.13s. This card is what makes that alternation legible.)
 import { Fragment, useEffect, useState, type ReactNode } from "react"
-import { Bot, ChevronRight, CircleAlert, CircleCheck, CircleDashed, CircleDot, CircleSlash, CircleX, Clock, GitMerge, GitPullRequestClosed, Hourglass, TerminalSquare } from "lucide-react"
+import { Bot, ChevronRight, CircleAlert, CircleCheck, CircleDashed, CircleDot, CircleSlash, CircleX, Clock, GitMerge, GitPullRequestClosed, Hourglass, ListTodo, TerminalSquare } from "lucide-react"
 import type { AwaitingHint, GithubIssueStatus, GithubWatchStatus, ThreadView, ThreadWatchView } from "@frizz/shared"
-import { awaitingFenceTitle, isDirectSubAgent } from "@frizz/shared"
+import { awaitingFenceTitle, awaitingSteps, isDirectSubAgent } from "@frizz/shared"
 import { githubRefUrl } from "../lib/githubRef.ts"
 import { noteGithubRefs } from "../lib/githubHovercards.ts"
-import { AWAITING_FALLBACK_TITLE, AWAITING_NO_PROSE, awaitingProseBlock, prWatchRefs } from "../lib/awaitingPresentation.ts"
+import { AWAITING_FALLBACK_TITLE, AWAITING_NO_PROSE, awaitingProseBlock, prWatchRefs, STEPS_FALLBACK_TITLE } from "../lib/awaitingPresentation.ts"
 import { compactElapsedSince, formatCompactElapsed } from "../lib/durationLabels.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { useMarkdownHtml } from "../lib/useMarkdown.ts"
@@ -41,6 +41,7 @@ import { threadLifecycleAvailability } from "../lib/threadLifecycle.ts"
 import { ICON_LABEL_NUDGE } from "../lib/iconAlign.ts"
 import { PRIMER, PRIMER_DANGER_LINK } from "../lib/primer.ts"
 import { LinkedHtml } from "./LinkedHtml.tsx"
+import { StepsList, StepsReply } from "./AwaitingSteps.tsx"
 import { CARD_ACTION_EXPLAINER, CardActions, CARD_BODY, CARD_LINK, CARD_PRIMARY_ACTION, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
 
 // Name what the thread is ACTUALLY waiting on. Three real cases, and the sentence has to be true in all
@@ -145,7 +146,7 @@ export function awaitingBackgroundLabel(
   thread: Pick<ThreadView, "subAgents" | "bgShells" | "watches">,
   hints: readonly AwaitingHint[],
 ): string {
-  return awaitingFenceTitle(hints) ?? (shellsAlone(thread) ? "Background shells running" : AWAITING_FALLBACK_TITLE)
+  return awaitingFenceTitle(hints) ?? (awaitingSteps(hints).length > 0 ? STEPS_FALLBACK_TITLE : shellsAlone(thread) ? "Background shells running" : AWAITING_FALLBACK_TITLE)
 }
 
 /** Background shells and nothing else — the one shape with a title of its own. An armed timer
@@ -167,6 +168,16 @@ function armedTimerWatches(thread: Pick<ThreadView, "watches">): ThreadWatchView
  *  heading; stating that once here beats an optional chain at every reader below. */
 const NO_LIVE_WORK: Pick<ThreadView, "id" | "subAgents" | "bgShells" | "watches"> = { id: "", subAgents: [], bgShells: [], watches: [] }
 const NO_HINTS: readonly AwaitingHint[] = []
+
+/** Is the thread resting on EXACTLY these steps right now — the board's own last fence, at rest? Only
+ *  then may the card offer the steps' verbs. A fence the transcript hands in (`fence`) is a rest the
+ *  thread may already have left: the tailer clears `lastFence` on the human's very next message, so a
+ *  steps card drawn after the reply is a record of what was asked, and a second Done would send twice. */
+export function restingOnSteps(thread: Pick<ThreadView, "runtime" | "lastFence"> | undefined, steps: readonly string[]): boolean {
+  if (steps.length === 0 || thread?.runtime !== "turn-idle" || thread.lastFence?.kind !== "awaiting") return false
+  const live = awaitingSteps(thread.lastFence.hints)
+  return live.length === steps.length && live.every((step, i) => step === steps[i])
+}
 
 /** The watched PRs that get a CHIP: the `prs:` the fence names which the wait table does not already
  *  row. A registered PR is a github row below — verdict glyph, check counts, the same link — so a chip
@@ -989,7 +1000,7 @@ function AwaitingSnooze({ thread, onSnooze, onSnoozeFailed }: {
   )
 }
 
-export function AwaitingBackgroundCard({ thread, fence, onSnooze, onSnoozeFailed }: {
+export function AwaitingBackgroundCard({ thread, fence, onSnooze, onSnoozeFailed, onReplied, onReplyFailed }: {
   // `id` joins the Pick because the rows OPEN things now: a shell's output drawer and a sub-agent's
   // transcript are both addressed by the parent thread's slug. `lastFence` joined on 2026-08-24: the
   // fence's prose is this card's opening stratum, so the card reads it directly off the thread.
@@ -1018,12 +1029,20 @@ export function AwaitingBackgroundCard({ thread, fence, onSnooze, onSnoozeFailed
   // to fade. Their absence no longer decides whether the Snooze RENDERS — see AwaitingSnooze.
   onSnooze?: () => void
   onSnoozeFailed?: () => void
+  // The same optimistic exit for a STEPS verb: replying "Done" takes the thread out of the queue just as
+  // a snooze does, and puts it back if the send fails. Queue-only, like the pair above.
+  onReplied?: () => void
+  onReplyFailed?: () => void
 }) {
   // The thread's live work, as the rows and the heading read it. A card with no owning thread has none
   // of it — no rows, no shell-only heading — rather than a branch at every use below.
   const work = thread ?? NO_LIVE_WORK
   const stated = fence ?? (thread?.lastFence?.kind === "awaiting" ? thread.lastFence : undefined)
   const hints = stated?.hints ?? NO_HINTS
+  // `steps:` — the fence is waiting on the HUMAN to perform these (2026-10-03). Drawn under the prose on
+  // every surface; the verbs that answer them only while the thread rests on them (restingOnSteps).
+  const steps = awaitingSteps(hints)
+  const stepsLive = thread !== undefined && restingOnSteps(thread, steps)
   const waiting = awaitsResults(work)
   // THE WORKER'S OWN HANDOFF, opening the card (maintainer 2026-08-24: "the rendered message at the
   // top of the card, followed by a horizontal divider, followed by all of the awaited items"). Until
@@ -1052,7 +1071,11 @@ export function AwaitingBackgroundCard({ thread, fence, onSnooze, onSnoozeFailed
   // shape that still reaches this card through ChatView's fence block — a thread the human has already
   // bg-snoozed — which would offer a park the mutation refuses (router.snoozeAwaitingBackground guards
   // on the rest instant). A thread running past its rest draws no awaiting card at all since 2026-09-24.
-  const snoozable = thread !== undefined && showsRestingCard(thread) && threadLifecycleAvailability(thread).snooze
+  //
+  // NOT ON A STEPS CARD. The thread is waiting on the reader, so the footer carries the steps' own verbs;
+  // an event-snooze ("until new activity") would hide a card whose only new activity is the reader's own
+  // reply. The lifecycle footer's wall-clock Snooze still parks it for anyone who means "not now".
+  const snoozable = thread !== undefined && steps.length === 0 && showsRestingCard(thread) && threadLifecycleAvailability(thread).snooze
   return (
     // The SAME shell as every transcript card (TranscriptCard). This card stacks directly under an
     // awaiting fence card on a queue card, and it used to be a visibly different object there —
@@ -1064,7 +1087,9 @@ export function AwaitingBackgroundCard({ thread, fence, onSnooze, onSnoozeFailed
       // heading and the hourglass, which is honest for it — a thread holding a sub-agent or a PR
       // watcher genuinely IS waiting on something to come back. A per-kind glyph would rebuild the
       // per-kind card the consolidation removed, exactly as a per-kind title did.
-      icon={shellsAlone(work) ? TerminalSquare : Hourglass}
+      // STEPS TAKE A THIRD, and only because their wait is of a different kind: the reader is the one
+      // being waited on, so the card is a to-do rather than a status.
+      icon={steps.length > 0 ? ListTodo : shellsAlone(work) ? TerminalSquare : Hourglass}
       // WRAPPED AT ANY CHARACTER, because this heading can now be WORKER-AUTHORED. Every other card in
       // the family carries a code-authored label, so the header's wrap-don't-truncate rule never had to
       // survive an unbreakable token; a `title:` naming a branch, a URL or a base64 id is one. Measured
@@ -1089,8 +1114,9 @@ export function AwaitingBackgroundCard({ thread, fence, onSnooze, onSnoozeFailed
         // lines, which never reach the reader — has no handoff to open on, and if it has no rows either
         // the card would be a bare heading. That is reachable only off a thread with nothing live (a
         // sub-agent's own transcript above all), and the sentence below is what it says instead.
-        : groups.length === 0 && !hasUnrowedWork(work) ? <p className={CARD_BODY}>{AWAITING_NO_PROSE}</p>
+        : groups.length === 0 && !hasUnrowedWork(work) && steps.length === 0 ? <p className={CARD_BODY}>{AWAITING_NO_PROSE}</p>
         : null}
+      {steps.length > 0 && <StepsList steps={steps} />}
       {unrowed.length > 1 && (
         // `gap-x-3` rather than a punctuation separator: the refs are a set of targets, not a sentence,
         // and a wrapped "·" stranded at a line end reads as a typo. They wrap onto as many lines as the
@@ -1145,7 +1171,9 @@ export function AwaitingBackgroundCard({ thread, fence, onSnooze, onSnoozeFailed
           the control reads as chrome under the content rather than as one more row of it. This card
           introduced the band on 2026-08-31; every card with a verb wears it since 2026-09-30. It draws
           on EVERY surface the card is live on; a thread with no snooze verb draws the card without it. */}
-      {snoozable ? (
+      {stepsLive ? (
+        <StepsReply slug={thread.id} sessionId={thread.sessionId} steps={steps} onReplied={onReplied} onReplyFailed={onReplyFailed} />
+      ) : snoozable ? (
         <CardActions data-awaiting-snooze>
           <AwaitingSnooze thread={thread} onSnooze={onSnooze} onSnoozeFailed={onSnoozeFailed} />
         </CardActions>

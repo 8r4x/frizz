@@ -99,6 +99,16 @@ export function mergeIntoDraft(key: string, text: string): void {
 export function projectDraftScope(projectDir: string | undefined): string {
   return encodeURIComponent(projectDir || "unresolved-project")
 }
+
+/** FNV-1a over the steps, joined by a separator no step can contain — a key, not a security boundary. */
+function stepsKeyHash(steps: readonly string[]): string {
+  let h = 0x811c9dc5
+  for (const ch of steps.join("\u0000")) {
+    h ^= ch.codePointAt(0) ?? 0
+    h = Math.imul(h, 0x01000193) >>> 0
+  }
+  return h.toString(36)
+}
 export const draftKey = {
   dispatch: (projectDir: string | undefined) => `dispatch:${projectDraftScope(projectDir)}:new`,
   followUp: (projectDir: string | undefined, slug: string, sessionId?: string) => `followup:${projectDraftScope(projectDir)}:${encodeURIComponent(slug)}:${encodeURIComponent(sessionId ?? "unowned")}`,
@@ -110,6 +120,10 @@ export const draftKey = {
   // asked it (that is the whole point of it being a row), and a half-typed answer must survive the
   // worker restarting under it.
   question: (projectDir: string | undefined, slug: string, id: string, path: string) => `question:${projectDraftScope(projectDir)}:${encodeURIComponent(slug)}:${encodeURIComponent(id)}:${encodeURIComponent(path)}`,
+  // The note box on a card handing the human `steps:`. A fence has no id, so the steps themselves are
+  // the key: a fence re-posting the same steps keeps the half-typed note, and different steps start a
+  // new one. Hashed so a long list cannot push the key past the store's 512-character entry limit.
+  steps: (projectDir: string | undefined, slug: string, sessionId: string | undefined, steps: readonly string[]) => `steps:${projectDraftScope(projectDir)}:${encodeURIComponent(slug)}:${encodeURIComponent(sessionId ?? "unowned")}:${stepsKeyHash(steps)}`,
   // There is no `settings:` key: the Settings drawer autosaves, so the server IS its draft store. A
   // sessionStorage mirror could only ever hold the ~500ms of typing the debounce has not written yet,
   // and it outlived the save — a stale entry that reappeared over the stored value on the next open.
