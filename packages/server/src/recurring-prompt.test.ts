@@ -766,6 +766,28 @@ test("stop hook: a REGISTERED done ends the arrangement exactly as the fence doe
   } finally { reopened.close() }
 })
 
+// AN OPEN INSTRUCTION HOLDS THE GOAL (2026-10-03), and an open QUESTION does not — the pair is the test,
+// because the difference is the kind. A Goal can answer a question ("decide it yourself" is what it says),
+// but it cannot perform a step only the human can: "keep going" has no answer until they act, and their
+// click on the card is the wake that ends the rest. Firing over it is the 2026-08-12 loop, where a worker
+// that needed a human to merge was bumped until it escaped through a done fence on an unmerged PR.
+test("stop hook: an open INSTRUCTION holds the Goal; an open question beside the same rest does not", async () => {
+  const askedAtMs = Date.parse("2026-08-02T00:00:01.000Z")
+  const h = scheduler({ pendingQuestion: false }, { now: at("2026-08-02T00:00:05.000Z") })
+  try {
+    h.storage.askThreadQuestion({ id: "ins_1", slug: h.slug, spec: JSON.stringify({ kind: "instructions", question: "Sign in to npm", steps: ["Run `npm login`"] }), askedAtMs })
+    await h.s.tick()
+    assert.deepEqual(h.goalBumps(), [], "a thread waiting on the human's act is not told to keep going")
+  } finally { h.close() }
+
+  const control = scheduler({ pendingQuestion: false }, { now: at("2026-08-02T00:00:05.000Z") })
+  try {
+    control.storage.askThreadQuestion({ id: "qst_1", slug: control.slug, spec: JSON.stringify({ question: "Force-push the rewrite?", kind: "question", danger: true, options: [{ label: "Yes" }, { label: "No" }] }), askedAtMs })
+    await control.s.tick()
+    assert.equal(control.goalBumps().length, 1, "a question is something the Goal lets the worker decide")
+  } finally { control.close() }
+})
+
 // RE-ARMING THE GOAL IS NEW WORK FROM THE HUMAN, and it was the one form of it the sign-off reading
 // could not see: `threadSaidDone` dates the human's last word off the TRANSCRIPT, and arming writes no
 // transcript record. So a human who armed a Goal on a thread that had already signed off got a panel
