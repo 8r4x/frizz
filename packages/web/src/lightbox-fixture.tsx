@@ -6,17 +6,21 @@ import { splitProseAttachments } from "./lib/imagePaths.ts"
 import { installLocalFileLinkInterceptor } from "./lib/local-file-links.ts"
 import { mdToHtml } from "./lib/markdown.ts"
 import type { BlockAnswer, ParsedQuestion } from "./lib/questionBlocks.ts"
+import type { RegisteredQuestionView } from "@frizz/shared"
 import { BlockImage, FenceCard } from "./components/ChatView.tsx"
 import { LightboxGallery, LightboxHost } from "./components/Lightbox.tsx"
 import { QuestionBlockCard } from "./components/QuestionBlockCard.tsx"
+import { RegisteredAnswerSheet } from "./components/RegisteredAnswerSheet.tsx"
+import { RegisteredAnsweringContext, type RegisteredAnswering } from "./components/RegisteredQuestionCards.tsx"
 
 // The ```lightbox fence with the REAL components: worker prose split exactly as ChatView splits it
 // (splitProseAttachments), each gallery drawn by LightboxGallery, and the viewer hosted the way the page
 // layouts host it. Driven by components/lightbox.e2e.test.ts.
 //
 // Below the transcript's galleries, the OTHER surfaces a fence reaches, each through its real
-// component: a done card (FenceCard) and a question option (QuestionBlockCard), which render prose as one
-// string of HTML and grow their galleries as islands (useLightboxIslands). And a message's LOOSE
+// component: a done card (FenceCard), a question option (QuestionBlockCard) and the same question on the
+// phone's answer sheet (RegisteredAnswerSheet), which render prose as one string of HTML and grow their
+// galleries as islands (useLightboxIslands). And a message's LOOSE
 // pictures — a Markdown image, a bare path line (BlockImage), a link to a picture — which open the same
 // viewer through the delegated click listener (lib/local-file-links.ts).
 //
@@ -28,10 +32,11 @@ import { QuestionBlockCard } from "./components/QuestionBlockCard.tsx"
 // A window listener counts the keys that reach the PAGE. The real page unwinds its drawers — and leaves
 // the fullscreen page — on an Escape that gets that far (DrawerStack), so the viewer must keep its own.
 declare global {
-  interface Window { __pageKeys?: string[]; __chips?: number[] }
+  interface Window { __pageKeys?: string[]; __chips?: number[]; __sheetPicks?: number[] }
 }
 window.__pageKeys = []
 window.__chips = []
+window.__sheetPicks = []
 window.addEventListener("keydown", (e) => { window.__pageKeys!.push(e.key) })
 
 // The cards resolve inline-code paths and read the board; nothing real answers either here.
@@ -88,6 +93,51 @@ function LayoutQuestion() {
   )
 }
 
+// The phone's way to answer a registered question: a bottom sheet whose option ROWS are buttons, with
+// the description's gallery and picture inside them.
+const REGISTERED: RegisteredQuestionView = {
+  id: "qst_fixture",
+  askedAt: "2026-10-03T00:00:00.000Z",
+  spec: {
+    question: "Which layout ships?",
+    kind: "question",
+    options: [
+      { label: "Two columns", recommended: true, description: ["```lightbox", `${shot("sheet-desktop-1440x900.png")}  Desktop`, `${shot("sheet-phone-390x844.png")}  Phone`, "```"].join("\n") },
+      { label: "One column", description: [`![One column](${shot("sheet-one-col-1440x900.png")})`, "", "Everything in one page."].join("\n") },
+    ],
+  },
+}
+
+function AnswerSheet() {
+  const [open, setOpen] = useState(false)
+  const [answers, setAnswers] = useState(() => new Map<string, BlockAnswer>())
+  const answering: RegisteredAnswering = {
+    slug: "fixture",
+    answerFor: (_q, path) => answers.get(path) ?? { chosen: null, chosenSet: [], text: "" },
+    answersOf: () => answers,
+    onChip: (_q, path, _multi, optIdx) => {
+      window.__sheetPicks!.push(optIdx)
+      setAnswers((prev) => new Map(prev).set(path, { chosen: optIdx, chosenSet: [], text: "" }))
+    },
+    onText: () => {},
+    dismiss: () => {},
+    dismissing: false,
+    submit: () => {},
+    complete: () => {},
+    staged: 0,
+    sending: false,
+    error: undefined,
+  }
+  return (
+    <RegisteredAnsweringContext.Provider value={answering}>
+      <button type="button" data-fixture-open-sheet onClick={() => setOpen(true)} className="rounded-md border border-border px-3 py-1.5 text-[13px]">
+        Answer
+      </button>
+      {open && <RegisteredAnswerSheet questions={[REGISTERED]} onClose={() => setOpen(false)} />}
+    </RegisteredAnsweringContext.Provider>
+  )
+}
+
 createRoot(document.getElementById("root")!).render(
   <QueryClientProvider client={new QueryClient()}>
     <main className="mx-auto max-w-[700px] p-8">
@@ -111,6 +161,9 @@ createRoot(document.getElementById("root")!).render(
       </section>
       <section data-fixture-question className="mb-8">
         <LayoutQuestion />
+      </section>
+      <section data-fixture-sheet className="mb-8">
+        <AnswerSheet />
       </section>
       <LightboxHost />
     </main>

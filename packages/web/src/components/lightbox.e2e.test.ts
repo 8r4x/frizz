@@ -409,6 +409,47 @@ test("on a phone, a pinch zooms the picture, one finger pans it, a double tap to
   }
 })
 
+test("on a phone's answer sheet, a picture in an option opens the viewer without picking it, and the row still picks", { skip: !baseUrl, timeout: 120_000 }, async () => {
+  const { browser, page, errors } = await launch(PHONE)
+  try {
+    await (await page.$("[data-fixture-open-sheet]"))!.tap()
+    // The sheet slides up over 200ms and its gallery re-justifies once the pictures decode, so a tap aimed
+    // before both settle lands where a tile WAS. At rest the sheet's bottom is the viewport's.
+    await page.waitForFunction(() => {
+      const sheet = document.querySelector("[data-answer-sheet]")
+      const pictures = [...document.querySelectorAll<HTMLImageElement>("[data-answer-sheet] img")]
+      return !!sheet && sheet.getAnimations().length === 0 && Math.abs(sheet.getBoundingClientRect().bottom - innerHeight) < 0.5
+        && pictures.length === 3 && pictures.every((img) => img.complete && img.naturalWidth > 0)
+    })
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))))
+    // The sheet's option rows are buttons, and the gallery inside the first one is a portal: its tile's
+    // tap reaches the row's handler too, which must leave it alone.
+    await (await page.$("[data-answer-sheet] [data-lightbox-tile]"))!.tap()
+    await page.waitForSelector("[data-lightbox]")
+    assert.deepEqual(await viewer(page), { counter: "1 / 2", title: "Desktop", picture: "/fixture/lightbox/sheet-desktop-1440x900.png" })
+    // A pick here would also have moved the sheet on to its next step, taking the other option with it.
+    assert.deepEqual(await page.evaluate(() => window.__sheetPicks), [], "looking at the gallery picked its option")
+    await (await page.$("[data-lightbox] button[aria-label='Close']"))!.tap()
+    await page.waitForFunction(() => !document.querySelector("[data-lightbox]"))
+    await (await page.$("[data-answer-sheet] [data-answer-option] img[data-local-path]"))!.tap()
+    await page.waitForSelector("[data-lightbox]")
+    assert.deepEqual(await viewer(page), { counter: null, title: "One column", picture: "/fixture/lightbox/sheet-one-col-1440x900.png" })
+    await (await page.$("[data-lightbox] button[aria-label='Close']"))!.tap()
+    await page.waitForFunction(() => !document.querySelector("[data-lightbox]"))
+    assert.deepEqual(await page.evaluate(() => window.__sheetPicks), [], "looking at a picture picked an option")
+    assert.ok(await page.$("[data-answer-sheet]"), "closing the viewer left the sheet open")
+    // The control: the row's label picks it.
+    const label = (await page.$$("[data-answer-sheet] [data-answer-option]"))[1]
+    const box = (await label.boundingBox())!
+    await page.touchscreen.tap(box.x + box.width - 24, box.y + 14)
+    await page.waitForFunction(() => window.__sheetPicks!.length === 1)
+    assert.deepEqual(await page.evaluate(() => window.__sheetPicks), [1])
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
 test("on a phone, Back closes the viewer and leaves the page where it was", { skip: !baseUrl, timeout: 120_000 }, async () => {
   const { browser, page, errors } = await launch(PHONE)
   try {

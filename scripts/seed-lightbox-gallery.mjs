@@ -5,9 +5,19 @@
 // /local-image route (a plain vite has none, so the fixture's e2e test intercepts it and draws
 // stand-ins): a captioned before/after pair; three widths of one page, whose shapes differ wildly and
 // must sit in one row at their real aspect ratios; one picture alone, which must match a bare framed
-// picture; and a long set in every line shape the grammar accepts, one of whose files is MISSING. The
-// last message closes on a ```done fence BELOW its gallery, the order the worker contract asks for, so
-// the card and the gallery are checked together.
+// picture; and a long set in every line shape the grammar accepts, one of whose files is MISSING. That
+// message closes on a ```done fence BELOW its gallery, the order the worker contract asks for, so the
+// card and the gallery are checked together.
+//
+// The last turn reaches every OTHER surface the viewer opens from: a message's loose pictures (a
+// Markdown image, a bare path line, a link to a picture), which page together; a done card with a
+// gallery in its body (`~~~lightbox`, since a ``` fence cannot nest inside the ```done one); and a link
+// to a `.md` report, written beside the shots, whose gallery names its pictures RELATIVE to the report —
+// the reader resolves them against the document's own directory. The reader only opens files under the
+// project, so keep `--shots` inside `--cwd` for that one. With `--origin` (the stack's URL) it also
+// REGISTERS a question through the running server's own `ask` RPC — what a worker's mcp__frizz__ask
+// does — whose first option's description is a gallery and whose second is a picture: a registered
+// question draws a multi-line description as the option's body, where the fence becomes a gallery.
 //
 // `--shots` is a directory holding desktop-a.png and desktop-b.png (1440×900), phone.png (375×812),
 // tablet.png (768×1024) and wide.png (1600×600). Any screenshots at those shapes will do; the stack's own
@@ -19,6 +29,7 @@
 import { execFileSync } from "node:child_process"
 import { existsSync, mkdirSync, writeFileSync } from "node:fs"
 import { join, resolve } from "node:path"
+import { createRpcClient } from "./lib/rpc-client.mjs"
 import { resolveSandboxDb, sessionProjectColumns } from "./lib/sandbox-db.mjs"
 
 const flags = Object.fromEntries(
@@ -67,6 +78,19 @@ const assistant = (text) => ({
     usage: { input_tokens: 2, output_tokens: 120 },
   },
 })
+const report = join(shots, "lightbox-report.md")
+writeFileSync(report, [
+  "# Design review",
+  "",
+  "Every page, as it stands — each path relative to this report:",
+  "",
+  "```lightbox",
+  "desktop-a.png  The first page",
+  "desktop-b.png  The second page",
+  "tablet.png     At tablet width",
+  "```",
+  "",
+].join("\n"))
 
 const records = [
   user("TASK:\nShow me the board before and after, at every width."),
@@ -117,6 +141,28 @@ const records = [
     "- **Rendered the gallery** in every line shape the fence accepts.",
     "```",
   ].join("\n")),
+  user("Which layout should ship? And where do things stand?"),
+  assistant([
+    "Where things stand:",
+    "",
+    `![The first page, at desktop width](${shot("desktop-a.png")})`,
+    "",
+    shot("desktop-b.png"),
+    "",
+    `The [phone layout](${shot("phone.png")}) is its own picture.`,
+  ].join("\n")),
+  assistant([
+    `The full review is in [the report](${report}).`,
+    "",
+    "```done",
+    "- **Reviewed every page**, before and after:",
+    "",
+    "~~~lightbox",
+    `${shot("desktop-a.png")}  Before`,
+    `${shot("desktop-b.png")}  After`,
+    "~~~",
+    "```",
+  ].join("\n")),
 ]
 
 writeFileSync(join(jsonlDir, `${sessionId}.jsonl`), records.map((r) => JSON.stringify(r)).join("\n") + "\n")
@@ -126,4 +172,30 @@ execFileSync("sqlite3", [
   `INSERT OR REPLACE INTO session (${sessionCols}slug, session_id, thread_name, spawned_at, title, title_auto, backend, model, effort, permission_mode, state, unread, exited, archived, rested_at)
    VALUES (${sessionVals}'${slug}', '${sessionId}', 'frizz-${slug}', '${now()}', 'Lightbox galleries', 0, 'claude', 'opus', 'high', 'default', 'open', 1, 0, 0, '${now()}')`,
 ])
-console.log(`seeded ${slug} → ${sessionId} (pair, three widths, single, long set with a missing file; shots=${shots})`)
+console.log(`seeded ${slug} → ${sessionId} (pair, three widths, single, long set with a missing file, loose pictures, a done card, a report; shots=${shots})`)
+
+if (flags.origin) {
+  const api = createRpcClient(flags.origin)
+  await api.waitForHealth()
+  // The board learns the session row on its own refresh; until then the ask is refused as unregistered.
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await api.mutate("ask", {
+        slug,
+        questions: [{
+          question: "Which layout should ship?",
+          kind: "question",
+          options: [
+            { label: "Two columns", recommended: true, description: ["Search beside the map, at both widths:", "", "```lightbox", `${shot("desktop-a.png")}  Desktop`, `${shot("phone.png")}  Phone`, "```"].join("\n") },
+            { label: "One column", description: [`![One column](${shot("tablet.png")})`, "", "Everything in one scrolling page."].join("\n") },
+          ],
+        }],
+      })
+      break
+    } catch (error) {
+      if (attempt >= 20) throw error
+      await new Promise((r) => setTimeout(r, 500))
+    }
+  }
+  console.log(`registered a question on ${slug} whose options carry a gallery and a picture`)
+}

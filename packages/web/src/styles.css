@@ -1049,7 +1049,7 @@ a[href] {
    a picture or a gallery tile opens the lightbox, and the option is picked by the rest of the row (the
    chip's div-level onClick skips the picture, as it skips a link). A gallery's mat, between its tiles,
    still picks the option — that click reaches the chip's handler with no button or picture under it. */
-[data-question-option] .md-body :is(img[data-local-path], .md-lightbox) {
+[data-question-option] :is(img[data-local-path], .md-lightbox) {
   position: relative;
   z-index: 1;
 }

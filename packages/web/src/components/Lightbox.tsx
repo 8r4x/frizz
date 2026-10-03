@@ -730,6 +730,8 @@ function ViewerButton({ label, trim, onClick, disabled, className = "", children
 
 // The side arrows are for a mouse. On a touch screen the picture fills the width, so they would sit on
 // top of it, and a swipe already pages (the stage's pointer handlers) — so a coarse pointer drops them.
+// A DARK chip with a hairline: at fit an arrow sits on the near-black field, but a magnified picture
+// fills the stage behind it, and the light chip it had vanished against a bright screenshot.
 function PageButton({ side, onClick }: { side: "left" | "right"; onClick: () => void }) {
   const Icon = side === "left" ? ChevronLeft : ChevronRight
   return (
@@ -738,7 +740,7 @@ function PageButton({ side, onClick }: { side: "left" | "right"; onClick: () => 
       data-lightbox-page={side}
       aria-label={side === "left" ? "Previous image" : "Next image"}
       onClick={onClick}
-      className={`absolute top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-white/10 text-white/80 outline-none backdrop-blur-sm transition-colors hover:bg-white/20 hover:text-white focus-visible:ring-1 focus-visible:ring-white/60 pointer-coarse:hidden ${
+      className={`absolute top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-black/55 text-white/85 outline-none ring-1 ring-white/15 backdrop-blur-sm transition-colors hover:bg-black/75 hover:text-white focus-visible:ring-white/60 pointer-coarse:hidden ${
         side === "left" ? "left-3" : "right-3"
       }`}
     >
