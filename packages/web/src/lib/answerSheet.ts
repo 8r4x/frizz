@@ -11,9 +11,12 @@
 // sheet therefore addresses a step by its KEY (`<question id>|<node path>`), never by its index, and
 // computes "the step after this pick" against the answers the pick is about to produce
 // (`stepAfterPick`) — the new list is not on screen yet in the tap that asks for it.
+//
+// An INSTRUCTION is never a step: it has nothing to pick, and its card answers it in one click on the
+// transcript itself. The walk skips one, so a thread holding only instructions has no steps at all.
 import type { AskedQuestion, RegisteredQuestionView } from "@frizz/shared"
 import type { BlockAnswer } from "./questionBlocks.ts"
-import { liveQuestionNodes, nodeAnswered } from "./registeredQuestion.ts"
+import { isAnswerable, liveQuestionNodes, nodeAnswered } from "./registeredQuestion.ts"
 
 export interface AnswerStep {
   /** `<question id>|<node path>` — the address that survives the list growing or shrinking. */
@@ -30,7 +33,7 @@ type AnswersOf = (q: RegisteredQuestionView) => ReadonlyMap<string, BlockAnswer>
 export const stepKey = (id: string, path: string) => `${id}|${path}`
 
 export function answerSteps(questions: readonly RegisteredQuestionView[], answersOf: AnswersOf): AnswerStep[] {
-  return questions.flatMap((q) =>
+  return questions.filter(isAnswerable).flatMap((q) =>
     liveQuestionNodes(q.spec, answersOf(q)).map((node) => ({ key: stepKey(q.id, node.path), q, path: node.path, spec: node.spec, depth: node.depth })),
   )
 }

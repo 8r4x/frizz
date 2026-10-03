@@ -18,18 +18,24 @@
 // thread; the surface mounts it ONCE (RegisteredAnsweringProvider) and every card and every stack on
 // that surface reads it through context. A stack mounted with no provider above it (a surface that
 // never places) owns a state of its own, exactly as it did before.
+//
+// AN INSTRUCTION RIDES THE SAME LIST (`mcp__frizz__instruct`, 2026-10-03) and renders through its own
+// card (InstructionCard): steps the human performs, then "Done" or "Couldn't do it". Its reply is a
+// click sent on its own (`complete`), never part of the staged batch, so the Send below counts only the
+// questions — and a stack holding nothing but instructions draws no Send at all.
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { X } from "lucide-react"
-import type { QuestionAnswer, RegisteredQuestionView, SettledQuestionView, ThreadView } from "@frizz/shared"
+import { isInstructions, type AskedQuestion, type QuestionAnswer, type RegisteredQuestionView, type SettledQuestionView, type ThreadView } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { draftKey, draftStore, useDraftValues, useProjectDir } from "../lib/drafts.ts"
 import { clearSteered, markSteered } from "../lib/steering.ts"
 import type { BlockAnswer } from "../lib/questionBlocks.ts"
 import type { PairedAnswer } from "../lib/answersMessage.ts"
-import { ROOT_PATH, liveQuestionNodes, nodeAnswered, registeredAnswer, settledQuestionNodes } from "../lib/registeredQuestion.ts"
+import { ROOT_PATH, instructionAnswer, isAnswerable, isInstruction, liveQuestionNodes, nodeAnswered, registeredAnswer, settledQuestionNodes, type AnswerableQuestion, type RegisteredInstruction } from "../lib/registeredQuestion.ts"
 import { AnswersCard } from "./AnswersCard.tsx"
 import { QueueDismissContext } from "./ChatView.tsx"
+import { InstructionCard, SettledInstructionCard } from "./InstructionCard.tsx"
 import { QuestionBlockCard } from "./QuestionBlockCard.tsx"
 import { CompactQuestionList, usePhoneQuestions } from "./PhoneQuestionCards.tsx"
 
@@ -54,6 +60,10 @@ export interface RegisteredAnswering {
   dismissing: boolean
   /** Send EVERY staged answer on the thread — placed or at an anchor, this rest's or an older one. */
   submit: () => void
+  /** Report on ONE instruction — `INSTRUCTIONS_DONE` or `INSTRUCTIONS_NOT_DONE`, with its note — and
+   *  send it now, on its own. Staged question answers stay staged. */
+  complete: (q: RegisteredInstruction, outcome: string) => void
+  /** Staged QUESTION answers. An instruction is never staged, so it never counts here. */
   staged: number
   sending: boolean
   error: string | undefined
@@ -96,8 +106,9 @@ export function useRegisteredAnswering(thread: ThreadView | undefined): Register
     new Map(allPaths(q).map((path) => [path, answerFor(q, path)]))
 
   // EVERY answered question goes in ONE call. A per-question send would half-wake the turn: the worker
-  // would come back to a payload it cannot act on and would have to ask for the rest again.
-  const stagedPairs = questions.flatMap((q) => {
+  // would come back to a payload it cannot act on and would have to ask for the rest again. (An
+  // instruction folds to nothing here — registeredAnswer — and is sent by `complete` instead.)
+  const stagedPairs = questions.filter(isAnswerable).flatMap((q) => {
     const built = registeredAnswer(q, answersOf(q))
     return built ? [{ q, answer: built }] : []
   })
@@ -138,8 +149,10 @@ export function useRegisteredAnswering(thread: ThreadView | undefined): Register
     onError: (cause) => setError(errorText(cause)),
   })
 
-  const submit = () => {
-    if (!slug || staged.length === 0 || send.isPending) return
+  /** The one send path both verbs share: dissolve the queue card, take the steer overlay, settle the
+   *  cards optimistically, then go to the network. */
+  const sendPairs = (pairs: { q: RegisteredQuestionView; answer: QuestionAnswer }[]) => {
+    if (!slug || pairs.length === 0 || send.isPending) return
     setError(undefined)
     // Local truth FIRST, then the network — the ordering every other send on this card obeys, and the
     // whole of what "the card goes away when I answer it" means on a machine under load.
@@ -156,13 +169,19 @@ export function useRegisteredAnswering(thread: ThreadView | undefined): Register
     const key = settledQuestionsKey(slug)
     void queryClient.cancelQueries({ queryKey: key })
     const settledAt = new Date().toISOString()
-    const ids = new Set(stagedPairs.map((pair) => pair.q.id))
+    const ids = new Set(pairs.map((pair) => pair.q.id))
     queryClient.setQueryData<SettledQuestion[]>(key, (prev) => [
       ...(prev ?? []).filter((s) => !ids.has(s.id)),
-      ...stagedPairs.map(({ q, answer }): SettledQuestion => ({ id: q.id, spec: q.spec, askedAt: q.askedAt, settledAt, answer, pending: true })),
+      ...pairs.map(({ q, answer }): SettledQuestion => ({ id: q.id, spec: q.spec, askedAt: q.askedAt, settledAt, answer, pending: true })),
     ])
-    send.mutate(staged)
+    send.mutate(pairs.map((pair) => pair.answer))
   }
+  const submit = () => sendPairs(stagedPairs)
+  // AN INSTRUCTION'S REPLY GOES ALONE, the moment it is clicked. The human has already done the steps,
+  // so there is nothing left to collect — and folding it into the question batch would either hold a
+  // finished act hostage to a half-answered question or send that half answer along with it.
+  const complete = (q: RegisteredInstruction, outcome: string) =>
+    sendPairs([{ q, answer: instructionAnswer(q, outcome, answerFor(q, ROOT_PATH).text) }])
 
   return {
     slug,
@@ -204,6 +223,7 @@ export function useRegisteredAnswering(thread: ThreadView | undefined): Register
     dismiss: (id) => dismiss.mutate(id),
     dismissing: dismiss.isPending,
     submit: () => submit(),
+    complete,
     staged: staged.length,
     sending: send.isPending,
     error,
@@ -262,6 +282,12 @@ export function openQuestionsOf(thread: ThreadView | undefined, settled: readonl
 /** ONE answered registration, in the slot its open card filled: the same card, the same branch rule,
  *  greyed, and carrying only what was picked or typed. Read-only — the answer has been sent. */
 export function SettledQuestionCard({ s, wrap }: { s: SettledQuestion; wrap?: boolean }) {
+  const spec = s.spec
+  if (isInstructions(spec)) return <SettledInstructionCard id={s.id} spec={spec} answer={s.answer} wrap={wrap} />
+  return <SettledAnsweredQuestion s={{ ...s, spec }} wrap={wrap} />
+}
+
+function SettledAnsweredQuestion({ s, wrap }: { s: SettledQuestion & { spec: AskedQuestion }; wrap?: boolean }) {
   const nodes = useMemo(() => settledQuestionNodes(s.spec, s.answer), [s.spec, s.answer])
   const card = (node: (typeof nodes)[number]) => (
     <QuestionBlockCard
@@ -315,8 +341,31 @@ export function RegisteredQuestionCard({ q, answering: given }: { q: RegisteredQ
   const phone = usePhoneQuestions()
   const a = given ?? shared
   if (!a || !a.slug) return null
+  // An instruction answers on its own card, on the phone too: two buttons need no sheet.
+  if (isInstruction(q)) return <LiveInstructionCard q={q} a={a} />
   // On the phone thread page the card is a reading surface; the sheet answers it (PhoneQuestionCards).
-  if (phone) return <CompactQuestionList questions={[q]} />
+  if (phone) return isAnswerable(q) ? <CompactQuestionList questions={[q]} /> : null
+  return isAnswerable(q) ? <LiveQuestionCard q={q} a={a} /> : null
+}
+
+/** An open instruction wired to the surface's answering state: its note in the draft store, its reply
+ *  through `complete`. */
+function LiveInstructionCard({ q, a }: { q: RegisteredInstruction; a: RegisteredAnswering }) {
+  return (
+    <article data-question-id={q.id} className="flex min-w-0 flex-col">
+      <InstructionCard
+        spec={q.spec}
+        note={a.answerFor(q, ROOT_PATH).text}
+        // `isMulti` true: a note has no chip to clear (see onText).
+        onNote={(text) => a.onText(q, ROOT_PATH, true, text)}
+        onComplete={(outcome) => a.complete(q, outcome)}
+        sending={a.sending}
+      />
+    </article>
+  )
+}
+
+function LiveQuestionCard({ q, a }: { q: AnswerableQuestion; a: RegisteredAnswering }) {
   const nodes = liveQuestionNodes(q.spec, a.answersOf(q))
   const card = (node: (typeof nodes)[number]) => (
     <QuestionBlockCard
@@ -447,14 +496,19 @@ export function RegisteredQuestionStack({
     )
   }
 
+  const answerable = questions.filter(isAnswerable)
+  const instructions = questions.filter(isInstruction)
+  const label = waitingLabel(answerable.length, instructions.length)
+
   if (phone) {
     return (
       <section
         data-registered-questions
-        aria-label={`${questions.length} question${questions.length === 1 ? "" : "s"} waiting for an answer`}
+        aria-label={label}
         className={`flex min-w-0 flex-col gap-3 ${className}`}
       >
-        <CompactQuestionList questions={questions} />
+        <CompactQuestionList questions={answerable} />
+        {instructions.map((q) => <RegisteredQuestionCard key={q.id} q={q} answering={a} />)}
         {/* The sheet closes on Send, so a refusal has to surface HERE, beside the questions it restored. */}
         {a.error && <div role="alert" className="break-words text-[13px] leading-snug text-danger-soft">{a.error}</div>}
         {a.sending && <div role="status" aria-live="polite" className="text-[13px] leading-snug text-muted">Sending…</div>}
@@ -465,7 +519,7 @@ export function RegisteredQuestionStack({
   return (
     <section
       data-registered-questions
-      aria-label={questions.length > 0 ? `${questions.length} question${questions.length === 1 ? "" : "s"} waiting for an answer` : "Send the answers above"}
+      aria-label={questions.length > 0 ? label : "Send the answers above"}
       className={`flex min-w-0 flex-col gap-3 ${className}`}
     >
       {questions.map((q) => <RegisteredQuestionCard key={q.id} q={q} answering={a} />)}
@@ -473,28 +527,42 @@ export function RegisteredQuestionStack({
       {a.sending && (
         <div role="status" aria-live="polite" className="text-[11px] leading-snug text-muted">Sending…</div>
       )}
-      <div className="flex justify-start">
-        <button
-          type="button"
-          data-send-answers
-          disabled={a.staged === 0 || a.sending}
-          onClick={a.submit}
-          onMouseDown={(e) => e.preventDefault()}
-          className="button-outline rounded-md bg-fg px-3 py-1.5 text-[12px] font-medium text-bg outline-none transition-all hover:opacity-90 active:scale-95 disabled:opacity-30 disabled:hover:opacity-30"
-        >
-          Send answers
-        </button>
-      </div>
+      {/* Only a QUESTION is sent by this verb; an instruction carries its own two in its card. */}
+      {(answerable.length > 0 || showSend) && (
+        <div className="flex justify-start">
+          <button
+            type="button"
+            data-send-answers
+            disabled={a.staged === 0 || a.sending}
+            onClick={a.submit}
+            onMouseDown={(e) => e.preventDefault()}
+            className="button-outline rounded-md bg-fg px-3 py-1.5 text-[12px] font-medium text-bg outline-none transition-all hover:opacity-90 active:scale-95 disabled:opacity-30 disabled:hover:opacity-30"
+          >
+            Send answers
+          </button>
+        </div>
+      )}
     </section>
   )
+}
+
+/** The stack's accessible name: what is waiting on the human, by kind. */
+function waitingLabel(questions: number, instructions: number): string {
+  const parts = [
+    questions > 0 ? `${questions} question${questions === 1 ? "" : "s"}` : "",
+    instructions > 0 ? `${instructions} instruction${instructions === 1 ? "" : "s"}` : "",
+  ].filter(Boolean)
+  return `${parts.join(" and ")} waiting for you`
 }
 
 /** EVERY node path in a question's tree — live or not. The draft subscription and the clear-on-send both
  *  need the whole tree, not just what is currently on screen: text typed into a branch, abandoned, and
  *  returned to must still be there, and a settled question must leave nothing behind anywhere. */
 function allPaths(q: RegisteredQuestionView): string[] {
+  // An instruction has no tree, only its note box, which keys on the root path.
+  if (!isAnswerable(q)) return [ROOT_PATH]
   const out: string[] = []
-  const walk = (node: RegisteredQuestionView["spec"], path: string) => {
+  const walk = (node: AskedQuestion, path: string) => {
     out.push(path)
     node.options?.forEach((option, optIdx) => {
       option.followUps?.forEach((child, fuIdx) => walk(child, `${path}/${optIdx}.${fuIdx}`))
@@ -504,7 +572,8 @@ function allPaths(q: RegisteredQuestionView): string[] {
   return out
 }
 
-/** Is this question answered enough to send? Exported for the board card, which shows a count. */
+/** Is this question answered enough to send? Exported for the board card, which shows a count. An
+ *  instruction is never staged: its reply is sent the moment it is clicked. */
 export function questionIsStaged(q: RegisteredQuestionView, answers: ReadonlyMap<string, BlockAnswer>): boolean {
-  return nodeAnswered(q.spec, answers.get(ROOT_PATH))
+  return isAnswerable(q) && nodeAnswered(q.spec, answers.get(ROOT_PATH))
 }

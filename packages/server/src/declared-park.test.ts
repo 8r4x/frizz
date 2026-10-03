@@ -785,6 +785,38 @@ test("a park beside an OPEN registered question is refused, even when everything
   } finally { h.close() }
 })
 
+// AN OPEN INSTRUCTION REFUSES IT THE SAME WAY (`mcp__frizz__instruct`, 2026-10-03) — and the correction
+// names what is actually open, because a worker told to `unask` "a question" while it rests on an
+// instruction goes looking for a question it never asked.
+test("a park beside an OPEN instruction is refused, and names the instruction and its own withdrawal", async () => {
+  const h = parkHarness([{ kind: "shell", value: "bzvtnt3ig" }, { kind: "for", value: "1h" }], { shells: [LIVE_SHELL] })
+  try {
+    h.storage.askThreadQuestion({ id: "ins_0a1b2c3d4e5f", slug: "parked", askedAtMs: Date.now() - 60_000, spec: JSON.stringify({ kind: "instructions", question: "Sign in to npm so the release can publish", steps: ["Run `npm login`."] }) })
+    await h.s.tick()
+    const rows = h.queued()
+    assert.equal(rows.length, 1)
+    assert.match(rows[0].fence_id, /^park:question:/)
+    assert.match(rows[0].message, /an instruction of yours was still OPEN/)
+    assert.match(rows[0].message, /ins_0a1b2c3d4e5f.*Sign in to npm/s)
+    assert.match(rows[0].message, /mcp__frizz__uninstruct/)
+    assert.doesNotMatch(rows[0].message, /mcp__frizz__unask/, "there is no question to withdraw")
+    assert.equal(isParkCorrection(rows[0].message), true)
+  } finally { h.close() }
+})
+
+test("a park beside a question AND an instruction names both withdrawals", async () => {
+  const h = parkHarness([{ kind: "shell", value: "bzvtnt3ig" }, { kind: "for", value: "1h" }], { shells: [LIVE_SHELL] })
+  try {
+    h.storage.askThreadQuestion({ id: "qst_6506c36d2f28", slug: "parked", askedAtMs: Date.now() - 90_000, spec: JSON.stringify({ question: "Which store — SQLite or a JSON file?", kind: "question" }) })
+    h.storage.askThreadQuestion({ id: "ins_0a1b2c3d4e5f", slug: "parked", askedAtMs: Date.now() - 60_000, spec: JSON.stringify({ kind: "instructions", question: "Sign in to npm", steps: ["Run `npm login`."] }) })
+    await h.s.tick()
+    const msg = h.queued()[0].message
+    assert.match(msg, /questions and instructions of yours were still OPEN/)
+    assert.match(msg, /`mcp__frizz__unask` for a question, `mcp__frizz__uninstruct` for an instruction/)
+    assert.equal(isParkCorrection(msg), true)
+  } finally { h.close() }
+})
+
 test("an ANSWERED question no longer refuses the park", async () => {
   const h = parkHarness([{ kind: "shell", value: "bzvtnt3ig" }, { kind: "for", value: "1h" }], { shells: [LIVE_SHELL] })
   try {

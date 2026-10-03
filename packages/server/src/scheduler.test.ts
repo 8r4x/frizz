@@ -368,6 +368,27 @@ test("question: a dismissal rides an answer's message and never wakes anybody on
   assert.equal(h.storage.getThreadQuestion("qst_drop")?.delivered, 1, "and rides along when one comes")
 })
 
+// AN INSTRUCTION'S REPLY TAKES THE ANSWER'S PATH, end to end: an `instruct` row is a row of this registry,
+// so the human's "Done" is stored, then handed over once, in the wire form the chat reads as their turn —
+// restating the instruction's TITLE, which is what the row keeps under `question`.
+test("instruction: the human's reply is handed over once, restating the title", async () => {
+  const h = harness()
+  h.storage.upsertSession(row("t"))
+  h.storage.askThreadQuestion({ id: "ins_1", slug: "t", spec: JSON.stringify({ kind: "instructions", question: "Sign in to npm", steps: ["Run `npm login`"] }), askedAtMs: h.clock.ms })
+  h.tele.set("t", tele())
+  const s = h.make()
+  await s.tick()
+  assert.equal(h.resumes.length, 0, "an open instruction wakes nobody — it is the human's move")
+
+  h.storage.answerThreadQuestion("ins_1", JSON.stringify({ questionId: "ins_1", question: "Sign in to npm", chosen: ["Done"], text: "used the work account" }), h.clock.ms)
+  await s.tick()
+  await s.tick()
+  assert.equal(h.resumes.length, 1)
+  assert.match(h.resumes[0].message, /^Answers to earlier questions:$/m)
+  assert.match(h.resumes[0].message, /^1\. “Sign in to npm” → Done — used the work account$/m)
+  assert.equal(h.storage.getThreadQuestion("ins_1")?.delivered, 1)
+})
+
 test("question: an archived thread keeps its answer rather than spending it", async () => {
   const h = harness()
   h.storage.upsertSession(row("t", { state: "archived", archived: 1 }))

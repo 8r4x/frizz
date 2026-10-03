@@ -3,7 +3,7 @@ import { useQueryClient } from "@tanstack/react-query"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { useSnapshot } from "valtio"
 import { AlarmClock, Check, ChevronRight, CircleDashed, Ellipsis, Github, Hourglass, Loader2, Pin, PinOff, RotateCcw, Timer } from "lucide-react"
-import type { BoardSnapshot, ThreadView } from "@frizz/shared"
+import { isInstructions, type BoardSnapshot, type ThreadView } from "@frizz/shared"
 import { store, openThread, scrollToQueueCard, queueCardTargetY, pushSubAgentDrawer, showToast, QUEUE_CARD_VIEWPORT_TOP } from "../store.ts"
 import { rpc } from "../api/rpc.ts"
 import { useBoard, asThreads } from "../hooks.ts"
@@ -1294,9 +1294,15 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
       // …AND WHAT THE PARK IS HOLDING, when it is holding an ask. A user snooze takes this row out of the
       // queue server-side, so its card — the only surface that renders a question — is gone until the
       // wake. The mark can no longer say [?] (it would advertise a card nobody can open), so the tooltip
-      // is where the unanswered ask stays legible until then.
-      const asking = (t.questions?.length ?? 0) > 0 || t.pendingQuestion === true || Boolean(t.pendingAsk)
-      return { node: parkMark, tip: popover(t, asking ? `${parked}\nA question is unanswered behind this park` : parked) }
+      // is where the unanswered ask stays legible until then. An instruction (`mcp__frizz__instruct`) is
+      // held the same way, and named for what it is: steps nobody has reported on, not a question.
+      const asking = (t.questions ?? []).some((q) => !isInstructions(q.spec)) || t.pendingQuestion === true || Boolean(t.pendingAsk)
+      const instructed = (t.questions ?? []).some((q) => isInstructions(q.spec))
+      const held = [
+        asking ? "A question is unanswered behind this park" : "",
+        instructed ? "Steps for you are waiting behind this park" : "",
+      ].filter(Boolean)
+      return { node: parkMark, tip: popover(t, [parked, ...held].join("\n")) }
     }
     // A usage-limit park is NOT in this family any more (2026-08-31): a limit kill queues as a failed
     // thread and wears the yellow "limit" mark above. What still reaches this arm with a limitPause set
