@@ -90,19 +90,3 @@ test("the contract teaches ask as the only way to ask, and the empty marker as t
     assert.doesNotMatch(c, /ask a ```question/)
   }
 })
-
-// `mcp__frizz__instruct` (2026-10-03) is ROUTED to at the places a worker decides how to hand over — the
-// sign-off verbs, `done`'s blockers, the recommendation rule and the dangling-idea rule — and the prose
-// home it replaces is gone: "what the human must do" used to be told to go in the handoff, where nothing
-// tracked it and the `done` card archived it.
-test("the contract routes an act only the human can perform to instruct, not to the handoff prose", () => {
-  for (const backend of ["claude", "codex", "acp"] as const) {
-    const c = buildWorkerPrompt(backend).replace(/\s+/g, " ")
-    assert.match(c, /`mcp__frizz__done`, `mcp__frizz__ask` and `mcp__frizz__instruct` each record a ROW/)
-    assert.match(c, /AN OPEN INSTRUCTION STANDS EXACTLY THE SAME WAY/)
-    assert.match(c, /An open question, an open instruction or an armed registration blocks it/)
-    assert.match(c, /Once nothing is left to DECIDE and only the human's act remains, the steps go to them with `mcp__frizz__instruct`/)
-    assert.match(c, /A REGISTERED INSTRUCTION — `mcp__frizz__instruct`/)
-    assert.doesNotMatch(c, /that is the handoff, and it belongs in the prose/)
-  }
-})

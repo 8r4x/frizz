@@ -102,8 +102,6 @@ import type {
   DropOwnWatchResult,
   AskInput,
   AskResult,
-  InstructInput,
-  InstructResult,
   MarkOwnDoneInput,
   MarkOwnDoneResult,
   UnaskInput,
@@ -228,9 +226,6 @@ export interface Api {
   // THE WORKER'S REGISTERED QUESTIONS. `ask`/`unask` are the worker's and are declared here for the
   // drift gate alone; the two below ARE called from the browser — they are what the question card does.
   ask(input: AskInput): Promise<AskResult>
-  // `mcp__frizz__instruct` — steps for the human to perform, a row of the same registry. The worker's,
-  // like `ask`; the human settles one through `answerQuestions` below.
-  instruct(input: InstructInput): Promise<InstructResult>
   unask(input: UnaskInput): Promise<UnaskResult>
   // The worker's gated completion verb. Declared here for the drift gate's sake — the browser never
   // calls it, exactly as it never calls `ask`.
@@ -421,7 +416,6 @@ export const PROCEDURES = {
   dropOwnLink: "mutation",
   dropOwnWatch: "mutation",
   ask: "mutation",
-  instruct: "mutation",
   unask: "mutation",
   markOwnDone: "mutation",
   answerQuestions: "mutation",

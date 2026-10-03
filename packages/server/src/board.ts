@@ -8,7 +8,7 @@ import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import watcher from "@parcel/watcher"
 import type { BoardSnapshot, ClaudeModel, ThreadView, RuntimeState, ThreadRecurringPrompt, ProviderError } from "@frizz/shared"
-import { RegisteredAskSchema, BoardDiffer, PermissionMode, SnoozeUntil, ThreadSlug, awaitingNeedsInput, isDirectSubAgent, needsInputRequired, questionAnswerMessage, questionsCancelledWakeMessage, type RegisteredAsk, type PermissionMode as PermissionModeValue, type QuestionAnswer, type QuestionDismissal } from "@frizz/shared"
+import { AskedQuestionSchema, BoardDiffer, PermissionMode, SnoozeUntil, ThreadSlug, awaitingNeedsInput, isDirectSubAgent, needsInputRequired, questionAnswerMessage, questionsCancelledWakeMessage, type AskedQuestion, type PermissionMode as PermissionModeValue, type QuestionAnswer, type QuestionDismissal } from "@frizz/shared"
 import type { Bus } from "./bus.ts"
 import type { Project } from "./project.ts"
 import { isHeadlessRow, isBrokerClaudeRow, sessionTitleLocked, type ThreadQuestionRow } from "./storage.ts"
@@ -451,13 +451,13 @@ export function hasDeclaredBackgroundPark(
   return true
 }
 
-/** A stored question's spec — or an instruction's, the registry's other kind (`isInstructions`) — or
- *  undefined when it no longer parses: a schema change, a hand-written row. Undefined is DROPPED by every
- *  caller rather than thrown on: one unreadable row must not blank a card carrying three good ones.
- *  Duplicated in router.ts for the worker's own read-back, which cannot reach into the board. */
-export function safeQuestionSpec(spec: string): RegisteredAsk | undefined {
+/** A stored question's spec, or undefined when it no longer parses — a schema change, a hand-written
+ *  row. Undefined is DROPPED by every caller rather than thrown on: one unreadable row must not blank a
+ *  card carrying three good ones. Duplicated in router.ts for the worker's own read-back, which cannot
+ *  reach into the board. */
+export function safeQuestionSpec(spec: string): AskedQuestion | undefined {
   try {
-    const parsed = RegisteredAskSchema.safeParse(JSON.parse(spec))
+    const parsed = AskedQuestionSchema.safeParse(JSON.parse(spec))
     return parsed.success ? parsed.data : undefined
   } catch {
     return undefined

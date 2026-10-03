@@ -482,12 +482,9 @@ test("end-state contract: a fenceless rest is a DEFECT, done checks, awaiting pa
     // `watch` LEFT THAT LIST ON 2026-10-01. A registration says when the worker wakes; whether the human
     // is needed meanwhile is the fence's `needs_input:` answer, so a rest on running work always takes
     // the fence (board.needsInputQueues, scheduler evalSignoffNudges).
-    //
-    // `instruct` JOINED IT ON 2026-10-03: an open instruction is a row of the question registry, so it
-    // silences the reminder exactly as an open question does.
     assert.match(c, /ALWAYS SIGN OFF/)
     assert.doesNotMatch(c, /ALWAYS SIGN OFF WITH A FENCE/, "a fence is no longer the only way to sign off")
-    assert.match(c, /`mcp__frizz__done`, `mcp__frizz__ask` and `mcp__frizz__instruct` each record a ROW, and frizz reads each as a sign-off/)
+    assert.match(c, /mcp__frizz__done` and `mcp__frizz__ask` each record a ROW, and frizz reads both as a sign-off/)
     assert.doesNotMatch(c, /frizz reads all three as a sign-off/, "a watch alone is no longer a sign-off")
     assert.match(c, /A WAIT IS THE ONE EXCEPTION, and it always takes the fence/)
     assert.match(c, /`needs_input:` — REQUIRED, `true` or `false`/)

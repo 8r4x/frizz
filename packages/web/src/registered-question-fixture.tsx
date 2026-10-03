@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { createRoot } from "react-dom/client"
-import type { BoardSnapshot, QuestionAnswer, RegisteredQuestionView, SettledQuestionView, ThreadView as ThreadViewModel, TranscriptMessage } from "@frizz/shared"
+import type { BoardSnapshot, RegisteredQuestionView, ThreadView as ThreadViewModel, TranscriptMessage } from "@frizz/shared"
 import { TodosView } from "./components/TodosView.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
 import { store } from "./store.ts"
@@ -31,12 +31,6 @@ import "./styles.css"
 //                 an empty ```question qst_… marker for ONE of them, mid-prose. That card must render in
 //                 the marker's slot, its sibling at the tail, and ONE "Send answers" at the tail must send
 //                 both — the marker's card carries no Send of its own.
-//   ?instruct=1 — an INSTRUCTION (`mcp__frizz__instruct`, 2026-10-03): steps only the human can perform,
-//                 one of them carrying a code block, with a note box and the card's own Done / Couldn't
-//                 do it. No ×, and no "Send answers" — nothing on the stack is staged.
-//   ?mixed=1    — an instruction AND a question open at once: Send counts only the question, and the
-//                 instruction's verb sends only the instruction, leaving the staged answer staged.
-//   ?settled=1  — the instruction and the question already answered, as their greyed settled cards.
 //   ?font=sans  — the other of the two fonts this app renders in; mono is the default and the wider.
 const params = new URLSearchParams(location.search)
 document.documentElement.dataset.font = params.get("font") === "sans" ? "sans" : "mono"
@@ -168,51 +162,16 @@ const TABLE: RegisteredQuestionView = {
   },
 }
 
-// Steps the worker cannot perform: a sign-in only the maintainer's own session can do. One step carries a
-// code block, which is why each step renders as its own markdown block rather than one joined list.
-const INSTRUCTION: RegisteredQuestionView = {
-  id: "ins_0001aaaa0001",
-  askedAt: ago(2),
-  spec: {
-    kind: "instructions",
-    question: "Sign in to npm so the release can publish",
-    context: "The release workflow is green up to the publish step, which needs a maintainer's npm session.",
-    steps: [
-      "Open a terminal on this machine.",
-      "Run the login, and finish it in the browser window it opens:\n\n```sh\nnpm login --auth-type=web\n```",
-      "Check that `npm whoami` prints the maintainer account.",
-    ],
-  },
-}
-
 const placed = params.get("placed") === "1"
-const instruct = params.get("instruct") === "1"
-const mixed = params.get("mixed") === "1"
-const settledOnly = params.get("settled") === "1"
 const questions = params.get("danger") === "1" ? [GATE]
   : placed ? [SETTINGS, GATES]
   : params.get("wide") === "1" ? [WIDE]
   : params.get("tree") === "1" ? [TREE]
   : params.get("many") === "1" ? [SETTINGS, TREE, GATES]
   : params.get("table") === "1" ? [TABLE]
-  : instruct ? [INSTRUCTION]
-  : mixed ? [SETTINGS, INSTRUCTION]
-  : settledOnly ? []
   : [SETTINGS]
 
-// THE SETTLED LIST, kept the way the server keeps it: an answer moves its row here, and
-// `threadSettledQuestions` reads it back — so a click in this fixture leaves the same greyed card the
-// app does, and `?settled=1` starts with one of each kind already there.
-const settled: SettledQuestionView[] = settledOnly
-  ? [
-      { id: INSTRUCTION.id, spec: INSTRUCTION.spec, askedAt: ago(4), settledAt: ago(1), answer: { questionId: INSTRUCTION.id, question: INSTRUCTION.spec.question, chosen: ["Done"], text: "signed in; `npm whoami` prints the maintainer account" } },
-      { id: SETTINGS.id, spec: SETTINGS.spec, askedAt: ago(4), settledAt: ago(1), answer: { questionId: SETTINGS.id, question: SETTINGS.spec.question, chosen: ["SQLite"] } },
-    ]
-  : []
-
-const tail = instruct || settledOnly
-  ? "**Needs you** — the release is built and verified; only the publish is left, and it needs a signed-in maintainer."
-  : "Both stores work. The choice is yours because it is the one thing here that is hard to reverse once there is data in it."
+const tail = "Both stores work. The choice is yours because it is the one thing here that is hard to reverse once there is data in it."
 const past = params.get("past") === "1"
 const marker = `**Fixed** — nothing further to do on the store: \`c6c292e8\` is on local \`main\`.\n\nThe one card still on the board is yours to decide, and it is the reason this thread does not file itself away as done:\n\n\`\`\`question ${SETTINGS.id}\n\`\`\`\n\nAnswer it either way and this thread is finished.`
 const placedHandoff = `**Fixed** — the store is in and \`c6c292e8\` is on local \`main\`.\n\nOne call is yours, because it is the one thing here that is hard to reverse once there is data in it:\n\n\`\`\`question ${SETTINGS.id}\n\`\`\`\n\nEither store passes every gate today. The gates themselves are the other open card, below.`
@@ -286,14 +245,7 @@ window.fetch = async (input, init) => {
     const body = JSON.parse(String(init?.body ?? "{}"))
     window.dispatchEvent(new CustomEvent("fixture-rpc", { detail: { rpc: url.pathname.split("/").pop(), body } }))
     const ids: string[] = body.ids ?? (body.answers ?? []).map((a: { questionId: string }) => a.questionId)
-    for (const answer of (body.answers ?? []) as QuestionAnswer[]) {
-      const q = questions.find((entry) => entry.id === answer.questionId)
-      if (q) settled.push({ id: q.id, spec: q.spec, askedAt: q.askedAt, settledAt: new Date().toISOString(), answer })
-    }
     return new Response(JSON.stringify({ result: { answered: ids, dismissed: ids, open: [] } }), { headers: { "content-type": "application/json" } })
-  }
-  if (url.pathname === "/_frizz/rpc/threadSettledQuestions") {
-    return new Response(JSON.stringify({ result: { questions: settled } }), { headers: { "content-type": "application/json" } })
   }
   if (url.pathname.startsWith("/_frizz/rpc/")) {
     return new Response(JSON.stringify({ result: null }), { headers: { "content-type": "application/json" } })

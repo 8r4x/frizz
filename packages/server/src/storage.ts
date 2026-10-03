@@ -461,8 +461,7 @@ export interface ThreadWatchRow {
 export interface ThreadQuestionRow {
   id: string
   thread_slug: string
-  /** The question tree as JSON, validated at the RPC boundary and stored verbatim (AskedQuestion) — or,
-   *  on a row `instruct` wrote, the steps the human is asked to perform (AskedInstructions). */
+  /** The question tree as JSON, validated at the RPC boundary and stored verbatim (AskedQuestion). */
   spec: string
   state: "open" | "answered" | "withdrawn" | "dismissed"
   /** The structured answer as JSON — keyed by question id and restating each question's text, because

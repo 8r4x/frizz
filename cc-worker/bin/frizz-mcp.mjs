@@ -591,9 +591,7 @@ const ASK = {
     "irreversible, an external-facing commitment, a security posture with real exposure, product or UX " +
     "direction that is genuinely the human's taste to set. And ask when you KNOW the answer but cannot " +
     "ACT on it: a merge, a publish, a spend, a comment that goes out under their name. Then the " +
-    "recommendation is the point, and it goes first. But once NOTHING IS LEFT TO DECIDE and only the act " +
-    "remains — the human already said ship it, and only they can sign in, approve or press publish — that " +
-    "is not a question at all: hand them the steps with `instruct`.\n\n" +
+    "recommendation is the point, and it goes first.\n\n" +
     "ASKING DOES NOT END YOUR TURN. A question waits on a person, so it carries no timeout and expires " +
     "never — but you keep working. Do everything that does NOT depend on the answer first, and register " +
     "the question at the moment you find it rather than saving it for the end.\n\n" +
@@ -612,10 +610,9 @@ const ASK = {
     "ON AN AUTONOMOUS THREAD THIS REFUSES, and tells you the standing instruction you are working " +
     "under. A thread carrying a rest Goal has already been told to keep going and decide for itself, " +
     "so the refusal is that instruction arriving at the moment it matters. Decide, and say which way " +
-    "you went in your write-up. If the call is genuinely the human's — destructive or irreversible — " +
-    "put it in your FINAL MESSAGE instead of here; autonomous does not mean nobody is reading. An ACT " +
-    "only the human can perform is not a call: hand them the steps with `instruct`, which autonomous " +
-    "mode allows.",
+    "you went in your write-up. If the call is genuinely the human's — destructive, irreversible, or " +
+    "an act you are not permitted to take — put it in your FINAL MESSAGE instead of here; autonomous " +
+    "does not mean nobody is reading.",
   inputSchema: {
     type: "object",
     properties: {
@@ -651,94 +648,6 @@ const UNASK = {
   },
 }
 
-// ---- `instruct` / `uninstruct`: steps only the HUMAN can perform, as a ROW --------------------------
-//
-// A row of the same registry as a question, with a kind of its own (AskedInstructions in @frizz/shared):
-// the open row queues the thread, blocks `done` and silences the sign-off reminder exactly as a question
-// does, and the human's click on the card is delivered through the same durable path as an answer.
-const INSTRUCT = {
-  name: "instruct",
-  description:
-    "HAND THE HUMAN STEPS ONLY THEY CAN PERFORM, as a ROW that waits for them to report back — and " +
-    "frizz wakes you the moment they do. Sign in to a CLI or a site, approve a held workflow run, " +
-    "dispatch a release, enter a 2FA code, restart an app outside your reach, press a button you are " +
-    "not allowed to press, run a command that needs their credentials. Before this existed those steps " +
-    "went into the prose of a handoff, where nothing tracked them, nothing woke you once they were done, " +
-    "and a `done` card filed them away unread.\n\n" +
-    "IT IS FOR AN ACT, NOT A DECISION. If the human should CHOOSE something — whether to merge, which " +
-    "design, what to call it — that is `ask`. If the choice is made and only the human can carry it out, " +
-    "that is this. And it is never for something you could do yourself: run the command, open the page, " +
-    "restart your own process. A step you hand over that you could have taken costs the human a trip " +
-    "and you a turn.\n\n" +
-    "THE CARD: your title, your context, your steps numbered in order, a note box, and two buttons — " +
-    "\"Done\" and \"Couldn't do it\". Either click wakes you, with the reply restating your title " +
-    "(`“Publish frizz-server 0.15.10” → Done — <their note>`). There is no × on it: \"Couldn't do it\" " +
-    "is how the human declines, and it tells you.\n\n" +
-    "IT IS A SIGN-OFF — rest on it. An open instruction holds your thread in the human's queue, and it " +
-    "BLOCKS `done`: steps the human has not reported on are work still owed. Write NO ```awaiting fence " +
-    "beside it — frizz refuses a park while one is open, exactly as it does beside a question. An armed " +
-    "Goal does not fire over it either: \"keep going\" has no answer until the human acts. When they " +
-    "report, decide what follows — check that the step took, carry on, and call `done` once the work " +
-    "has really landed.\n\n" +
-    "REGISTERING DOES NOT END YOUR TURN. Do everything that does not depend on the steps first, and " +
-    "register the moment you know they are needed rather than saving it for the end — the human can " +
-    "start on them while you work.\n\n" +
-    "WRITE THE STEPS TO BE FOLLOWED COLD. The human has their original prompt and nothing else — not " +
-    "your plan, not your notes, not the names you coined. One action per step, in the order to take " +
-    "them, imperative (\"Run …\", \"Open …\", \"Approve …\"), with the exact command in backticks or a " +
-    "fenced block and the exact page as a link. If you need something to be true afterwards, say how " +
-    "they can tell it worked.\n\n" +
-    "ONE INSTRUCTION PER CALL, completed on its own card: several steps toward one outcome are one call, " +
-    "several unrelated acts are several. Withdraw one you no longer need with `uninstruct`. NOT REFUSED " +
-    "ON AN AUTONOMOUS THREAD, unlike `ask`: a Goal lets you decide for yourself, it cannot sign in for you.",
-  inputSchema: {
-    type: "object",
-    properties: {
-      title: {
-        type: "string",
-        description:
-          "ONE LINE naming what the human gets done, in their vocabulary — \"Sign in to Claude on this " +
-          "machine\", \"Publish frizz-server 0.15.10\", \"Approve the held CI run on #482\". It heads the " +
-          "card, and it is how their reply names the instruction back to you.",
-      },
-      steps: {
-        type: "array",
-        minItems: 1,
-        items: { type: "string" },
-        description:
-          "The steps, IN ORDER, one action each, as markdown — a command in backticks or a fenced block, " +
-          "a link to the page with the button on it. The card numbers them, so do not number them yourself.",
-      },
-      context: {
-        type: "string",
-        description:
-          "OPTIONAL markdown shown above the steps: why this is needed and what happens once it is done. " +
-          "A sentence or two — the steps are the substance.",
-      },
-    },
-    required: ["title", "steps"],
-  },
-}
-
-const UNINSTRUCT = {
-  name: "uninstruct",
-  description:
-    "WITHDRAW AN INSTRUCTION you registered with `instruct`, by its id. Its card disappears and the human " +
-    "is no longer asked to perform those steps.\n\n" +
-    "Use it the moment the steps stop mattering: you found a way to do it yourself, the plan changed, or " +
-    "what they were for is gone. Steps left on someone's board after they stopped mattering are worse " +
-    "than none — the human performs them, for nothing.\n\n" +
-    "You do NOT need this for an instruction the human reports on; that settles itself and wakes you. " +
-    "Withdrawing is YOUR move and is never reported back to you as news.",
-  inputSchema: {
-    type: "object",
-    properties: {
-      id: { type: "string", description: "The instruction id (`ins_…`) `instruct` returned, or that `activity` lists. Only your own thread's." },
-    },
-    required: ["id"],
-  },
-}
-
 const DONE = {
   name: "done",
   description:
@@ -746,12 +655,10 @@ const DONE = {
     "success in their queue and stays there until they archive it — marking done is not dismissal, and " +
     "it does not close, archive or hide anything.\n\n" +
     "FRIZZ CAN REFUSE THIS, which is the whole reason it is a tool rather than a fence. An OPEN " +
-    "QUESTION, an OPEN INSTRUCTION or an ARMED REGISTRATION blocks it, and the refusal names each one by " +
-    "id: a question nobody answered dies with the card, so do steps nobody performed, and a live wait " +
-    "means the thing you were waiting for has not happened yet. Resolve them for real — answer it " +
-    "yourself and `unask`, wait for the human to report on an instruction (or `uninstruct` one you no " +
-    "longer need), or `unwatch` the wait you no longer need — then call again. There is no force " +
-    "parameter and there will not be one.\n\n" +
+    "QUESTION or an ARMED REGISTRATION blocks it, and the refusal names each one by id: a question " +
+    "nobody answered dies with the card, and a live wait means the thing you were waiting for has not " +
+    "happened yet. Resolve them for real — answer it yourself and `unask`, or `unwatch` the wait you no " +
+    "longer need — then call again. There is no force parameter and there will not be one.\n\n" +
     "IT ONLY COUNTS WHAT IS REGISTERED. A background shell or a sub-agent you never registered does " +
     "not block this, because frizz cannot tell a build you are waiting on from a dev server you walked " +
     "away from. That judgement is yours, and registering it is how you make it.\n\n" +
@@ -759,8 +666,7 @@ const DONE = {
     "plan, doc or commissioned report written INTO A FILE. An open pull request is not done — the " +
     "merge is. An investigation headed for a fix is not done — the fix is. And a verdict that ends in " +
     "SOMEBODY SHOULD NOW DO SOMETHING (merge it, post this, pick one of these) is not done either: " +
-    "that is an `ask`, carrying your recommendation as the first option — or, once the decision is made " +
-    "and only the human's act is left, an `instruct`.\n\n" +
+    "that is an `ask`, carrying your recommendation as the first option.\n\n" +
     "THE TEST IS NEVER \"HAVE I STOPPED WORKING\". It is: WHAT IS LOST IF NOBODY EVER OPENS THIS " +
     "THREAD AGAIN? Name one thing and you are not done. Uncertain is not done.",
   inputSchema: {
@@ -828,11 +734,10 @@ const ACTIVITY = {
   description:
     "EVERYTHING YOU CURRENTLY HAVE OUT, with the id each one is named by — your background shells, your " +
     "sub-agents, your armed timers, the pull requests you registered, the `wch_…` of every watch holding " +
-    "one of them, every QUESTION still owed an answer, every INSTRUCTION the human has not reported on, " +
-    "and saved links/files with their lnk_ ids.\n\n" +
+    "one of them, every QUESTION still owed an answer, and saved links/files with their lnk_ ids.\n\n" +
     "WHY YOU NEED IT: an ```awaiting fence names what you are waiting on BY ID, and frizz checks every " +
     "one against what is actually live. A name that matches nothing is not a park — you are bumped and " +
-    "your thread queues. The same goes for the ids `unwatch`, `unask` and `uninstruct` take, and for the id you put in " +
+    "your thread queues. The same goes for the ids `unwatch` and `unask` take, and for the id you put in " +
     "an EMPTY ```question fence to PLACE a registered question in your handoff (a marker naming no open " +
     "question of yours draws nothing). So if you have lost one (a " +
     "compaction, a long turn, a wake you did not expect), call this rather than guessing. Guessing is " +
@@ -871,10 +776,9 @@ const UNLINK = {
   },
 }
 
-// WATCH_ISSUE rides at the END (2026-09-14), and INSTRUCT / UNINSTRUCT after it (2026-10-03): the tool list
-// is read by position in frizz-mcp.test.ts, and a worker's runtime reads it by name, so the order costs
-// nothing and appending breaks nothing.
-const TOOLS = [SPAWN_THREAD, GOAL, TIMER, WATCH_PR, WATCH, UNWATCH, ASK, UNASK, DONE, TITLE, ACTIVITY, LINK, UNLINK, WATCH_ISSUE, INSTRUCT, UNINSTRUCT]
+// WATCH_ISSUE rides at the END (2026-09-14): the tool list is read by position in frizz-mcp.test.ts, and a
+// worker's runtime reads it by name, so the order costs nothing and appending breaks nothing.
+const TOOLS = [SPAWN_THREAD, GOAL, TIMER, WATCH_PR, WATCH, UNWATCH, ASK, UNASK, DONE, TITLE, ACTIVITY, LINK, UNLINK, WATCH_ISSUE]
 
 /** @type {Record<string, (args: Record<string, unknown>) => Promise<string>>} */
 const HANDLERS = {
@@ -886,8 +790,6 @@ const HANDLERS = {
   [WATCH.name]: watch,
   [ASK.name]: ask,
   [UNASK.name]: unask,
-  [INSTRUCT.name]: instruct,
-  [UNINSTRUCT.name]: uninstruct,
   [DONE.name]: done,
   [TITLE.name]: title,
   [UNWATCH.name]: unwatch,
@@ -953,29 +855,19 @@ async function activity() {
     "inside your prose. `unask` the ones since decided. A question is never named in an ```awaiting " +
     "fence."
   )
-  // THE INSTRUCTIONS, for the same reason as the questions: they wait on a person, not on running work.
-  const instructions = Array.isArray(result?.instructions) ? result.instructions : []
-  const instructedBlock = instructions.length === 0 ? "" : (
-    `\n\n${instructions.length} instruction${instructions.length === 1 ? "" : "s"} the human has not reported on yet:\n\n` +
-    instructions.map((q) => `  instruction: ${q.id}\n    ${String(q?.spec?.question ?? "").replace(/\s+/g, " ").slice(0, 160)}`).join("\n") +
-    "\n\nEach one blocks `done` until the human reports — their \"Done\" or \"Couldn't do it\" wakes you — " +
-    "or you withdraw it with `uninstruct`. Like a question it draws its own card, and it is never named " +
-    "in an ```awaiting fence."
-  )
   if (!items.length) {
-    if (questions.length > 0 || instructions.length > 0) {
+    if (questions.length > 0) {
       return (
         "Nothing is RUNNING on this thread — no background shells, no sub-agents, no armed timers, no " +
         "registered PRs. So an ```awaiting fence would have nothing to name, and a fence naming nothing " +
-        "is not a park." + askedBlock + instructedBlock + linksBlock
+        "is not a park." + askedBlock + linksBlock
       )
     }
     return (
       "Nothing is running on this thread — no background shells, no sub-agents, no armed timers, no " +
-      "registered PRs, no open questions and no open instructions.\n\nSo there is nothing to wait on: an " +
-      "```awaiting fence would have nothing to name, and a fence naming nothing is not a park. End with " +
-      "```done, register a question with `ask` if you need the human to decide something, or hand them " +
-      "steps with `instruct` if you need them to do something." + linksBlock
+      "registered PRs, and no open questions.\n\nSo there is nothing to wait on: an ```awaiting fence " +
+      "would have nothing to name, and a fence naming nothing is not a park. End with ```done, or " +
+      "register a question with `ask` if you need the human." + linksBlock
     )
   }
   const lines = items.map((i) => {
@@ -1006,7 +898,7 @@ async function activity() {
     "```\n\nDrop the lines you are not actually waiting on — a dev server you left running is not a wait." +
     "\n\nA `watch` registration (marked `[watched as …]` above) keeps the WAKE across a compaction and a " +
     "restart, but it does not replace the fence: name the work in the fence all the same." +
-    askedBlock + instructedBlock + linksBlock
+    askedBlock + linksBlock
   )
 }
 
@@ -1626,21 +1518,10 @@ async function unwatch(args) {
 /** Read back what the human still owes an answer on, so a worker never needs a second call to find out.
  * @param {Record<string, unknown> | undefined} result @returns {string} */
 function openQuestionList(result) {
-  // QUESTIONS ONLY: the server echoes the whole registry, instructions included, and a worker that asked
-  // a question should not read its instructions back as more questions it owes nothing on.
-  const open = (Array.isArray(result?.open) ? result.open : []).filter((q) => q?.spec?.kind !== "instructions")
+  const open = Array.isArray(result?.open) ? result.open : []
   if (!open.length) return "Nothing else is open on this thread — the human owes you no answer."
   const lines = open.map((q) => `  ${q.id}  ${(q.spec?.question ?? "").split("\n")[0]}`)
   return `Open on this thread now:\n${lines.join("\n")}`
-}
-
-/** The instructions twin of openQuestionList: what the human still has to perform on this thread.
- * @param {Record<string, unknown> | undefined} result @returns {string} */
-function openInstructionList(result) {
-  const open = (Array.isArray(result?.open) ? result.open : []).filter((q) => q?.spec?.kind === "instructions")
-  if (!open.length) return "No instruction is open on this thread — the human has nothing of yours to perform."
-  const lines = open.map((q) => `  ${q.id}  ${(q.spec?.question ?? "").split("\n")[0]}`)
-  return `Instructions open on this thread now:\n${lines.join("\n")}`
 }
 
 /** The `ask` handler: register one or more questions the human owes an answer to.
@@ -1672,9 +1553,6 @@ async function unask(args) {
   const slug = threadSlug()
   const id = typeof args.id === "string" ? args.id.trim() : ""
   if (!id) throw new Error("`id` is required — take it from `ask`")
-  // An instruction id is withdrawn by `uninstruct`, and reaching for the question verb is an easy slip —
-  // the id prefix names its kind, so route it rather than reporting it as a question withdrawn.
-  if (id.startsWith("ins_")) return uninstruct(args)
   const result = (await callRpc("unask", { slug, id }))?.result
   // A withdrawal that matched nothing is reported rather than swallowed: the id was wrong, the human
   // already answered it, or it is another thread's — and a worker that believes it withdrew a question
@@ -1683,45 +1561,6 @@ async function unask(args) {
     ? `Question ${id} withdrawn. Its card is gone and the human will not be asked.`
     : `No OPEN question ${id} on this thread — it was already answered or dismissed, or the id is not one of yours.`
   return `${head}\n\n${openQuestionList(result)}`
-}
-
-/** The `instruct` handler: register steps the human performs, and rest on them.
- * @param {Record<string, unknown>} args @returns {Promise<string>} */
-async function instruct(args) {
-  const slug = threadSlug()
-  const title = typeof args.title === "string" ? args.title.trim() : ""
-  if (!title) throw new Error("`title` is required — one line naming what the human gets done")
-  const steps = (Array.isArray(args.steps) ? args.steps : []).filter((s) => typeof s === "string" && s.trim()).map((s) => s.trim())
-  if (!steps.length) throw new Error("`steps` is required — at least one step, in the order to take them, one action each")
-  const context = typeof args.context === "string" ? args.context.trim() : ""
-  const result = (await callRpc("instruct", { slug, title, steps, ...(context ? { context } : {}) }))?.result
-  const id = result?.registered?.id ?? "(unknown)"
-  return (
-    `Registered instruction ${id}: ${title}\n\n` +
-    "IT IS ON THE HUMAN'S BOARD NOW, as a card with your steps and two buttons — \"Done\" and \"Couldn't " +
-    "do it\". Either click wakes you with their reply, restating your title.\n\n" +
-    "KEEP WORKING on whatever does not depend on these steps; when nothing is left, rest — the open " +
-    "instruction is your sign-off. Write no ```awaiting fence beside it, and `done` refuses while it is " +
-    "open.\n\n" +
-    `WITHDRAW IT the moment it stops mattering (\`uninstruct\`, id \`${id}\`).\n\n${openInstructionList(result)}`
-  )
-}
-
-/** The `uninstruct` handler: withdraw one instruction by id. Through the `unask` RPC — an instruction is a
- * row of the question registry, so the slug-scoped withdrawal is that registry's.
- * @param {Record<string, unknown>} args @returns {Promise<string>} */
-async function uninstruct(args) {
-  const slug = threadSlug()
-  const id = typeof args.id === "string" ? args.id.trim() : ""
-  if (!id) throw new Error("`id` is required — take it from `instruct` or from `activity`")
-  // The RPC would withdraw a QUESTION by this id just as readily, which is not what a worker calling this
-  // verb meant — so the question prefix is refused by name rather than silently taking the question away.
-  if (id.startsWith("qst_")) throw new Error(`\`${id}\` is a question, not an instruction — withdraw it with \`unask\``)
-  const result = (await callRpc("unask", { slug, id }))?.result
-  const head = result?.withdrawn
-    ? `Instruction ${id} withdrawn. Its card is gone and the human will not be asked to perform it.`
-    : `No OPEN instruction ${id} on this thread — the human already reported on it, or the id is not one of yours.`
-  return `${head}\n\n${openInstructionList(result)}`
 }
 
 /** The `done` handler: declare the effort finished, or report exactly what refuses to let it.
@@ -1741,7 +1580,6 @@ async function done(args) {
   // REFUSED, with everything that refuses it named by id, so the next move is a tool call and not a
   // guess. Reported as an ordinary result rather than thrown: this is a gate doing its job, not a fault.
   const questions = (result?.blockingQuestions ?? []).map((q) => `  ${q.id}  ${(q.question ?? "").split("\n")[0]}`)
-  const instructions = (result?.blockingInstructions ?? []).map((i) => `  ${i.id}  ${(i.title ?? "").split("\n")[0]}`)
   const watches = (result?.blockingWatches ?? []).map((w) => `  ${w.id}  ${w.what}`)
   const parts = ["NOT marked done. This thread still holds work open."]
   if (questions.length) {
@@ -1749,13 +1587,6 @@ async function done(args) {
       `${questions.length} question${questions.length === 1 ? "" : "s"} the human has not answered:\n${questions.join("\n")}\n` +
       "Each one dies unread with a done card. Decide it yourself and withdraw it (`unask`), or leave it " +
       "open and keep working until it is answered.",
-    )
-  }
-  if (instructions.length) {
-    parts.push(
-      `${instructions.length} instruction${instructions.length === 1 ? "" : "s"} the human has not reported on:\n${instructions.join("\n")}\n` +
-      "Steps nobody performed die unread with a done card. Rest and wait for the human — their \"Done\" or " +
-      "\"Couldn't do it\" wakes you — or withdraw the ones you no longer need (`uninstruct`).",
     )
   }
   if (watches.length) {

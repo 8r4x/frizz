@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactElement, type ReactNode } from "react"
 import { useSnapshot } from "valtio"
-import { INSTRUCTIONS_KIND, type AccountBackend, type ThreadSkill, type ThreadView } from "@frizz/shared"
+import type { AccountBackend, ThreadSkill, ThreadView } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { restoreContextItems, showToast, store, takeContextItems } from "../store.ts"
 import { buildMessageWithContext, hasToken } from "../lib/composerContext.ts"
@@ -125,12 +125,7 @@ export function ThreadComposerBox({
   const isMobile = useIsMobile()
   const phoneBar = isMobile && surface === "chatComposer"
   const turnRunning = thread?.runtime === "running" || thread?.runtime === "spawning"
-  // NOT while an instruction is open (`mcp__frizz__instruct`). Its card carries its own "Done", the
-  // human's report that wakes the worker, directly above this bar; a second "Done" here would FILE THE
-  // THREAD instead and tell the worker nothing. An open question hides this verb the same way, behind
-  // the bar's "Answer" (PhoneAnswerBar).
-  const instructionOpen = (thread?.questions ?? []).some((q) => q.spec.kind === INSTRUCTIONS_KIND)
-  const canComplete = thread ? threadLifecycleAvailability(thread).archive && !turnRunning && !instructionOpen : false
+  const canComplete = thread ? threadLifecycleAvailability(thread).archive && !turnRunning : false
 
   function send(interrupt = false) {
     const text = message.trim()
