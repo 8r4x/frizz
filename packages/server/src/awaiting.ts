@@ -176,8 +176,8 @@ function liveKey(i: AwaitingItem): string {
  *
  *  STEPS ARE THE ONE WAIT THAT NEEDS NEITHER (2026-10-03). A fence listing `steps:` waits on the HUMAN,
  *  and the human is the one party frizz never has to watch: the thread sits in their queue
- *  (awaitingNeedsInput reads steps as `true`), and their reply — the card's Done or Couldn't do it, or
- *  anything they type — is itself the wake. Any item named beside the steps must still be live, and a
+ *  (awaitingNeedsInput reads steps as `true`), and their reply — the card's Done, or anything they
+ *  type — is itself the wake. Any item named beside the steps must still be live, and a
  *  `for:` beside them still runs out (parkExpiresAt), as a re-check the worker asked for. */
 export function parkIsHonoured(park: AwaitingPark, live: LiveActivity): boolean {
   const onHuman = park.steps.length > 0

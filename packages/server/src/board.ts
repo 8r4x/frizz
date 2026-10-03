@@ -1237,8 +1237,8 @@ export function deriveAwaitingBackground(
     // A TIMER PARK IS THE SAME EXCEPTION AGAIN (2026-08-24): its fence has no park action either, so
     // suppressing this card left the wait stated nowhere but the fence's own machinery footer.
     !hasParkedTimerWatch(tele, armedTimerIds) &&
-    // STEPS FOR THE HUMAN are the card's own verbs (Done / Couldn't do it), so this card is the one
-    // place they can be performed from — the queue, the drawer and the full-screen page alike.
+    // STEPS FOR THE HUMAN carry the card's own Done, so this card is the one place it can be pressed
+    // from — the queue, the drawer and the full-screen page alike.
     !hasHumanSteps(tele)
   ) return false
   // Every OTHER excusal deriveNeedsYou applies still outranks the card (a user wall-clock snooze, a

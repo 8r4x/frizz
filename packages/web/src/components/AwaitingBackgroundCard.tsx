@@ -41,7 +41,7 @@ import { threadLifecycleAvailability } from "../lib/threadLifecycle.ts"
 import { ICON_LABEL_NUDGE } from "../lib/iconAlign.ts"
 import { PRIMER, PRIMER_DANGER_LINK } from "../lib/primer.ts"
 import { LinkedHtml } from "./LinkedHtml.tsx"
-import { StepsList, StepsReply } from "./AwaitingSteps.tsx"
+import { StepsDone, StepsList } from "./AwaitingSteps.tsx"
 import { CARD_ACTION_EXPLAINER, CardActions, CARD_BODY, CARD_LINK, CARD_PRIMARY_ACTION, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
 
 // Name what the thread is ACTUALLY waiting on. Three real cases, and the sentence has to be true in all
@@ -170,7 +170,7 @@ const NO_LIVE_WORK: Pick<ThreadView, "id" | "subAgents" | "bgShells" | "watches"
 const NO_HINTS: readonly AwaitingHint[] = []
 
 /** Is the thread resting on EXACTLY these steps right now — the board's own last fence, at rest? Only
- *  then may the card offer the steps' verbs. A fence the transcript hands in (`fence`) is a rest the
+ *  then may the card offer the steps' Done. A fence the transcript hands in (`fence`) is a rest the
  *  thread may already have left: the tailer clears `lastFence` on the human's very next message, so a
  *  steps card drawn after the reply is a record of what was asked, and a second Done would send twice. */
 export function restingOnSteps(thread: Pick<ThreadView, "runtime" | "lastFence"> | undefined, steps: readonly string[]): boolean {
@@ -1029,7 +1029,7 @@ export function AwaitingBackgroundCard({ thread, fence, onSnooze, onSnoozeFailed
   // to fade. Their absence no longer decides whether the Snooze RENDERS — see AwaitingSnooze.
   onSnooze?: () => void
   onSnoozeFailed?: () => void
-  // The same optimistic exit for a STEPS verb: replying "Done" takes the thread out of the queue just as
+  // The same optimistic exit for the STEPS verb: replying "Done" takes the thread out of the queue just as
   // a snooze does, and puts it back if the send fails. Queue-only, like the pair above.
   onReplied?: () => void
   onReplyFailed?: () => void
@@ -1172,7 +1172,7 @@ export function AwaitingBackgroundCard({ thread, fence, onSnooze, onSnoozeFailed
           introduced the band on 2026-08-31; every card with a verb wears it since 2026-09-30. It draws
           on EVERY surface the card is live on; a thread with no snooze verb draws the card without it. */}
       {stepsLive ? (
-        <StepsReply slug={thread.id} sessionId={thread.sessionId} steps={steps} onReplied={onReplied} onReplyFailed={onReplyFailed} />
+        <StepsDone slug={thread.id} onReplied={onReplied} onReplyFailed={onReplyFailed} />
       ) : snoozable ? (
         <CardActions data-awaiting-snooze>
           <AwaitingSnooze thread={thread} onSnooze={onSnooze} onSnoozeFailed={onSnoozeFailed} />

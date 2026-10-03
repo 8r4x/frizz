@@ -100,12 +100,14 @@ test("the contract teaches steps: as the wait on a human's act, and routes to it
     const c = prompt.replace(/\s+/g, " ")
     // Taught by example, in the grammar the parser reads: one `- ` item per step under the key.
     assert.match(prompt, /```awaiting\n {2}title: Sign in to npm so the release can publish\n {2}steps:\n {4}- Run `npm login --auth-type=web`/)
-    // Its properties: verbatim, names the human (so no other name and no `for:`), always queues, and the
-    // two verbs come back as the human's own reply.
+    // Its properties: verbatim, names the human (so no other name and no `for:`), always queues, and its
+    // one verb comes back as the human's own reply — anything else is a message of their own.
     assert.match(c, /The `title:` and `steps:` values are the exceptions: frizz reads them verbatim/)
     assert.match(c, /Steps NAME THE HUMAN as the wait, so the fence needs no other name and no `for:`/)
     assert.match(c, /it always puts the thread in their queue/)
-    assert.match(c, /\*\*Done\*\* and \*\*Couldn't do it\*\*/)
+    assert.match(c, /card shows the steps over one \*\*Done\*\* button, and its click comes back to you as their reply, `Done`/)
+    assert.match(c, /anything else they need to tell you — a step that failed, the account they used — comes as a message of their own/)
+    assert.doesNotMatch(c, /Couldn't do it/)
     assert.match(c, /\(`steps:` count: they name the human\.\)/)
     // A decision is still a question; an act is steps — at every place the two used to blur.
     assert.match(c, /A DECISION you need from them is a question, never a fence/)

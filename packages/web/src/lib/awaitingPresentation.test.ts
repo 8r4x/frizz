@@ -10,9 +10,6 @@ import {
   reasonSentence,
   awaitingProse,
   hintGloss,
-  STEPS_DONE,
-  STEPS_NOT_DONE,
-  stepsReply,
 } from "./awaitingPresentation.ts"
 
 const now = Date.parse("2026-07-21T18:00:00.000Z")
@@ -236,18 +233,7 @@ test("hintGloss: an issue-only fence glosses as the issue; a PR still wins when 
   assert.equal(hintGloss([{ kind: "issue", value: "acme/app#7" }, { kind: "pr", value: "acme/app#391" }]), "PR acme/app#391")
 })
 
-// STEPS FOR THE HUMAN (2026-10-03). A steps verb sends an ORDINARY reply — the same message typing it
-// would — so the worker reads the outcome first and the human's own words after it, and nothing marks
-// the reply as frizz's.
-test("stepsReply: the outcome, then the human's note after an em dash, and nothing when they wrote nothing", () => {
-  assert.equal(stepsReply(STEPS_DONE, ""), "Done")
-  assert.equal(stepsReply(STEPS_DONE, "   \n "), "Done", "whitespace is not a note")
-  assert.equal(stepsReply(STEPS_DONE, "  signed in as the maintainer \n"), "Done — signed in as the maintainer")
-  assert.equal(stepsReply(STEPS_NOT_DONE, "the 2FA app is on my other phone"), "Couldn't do it — the 2FA app is on my other phone")
-  // A multi-line note keeps its lines: it is the human's message, not a label.
-  assert.equal(stepsReply(STEPS_DONE, "signed in\nthe token expires in 30 days"), "Done — signed in\nthe token expires in 30 days")
-})
-
+// STEPS FOR THE HUMAN (2026-10-03) — a fence whose wait is on the reader.
 test("the wait clause counts steps first, as a wait on the reader", () => {
   const steps = [{ kind: "step" as const, value: "Run `npm login`" }, { kind: "step" as const, value: "Approve the prompt" }]
   assert.equal(awaitingWaitClause(steps.slice(0, 1)), "waiting on a step from you")

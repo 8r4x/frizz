@@ -16,18 +16,11 @@ export const AWAITING_NO_PROSE = "Waiting for an external update."
  *  shape whose wait is on the READER, so the fallback says so instead of the generic "Awaiting". */
 export const STEPS_FALLBACK_TITLE = "For you to do"
 
-/** The steps card's two verbs, and the words each one sends. */
+/** The steps card's one verb, and EXACTLY the message it sends — an ordinary reply from the human, the
+ *  same thing typing the word would send. Nothing marks it as frizz's, because nothing about it is: the
+ *  worker reads it as the human's own answer to the steps it just posted, and the transcript draws it as
+ *  their bubble. Anything more the human has to say goes through the prompt box. */
 export const STEPS_DONE = "Done"
-export const STEPS_NOT_DONE = "Couldn't do it"
-
-/** THE REPLY A STEPS VERB SENDS — an ordinary message from the human, the same thing typing it would
- *  send: the outcome, then their note after an em dash. Nothing marks it as frizz's, because nothing
- *  about it is: the worker reads it as the human's own answer to the steps it just posted, and the
- *  transcript draws it as their bubble. The note keeps the human's line breaks. */
-export function stepsReply(outcome: string, note: string): string {
-  const said = note.trim()
-  return said ? `${outcome} — ${said}` : outcome
-}
 
 /** The PRs this fence is parked on, in fence order, deduped — clickable, because the fence line is the
  *  only place the ref exists and a card that names a PR without reaching it is a dead end (maintainer

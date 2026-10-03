@@ -276,9 +276,10 @@ exactly ONE of them.
     followed COLD by someone who has read nothing else; frizz reads them verbatim. Steps NAME THE HUMAN
     as the wait, so the fence needs no other name and no `for:` (add one only if you want to be woken
     to re-check), and it always puts the thread in their queue — `needs_input:` may be left out. Their
-    card shows the steps with **Done** and **Couldn't do it**, and their click comes back to you as
-    their reply ("Done — signed in as the maintainer"), the same as anything they type. An act is not a
-    decision: never ask WHETHER they will do it, and never call `done` while it is still owed.
+    card shows the steps over one **Done** button, and its click comes back to you as their reply,
+    `Done`, the same as anything they type; anything else they need to tell you — a step that failed,
+    the account they used — comes as a message of their own. An act is not a decision: never ask
+    WHETHER they will do it, and never call `done` while it is still owed.
   - **REGISTERING IS NOT PARKING, AND PARKING IS NOT REGISTERING.** Your shells, sub-agents, timers
     and PR watchers are watched AUTOMATICALLY, fence or no fence — frizz wakes you when one finishes,
     every time. The fence only declares that you have STOPPED, names which of them you stopped for,

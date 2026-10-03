@@ -328,9 +328,3 @@ export const CARD_ACTION_RADIUS = "rounded-md"
 // The same verb with the icon+label layout every card action uses. Cards differ only in what they pass
 // beyond this (shrink-0, a disabled treatment), never in the fill.
 export const CARD_PRIMARY_ACTION = `flex shrink-0 items-center gap-1 ${CARD_ACTION_RADIUS} text-[11px] font-medium outline-none transition-colors focus-visible:ring-1 focus-visible:ring-focus-ink-60 ${CARD_PRIMARY_BUTTON}`
-// The SECONDARY sibling beside a card's primary verb — the steps card's "Couldn't do it" beside its
-// "Done". It departs from the primary on FILL only: outlined, so the pair keeps its hierarchy, and
-// otherwise the SAME box. The 1px border comes OUT of the padding (9px + 1 is the primary's 10px, 3px + 1
-// its 4px): a border drawn on top of the primary's padding made the secondary 2px taller than the button
-// beside it (26.5px against 24.5px, measured 2026-10-03).
-export const CARD_SECONDARY_ACTION = `flex shrink-0 items-center gap-1 ${CARD_ACTION_RADIUS} border border-border px-[9px] py-[3px] text-[11px] font-medium text-fg/90 outline-none transition-colors hover:border-border-strong hover:bg-panel focus-visible:ring-1 focus-visible:ring-focus-ink-60`

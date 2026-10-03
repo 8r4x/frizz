@@ -417,8 +417,8 @@ test("hasAwaitingWaitRows agrees with the table", () => {
 
 // ---- STEPS FOR THE HUMAN (2026-10-03) --------------------------------------------------------------
 // A fence carrying `steps:` waits on the READER. The steps themselves render through the markdown
-// sanitizer, which needs a real DOM this runner does not have — the drawn card, its note box and its two
-// verbs are pinned in a real browser by AwaitingSteps.e2e.test.ts. What is DOM-free is pinned here: the
+// sanitizer, which needs a real DOM this runner does not have — the drawn card and its one verb are
+// pinned in a real browser by AwaitingSteps.e2e.test.ts. What is DOM-free is pinned here: the
 // heading, and the one test that decides whether the verbs may be offered at all.
 const stepHints = [{ kind: "step" as const, value: "Run `npm login`" }, { kind: "step" as const, value: "Approve the prompt" }]
 
@@ -429,7 +429,7 @@ test("a steps card is headed for the reader unless the worker titled it", () => 
   assert.equal(awaitingBackgroundLabel(thread([], []), [{ kind: "title", value: "Sign in to npm" }, ...stepHints]), "Sign in to npm")
 })
 
-test("the steps' verbs are offered only while the thread rests on exactly those steps", () => {
+test("the steps' Done is offered only while the thread rests on exactly those steps", () => {
   const steps = stepHints.map((h) => h.value)
   const resting = { runtime: "turn-idle", lastFence: { kind: "awaiting", body: "", hints: stepHints } } as Parameters<typeof restingOnSteps>[0]
   assert.equal(restingOnSteps(resting, steps), true)
@@ -440,6 +440,6 @@ test("the steps' verbs are offered only while the thread rests on exactly those 
   assert.equal(restingOnSteps({ ...resting, lastFence: { kind: "done", body: "", hints: stepHints } } as typeof resting, steps), false)
   assert.equal(restingOnSteps(resting, [steps[0]]), false, "a card for other steps is a record, not the ask")
   assert.equal(restingOnSteps(resting, [...steps].reverse()), false)
-  assert.equal(restingOnSteps(resting, []), false, "no steps, no verbs")
+  assert.equal(restingOnSteps(resting, []), false, "no steps, no Done")
   assert.equal(restingOnSteps(undefined, steps), false, "a sub-agent's transcript has no thread to reply to")
 })

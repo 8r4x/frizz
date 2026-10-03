@@ -47,7 +47,7 @@ const wantAgents = wantAll || params.get("agents") === "1"
 const wantWatch = wantAll || watchMode !== null
 // ?steps=1 — STEPS FOR THE HUMAN (2026-10-03): a fence handing the reader things only they can do, with
 // no live work beside it — the shape a worker parks on when it needs a sign-in. ?steps=titled adds the
-// worker's own heading. The note box and the two verbs draw because the thread rests on these steps.
+// worker's own heading. The Done button draws because the thread rests on these steps.
 const stepsMode = params.get("steps")
 const wantSteps = stepsMode !== null
 // Shells are the DEFAULT shape; ?agents=1 swaps them for sub-agents, and ?watch=1 for a lone watcher.
@@ -209,8 +209,8 @@ window.fetch = async (input, init) => {
     // A void mutation serializes as {result:null} (rpc/server.ts) — mirror that so the web client parses success.
     return new Response(JSON.stringify({ result: null }), { headers: { "content-type": "application/json" } })
   }
-  // A steps verb is an ordinary reply, so it arrives HERE, as the composer's would — recorded with the
-  // exact message, so the e2e can read the words the worker would receive.
+  // The steps' Done is an ordinary reply, so it arrives HERE, as the composer's would — recorded with
+  // the exact message, so the e2e can read the words the worker would receive.
   // The reply starts the worker's turn in production, which takes the thread out of the queue; model
   // that by pruning it, so the queue's 8s un-hide guard does not bring the card back.
   if (url.pathname === "/_frizz/rpc/followUp") {
@@ -235,7 +235,7 @@ function Fixture() {
 createRoot(document.getElementById("root")!).render(
   <QueryClientProvider client={new QueryClient()}>
     <TooltipProvider>
-      {/* A SEND from this card (a steps verb, or the composer) marks the thread steered, and the working
+      {/* A SEND from this card (the steps' Done, or the composer) marks the thread steered, and the working
           status row that then draws reads the router (StatusRow's project-scoped links) — outside a router
           context it throws on render. A MemoryRouter gives it that context without an address bar, as in
           the sidebar fixtures. */}

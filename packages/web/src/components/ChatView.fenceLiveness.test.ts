@@ -199,7 +199,7 @@ test("the resting card owns the heading, the glyph, the prose and the chips", ()
   // Nothing else may key on the runtime. A second `showsRestingCard` call inside this card is how a
   // heading, a glyph or a truncation rule would start varying with it again.
   assert.equal(code.match(/showsRestingCard\(/g)?.length, 1, "the runtime reaches the Snooze once")
-  assert.equal(code.match(/restingOnSteps\(/g)?.length, 1, "…and the steps' verbs once")
+  assert.equal(code.match(/restingOnSteps\(/g)?.length, 1, "…and the steps' Done once")
   assert.doesNotMatch(code, /\.runtime\b/, "and nothing in the card reads the runtime directly")
 })
 
