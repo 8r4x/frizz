@@ -383,6 +383,8 @@ test("`ask` is REFUSED on an autonomous thread, and the refusal quotes the stand
         // And it names the way out that is NOT asking, so a genuinely human-owned call is not simply
         // swallowed by the mode.
         assert.match(e.message, /say so in your final message/)
+        // An ACT the human must perform is not a call, and has a verb autonomous mode allows.
+        assert.match(e.message, /hand them the steps with `instruct`, which autonomous mode allows/)
         return true
       },
     )
@@ -670,6 +672,9 @@ test("an instruction takes exactly one of its two replies, and the reply is deli
       const refused = await h.router.answerQuestions.handler({ input: { slug: "t", answers: [{ questionId: instruction.id, question: title, chosen }] } })
       assert.deepEqual(refused.answered, [], `chosen ${JSON.stringify(chosen)} must not settle an instruction`)
     }
+    // …and so is a right label carrying follow-up rows: an instruction has none, and the wake would quote them.
+    const withFollowUps = { questionId: instruction.id, question: title, chosen: [INSTRUCTIONS_DONE], followUps: [{ questionId: instruction.id, question: "And?", chosen: ["Yes"] }] }
+    assert.deepEqual((await h.router.answerQuestions.handler({ input: { slug: "t", answers: [withFollowUps] } })).answered, [])
     assert.equal(h.kicks(), 0)
     assert.equal(h.storage.getThreadQuestion(instruction.id)!.state, "open")
 

@@ -3132,9 +3132,11 @@ export function createRouter(ctx: AppContext) {
           throw new Error(
             "This thread is running autonomously — decide it yourself and proceed. Its standing " +
             `instruction is:\n\n${goal}\n\nSay which way you went and why in your write-up, so the ` +
-            "human can course-correct. If the call is genuinely theirs — something destructive, " +
-            "irreversible, or an act you are not permitted to take — say so in your final message " +
-            "instead; a thread on autonomous mode is not a thread with no human reading it.",
+            "human can course-correct. If the call is genuinely theirs — something destructive or " +
+            "irreversible — say so in your final message instead; a thread on autonomous mode is not a " +
+            "thread with no human reading it. An ACT only the human can perform (a sign-in, an approval, " +
+            "a button you may not press) is not a call: hand them the steps with `instruct`, which " +
+            "autonomous mode allows.",
           )
         }
         // REFUSED, not stored, and named one fault at a time in the worker's own vocabulary — a shape
@@ -3217,10 +3219,11 @@ export function createRouter(ctx: AppContext) {
           if (!q || q.thread_slug !== input.slug || q.state !== "open") continue
           // AN INSTRUCTION TAKES ONE OF ITS TWO REPLIES and nothing else. Its card offers exactly those,
           // and the worker reads the label back as what HAPPENED — "Done" means the steps were performed —
-          // so a reply that names neither reached here from something other than the card, and is
-          // skipped like any other mismatch rather than delivered as a claim nobody made.
+          // so a reply that names neither, or carries follow-up rows an instruction never has, reached
+          // here from something other than the card, and is skipped like any other mismatch rather than
+          // delivered as a claim nobody made.
           const spec = parseQuestionSpec(q.spec)
-          if (spec && isInstructions(spec) && !(answer.chosen.length === 1 && INSTRUCTIONS_OUTCOMES.includes(answer.chosen[0]))) continue
+          if (spec && isInstructions(spec) && !(answer.chosen.length === 1 && INSTRUCTIONS_OUTCOMES.includes(answer.chosen[0]) && !answer.followUps?.length)) continue
           if (ctx.storage.answerThreadQuestion(answer.questionId, JSON.stringify(answer), now)) answered.push(answer.questionId)
         }
         // ANSWERING IS NOT DELIVERING. The row is stored answered-but-undelivered and the scheduler

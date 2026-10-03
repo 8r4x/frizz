@@ -17,7 +17,6 @@
 import { useLayoutEffect, useRef } from "react"
 import { ListTodo } from "lucide-react"
 import { INSTRUCTIONS_DONE, INSTRUCTIONS_NOT_DONE, type AskedInstructions, type QuestionAnswer } from "@frizz/shared"
-import { shouldSubmitStagedEnter } from "../lib/composerKeyboard.ts"
 import { useInlineMarkdownHtml, useMarkdownHtml } from "../lib/useMarkdown.ts"
 import { LinkedHtml } from "./LinkedHtml.tsx"
 import { CARD_PRIMARY_ACTION, CARD_SECONDARY_ACTION, CardActions, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
@@ -63,27 +62,19 @@ export function InstructionCard({
         value={note}
         disabled={sending}
         onChange={(e) => onNote(e.target.value)}
+        // ENTER IS A NEWLINE HERE, not a send — the one box that departs from the Enter-sends rule every
+        // other box shares (shouldSubmitStagedEnter), because this card has TWO verbs and a key cannot
+        // know which one the human means. Sent as "Done", a note reading "couldn't — the 2FA app is on my
+        // other phone" tells the worker the steps were performed; on a phone, whose Return key is the
+        // only way to start a new line, that was one keystroke away. The reply is always a click.
+        //
+        // Every key still stops HERE, as in every box that owns its keys: Escape must not reach the app's
+        // window handler, and the queue card's own Enter-to-send (TodosView) counts on boxes stopping it.
         onKeyDown={(e) => {
           e.stopPropagation()
           if (e.key === "Escape") {
             e.preventDefault()
             e.currentTarget.blur()
-            return
-          }
-          // Enter sends the card's PRIMARY verb, as Enter sends the staged answers in a question's box
-          // (the three Enter keys every box shares — see shouldSubmitStagedEnter). Shift/Option-Enter
-          // still write a newline, and "Couldn't do it" is always a click.
-          if (shouldSubmitStagedEnter({
-            key: e.key,
-            altKey: e.altKey,
-            ctrlKey: e.ctrlKey,
-            metaKey: e.metaKey,
-            shiftKey: e.shiftKey,
-            isComposing: e.nativeEvent.isComposing,
-            keyCode: e.nativeEvent.keyCode,
-          })) {
-            e.preventDefault()
-            if (!sending) onComplete(INSTRUCTIONS_DONE)
           }
         }}
         placeholder="Add a note (optional)…"

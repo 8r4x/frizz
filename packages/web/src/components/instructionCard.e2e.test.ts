@@ -86,15 +86,21 @@ test("an instruction draws its numbered steps with no × and no Send, and Done s
   }
 })
 
-test("Enter in an instruction's note box sends Done", { skip: !baseUrl, timeout: 60_000 }, async () => {
-  const { browser, page, errors } = await launch("instruct=1")
+// ENTER IS A NEWLINE in this box, never a send: the card has two verbs, and a note explaining why the
+// steps FAILED, sent as "Done" by a Return key, would tell the worker they were performed. Asked beside a
+// staged question, so neither verb nor the question batch can ride the key.
+test("Enter in an instruction's note box writes a newline and sends nothing", { skip: !baseUrl, timeout: 60_000 }, async () => {
+  const { browser, page, errors } = await launch("mixed=1")
   try {
-    await page.waitForSelector(`${CARD} textarea`)
+    await page.waitForSelector(`${QUESTION} [data-question-option]`)
+    await mouseClick(page, `${QUESTION} [data-question-option]`)
     await mouseClick(page, `${CARD} textarea`)
-    await page.keyboard.type("ok")
+    await page.keyboard.type("couldn't")
     await page.keyboard.press("Enter")
-    const [sent] = await rpcs(page, 1)
-    assert.deepEqual(sent.body.answers, [{ questionId: "ins_0001aaaa0001", question: TITLE, chosen: ["Done"], text: "ok" }])
+    await page.keyboard.type("the 2FA app is elsewhere")
+    await new Promise((r) => setTimeout(r, 500))
+    assert.deepEqual(await page.evaluate(() => (window as unknown as { __rpc: unknown[] }).__rpc), [], "nothing is sent")
+    assert.equal(await page.$eval(`${CARD} textarea`, (ta) => (ta as HTMLTextAreaElement).value), "couldn't\nthe 2FA app is elsewhere")
     assert.deepEqual(errors, [])
   } finally {
     await browser.close()
