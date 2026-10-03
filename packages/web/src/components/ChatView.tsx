@@ -90,7 +90,7 @@ import { QuestionBlockCard } from "./QuestionBlockCard.tsx"
 import { settledAskView } from "../lib/interactionQuestion.ts"
 // ONE frame for every image the chat renders — border, inset mat, centered picture. See its module
 // header for why it spans the message width rather than shrink-wrapping each picture.
-import { FRAMED_IMAGE, ImageFrame } from "./ImageFrame.tsx"
+import { FRAMED_IMAGE, IMAGE_FRAME_MAT, ImageFrame } from "./ImageFrame.tsx"
 // The resting card, shared with the queue (TodosView passes it the event-Snooze; these two surfaces
 // deliberately pass no action — see the module header).
 import { AwaitingBackgroundCard, AwaitingWaitTable, issueStatusLine, showsRestingCard, watchStatusLine } from "./AwaitingBackgroundCard.tsx"
@@ -1918,8 +1918,8 @@ export function workingIndicatorGap(messages: readonly ChatMessage[]): number {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i]
     if (m.queued || messageRendersNothing(m)) continue
-    // Under a PICTURE it takes the picture's own gap — this is the exact pair the maintainer reported
-    // (an image `Read` with the shimmer under it). See PICTURE_STEP.
+    // Under a PICTURE it takes the picture's own gap — the pair the maintainer reported (a picture card
+    // with the shimmer under it; an image `Read` then, a delivery now). See PICTURE_STEP.
     if (messageTailIsPicture(m)) return PICTURE_STEP
     // The shimmer is itself a bare LABEL, so it joins the tight run only under a CARD — under another
     // label it takes the ordinary step, exactly as messageGap charges that pair.
@@ -2027,8 +2027,8 @@ export interface CollapsedTool {
   // BashBlock. Absent for Claude Bash calls → the command shows alone (the prior behavior).
   output?: string
   // Set for a tool whose result carried an image (e.g. chrome-devtools `take_screenshot`): the absolute
-  // path to the decoded screenshot, rendered inline via /local-image inside a ToolImageCard. Like the
-  // read/command entries it stands alone — never folds into a ×N repeat count.
+  // path to the decoded screenshot, shown via /local-image once its collapsed ToolImageCard is opened.
+  // Like the read/command entries it stands alone — never folds into a ×N repeat count.
   outputImage?: string
   // Generic tool input/source plus terminal result metadata. These fields also retain failure context
   // for specialized cards such as Edit, which normally renders only its diff.
@@ -2094,9 +2094,10 @@ function collapseTools(tools: TranscriptMessage["tools"]): CollapsedTool[] {
       out.push({ name: t.name, detail: t.detail, command: t.command, desc: t.desc, input: t.input, output: t.output, status: t.status, backgroundState: t.backgroundState, exitCode: t.exitCode, cwd: t.cwd, sessionId: t.sessionId, durationMs: t.durationMs, count: 1 })
     } else if (t.outputImage) {
       // A tool whose result carried a PICTURE (an image `Read`, chrome-devtools `take_screenshot`) renders
-      // as its own ToolImageCard showing it inline — never folds into a ×N run. Ahead of the `read` branch
-      // on purpose: a Read of a `.png` is an image first and an excerpt second, so if a result ever ships
-      // both, the picture wins and the text rides along in the card's body rather than replacing it.
+      // as its own ToolImageCard, the picture one click in — never folds into a ×N run. Ahead of the
+      // `read` branch on purpose: a Read of a `.png` is an image first and an excerpt second, so if a
+      // result ever ships both, the picture wins and the text rides along in the card's body rather than
+      // replacing it.
       out.push({ name: t.name, detail: t.detail, outputImage: t.outputImage, output: t.output ?? t.read, status: t.status, durationMs: t.durationMs, count: 1 })
     } else if (t.read) {
       // A Read that shipped an excerpt renders as its own expandable card — never folds into a ×N run.
@@ -2513,48 +2514,77 @@ function ToolCard({ name, detail, count, status, backgroundState, liveBackground
   )
 }
 
-// A tool whose result carried an image (chrome-devtools `take_screenshot`, a Read of a `.png`) rendered
-// as the picture itself, always — the maintainer's whole point is that a screenshot in the transcript
-// should just BE there (2026-08-02: "those should just be rendered … automatically"). The one Read the
-// server does NOT hand a picture is a Read of the human's own prompt attachment, whose bubble already
-// shows it (server/frizz-paths.ts isPromptAttachmentPath); that call keeps its plain header. So the frame IS
-// the card: the shared ImageFrame draws the outer border, the label bar (petite-caps tool name + target +
-// status, in the Bash/Read header language) rides inside it, and the picture sits centered in the mat.
-// No collapse — a picture is the one card body whose whole value is being visible without a click; the
-// call is also lifted out of the `Ran N tool calls` digest for the same reason
-// (lib/toolActivity.isToolActivityException). Any accompanying text result prints below the picture.
+// A tool whose result carried an image (chrome-devtools `take_screenshot`, a Read of a `.png`, codex's
+// `view_image`): a card like ReadBlock, COLLAPSED by default, whose body is the picture. A worker takes
+// these to check its own work, and the human sees a picture only where the worker chose to SHOW one, in
+// a ```lightbox fence (maintainer 2026-10-03: "we should stop having special rendering where we display
+// screenshots in the read tool … No images or screenshots are visible unless you make them visible to
+// the user with the light box"). So the call folds into the `Ran N tool calls` digest like any other
+// (lib/toolActivity.isToolActivityException), and the picture is one click further in. It reverses
+// 2026-08-02 ("those should just be rendered … automatically"), which drew every one of them open.
+//
+// The one Read the server does NOT hand a picture is a Read of the human's own prompt attachment, whose
+// bubble already shows it (server/frizz-paths.ts isPromptAttachmentPath); that call keeps its plain
+// header. Opened, the picture sits in the shared frame's mat (ImageFrame) and clicks through to the
+// lightbox viewer like any picture; any accompanying text result prints below it.
 function ToolImageCard({ name, detail, outputImage, output, status, durationMs }: { name: string; detail?: string; outputImage: string; output?: string; status?: ToolStatus; durationMs?: number }) {
+  const [open, setOpen] = useState(false)
+  const [broken, setBroken] = useState(false)
+  const bodyId = useId()
+  const label = prettyToolName(name)
   const short = detail ? shortenTarget(detail) : undefined
-  const header = (
-    <div className="frizz-bash-header">
-      <span className="flex min-w-0 items-center gap-2">
-        <span className="petite-caps frizz-bash-label shrink-0">{prettyToolName(name)}</span>
-        {short && <span className="min-w-0 truncate text-[11.5px] text-muted" title={detail}>{short}</span>}
-      </span>
-      <span className="flex shrink-0 items-center gap-2">
-        <ToolStatusMeta status={status} durationMs={durationMs} />
-      </span>
-    </div>
-  )
   return (
-    <div>
-      {/* `outputImage` is ALWAYS a hash-named copy in the screenshot cache, so BlockImage's basename
-          caption would read "9f2c…c1.png" — noise directly under a header that already names the real
-          file. Drop it and give the picture the real target as its alt. */}
-      <BlockImage path={outputImage} hideCaption altText={short ? `${prettyToolName(name)}: ${short}` : prettyToolName(name)} header={header} />
-      {output && <pre className="frizz-bash frizz-bash-body frizz-bash-output-body mt-1.5">{output}</pre>}
+    <div data-tool-image className="frizz-bash">
+      <ToolDisclosureHeader
+        className="frizz-bash-header"
+        controls={bodyId}
+        expanded={open}
+        label={`${open ? "Collapse" : "Expand"} ${label}${detail ? `: ${detail}` : ""}`}
+        onToggle={() => setOpen((v) => !v)}
+        meta={<ToolStatusMeta status={status} durationMs={durationMs} />}
+      >
+        <span className="petite-caps frizz-bash-label shrink-0">{label}</span>
+        {short && <span className="min-w-0 truncate text-[11.5px] text-muted" title={detail}>{short}</span>}
+      </ToolDisclosureHeader>
+      <div id={bodyId} hidden={!open}>
+        {open && (
+          <>
+            {broken ? (
+              <div className="frizz-bash-body break-all text-muted-70">{outputImage}</div>
+            ) : (
+              <div className={IMAGE_FRAME_MAT}>
+                {/* `outputImage` is ALWAYS a hash-named copy in the screenshot cache, so its basename
+                    would read "9f2c…c1.png". The alt names the real target instead, and the lightbox
+                    viewer titles the picture from it (lib/lightbox.lightboxImageFor). */}
+                <img
+                  src={localImageUrl(outputImage)}
+                  alt={short ? `${label}: ${short}` : label}
+                  data-local-path={outputImage}
+                  data-local-image="true"
+                  onError={() => setBroken(true)}
+                  className={`cursor-zoom-in ${FRAMED_IMAGE}`}
+                />
+              </div>
+            )}
+            {output && <pre className="frizz-bash-body frizz-bash-output-body">{output}</pre>}
+          </>
+        )}
+      </div>
     </div>
   )
 }
 
 // A SendUserFile delivery — the worker surfacing files to the human. Same card family (`frizz-bash`) and
 // header as ToolImageCard so it reads as one of the tool cards, but OPEN by default: seeing the delivered
-// images IS the point. Body: images inline (stacked, via the gated /local-image route), non-image files as
-// openable chips (BlockFile → the gated opener), and the `caption` below in muted prose (capped ~65% wide
-// so long captions stay readable against the wide card, not one edge-to-edge line).
+// images IS the point. Body: the images as ONE lightbox gallery — the same object a ```lightbox fence
+// draws, because a delivery is the other way a worker SHOWS a picture (via the gated /local-image route)
+// — non-image files as openable chips (BlockFile → the gated opener), and the `caption` below in muted
+// prose (capped ~65% wide so long captions stay readable against the wide card, not one edge-to-edge line).
 function SentFilesCard({ images, files, caption, status, durationMs }: { images: string[]; files: string[]; caption?: string; status?: ToolStatus; durationMs?: number }) {
   const [open, setOpen] = useState(true)
   const bodyId = useId()
+  // Uncaptioned tiles: the one `caption` describes the delivery as a whole and prints once, below.
+  const galleryEntries = useMemo(() => images.map((target) => ({ target })), [images])
   const summary = [
     images.length ? `${images.length} image${images.length === 1 ? "" : "s"}` : "",
     files.length ? `${files.length} file${files.length === 1 ? "" : "s"}` : "",
@@ -2582,7 +2612,7 @@ function SentFilesCard({ images, files, caption, status, durationMs }: { images:
       <div id={bodyId} hidden={!open}>
         {open && (
           <div className="flex flex-col gap-1.5 px-2.5 pb-2.5 pt-1.5">
-            {images.map((path, i) => <BlockImage key={`i${i}`} path={path} hideCaption altText={caption ?? "delivered image"} />)}
+            {images.length > 0 && <LightboxGallery entries={galleryEntries} />}
             {files.length > 0 && (
               <div className="flex flex-wrap gap-1.5">
                 {files.map((f, i) => <BlockFile key={`f${i}`} path={f} />)}
@@ -3709,17 +3739,14 @@ function ProseHtml({ md, wrap }: { md: string; wrap?: boolean }) {
 
 // A local absolute image path rendered inline via the gated /local-image route, inside the shared
 // ImageFrame. A load failure (route 4xx, missing file) falls back to showing the plain path text so
-// nothing is silently swallowed. `hideCaption` drops the basename line (SendUserFile images are
-// hash-named cache copies whose basename is meaningless, and the SentFilesCard carries its own caption);
-// `altText` overrides the a11y alt (else the basename); `header` is the frame's label bar (ToolImageCard
-// passes the tool name + target + status through it, so the card IS the frame — see ImageFrame).
-export function BlockImage({ path, hideCaption, altText, header }: { path: string; hideCaption?: boolean; altText?: string; header?: ReactNode }) {
+// nothing is silently swallowed. `hideCaption` drops the basename line (an attachment's bubble names
+// the file already); `altText` overrides the a11y alt (else the basename).
+export function BlockImage({ path, hideCaption, altText }: { path: string; hideCaption?: boolean; altText?: string }) {
   const [broken, setBroken] = useState(false)
   if (broken) return <div className="font-mono-keep text-[12px] text-muted-70 break-all">{path}</div>
   const base = basename(path)
   return (
     <ImageFrame
-      header={header}
       caption={hideCaption ? undefined : <figcaption className="bg-panel-2 px-2 pb-1.5 font-mono-keep text-[11px] text-muted-60 break-all">{base}</figcaption>}
     >
       <img

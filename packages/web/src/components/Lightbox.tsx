@@ -1,11 +1,11 @@
 import * as RadixDialog from "@radix-ui/react-dialog"
-import { ChevronLeft, ChevronRight, ExternalLink, X, ZoomIn, ZoomOut } from "lucide-react"
+import { ChevronLeft, ChevronRight, ExternalLink, Play, X, ZoomIn, ZoomOut } from "lucide-react"
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactNode, type RefObject } from "react"
 import { createPortal } from "react-dom"
 import { useSnapshot } from "valtio"
 import { closeLightbox, openLightbox, stepLightbox, store } from "../store.ts"
 import { justifyRows } from "../lib/justifiedRows.ts"
-import { lightboxLabel, parseLightboxBody, resolveLightboxPath, type LightboxEntry, type LightboxImage } from "../lib/lightbox.ts"
+import { isLightboxVideo, lightboxLabel, parseLightboxBody, resolveLightboxPath, type LightboxEntry, type LightboxImage } from "../lib/lightbox.ts"
 import { useBackClosesLayer } from "../lib/backDismiss.ts"
 import { openLocalPath } from "../lib/local-file-links.ts"
 import { localImageUrl } from "../lib/markdownTargets.ts"
@@ -15,9 +15,10 @@ import { useLocalPathBase } from "../lib/useMarkdown.ts"
 import { FIT, clampZoom, detailScale, maxScale, panBy, pinch, zoomAbout, type ZoomBounds, type ZoomState } from "../lib/viewerZoom.ts"
 import { ImageFrame } from "./ImageFrame.tsx"
 
-// A ```lightbox fence (lib/lightbox.ts for the grammar): the pictures a worker listed, laid out as ONE
-// gallery inside the same frame every rendered picture in the transcript sits in (ImageFrame), and a
-// full-screen viewer that pages through them — and zooms into each — when one is clicked.
+// A ```lightbox fence (lib/lightbox.ts for the grammar): the pictures and videos a worker listed, laid out
+// as ONE gallery inside the same frame every rendered picture in the transcript sits in (ImageFrame), and
+// a full-screen viewer that pages through them — zooming into a picture, playing a video — when one is
+// clicked.
 //
 // The gallery is JUSTIFIED ROWS (lib/justifiedRows.ts) — every picture in a row at one height, each at
 // its own aspect ratio — so a phone shot and a desktop shot sit side by side at their real shapes, with
@@ -135,27 +136,51 @@ function GalleryPicture({ tile, ratio, labelled, onOpen, onShape, onBroken }: {
   onShape: (ratio: number) => void
   onBroken: () => void
 }) {
+  const video = isLightboxVideo(tile.path!)
+  const shape = (width: number, height: number) => {
+    if (width > 0 && height > 0) onShape(width / height)
+  }
   return (
     <button
       type="button"
       data-lightbox-tile
+      data-lightbox-video={video || undefined}
       onClick={onOpen}
-      aria-label={`View ${tile.label}`}
-      className="group flex min-w-0 cursor-zoom-in flex-col gap-1 rounded-md text-left outline-none focus-visible:ring-1 focus-visible:ring-focus-ink-60 focus-visible:ring-offset-2 focus-visible:ring-offset-panel-2"
+      aria-label={`${video ? "Play" : "View"} ${tile.label}`}
+      className={`group flex min-w-0 flex-col gap-1 rounded-md text-left outline-none focus-visible:ring-1 focus-visible:ring-focus-ink-60 focus-visible:ring-offset-2 focus-visible:ring-offset-panel-2 ${video ? "cursor-pointer" : "cursor-zoom-in"}`}
       style={tileStyle(ratio)}
     >
-      <span className="block w-full overflow-hidden rounded-md" style={{ aspectRatio: ratio }}>
-        <img
-          src={localImageUrl(tile.path!)}
-          alt={tile.label}
-          draggable={false}
-          onLoad={(e) => {
-            const { naturalWidth, naturalHeight } = e.currentTarget
-            if (naturalWidth > 0 && naturalHeight > 0) onShape(naturalWidth / naturalHeight)
-          }}
-          onError={onBroken}
-          className="block h-full w-full object-contain transition-[filter] group-hover:brightness-110"
-        />
+      <span className="relative block w-full overflow-hidden rounded-md" style={{ aspectRatio: ratio }}>
+        {video ? (
+          <>
+            {/* The tile is the video's first frame, never a player: it loads only the metadata (its
+                shape) and that frame, and plays in the viewer. `#t=0.001` is what makes iOS Safari
+                paint the frame at all — with only metadata it otherwise draws an empty box. Inert to
+                the pointer, so the click is the tile's. */}
+            <video
+              src={`${localImageUrl(tile.path!)}#t=0.001`}
+              preload="metadata"
+              muted
+              playsInline
+              disablePictureInPicture
+              tabIndex={-1}
+              aria-hidden
+              onLoadedMetadata={(e) => shape(e.currentTarget.videoWidth, e.currentTarget.videoHeight)}
+              onError={onBroken}
+              className="pointer-events-none block h-full w-full object-contain transition-[filter] group-hover:brightness-110"
+            />
+            <PlayBadge />
+          </>
+        ) : (
+          <img
+            src={localImageUrl(tile.path!)}
+            alt={tile.label}
+            draggable={false}
+            onLoad={(e) => shape(e.currentTarget.naturalWidth, e.currentTarget.naturalHeight)}
+            onError={onBroken}
+            className="block h-full w-full object-contain transition-[filter] group-hover:brightness-110"
+          />
+        )}
       </span>
       {labelled && (
         <span title={tile.label} className="block truncate font-sans text-[11px] leading-4 text-muted">
@@ -163,6 +188,25 @@ function GalleryPicture({ tile, ratio, labelled, onOpen, onShape, onBroken }: {
         </span>
       )}
     </button>
+  )
+}
+
+// What says a tile is a video: the play mark on a dark chip, centred — the viewer's own paging chip, so it
+// reads on any frame. A play triangle carries its mass on its flat left side, so centring its BOX leaves
+// it looking pushed left and centring its mass leaves it looking pushed right; the eye settles between
+// the two. Lucide's own triangle already sits a twelfth of its box right of centre, which lands there:
+// measured on the rendered chip at dsf 8, the painted triangle's box centre is 0.56px right of the chip's
+// and its luminance centroid 0.84px left, so their midpoint is 0.14px off — under the device grid, so no
+// nudge of ours.
+function PlayBadge() {
+  return (
+    <span
+      data-lightbox-play
+      aria-hidden
+      className="pointer-events-none absolute left-1/2 top-1/2 flex h-8 w-8 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-black/55 text-white/90 ring-1 ring-white/15 backdrop-blur-sm transition-colors group-hover:bg-black/70 group-hover:text-white"
+    >
+      <Play size={14} strokeWidth={VIEWER_PEN} absoluteStrokeWidth fill="currentColor" />
+    </span>
   )
 }
 
@@ -299,8 +343,12 @@ function LightboxViewer({ images, index }: { images: readonly LightboxImage[]; i
     setStage(el)
   }, [])
   const pictureRef = useRef<HTMLImageElement>(null)
+  const videoRef = useRef<HTMLVideoElement>(null)
   const image = images[index]
   const path = image?.path ?? ""
+  // A video plays rather than zooms: it has no picture element for the zoom to measure, so every zoom
+  // path below is a no-op on one, and its gestures are the player's own (see onPointerDown).
+  const video = isLightboxVideo(path)
 
   // The view lives in a ref as well as in state: pointer and wheel events arrive faster than React
   // renders, and each must build on the one before it, not on the last render's copy.
@@ -430,7 +478,12 @@ function LightboxViewer({ images, index }: { images: readonly LightboxImage[]; i
     else if (plain && (e.key === "+" || e.key === "=")) zoomBy(ZOOM_STEP)
     else if (plain && (e.key === "-" || e.key === "_")) zoomBy(1 / ZOOM_STEP)
     else if (plain && e.key === "0") commit({ zoom: FIT, animate: true })
-    else return
+    // Space plays and pauses wherever focus is in the viewer. On the player itself the player does that.
+    else if (plain && e.key === " " && video && e.target !== videoRef.current) {
+      const player = videoRef.current
+      if (player?.paused) void player.play().catch(() => undefined)
+      else player?.pause()
+    } else return
     e.preventDefault()
     e.stopPropagation()
   }
@@ -445,8 +498,9 @@ function LightboxViewer({ images, index }: { images: readonly LightboxImage[]; i
   // every touch reaches these handlers — which is what lets a pinch zoom the PICTURE rather than the page.
   const onPointerDown = (e: PointerEvent) => {
     if (e.pointerType === "mouse" && e.button !== 0) return
-    // A press on a control (the paging arrows) is the control's.
-    if ((e.target as Element).closest("button")) return
+    // A press on a control (the paging arrows) is the control's, and so is one on a video: its timeline,
+    // volume and play button are the player's, and a scrub must never turn into a swipe that pages away.
+    if ((e.target as Element).closest("button, video")) return
     pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
     if (pointers.current.size === 1) {
       pointerType.current = e.pointerType
@@ -549,7 +603,7 @@ function LightboxViewer({ images, index }: { images: readonly LightboxImage[]; i
       suppressClick.current = false
       return
     }
-    if ((e.target as Element).closest("button")) return
+    if ((e.target as Element).closest("button, video")) return
     const mouse = pointerType.current === "mouse"
     if (e.target === pictureRef.current) {
       if (mouse) toggleZoom({ x: e.clientX, y: e.clientY })
@@ -608,14 +662,19 @@ function LightboxViewer({ images, index }: { images: readonly LightboxImage[]; i
                 </span>
               )}
               {/* A mouse's only way to zoom without knowing the click or the keys. A touch screen pinches
-                  and double-taps, and its header has no room to spare, so a coarse pointer drops them. */}
-              <ViewerButton label="Zoom out" trim={ZOOM_TRIM} onClick={() => zoomBy(1 / ZOOM_STEP)} disabled={!zoomed} className="pointer-coarse:hidden">
-                <ZoomOut size={16} strokeWidth={VIEWER_PEN} absoluteStrokeWidth />
-              </ViewerButton>
-              <ViewerButton label="Zoom in" trim={ZOOM_TRIM} onClick={() => zoomBy(ZOOM_STEP)} disabled={shown.zoom.scale >= shown.max - 1e-6} className="pointer-coarse:hidden">
-                <ZoomIn size={16} strokeWidth={VIEWER_PEN} absoluteStrokeWidth />
-              </ViewerButton>
-              <ViewerButton label="Open in default viewer" trim={OPEN_TRIM} onClick={() => openLocalPath(image.path, true)}>
+                  and double-taps, and its header has no room to spare, so a coarse pointer drops them.
+                  A video does not zoom, so it has none. */}
+              {!video && (
+                <>
+                  <ViewerButton label="Zoom out" trim={ZOOM_TRIM} onClick={() => zoomBy(1 / ZOOM_STEP)} disabled={!zoomed} className="pointer-coarse:hidden">
+                    <ZoomOut size={16} strokeWidth={VIEWER_PEN} absoluteStrokeWidth />
+                  </ViewerButton>
+                  <ViewerButton label="Zoom in" trim={ZOOM_TRIM} onClick={() => zoomBy(ZOOM_STEP)} disabled={shown.zoom.scale >= shown.max - 1e-6} className="pointer-coarse:hidden">
+                    <ZoomIn size={16} strokeWidth={VIEWER_PEN} absoluteStrokeWidth />
+                  </ViewerButton>
+                </>
+              )}
+              <ViewerButton label={video ? "Open in default player" : "Open in default viewer"} trim={OPEN_TRIM} onClick={() => openLocalPath(image.path, true)}>
                 <ExternalLink size={16} strokeWidth={VIEWER_PEN} absoluteStrokeWidth />
               </ViewerButton>
               <ViewerButton label="Close" trim={CLOSE_TRIM} onClick={closeLightbox}>
@@ -638,7 +697,9 @@ function LightboxViewer({ images, index }: { images: readonly LightboxImage[]; i
             className={`relative flex min-h-0 flex-1 items-center justify-center overflow-hidden px-3 pb-[max(env(safe-area-inset-bottom),16px)] sm:px-16 ${zoomed ? (shown.panning ? "cursor-grabbing" : "cursor-grab") : ""}`}
             style={{ touchAction: "none" }}
           >
-            <ViewerPicture key={image.path} image={image} view={shown} pictureRef={pictureRef} />
+            {video
+              ? <ViewerVideo key={image.path} image={image} view={shown} videoRef={videoRef} />
+              : <ViewerPicture key={image.path} image={image} view={shown} pictureRef={pictureRef} />}
             {many && index > 0 && (
               <PageButton side="left" onClick={() => stepLightbox(-1)} />
             )}
@@ -652,16 +713,18 @@ function LightboxViewer({ images, index }: { images: readonly LightboxImage[]; i
   )
 }
 
+function Unavailable({ what, path }: { what: string; path: string }) {
+  return (
+    <div className="pointer-events-none max-w-md text-center">
+      <div className="text-[13px] text-white/70">{what} unavailable</div>
+      <div className="mt-1 break-all font-mono-keep text-[11px] text-white/45">{path}</div>
+    </div>
+  )
+}
+
 function ViewerPicture({ image, view, pictureRef }: { image: LightboxImage; view: ViewState; pictureRef: RefObject<HTMLImageElement | null> }) {
   const [broken, setBroken] = useState(false)
-  if (broken) {
-    return (
-      <div className="pointer-events-none max-w-md text-center">
-        <div className="text-[13px] text-white/70">Image unavailable</div>
-        <div className="mt-1 break-all font-mono-keep text-[11px] text-white/45">{image.path}</div>
-      </div>
-    )
-  }
+  if (broken) return <Unavailable what="Image" path={image.path} />
   const { scale, x, y } = view.zoom
   return (
     <img
@@ -681,6 +744,33 @@ function ViewerPicture({ image, view, pictureRef }: { image: LightboxImage; view
         // every magnification, instead of a 4px rule and a 24px corner at 4×.
         borderRadius: 6 / scale,
         boxShadow: `0 0 0 ${1 / scale}px rgb(255 255 255 / 0.1)`,
+      }}
+    />
+  )
+}
+
+// A video in the viewer: the browser's own player, which plays as it opens — opening it was the click
+// that asked for it — and inline on a phone rather than taking the screen over. It does not zoom, and a
+// swipe only pages from the backdrop around it, so its scrubber is never mistaken for a swipe. It
+// follows a swipe's pull like a picture does, and wears the picture's hairline edge for the same reason.
+function ViewerVideo({ image, view, videoRef }: { image: LightboxImage; view: ViewState; videoRef: RefObject<HTMLVideoElement | null> }) {
+  const [broken, setBroken] = useState(false)
+  if (broken) return <Unavailable what="Video" path={image.path} />
+  return (
+    <video
+      ref={videoRef}
+      src={localImageUrl(image.path)}
+      aria-label={image.label}
+      controls
+      autoPlay
+      playsInline
+      preload="auto"
+      onError={() => setBroken(true)}
+      className="block max-h-full max-w-full rounded-md bg-black"
+      style={{
+        transform: `translate(${view.pull.x}px, ${view.pull.y}px)`,
+        transition: view.animate ? SETTLE : "none",
+        boxShadow: "0 0 0 1px rgb(255 255 255 / 0.1)",
       }}
     />
   )

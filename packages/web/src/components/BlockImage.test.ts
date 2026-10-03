@@ -12,7 +12,13 @@ test("every rendered image sits in the one frame: border, inset mat, centered pi
 
   assert.ok(blockImage, "BlockImage source should remain discoverable")
   assert.match(blockImage, /data-local-image="true"/)
-  // Prose paths, tool screenshots, deliveries and attachments all reach the picture through ONE element.
+  // Prose paths and attachments reach the picture through ONE element; a gallery (Lightbox.tsx) frames
+  // its rows in the same one, and a tool's collapsed picture card opens onto the same mat and picture.
+  const toolImageCard = source.match(/function ToolImageCard[\s\S]*?\n}\n/)?.[0]
+  assert.ok(toolImageCard, "ToolImageCard source should remain discoverable")
+  assert.match(toolImageCard, /\bIMAGE_FRAME_MAT\b/)
+  assert.match(toolImageCard, /\bFRAMED_IMAGE\b/)
+  assert.match(toolImageCard, /data-local-image="true"/)
   assert.match(blockImage, /<ImageFrame\b/)
   assert.match(blockImage, /\bFRAMED_IMAGE\b/)
 
@@ -22,7 +28,7 @@ test("every rendered image sits in the one frame: border, inset mat, centered pi
   // renders those constants rather than a second copy that could drift from the one Markdown uses.
   assert.match(imageFrame, /className=\{IMAGE_FRAME\}/)
   assert.match(imageFrame, /className=\{IMAGE_FRAME_MAT\}/)
-  // The outer border + the tool-card typography, so a `frizz-bash-header` can ride inside the frame.
+  // The outer border + the tool-card typography, so a framed picture belongs to the tool-card family.
   assert.match(frame, /IMAGE_FRAME\s*=\s*"frizz-bash\b/)
   // The mat: a little inset padding, a step lighter than the card so a dark screenshot keeps an edge,
   // and the picture centered in it however narrow the picture is.
