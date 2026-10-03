@@ -13,6 +13,7 @@ import { isLocalMarkdownFile, localFileDir } from "../lib/markdownTargets.ts"
 import { basename } from "../lib/paths.ts"
 import { contextChipLabel, insertTokenIntoProse, locateInSource, uniqueToken } from "../lib/composerContext.ts"
 import { Frontmatter, FOOTER_STYLE, OpenAction } from "./MarkdownDrawer.tsx"
+import { useLightboxIslands } from "./Lightbox.tsx"
 import { SheetHeader } from "./ui/SheetHeader.tsx"
 
 // The /full page's SPLIT file viewer: the same built-in markdown reader as MarkdownDrawer, framed as
@@ -74,7 +75,8 @@ export function FileViewerPanel({ slug, path, active }: { slug: string; path: st
   const raw = body.data?.markdown ?? ""
   const { front, body: source } = splitFrontmatter(markdown ? raw : "")
   const [view, setView] = useState<"rendered" | "source">(markdown ? "rendered" : "source")
-  const html = useMarkdownHtml(source, { baseDir: localFileDir(resolved), asDocument: true })
+  const baseDir = localFileDir(resolved)
+  const html = useMarkdownHtml(source, { baseDir, asDocument: true })
   const inner = useInnerHtml(html)
   // Highlighted ONLY when the source view is actually showing, and memoised across mounts by
   // localFileQuery: a markdown file opens rendered, and hljs over its raw text was a blocking task
@@ -84,6 +86,8 @@ export function FileViewerPanel({ slug, path, active }: { slug: string; path: st
   const sourceRef = useRef<HTMLPreElement>(null)
   const rootRef = useRef<HTMLDivElement>(null)
   useLocalFileCodeLinks(renderedRef, html)
+  // A ```lightbox fence renders as the gallery it is in the transcript, against the document's directory.
+  const galleries = useLightboxIslands(renderedRef, html, baseDir)
   const title = basename(resolved)
 
   // ⌘I / Ctrl-I: stage the current selection (when it lives inside this panel) as a context item —
@@ -218,6 +222,7 @@ export function FileViewerPanel({ slug, path, active }: { slug: string; path: st
           <>
             {front && <Frontmatter source={front} />}
             <div ref={renderedRef} className="md-body" dangerouslySetInnerHTML={inner} />
+            {galleries}
           </>
         ) : (
           <div className="text-[13px] text-muted">This file is empty.</div>

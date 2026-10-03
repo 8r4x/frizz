@@ -3728,7 +3728,7 @@ export function BlockImage({ path, hideCaption, altText, header }: { path: strin
         data-local-path={path}
         data-local-image="true"
         onError={() => setBroken(true)}
-        className={`cursor-pointer ${FRAMED_IMAGE}`}
+        className={`cursor-zoom-in ${FRAMED_IMAGE}`}
       />
     </ImageFrame>
   )

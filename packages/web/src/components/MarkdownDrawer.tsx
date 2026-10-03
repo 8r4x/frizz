@@ -13,6 +13,7 @@ import { splitFrontmatter } from "../lib/frontmatter.ts"
 import { isLocalMarkdownFile, localFileDir } from "../lib/markdownTargets.ts"
 import { useIsMobile } from "../lib/mobile.ts"
 import { CodeBody } from "./CodeBody.tsx"
+import { useLightboxIslands } from "./Lightbox.tsx"
 import { Sheet } from "./ui/Sheet.tsx"
 import { SheetHeader } from "./ui/SheetHeader.tsx"
 
@@ -86,10 +87,14 @@ export function MarkdownDrawer({ id, path, title, depth, widthDepth }: { id: num
   // (A non-markdown file — the phone's source view, below — skips the markdown pipeline entirely.)
   const markdown = isLocalMarkdownFile(path)
   const { front, body: source } = splitFrontmatter(markdown ? body.data?.markdown ?? "" : "")
-  const html = useMarkdownHtml(source, { baseDir: localFileDir(resolved), asDocument: true })
+  const baseDir = localFileDir(resolved)
+  const html = useMarkdownHtml(source, { baseDir, asDocument: true })
   const inner = useInnerHtml(html)
   const ref = useRef<HTMLDivElement>(null)
   useLocalFileCodeLinks(ref, html)
+  // A report's ```lightbox fence is a gallery here too, its relative paths resolved against the
+  // document's own directory like its links.
+  const galleries = useLightboxIslands(ref, html, baseDir)
   // ON A PHONE this drawer is the reader for EVERY file (lib/local-file-links: the desktop opener would
   // launch it on the machine Frizz runs on). A file that is not markdown has no rendered form, so it
   // shows as highlighted source — the /full split viewer's source view, same read, same highlighter.
@@ -129,6 +134,7 @@ export function MarkdownDrawer({ id, path, title, depth, widthDepth }: { id: num
               <>
                 {front && <Frontmatter source={front} />}
                 <div ref={ref} className="md-body" dangerouslySetInnerHTML={inner} />
+                {galleries}
                 {body.data?.truncated && (
                   <p className="mt-4 border-t border-border/60 pt-3 text-[12px] text-muted">
                     This file is too long to render in full — everything above the cut is shown.{phone ? "" : " Open it to read the rest."}

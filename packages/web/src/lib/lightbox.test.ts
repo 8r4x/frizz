@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { lightboxLabel, parseLightboxBody, resolveLightboxPath } from "./lightbox.ts"
+import { lightboxImageFor, lightboxLabel, parseLightboxBody, resolveLightboxPath } from "./lightbox.ts"
 
 test("a lightbox body is one picture per non-blank line, in order", () => {
   assert.deepEqual(parseLightboxBody("/tmp/a.png\n\n  /tmp/b.jpg  \n/tmp/c.webp\n"), [
@@ -78,4 +78,15 @@ test("a picture is labelled by its caption, else by its file name", () => {
   assert.deepEqual(lightboxLabel({ target: "/tmp/a.png", caption: "Before" }, "/tmp/a.png"), { label: "Before", captioned: true })
   assert.deepEqual(lightboxLabel({ target: "/tmp/shots/after.png" }, "/tmp/shots/after.png"), { label: "after.png", captioned: false })
   assert.deepEqual(lightboxLabel({ target: "shots/gone.png" }, null), { label: "gone.png", captioned: false })
+})
+
+test("a picture drawn some other way is captioned by its alt text, unless the alt only names the file", () => {
+  // `![The settings page](/tmp/s.png)`.
+  assert.deepEqual(lightboxImageFor("/tmp/s.png", " The settings page "), { path: "/tmp/s.png", label: "The settings page", captioned: true })
+  // A bare picture line: BlockImage's alt is the basename.
+  assert.deepEqual(lightboxImageFor("/tmp/shots/s.png", "s.png"), { path: "/tmp/shots/s.png", label: "s.png", captioned: false })
+  // `![](~/shots/s.png)`: the sanitizer fills an empty alt with the path as written.
+  assert.deepEqual(lightboxImageFor("/Users/me/shots/s.png", "~/shots/s.png"), { path: "/Users/me/shots/s.png", label: "s.png", captioned: false })
+  assert.deepEqual(lightboxImageFor("/tmp/s.png", ""), { path: "/tmp/s.png", label: "s.png", captioned: false })
+  assert.deepEqual(lightboxImageFor("/tmp/s.png", null), { path: "/tmp/s.png", label: "s.png", captioned: false })
 })

@@ -1,12 +1,24 @@
+import { useState } from "react"
 import { createRoot } from "react-dom/client"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import "./styles.css"
 import { splitProseAttachments } from "./lib/imagePaths.ts"
+import { installLocalFileLinkInterceptor } from "./lib/local-file-links.ts"
 import { mdToHtml } from "./lib/markdown.ts"
+import type { BlockAnswer, ParsedQuestion } from "./lib/questionBlocks.ts"
+import { BlockImage, FenceCard } from "./components/ChatView.tsx"
 import { LightboxGallery, LightboxHost } from "./components/Lightbox.tsx"
+import { QuestionBlockCard } from "./components/QuestionBlockCard.tsx"
 
 // The ```lightbox fence with the REAL components: worker prose split exactly as ChatView splits it
 // (splitProseAttachments), each gallery drawn by LightboxGallery, and the viewer hosted the way the page
 // layouts host it. Driven by components/lightbox.e2e.test.ts.
+//
+// Below the transcript's galleries, the OTHER surfaces a fence reaches, each through its real
+// component: a done card (FenceCard) and a question option (QuestionBlockCard), which render prose as one
+// string of HTML and grow their galleries as islands (useLightboxIslands). And a message's LOOSE
+// pictures — a Markdown image, a bare path line (BlockImage), a link to a picture — which open the same
+// viewer through the delegated click listener (lib/local-file-links.ts).
 //
 // The pictures come from that test, not from here. An <img> load is not a `fetch`, so no stub on this
 // page can answer `/_frizz/local-image` (see attachment-render-fixture.tsx); the test intercepts the
@@ -16,10 +28,25 @@ import { LightboxGallery, LightboxHost } from "./components/Lightbox.tsx"
 // A window listener counts the keys that reach the PAGE. The real page unwinds its drawers — and leaves
 // the fullscreen page — on an Escape that gets that far (DrawerStack), so the viewer must keep its own.
 declare global {
-  interface Window { __pageKeys?: string[] }
+  interface Window { __pageKeys?: string[]; __chips?: number[] }
 }
 window.__pageKeys = []
+window.__chips = []
 window.addEventListener("keydown", (e) => { window.__pageKeys!.push(e.key) })
+
+// The cards resolve inline-code paths and read the board; nothing real answers either here.
+const nativeFetch = window.fetch.bind(window)
+window.fetch = async (input, init) => {
+  const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url, window.location.href)
+  if (url.pathname === "/_frizz/rpc/resolveLocalPaths") {
+    return new Response(JSON.stringify({ result: { resolved: [] } }), { headers: { "content-type": "application/json" } })
+  }
+  if (url.pathname.startsWith("/_frizz/rpc/")) {
+    return new Response(JSON.stringify({ result: {} }), { headers: { "content-type": "application/json" } })
+  }
+  return nativeFetch(input, init)
+}
+installLocalFileLinkInterceptor()
 
 const shot = (name: string) => `/fixture/lightbox/${name}`
 
@@ -29,17 +56,63 @@ const messages = [
   ["One file was cleaned up:", "", "```lightbox", shot("first-1440x900.png"), shot("missing-1440x900.png"), shot("last-1440x900.png"), "```"],
 ].map((lines) => lines.join("\n"))
 
+const DONE_BODY = ["Shipped the new settings page.", "", "```lightbox", `${shot("card-before-1440x900.png")}  Before`, `${shot("card-after-1440x900.png")}  After`, "```"].join("\n")
+
+const LAYOUT_QUESTION: ParsedQuestion = {
+  kind: "question",
+  danger: false,
+  contextMd: "Which layout ships?",
+  options: ["A. Two columns", "B. One column"],
+  optionBodies: [
+    ["```lightbox", `${shot("two-col-1440x900.png")}  Desktop`, `${shot("two-col-phone-390x844.png")}  Phone`, "```"].join("\n"),
+    `![One column](${shot("one-col-1440x900.png")})`,
+  ],
+  recommendedIdx: 0,
+}
+
+function LayoutQuestion() {
+  const [answer, setAnswer] = useState<BlockAnswer>({ chosen: null, chosenSet: [], text: "" })
+  return (
+    <QuestionBlockCard
+      question={LAYOUT_QUESTION}
+      interactive={{
+        answer,
+        onChip: (i) => {
+          window.__chips!.push(i)
+          setAnswer((a) => ({ ...a, chosen: a.chosen === i ? null : i }))
+        },
+        onText: (text) => setAnswer(() => ({ chosen: null, text })),
+        onSubmit: () => {},
+      }}
+    />
+  )
+}
+
 createRoot(document.getElementById("root")!).render(
-  <main className="mx-auto max-w-[700px] p-8">
-    {messages.map((md, m) => (
-      <section key={m} data-fixture-message={m} className="mb-8 flex flex-col gap-3 text-[13px]">
-        {splitProseAttachments(md).map((part, i) =>
-          part.kind === "lightbox" ? <LightboxGallery key={i} entries={part.entries} />
-          : part.kind === "md" ? <div key={i} className="md-body" dangerouslySetInnerHTML={{ __html: mdToHtml(part.text) }} />
-          : null,
-        )}
+  <QueryClientProvider client={new QueryClient()}>
+    <main className="mx-auto max-w-[700px] p-8">
+      {messages.map((md, m) => (
+        <section key={m} data-fixture-message={m} className="mb-8 flex flex-col gap-3 text-[13px]">
+          {splitProseAttachments(md).map((part, i) =>
+            part.kind === "lightbox" ? <LightboxGallery key={i} entries={part.entries} />
+            : part.kind === "md" ? <div key={i} className="md-body" dangerouslySetInnerHTML={{ __html: mdToHtml(part.text) }} />
+            : null,
+          )}
+        </section>
+      ))}
+      {/* One transcript message's loose pictures: `data-frizz-msg` is the root ChatView stamps on it. */}
+      <section data-fixture-loose data-frizz-msg="loose" className="mb-8 flex flex-col gap-3 text-[13px]">
+        <div className="md-body" dangerouslySetInnerHTML={{ __html: mdToHtml(`The page now:\n\n![The settings page](${shot("settings-1200x800.png")})`) }} />
+        <BlockImage path={shot("terminal-1000x700.png")} />
+        <div className="md-body" dangerouslySetInnerHTML={{ __html: mdToHtml(`And [the log view](${shot("log-800x600.png")}) on its own.`) }} />
       </section>
-    ))}
-    <LightboxHost />
-  </main>,
+      <section data-fixture-card className="mb-8">
+        <FenceCard fenceKind="done" body={DONE_BODY} hints={[]} />
+      </section>
+      <section data-fixture-question className="mb-8">
+        <LayoutQuestion />
+      </section>
+      <LightboxHost />
+    </main>
+  </QueryClientProvider>,
 )

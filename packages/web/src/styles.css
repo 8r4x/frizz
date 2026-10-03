@@ -992,12 +992,13 @@ a[href] {
 /* The image itself, on BOTH paths — inside a frame, and bare on the inline path, which deliberately
    does not frame (a block frame would burst a one-line answer chip or caption). Every declaration here
    either matches what FRAMED_IMAGE already sets or, like the cursor, is wanted in both places, so the
-   framed picture is unaffected by it. */
+   framed picture is unaffected by it. The cursor is the gallery tiles' own: a click opens the picture
+   in the lightbox (lib/local-file-links.ts). */
 .md-body img[data-local-path] {
   display: block;
   max-width: 100%;
   margin-inline: auto;
-  cursor: pointer;
+  cursor: zoom-in;
 }
 /* The stand-in the delegated error handler (lib/local-file-links.ts) swaps in for a screenshot whose
    file is gone. Same muted mono register as BlockImage's own fallback, and BLOCK so it occupies one
@@ -1041,6 +1042,14 @@ a[href] {
    a click on a link, a local-file action or a resolved path follows the reference, and a click on any
    other pixel of the row picks the option. */
 [data-question-option] :is(a, .local-file-action, .local-file-code) {
+  position: relative;
+  z-index: 1;
+}
+/* A picture in an option is there to be LOOKED AT before choosing, so it is a live thing too: a click on
+   a picture or a gallery tile opens the lightbox, and the option is picked by the rest of the row (the
+   chip's div-level onClick skips the picture, as it skips a link). A gallery's mat, between its tiles,
+   still picks the option — that click reaches the chip's handler with no button or picture under it. */
+[data-question-option] .md-body :is(img[data-local-path], .md-lightbox) {
   position: relative;
   z-index: 1;
 }
@@ -1140,6 +1149,19 @@ a[href] {
   margin-top: 0;
 }
 .md-body > .md-code:last-child {
+  margin-bottom: 0;
+}
+/* A ```lightbox fence in rendered Markdown (components/Lightbox.tsx useLightboxIslands): the gallery
+   stands where the fence's code block stood, so it takes that block's rhythm and the same explicit
+   first/last-child resets, for the same specificity tie. */
+.md-body .md-lightbox {
+  display: block;
+  margin: var(--md-step) 0;
+}
+.md-body > .md-lightbox:first-child {
+  margin-top: 0;
+}
+.md-body > .md-lightbox:last-child {
   margin-bottom: 0;
 }
 /* Geometry is ExternalTerminalCommand's copy button — the app's existing one — expressed in `em` so it

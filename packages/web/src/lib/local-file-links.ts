@@ -1,6 +1,7 @@
 import { rpc } from "../api/rpc.ts"
-import { openFilePanel, pushMarkdownDrawer, showToast, store } from "../store.ts"
+import { openFilePanel, openLightbox, pushMarkdownDrawer, showToast, store } from "../store.ts"
 import { copyTextToClipboard } from "./clipboard.ts"
+import { lightboxImageFor } from "./lightbox.ts"
 import { isLocalMarkdownFile, localImageUrl } from "./markdownTargets.ts"
 import { isMobileViewport } from "./mobile.ts"
 
@@ -15,7 +16,8 @@ export function installLocalFileLinkInterceptor(): () => void {
     if (!source || !path) return
     event.preventDefault()
     event.stopPropagation()
-    openLocalPath(path, source.dataset.localImage === "true")
+    if (source.dataset.localImage === "true") openPicture(source, path)
+    else openLocalPath(path)
   }
   document.addEventListener("click", handler)
   const failed = imageFailureHandler()
@@ -60,13 +62,30 @@ function imageFailureHandler(): (event: Event) => void {
   }
 }
 
+// A picture opens in Frizz's own viewer (components/Lightbox.tsx) — a screenshot a worker drew as a
+// bare path line (BlockImage) or as Markdown, on any surface — with every other picture of the same
+// message beside it, so a turn's screenshots page like a ```lightbox gallery's. The message is the
+// transcript's `data-frizz-msg` root; a card or a reader, which hold one message, is its `.md-body`. A
+// LINK to a picture names one picture, so it opens alone.
+function openPicture(source: HTMLElement, path: string): void {
+  if (!(source instanceof HTMLImageElement)) {
+    openLightbox([lightboxImageFor(path, source.textContent)], 0)
+    return
+  }
+  const scope = source.closest("[data-frizz-msg]") ?? source.closest(".md-body, .md-inline")
+  const pictures = scope ? [...scope.querySelectorAll<HTMLImageElement>('img[data-local-image="true"][data-local-path]')] : [source]
+  openLightbox(pictures.map((img) => lightboxImageFor(img.dataset.localPath!, img.alt)), Math.max(pictures.indexOf(source), 0))
+}
+
 // Act on a vetted local path: a `.md` file is prose Frizz can render itself, so it opens in the built-in
 // reader instead of launching an editor; everything else goes to the server, which realpath-gates it and
 // hands it to the opener the `localFileOpener` setting names — except on a phone, where nothing leaves
 // the browser (below). The decision lives HERE, in the one place
 // every local-path activation passes through, rather than in each producer — markdown links, resolved
 // inline-code paths, attachment chips, the Codex file rows and the tool-header path links all get the
-// same routing from this single branch. An image is excluded: those have a viewer of their own.
+// same routing from this single branch. A picture never arrives here from a click — it opens in the
+// lightbox (openPicture, above) — so `image` is the lightbox's own way OUT, its "Open in default
+// viewer": the file goes to the desktop's image viewer rather than to the reader or an editor.
 //
 // Components that own their own click (PathLink, whose row swallows the event before it can reach the
 // delegated listener below) call this directly; everything that only tags itself `data-local-path`
@@ -86,8 +105,8 @@ export function openLocalPath(path: string, image = false): void {
   // ON A PHONE the desktop opener is the wrong machine: it launches an editor on the computer Frizz runs
   // on, which from a phone is somewhere else entirely, and the tap appears to do nothing. So every file
   // opens in Frizz's own reader instead — the same drawer a `.md` gets, showing the file as highlighted
-  // source (MarkdownDrawer) — and an image opens in the browser, the phone's own image viewer, through
-  // the route that already serves it to the transcript.
+  // source (MarkdownDrawer) — and the lightbox's "Open in default viewer" opens the picture in the
+  // browser, the phone's own image viewer, through the route that already serves it to the transcript.
   if (isMobileViewport()) {
     if (image) window.open(localImageUrl(path), "_blank", "noopener")
     else pushMarkdownDrawer(path)

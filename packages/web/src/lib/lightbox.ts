@@ -1,5 +1,6 @@
-// The ```lightbox fence: a worker lists image files, one per line, and the transcript renders them as ONE
-// gallery the human can click through (components/Lightbox.tsx) instead of a stack of full-width frames.
+// The ```lightbox fence: a worker lists image files, one per line, and Frizz renders them as ONE gallery
+// the human can click through (components/Lightbox.tsx) instead of a stack of full-width frames — in the
+// transcript, and on every card and reader that renders a worker's Markdown.
 //
 //   ```lightbox
 //   /tmp/shots/before.png  Before the fix
@@ -73,7 +74,8 @@ function parseLine(raw: string): LightboxEntry | null {
 
   const end = PATH_END.exec(line)
   // No image extension at all (an `.svg`, a URL with a query, a stray note): keep the whole line as the
-  // target. It will not resolve, and the gallery shows it as an unavailable tile rather than dropping it.
+  // target. It will not resolve, and the gallery lists it under the pictures as plain text rather than
+  // dropping it.
   if (!end) return { target: line }
   const cut = end.index + end[0].length
   return { target: line.slice(0, cut), caption: cleanCaption(line.slice(cut)) }
@@ -105,4 +107,19 @@ export function resolveLightboxPath(target: string, base: { dir: string; home: s
 export function lightboxLabel(entry: LightboxEntry, path: string | null): { label: string; captioned: boolean } {
   if (entry.caption) return { label: entry.caption, captioned: true }
   return { label: basename(path ?? entry.target), captioned: false }
+}
+
+// Text that names a file rather than describing one: what the sanitizer writes into an empty alt
+// (`target.display`, the path as written) and what a bare picture line carries (its basename).
+const NAMES_A_FILE = /\.(?:png|jpe?g|gif|webp)$/i
+
+/**
+ * The overlay's picture for an image the transcript drew some other way — a bare path line (BlockImage)
+ * or a Markdown image — from its `<img>`'s path and alt text. The alt is the caption when an author
+ * wrote one (`![The settings page](/abs/x.png)`); alt text that only names the file is not a caption.
+ */
+export function lightboxImageFor(path: string, alt: string | null | undefined): LightboxImage {
+  const text = alt?.trim() ?? ""
+  const captioned = text !== "" && !NAMES_A_FILE.test(text)
+  return { path, label: captioned ? text : basename(path), captioned }
 }
