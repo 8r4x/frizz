@@ -191,7 +191,7 @@ import { homedir } from "node:os"
 import { chosenProjectRoot, ensureProjectIdFile, existingProjectId, isHomeDirectory, writeProjectIdFile } from "./project-root.ts"
 import { resolveProjectLabel } from "./project-identity.ts"
 import { registerProject } from "./project-registry.ts"
-import { pickDirectory, pickImageFile, warmDirectoryPicker } from "./directory-picker.ts"
+import { pickDirectory, pickImageFile, warmDirectoryPicker, warmImagePicker } from "./directory-picker.ts"
 import Database from "./sqlite.ts"
 import { projectStateDir } from "./frizz-paths.ts"
 
@@ -731,6 +731,18 @@ function storeProjectIcon(id: string, name: string, bytes: Buffer): ProjectCard 
   const updated = setProjectIcon(id, path)
   if (!updated) throw new Error("No such project.")
   return projectCard(updated, entry.stale)
+}
+
+/**
+ * Where a project's icon picker opens, and what it asks. Shared by the pick and the build ahead of it,
+ * because a panel built in any other directory is not the one the pick shows.
+ */
+function iconPicker(id: string): { startIn: string | undefined; prompt: string } {
+  const entry = listProjects().find((project) => project.id === id)
+  if (!entry) throw new Error("No such project.")
+  // A directory that has since been moved or deleted is not a reason to refuse the dialog — it just
+  // opens wherever the OS would have opened it anyway.
+  return { startIn: entry.stale ? undefined : entry.path, prompt: `Choose an icon for ${entry.name ?? entry.slug}` }
 }
 
 /** The picked FILE's bytes, read from disk — the native picker hands back a path, not an upload. */
@@ -3890,15 +3902,22 @@ export function createRouter(ctx: AppContext) {
       input: z.object({ id: z.string().min(1) }),
       output: DirectoryPickResult,
       handler: async ({ input }) => {
-        const entry = listProjects().find((project) => project.id === input.id)
-        if (!entry) throw new Error("No such project.")
-        // A directory that has since been moved or deleted is not a reason to refuse the dialog —
-        // it just opens wherever the OS would have opened it anyway.
-        const startIn = entry.stale ? undefined : entry.path
-        const picked = await pickImageFile(startIn, `Choose an icon for ${entry.name ?? entry.slug}`)
+        const { startIn, prompt } = iconPicker(input.id)
+        const picked = await pickImageFile(startIn, prompt)
         if (picked.kind !== "picked") return picked
         return { kind: "picked" as const, project: setProjectIconFromFile(input.id, picked.path) }
       },
+    }),
+
+    /**
+     * Build that image picker now: the project's icon menu has opened, and "Choose an icon…" is one
+     * move away. The same split as `projectPickWarm` — on macOS the click then only shows a panel that
+     * is already built (see directory-picker.ts); everywhere else this answers `false`.
+     */
+    projectIconPickWarm: mutation({
+      input: z.object({ id: z.string().min(1) }),
+      output: z.object({ warming: z.boolean() }),
+      handler: async ({ input }) => ({ warming: warmImagePicker(iconPicker(input.id).startIn) }),
     }),
 
     projectIconSet: mutation({

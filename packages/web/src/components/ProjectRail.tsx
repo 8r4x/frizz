@@ -385,9 +385,9 @@ function RailLink({
 /**
  * Choose, or stop choosing, this project's picture.
  *
- * A browser file input rather than the server's native picker: the picker exists because a PROJECT is
- * an absolute path the browser withholds, and an icon is bytes — which the browser hands over
- * happily. One fewer round trip and it works over a forwarded port.
+ * The server's native picker, opened standing in the project's own directory (`pick` below), with a
+ * browser file input as the fallback where the machine has none. Opening the menu has the server build
+ * that picker, so the click on "Choose an icon…" only has to show it.
  */
 export function ProjectIconMenu({
   project,
@@ -455,7 +455,10 @@ export function ProjectIconMenu({
           if (file) set.mutate(file)
         }}
       />
-      <RadixDropdown.Root>
+      {/* Opening the menu is the cue: "Choose an icon…" is one move away, and on macOS a panel built at
+          the click took most of a second to draw (server/directory-picker.ts). Speculative, so a failed
+          request is dropped — the click builds its own panel. */}
+      <RadixDropdown.Root onOpenChange={(open) => { if (open) rpc.projectIconPickWarm({ id: project.id }).catch(() => {}) }}>
         <RadixDropdown.Trigger asChild>{children}</RadixDropdown.Trigger>
         <RadixDropdown.Portal>
           <RadixDropdown.Content

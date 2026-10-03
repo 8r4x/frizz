@@ -39,39 +39,52 @@ const unanswered = (what: "folder" | "image"): DirectoryPick => ({
   reason: `no ${what} was chosen within 5 minutes`,
 })
 
-// THE MACOS FOLDER PANEL IS BUILT BEFORE THE CLICK THAT SHOWS IT.
+// THE MACOS PANELS ARE BUILT BEFORE THE CLICK THAT SHOWS THEM.
 //
 // Building one takes most of a second, and almost none of that is Frizz. Measured 2026-10-03 on macOS
 // 26.6 against the live server: the request reached the server and spawned the helper in ~0.1s, and the
 // dialog then took 0.8-1.0s to draw. The unified log of the operator's own three adds that afternoon
 // has the same split: osascript and AppKit up in ~0.18s, then ~0.6s waiting on
 // `com.apple.appkit.xpc.openAndSavePanelService`, the separate process every NSOpenPanel is hosted in
-// (the private `NSUseRemoteSavePanel=NO` keeps it in-process and saves only ~0.2s). An AppleScript
-// `choose folder` cannot be split, so the panel is an NSOpenPanel driven from JXA: the helper BUILDS
-// it and then waits on stdin, and a built panel draws 82-94ms after the line that shows it arrives.
+// (the private `NSUseRemoteSavePanel=NO` keeps it in-process and saves only ~0.2s). AppleScript's
+// `choose folder` and `choose file` cannot be split, so each picker is an NSOpenPanel driven from JXA:
+// the helper BUILDS it and then waits on stdin, and a built panel draws 82-94ms after the line that
+// shows it arrives.
 //
-// So the browser asks for one when the pointer or keyboard focus reaches an "Add a project" control
-// (`warmDirectoryPicker`, through the `projectPickWarm` RPC), and the click only shows it. A panel
-// nobody shows is killed after WARM_PANEL_IDLE_MS, because while it waits it holds ~55 MB of physical
-// footprint — osascript 31 MB and its own instance of the panel service 24 MB, both gone with it
-// (`footprint`; RSS reads ~150 MB, most of it shared framework pages): fine for a minute, not forever.
+// So the browser asks for a panel as soon as the click it serves is likely — the folder panel when the
+// pointer or keyboard focus reaches an "Add a project" control (`warmDirectoryPicker`, through the
+// `projectPickWarm` RPC), the image panel when a project's icon menu opens (`warmImagePicker`, through
+// `projectIconPickWarm`) — and the click only shows it. A panel nobody shows is killed after
+// WARM_PANEL_IDLE_MS, because while it waits it holds ~55 MB of physical footprint — osascript 31 MB
+// and its own instance of the panel service 24 MB, both gone with it (`footprint`; RSS reads ~150 MB,
+// most of it shared framework pages): fine for a minute, not forever.
 
 /** How long a panel built ahead of a click waits for it. */
 const WARM_PANEL_IDLE_MS = 60_000
 
+/** What a panel chooses, which is also which of the two pickers it is. */
+export type PanelKind = "folder" | "image"
+
 /**
- * The helper. It builds the panel at once and draws it only when a line `{"prompt":…}` arrives on
- * stdin, then prints ONE line — `{"path":…}` or `{"cancelled":true}` — and exits. End of input before
- * that line means nobody is going to ask: it exits without drawing anything, which is also what ends a
- * waiting panel whose server has gone.
+ * The helper. Its one argument says which panel to build — `{"kind":"folder"}`, or `{"kind":"image"}`
+ * with the `directory` it opens in — and it builds that panel at once, drawing it only when a line
+ * `{"prompt":…}` arrives on stdin. Then it prints ONE line — `{"path":…}` or `{"cancelled":true}` — and
+ * exits. End of input before that line means nobody is going to ask: it exits without drawing
+ * anything, which is also what ends a waiting panel whose server has gone.
  *
- * Kept a `choose folder` in every visible respect: folders only, New Folder offered, the button reads
- * Choose, and the panel floats above the browser at the modal-panel level without activating itself.
+ * Each panel keeps the AppleScript dialog it replaced in every visible respect. Both take one item,
+ * their button reads Choose, and they float above the browser at the modal-panel level without
+ * activating themselves. The folder panel takes folders only and offers New Folder. The image panel
+ * takes files conforming to `public.image` — every format the rail accepts, and nothing else — and
+ * opens in `directory`, which is a hint rather than a jail: the operator can browse anywhere, and a
+ * directory that is not there opens wherever the OS would have.
+ *
  * Accessory, so it never puts an icon in the Dock. JXA hands enum values over as STRINGS ("1") — the
  * constants and a method's return alike (`activationPolicy` reads back "1") — hence the Number() on
- * both sides of the comparison.
+ * both sides of the comparison. UTType is looked up by name: its framework ships no BridgeSupport, so
+ * `ObjC.import` finds "nothing found to import", but AppKit has already loaded the class.
  */
-const FOLDER_PANEL_SCRIPT = String.raw`
+const PANEL_SCRIPT = String.raw`
 ObjC.import("AppKit")
 function say(message) {
   const line = $.NSString.alloc.initWithUTF8String(JSON.stringify(message) + "\n")
@@ -87,14 +100,22 @@ function readLine() {
   }
   return text.slice(0, text.indexOf("\n"))
 }
-function run() {
+function run(argv) {
+  const choose = JSON.parse(argv[0])
   $.NSApplication.sharedApplication.setActivationPolicy($.NSApplicationActivationPolicyAccessory)
   const panel = $.NSOpenPanel.openPanel
-  panel.canChooseFiles = false
-  panel.canChooseDirectories = true
-  panel.canCreateDirectories = true
   panel.allowsMultipleSelection = false
   panel.prompt = "Choose"
+  if (choose.kind === "image") {
+    panel.canChooseFiles = true
+    panel.canChooseDirectories = false
+    panel.allowedContentTypes = $.NSArray.arrayWithObject($.NSClassFromString("UTType").typeWithIdentifier("public.image"))
+  } else {
+    panel.canChooseFiles = false
+    panel.canChooseDirectories = true
+    panel.canCreateDirectories = true
+  }
+  if (choose.directory) panel.directoryURL = $.NSURL.fileURLWithPathIsDirectory(choose.directory, true)
   const line = readLine()
   if (line === undefined) return
   panel.message = JSON.parse(line).prompt
@@ -103,8 +124,13 @@ function run() {
 }
 `
 
-/** One folder panel: built when it is opened, drawn only when `show` hands it the prompt. */
-export interface FolderPanel {
+/** The helper's command line. The panel's kind and starting directory travel as its one argument. */
+function panelCommand(kind: PanelKind, directory?: string): string[] {
+  return ["osascript", "-l", "JavaScript", "-e", PANEL_SCRIPT, JSON.stringify({ kind, directory })]
+}
+
+/** One native panel: built when it is opened, drawn only when `show` hands it the prompt. */
+export interface NativePanel {
   /** Draw it. Settles with what the operator did, or with why the panel could not be drawn. */
   show(prompt: string): Promise<DirectoryPick>
   /** Kill a panel nobody showed. Never touches one that is showing. */
@@ -116,9 +142,7 @@ export interface FolderPanel {
  * Start building a panel. Exported, with the command as a parameter, for the test that drives this
  * protocol with a stand-in helper — a real panel is a window on the operator's desktop.
  */
-export function openFolderPanel(
-  command: readonly string[] = ["osascript", "-l", "JavaScript", "-e", FOLDER_PANEL_SCRIPT],
-): FolderPanel {
+export function openPanel(kind: PanelKind, command: readonly string[] = panelCommand(kind)): NativePanel {
   const [bin = "osascript", ...args] = command
   const child = spawn(bin, args, { stdio: ["pipe", "pipe", "pipe"] })
   let exited = false
@@ -155,7 +179,7 @@ export function openFolderPanel(
   child.on("close", () => {
     exited = true
     // A settled outcome ignores this: the answer line always arrives before the pipes close.
-    settle(reaped ? unanswered("folder") : { kind: "unavailable", reason: firstLine(stderr) || "the folder picker did not open" })
+    settle(reaped ? unanswered(kind) : { kind: "unavailable", reason: firstLine(stderr) || `the ${kind} picker did not open` })
   })
   // A panel built ahead of a click is speculative and must never be what holds the event loop open;
   // one that is showing is somebody's answer, and is held like any other.
@@ -182,15 +206,37 @@ export function openFolderPanel(
   }
 }
 
-let warm: { panel: FolderPanel; idle: ReturnType<typeof setTimeout> } | undefined
+/**
+ * The panels built ahead of their clicks: at most one of each kind, each with the directory it stands
+ * in, because an image panel opened in one project's directory is no use to another project's click.
+ */
+const warm = new Map<PanelKind, { panel: NativePanel; directory: string | undefined; idle: ReturnType<typeof setTimeout> }>()
 
-/** The panel built ahead of this click, if it is still alive. It is the caller's from here on. */
-function takeWarmPanel(): FolderPanel | undefined {
-  const taken = warm
-  warm = undefined
+/**
+ * The panel built ahead of this click, if it is still alive and stands where the click wants it. It is
+ * the caller's from here on. One built for another directory is killed, not kept for a later click.
+ */
+function takeWarmPanel(kind: PanelKind, directory?: string): NativePanel | undefined {
+  const taken = warm.get(kind)
+  warm.delete(kind)
   if (!taken) return undefined
   clearTimeout(taken.idle)
+  if (taken.directory !== directory) {
+    taken.panel.discard()
+    return undefined
+  }
   return taken.panel.exited ? undefined : taken.panel
+}
+
+/** Keep one panel of this kind built, standing in `directory`, for the next WARM_PANEL_IDLE_MS. */
+function warmPanel(kind: PanelKind, directory: string | undefined, open: () => NativePanel): void {
+  const panel = takeWarmPanel(kind, directory) ?? open()
+  const idle = setTimeout(() => {
+    if (warm.get(kind)?.panel === panel) warm.delete(kind)
+    panel.discard()
+  }, WARM_PANEL_IDLE_MS)
+  idle.unref()
+  warm.set(kind, { panel, directory, idle })
 }
 
 /**
@@ -199,16 +245,24 @@ function takeWarmPanel(): FolderPanel | undefined {
  */
 export function warmDirectoryPicker(
   platform: NodeJS.Platform = process.platform,
-  open: () => FolderPanel = openFolderPanel,
+  open: () => NativePanel = () => openPanel("folder"),
 ): boolean {
   if (platform !== "darwin") return false
-  const panel = takeWarmPanel() ?? open()
-  const idle = setTimeout(() => {
-    if (warm?.panel === panel) warm = undefined
-    panel.discard()
-  }, WARM_PANEL_IDLE_MS)
-  idle.unref()
-  warm = { panel, idle }
+  warmPanel("folder", undefined, open)
+  return true
+}
+
+/**
+ * Build the image panel now, standing in `startIn`: the menu that offers it has just opened. As
+ * warmDirectoryPicker, except that a panel already built in another directory is replaced.
+ */
+export function warmImagePicker(
+  startIn: string | undefined,
+  platform: NodeJS.Platform = process.platform,
+  open: () => NativePanel = () => openPanel("image", panelCommand("image", startIn)),
+): boolean {
+  if (platform !== "darwin") return false
+  warmPanel("image", startIn, open)
   return true
 }
 
@@ -220,28 +274,18 @@ export function warmDirectoryPicker(
  * the repo, a screenshot you just took of it), so opening the picker anywhere else means navigating
  * back to a directory Frizz already knows the path of.
  *
- * `default location` is a hint, not a jail: the operator can still browse anywhere, which is why
+ * The starting directory is a hint, not a jail: the operator can still browse anywhere, which is why
  * a missing or unreadable startIn simply falls back to the OS default rather than failing.
  */
 export async function pickImageFile(
   startIn: string | undefined,
   prompt = "Choose an image for this project",
   platform: NodeJS.Platform = process.platform,
+  open: () => NativePanel = () => openPanel("image", panelCommand("image", startIn)),
 ): Promise<DirectoryPick> {
-  if (platform === "darwin") {
-    // `of type` takes UTIs; public.image covers every format the rail accepts and nothing else.
-    const location = startIn ? ` default location POSIX file ${JSON.stringify(startIn)}` : ""
-    const script = `POSIX path of (choose file with prompt ${JSON.stringify(prompt)} of type {"public.image"}${location})`
-    try {
-      const { stdout } = await run("osascript", ["-e", script], { timeout: PICKER_TIMEOUT_MS })
-      const path = stdout.trim().replace(/\/+$/u, "")
-      return path ? { kind: "picked", path } : { kind: "cancelled" }
-    } catch (error) {
-      if (timedOut(error)) return unanswered("image")
-      if (/User canceled|-128/u.test(stderrOf(error))) return { kind: "cancelled" }
-      return { kind: "unavailable", reason: firstLine(stderrOf(error)) || "the image picker did not open" }
-    }
-  }
+  // The panel built when the icon menu opened, or — a click nothing warned of — one built now, which
+  // costs the whole build. See THE MACOS PANELS above.
+  if (platform === "darwin") return (takeWarmPanel("image", startIn) ?? open()).show(prompt)
   if (platform === "linux") {
     for (const [bin, args] of [
       ["zenity", ["--file-selection", `--title=${prompt}`, ...(startIn ? [`--filename=${startIn}/`] : [])]],
@@ -264,11 +308,11 @@ export async function pickImageFile(
 export async function pickDirectory(
   prompt = "Choose a folder to open in Frizz",
   platform: NodeJS.Platform = process.platform,
-  open: () => FolderPanel = openFolderPanel,
+  open: () => NativePanel = () => openPanel("folder"),
 ): Promise<DirectoryPick> {
   // The panel built when the pointer reached the button, or — a click nothing warned of — one built now,
-  // which costs the whole build. See THE MACOS FOLDER PANEL above.
-  if (platform === "darwin") return (takeWarmPanel() ?? open()).show(prompt)
+  // which costs the whole build. See THE MACOS PANELS above.
+  if (platform === "darwin") return (takeWarmPanel("folder") ?? open()).show(prompt)
   if (platform === "linux") {
     // Neither is guaranteed present; try the GNOME one, then the KDE one, then give up gracefully.
     for (const [bin, args] of [

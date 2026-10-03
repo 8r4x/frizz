@@ -342,6 +342,8 @@ export interface Api {
   // Opens the machine's native image picker ALREADY IN the project's directory, then stores what
   // comes back. The browser input cannot be aimed anywhere, which is the whole reason this exists.
   projectIconPick(input: { id: string }): Promise<DirectoryPickResult>
+  // Builds that picker when the icon menu opens, so the click only has to show it (macOS; `false` elsewhere).
+  projectIconPickWarm(input: { id: string }): Promise<{ warming: boolean }>
   projectIconSet(input: { id: string; name: string; data: string }): Promise<ProjectCard>
   projectIconClear(input: { id: string }): Promise<ProjectCard>
   // Rename a project: the name on its card and the slug in its URL, and — only with
@@ -467,6 +469,7 @@ export const PROCEDURES = {
   projectRemove: "mutation",
   projectsRailCounts: "query",
   projectIconPick: "mutation",
+  projectIconPickWarm: "mutation",
   projectIconSet: "mutation",
   projectIconClear: "mutation",
   projectRename: "mutation",
