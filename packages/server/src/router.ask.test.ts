@@ -12,7 +12,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { AskedQuestion, BoardSnapshot, Settings } from "@frizz/shared"
-import { AnswerQuestionsInput, AskInput, BURIED_ANSWERS_HEADER, INSTRUCTIONS_DONE, INSTRUCTIONS_NOT_DONE, InstructInput, parseQuestionsCancelledWake, questionAnswerMessage, questionsCancelledWakeMessage } from "@frizz/shared"
+import { AnswerQuestionsInput, AskInput, BURIED_ANSWERS_HEADER, INSTRUCT_AVAILABLE_AT, INSTRUCTIONS_DONE, INSTRUCTIONS_NOT_DONE, InstructInput, parseQuestionsCancelledWake, questionAnswerMessage, questionsCancelledWakeMessage } from "@frizz/shared"
 import type { BoardManager } from "./board.ts"
 import { createRouter } from "./router.ts"
 import { createStorage, type SessionRow } from "./storage.ts"
@@ -371,7 +371,8 @@ const goal = (h: ReturnType<typeof harness>, slug: string, prompt = "Keep going.
 test("`ask` is REFUSED on an autonomous thread, and the refusal quotes the standing instruction", async () => {
   const h = harness()
   try {
-    h.storage.upsertSession(row("t"))
+    // Dispatched AT the cut, so its MCP server has `instruct` and the refusal may name it.
+    h.storage.upsertSession(row("t", { spawned_at: INSTRUCT_AVAILABLE_AT }))
     goal(h, "t", "Finish the migration. Decide the small things yourself.")
     await assert.rejects(
       () => h.router.ask.handler({ input: { slug: "t", questions: [simple()] } }),
@@ -389,6 +390,25 @@ test("`ask` is REFUSED on an autonomous thread, and the refusal quotes the stand
       },
     )
     assert.deepEqual(h.storage.listThreadQuestions("t", { openOnly: true }), [])
+  } finally { h.close() }
+})
+
+// A worker dispatched before the verb existed has no `instruct` in its MCP server — its broker daemon
+// outlives the Frizz that learned the verb — so its refusal must not send it to a call that fails. The
+// sign-off reminder's rule (INSTRUCT_AVAILABLE_AT), for the same reason.
+test("an autonomous refusal names `instruct` only to a worker dispatched with it", async () => {
+  const h = harness()
+  try {
+    h.storage.upsertSession(row("old")) // dispatched 2026-08-26, before INSTRUCT_AVAILABLE_AT
+    goal(h, "old")
+    await assert.rejects(
+      () => h.router.ask.handler({ input: { slug: "old", questions: [simple()] } }),
+      (e: Error) => {
+        assert.match(e.message, /say so in your final message/, "the way out it CAN take is still named")
+        assert.doesNotMatch(e.message, /`instruct`/)
+        return true
+      },
+    )
   } finally { h.close() }
 })
 
