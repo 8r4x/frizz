@@ -29,6 +29,11 @@ export interface LightboxEntry {
   target: string
   /** The worker's label for the picture, when the line carried one. */
   caption?: string
+  /**
+   * What the viewer calls an uncaptioned picture whose file name means nothing — a delivered picture is
+   * a hash-named cache copy. It names the picture in the viewer only; the tile stays unlabelled.
+   */
+  title?: string
 }
 
 /**
@@ -37,9 +42,9 @@ export interface LightboxEntry {
  */
 export interface LightboxImage {
   path: string
-  /** What the picture is called on screen — the caption, else the file's basename. */
+  /** What the picture is called on screen — the caption, else the entry's title, else the file's basename. */
   label: string
-  /** True when `label` is the worker's caption rather than a file name, which is set in mono. */
+  /** True when `label` is prose — a caption or a title — rather than a file name, which is set in mono. */
   captioned: boolean
 }
 
@@ -116,9 +121,10 @@ export function isLightboxVideo(path: string): boolean {
   return isProxiedVideoPath(path)
 }
 
-/** What a tile and the overlay call a picture: the worker's caption, else the file's own name. */
+/** What a tile and the overlay call a picture: the worker's caption, else its title, else the file's own name. */
 export function lightboxLabel(entry: LightboxEntry, path: string | null): { label: string; captioned: boolean } {
   if (entry.caption) return { label: entry.caption, captioned: true }
+  if (entry.title) return { label: entry.title, captioned: true }
   return { label: basename(path ?? entry.target), captioned: false }
 }
 

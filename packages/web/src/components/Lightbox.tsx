@@ -13,7 +13,7 @@ import { useIsMobile } from "../lib/mobile.ts"
 import { handleDialogEscape } from "../lib/selectOverlay.ts"
 import { useLocalPathBase } from "../lib/useMarkdown.ts"
 import { FIT, clampZoom, detailScale, maxScale, panBy, pinch, zoomAbout, type ZoomBounds, type ZoomState } from "../lib/viewerZoom.ts"
-import { ImageFrame } from "./ImageFrame.tsx"
+import { IMAGE_FRAME_MAT, ImageFrame } from "./ImageFrame.tsx"
 
 // A ```lightbox fence (lib/lightbox.ts for the grammar): the pictures and videos a worker listed, laid out
 // as ONE gallery inside the same frame every rendered picture in the transcript sits in (ImageFrame), and
@@ -52,9 +52,10 @@ interface Tile {
 
 /**
  * `baseDir` is the directory a relative path resolves against when it is not the project root — the
- * `.md` reader passes the document's own, the way its links resolve.
+ * `.md` reader passes the document's own, the way its links resolve. `framed={false}` draws the mat
+ * without the frame's border, for a card whose own border already is the frame (ImageFrame).
  */
-export function LightboxGallery({ entries, baseDir }: { entries: LightboxEntry[]; baseDir?: string }) {
+export function LightboxGallery({ entries, baseDir, framed = true }: { entries: LightboxEntry[]; baseDir?: string; framed?: boolean }) {
   const projectBase = useLocalPathBase()
   const base = useMemo(() => (baseDir ? { ...projectBase, dir: baseDir } : projectBase), [projectBase, baseDir])
   const tiles = useMemo<Tile[]>(
@@ -86,7 +87,7 @@ export function LightboxGallery({ entries, baseDir }: { entries: LightboxEntry[]
   // A gallery is labelled only when the worker captioned it: a bare list of files reads as pictures, and
   // the viewer names each one. Once any picture has a caption every tile carries a label line, in one
   // register, so the rows stay level.
-  const labelled = tiles.some((tile) => tile.captioned)
+  const labelled = tiles.some((tile) => tile.entry.caption)
   const images: LightboxImage[] = shown.map((tile) => ({ path: tile.path!, label: tile.label, captioned: tile.captioned }))
 
   if (shown.length === 0) {
@@ -96,30 +97,29 @@ export function LightboxGallery({ entries, baseDir }: { entries: LightboxEntry[]
       </div>
     )
   }
-  return (
-    <ImageFrame>
-      <div ref={setRowsEl} data-lightbox-gallery className="flex w-full min-w-0 flex-col gap-1.5">
-        {rows.map((row) => (
-          // A row capped at MAX_ROW_HEIGHT is narrower than the mat, and centers in it the way a lone
-          // framed picture does.
-          <div key={row.start} data-lightbox-row className="mx-auto flex max-w-full gap-1.5" style={{ width: row.width }}>
-            {shown.slice(row.start, row.end).map((tile, offset) => (
-              <GalleryPicture
-                key={row.start + offset}
-                tile={tile}
-                ratio={ratioOf(tile)}
-                labelled={labelled}
-                onOpen={() => openLightbox(images, row.start + offset)}
-                onShape={(ratio) => setRatios((prev) => (prev[tile.path!] === ratio ? prev : { ...prev, [tile.path!]: ratio }))}
-                onBroken={() => setBroken((prev) => ({ ...prev, [tile.path!]: true }))}
-              />
-            ))}
-          </div>
-        ))}
-        {missing.map((tile, i) => <MissingPath key={i} tile={tile} />)}
-      </div>
-    </ImageFrame>
+  const gallery = (
+    <div ref={setRowsEl} data-lightbox-gallery className="flex w-full min-w-0 flex-col gap-1.5">
+      {rows.map((row) => (
+        // A row capped at MAX_ROW_HEIGHT is narrower than the mat, and centers in it the way a lone
+        // framed picture does.
+        <div key={row.start} data-lightbox-row className="mx-auto flex max-w-full gap-1.5" style={{ width: row.width }}>
+          {shown.slice(row.start, row.end).map((tile, offset) => (
+            <GalleryPicture
+              key={row.start + offset}
+              tile={tile}
+              ratio={ratioOf(tile)}
+              labelled={labelled}
+              onOpen={() => openLightbox(images, row.start + offset)}
+              onShape={(ratio) => setRatios((prev) => (prev[tile.path!] === ratio ? prev : { ...prev, [tile.path!]: ratio }))}
+              onBroken={() => setBroken((prev) => ({ ...prev, [tile.path!]: true }))}
+            />
+          ))}
+        </div>
+      ))}
+      {missing.map((tile, i) => <MissingPath key={i} tile={tile} />)}
+    </div>
   )
+  return framed ? <ImageFrame>{gallery}</ImageFrame> : <div className={IMAGE_FRAME_MAT}>{gallery}</div>
 }
 
 // The tile's share of its row is its aspect ratio (`flex-grow`), and its picture box carries the same

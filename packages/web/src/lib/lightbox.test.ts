@@ -95,6 +95,9 @@ test("a picture is labelled by its caption, else by its file name", () => {
   assert.deepEqual(lightboxLabel({ target: "/tmp/a.png", caption: "Before" }, "/tmp/a.png"), { label: "Before", captioned: true })
   assert.deepEqual(lightboxLabel({ target: "/tmp/shots/after.png" }, "/tmp/shots/after.png"), { label: "after.png", captioned: false })
   assert.deepEqual(lightboxLabel({ target: "shots/gone.png" }, null), { label: "gone.png", captioned: false })
+  // A delivered picture's file is a hash-named cache copy: its title names it, and a caption still wins.
+  assert.deepEqual(lightboxLabel({ target: "/c/465ab1.png", title: "The two pages" }, "/c/465ab1.png"), { label: "The two pages", captioned: true })
+  assert.deepEqual(lightboxLabel({ target: "/c/465ab1.png", caption: "Before", title: "The two pages" }, "/c/465ab1.png"), { label: "Before", captioned: true })
 })
 
 test("a picture drawn some other way is captioned by its alt text, unless the alt only names the file", () => {

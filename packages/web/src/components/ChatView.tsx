@@ -2587,8 +2587,9 @@ function ToolImageCard({ name, detail, outputImage, output, status, durationMs }
 function SentFilesCard({ images, files, caption, status, durationMs }: { images: string[]; files: string[]; caption?: string; status?: ToolStatus; durationMs?: number }) {
   const [open, setOpen] = useState(true)
   const bodyId = useId()
-  // Uncaptioned tiles: the one `caption` describes the delivery as a whole and prints once, below.
-  const galleryEntries = useMemo(() => images.map((target) => ({ target })), [images])
+  // Uncaptioned tiles: the one `caption` describes the delivery as a whole and prints once, below. It
+  // still names each picture in the viewer, whose file is a hash-named cache copy.
+  const galleryEntries = useMemo(() => images.map((target) => ({ target, title: caption ?? "Delivered image" })), [images, caption])
   const summary = [
     images.length ? `${images.length} image${images.length === 1 ? "" : "s"}` : "",
     files.length ? `${files.length} file${files.length === 1 ? "" : "s"}` : "",
@@ -2615,15 +2616,21 @@ function SentFilesCard({ images, files, caption, status, durationMs }: { images:
       </button>
       <div id={bodyId} hidden={!open}>
         {open && (
-          <div className="flex flex-col gap-1.5 px-2.5 pb-2.5 pt-1.5">
-            {images.length > 0 && <LightboxGallery entries={galleryEntries} />}
-            {files.length > 0 && (
-              <div className="flex flex-wrap gap-1.5">
-                {files.map((f, i) => <BlockFile key={`f${i}`} path={f} />)}
+          <>
+            {/* The card's border is the gallery's frame, as ToolImageCard's is its picture's: a framed
+                gallery in here drew a bordered box 10px inside the card's own. */}
+            {images.length > 0 && <LightboxGallery entries={galleryEntries} framed={false} />}
+            {(files.length > 0 || caption) && (
+              <div className="flex flex-col gap-1.5 px-2.5 pb-2.5 pt-1.5">
+                {files.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {files.map((f, i) => <BlockFile key={`f${i}`} path={f} />)}
+                  </div>
+                )}
+                {caption && <div className="max-w-[65%] text-[12px] leading-snug text-muted">{caption}</div>}
               </div>
             )}
-            {caption && <div className="max-w-[65%] text-[12px] leading-snug text-muted">{caption}</div>}
-          </div>
+          </>
         )}
       </div>
     </div>

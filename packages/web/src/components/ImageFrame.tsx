@@ -1,11 +1,12 @@
 import type { ReactNode } from "react"
 
-// THE frame every rendered image sits in — a lightbox gallery, a picture a worker delivered, a path the
-// agent wrote on its own line, a file the human attached. One element so they cannot drift: an outer
-// border in the tool-card family, a little inset padding (the mat), and the picture centered inside it.
+// THE frame every rendered image sits in — a lightbox gallery, a path the agent wrote on its own line, a
+// file the human attached. One element so they cannot drift: an outer border in the tool-card family, a
+// little inset padding (the mat), and the picture centered inside it.
 // A screenshot a TOOL returned sits in the same mat inside its own collapsed card (ChatView
 // ToolImageCard), whose border is the frame's, so opening it draws one framed object rather than a
-// bordered card with a separately bordered picture nested in it.
+// bordered card with a separately bordered picture nested in it. A SendUserFile delivery's gallery does
+// the same inside its card (SentFilesCard, LightboxGallery `framed={false}`).
 //
 // The frame SPANS the message width and centers the picture inside the mat, rather than shrink-wrapping
 // it. Shrink-wrapping was tried first and is what "consistent frame" rules out: two image Reads in one

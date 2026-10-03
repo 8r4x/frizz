@@ -19,6 +19,14 @@ test("every rendered image sits in the one frame: border, inset mat, centered pi
   assert.match(toolImageCard, /\bIMAGE_FRAME_MAT\b/)
   assert.match(toolImageCard, /\bFRAMED_IMAGE\b/)
   assert.match(toolImageCard, /data-local-image="true"/)
+  // A delivery's gallery opens onto its card's own mat the same way, rather than a framed gallery nested
+  // in the card, and the viewer names its pictures — hash-named cache copies — by the delivery's caption.
+  const sentFilesCard = source.match(/function SentFilesCard[\s\S]*?\n}\n/)?.[0]
+  const lightbox = readFileSync(new URL("./Lightbox.tsx", import.meta.url), "utf8")
+  assert.ok(sentFilesCard, "SentFilesCard source should remain discoverable")
+  assert.match(sentFilesCard, /<LightboxGallery\b[^>]*\bframed=\{false\}/)
+  assert.match(sentFilesCard, /\btitle: caption\b/)
+  assert.match(lightbox, /framed \? <ImageFrame>\{gallery\}<\/ImageFrame> : <div className=\{IMAGE_FRAME_MAT\}>\{gallery\}<\/div>/)
   assert.match(blockImage, /<ImageFrame\b/)
   assert.match(blockImage, /\bFRAMED_IMAGE\b/)
 
