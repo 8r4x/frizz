@@ -107,6 +107,8 @@ import {
   AddOwnWatchResult,
   AskInput,
   AskResult,
+  InstructInput,
+  InstructResult,
   UnaskInput,
   UnaskResult,
   AnswerQuestionsInput,
@@ -116,9 +118,13 @@ import {
   ThreadSettledQuestionsResult,
   QuestionAnswerSchema,
   type SettledQuestionView,
-  AskedQuestionSchema,
+  RegisteredAskSchema,
   askedQuestionFaults,
-  type AskedQuestion,
+  isInstructions,
+  INSTRUCTIONS_KIND,
+  INSTRUCTIONS_OUTCOMES,
+  type AskedInstructions,
+  type RegisteredAsk,
   type RegisteredQuestionView,
   DropOwnWatchInput,
   DropOwnWatchResult,
@@ -935,16 +941,25 @@ export function createRouter(ctx: AppContext) {
   // stored label would be a copy of a name the runtime owns, and it would go stale the moment the op
   // it names ends — leaving a read-back that confidently names work that is over. Re-resolving means
   // the label is either current or absent, and absent is the honest answer.
-  // A stored question's spec, or undefined when the row predates a schema change or was written by
-  // hand. Undefined is rendered as "unreadable" rather than thrown: one bad row must not blank a card
-  // carrying three good ones.
-  function parseQuestionSpec(spec: string): AskedQuestion | undefined {
+  // A stored question's spec — or an instruction's, the registry's other kind — or undefined when the
+  // row predates a schema change or was written by hand. Undefined is rendered as "unreadable" rather
+  // than thrown: one bad row must not blank a card carrying three good ones.
+  function parseQuestionSpec(spec: string): RegisteredAsk | undefined {
     try {
-      const parsed = AskedQuestionSchema.safeParse(JSON.parse(spec))
+      const parsed = RegisteredAskSchema.safeParse(JSON.parse(spec))
       return parsed.success ? parsed.data : undefined
     } catch {
       return undefined
     }
+  }
+
+  /** Does this row stay open whatever the human's × or a Goal's arming would do to an ordinary question?
+   *  A `danger` question does — a close icon is not consent to something irreversible — and so does
+   *  every INSTRUCTION, which is not a decision anybody could dismiss on the worker's behalf: it is an
+   *  act only the human can perform, and its card offers "Couldn't do it" in place of the ×, which
+   *  tells the worker and wakes it where a dismissal would do neither. */
+  function survivesDismissal(spec: RegisteredAsk | undefined): boolean {
+    return spec !== undefined && (isInstructions(spec) || spec.danger === true)
   }
 
   function parseStoredAnswer(raw: string | null): SettledQuestionView["answer"] | undefined {
@@ -957,7 +972,9 @@ export function createRouter(ctx: AppContext) {
     }
   }
 
-  // This thread's OPEN questions, in the shape the worker's read-back, the board and the card all use.
+  // This thread's OPEN questions AND instructions, in the shape the worker's read-back, the board and
+  // the card all use. Both kinds, because every caller that echoes this back to the worker (`ask`,
+  // `unask`, the card's two RPCs) is echoing the registry; the worker's tools split it by kind.
   function openQuestionViews(slug: string): RegisteredQuestionView[] {
     const out: RegisteredQuestionView[] = []
     for (const q of ctx.storage.listThreadQuestions(slug, { openOnly: true })) {
@@ -968,6 +985,11 @@ export function createRouter(ctx: AppContext) {
     return out
   }
 
+  /** Only the open INSTRUCTIONS — what `instruct` reads back, and `activity`'s list of them. */
+  function openInstructionViews(slug: string): RegisteredQuestionView[] {
+    return openQuestionViews(slug).filter((q) => isInstructions(q.spec))
+  }
+
   /** Arming a Goal is the human (or the worker) saying "decide the rest yourself", so anything still
    *  waiting on an answer is now the worker's to settle. Dismissing them here rather than leaving them
    *  on the board is what stops a thread from being autonomous and blocked at the same time — a card
@@ -975,14 +997,16 @@ export function createRouter(ctx: AppContext) {
    *
    *  A DANGER-TAGGED QUESTION SURVIVES IT, exactly as it survives the human's x. Autonomy is consent to
    *  decide ordinary things; it is not consent to a force-push. `dismissThreadQuestion` is reached
-   *  through the same path the x uses, so the rule lives in one place.
+   *  through the same path the x uses, so the rule lives in one place. AN INSTRUCTION SURVIVES IT TOO
+   *  (survivesDismissal): there is nothing in one for the worker to decide — it needs the human to DO
+   *  something — so cancelling it would only strand the worker waiting on an act nobody was asked for.
    *
    *  Returns how many were cancelled, so the caller can say so. */
   function cancelQuestionsForAutonomy(slug: string): number {
     const now = Date.now()
     let cancelled = 0
     for (const q of ctx.storage.listThreadQuestions(slug, { openOnly: true })) {
-      if (parseQuestionSpec(q.spec)?.danger) continue
+      if (survivesDismissal(parseQuestionSpec(q.spec))) continue
       if (ctx.storage.dismissThreadQuestion(q.id, now)) cancelled++
     }
     return cancelled
@@ -2862,8 +2886,14 @@ export function createRouter(ctx: AppContext) {
         }
         // The WATCHES are already readable: each armed one rides its live item as `watchId`, and the
         // scheduler settles a watch the tick its target stops being live, so an armed row always has an
-        // item to ride. The QUESTIONS had nowhere at all — hence their own list.
-        return { activity, questions: openQuestionViews(input.slug), links: ctx.storage.listThreadLinks(input.slug).map(threadLinkView) }
+        // item to ride. The QUESTIONS had nowhere at all — hence their own list, and the instructions'.
+        const open = openQuestionViews(input.slug)
+        return {
+          activity,
+          questions: open.filter((q) => !isInstructions(q.spec)),
+          instructions: open.filter((q) => isInstructions(q.spec)),
+          links: ctx.storage.listThreadLinks(input.slug).map(threadLinkView),
+        }
       },
     }),
 
@@ -3127,11 +3157,47 @@ export function createRouter(ctx: AppContext) {
       },
     }),
 
+    // ---- THE WORKER'S INSTRUCTIONS (instruct): steps only the HUMAN can perform -----------------------
+    // `mcp__frizz__instruct`. A row in the question registry with a kind of its own — see
+    // AskedInstructions in @frizz/shared for why it rides that registry rather than one of its own. The
+    // human settles it from its card ("Done" / "Couldn't do it", through answerQuestions below), and the
+    // worker withdraws it through `unask`, which is what the MCP server's `uninstruct` calls: the row is
+    // the registry's, and so is the slug-scoped withdrawal.
+    instruct: mutation({
+      input: InstructInput,
+      output: InstructResult,
+      handler: async ({ input }) => {
+        const row = ctx.storage.getSession(input.slug)
+        if (!row) throw new Error(`thread ${input.slug} is not registered`)
+        if (row.state === "archived" || row.archived === 1) {
+          throw new Error("Reopen this thread before giving the human instructions on it")
+        }
+        // NOT REFUSED ON AN AUTONOMOUS THREAD, unlike `ask`. A Goal is the human saying "decide the rest
+        // yourself", and an instruction is not a decision: it is an act the worker cannot take — a
+        // sign-in, a 2FA prompt, a button only the human may press. Refusing it would leave that worker
+        // exactly where the retired `human:` fence key left one: needing a person, with nowhere to say so.
+        const spec: AskedInstructions = {
+          kind: INSTRUCTIONS_KIND,
+          question: input.title,
+          ...(input.context ? { context: input.context } : {}),
+          steps: input.steps,
+        }
+        const now = Date.now()
+        const id = `ins_${randomUUID().replace(/-/g, "").slice(0, 12)}`
+        // An instruction trumps a done — see setOwnThreadTimer.
+        ctx.storage.clearThreadDone(input.slug)
+        ctx.storage.askThreadQuestion({ id, slug: input.slug, spec: JSON.stringify(spec), askedAtMs: now })
+        ctx.board.refresh()
+        return { registered: { id, spec, askedAt: new Date(now).toISOString() }, open: openInstructionViews(input.slug) }
+      },
+    }),
+
     unask: mutation({
       input: UnaskInput,
       output: UnaskResult,
       handler: async ({ input }) => {
-        // Slug-scoped in storage, so one thread can never withdraw another's question.
+        // Slug-scoped in storage, so one thread can never withdraw another's question. Any kind: this is
+        // also `uninstruct`'s withdrawal, since an instruction is a row of the same registry.
         const withdrawn = ctx.storage.withdrawThreadQuestion(input.slug, input.id, Date.now())
         if (withdrawn) ctx.board.refresh()
         return { withdrawn, open: openQuestionViews(input.slug) }
@@ -3149,6 +3215,12 @@ export function createRouter(ctx: AppContext) {
           // Scoped by reading the row first: an id belonging to another thread answers nothing here.
           const q = ctx.storage.getThreadQuestion(answer.questionId)
           if (!q || q.thread_slug !== input.slug || q.state !== "open") continue
+          // AN INSTRUCTION TAKES ONE OF ITS TWO REPLIES and nothing else. Its card offers exactly those,
+          // and the worker reads the label back as what HAPPENED — "Done" means the steps were performed —
+          // so a reply that names neither reached here from something other than the card, and is
+          // skipped like any other mismatch rather than delivered as a claim nobody made.
+          const spec = parseQuestionSpec(q.spec)
+          if (spec && isInstructions(spec) && !(answer.chosen.length === 1 && INSTRUCTIONS_OUTCOMES.includes(answer.chosen[0]))) continue
           if (ctx.storage.answerThreadQuestion(answer.questionId, JSON.stringify(answer), now)) answered.push(answer.questionId)
         }
         // ANSWERING IS NOT DELIVERING. The row is stored answered-but-undelivered and the scheduler
@@ -3182,7 +3254,8 @@ export function createRouter(ctx: AppContext) {
           // the card: a generic close icon is not consent for something irreversible, and declining is a
           // real option INSIDE the question. Skipped rather than thrown — the card does not offer the x
           // on one of these, so reaching this line at all means something other than the card called.
-          if (parseQuestionSpec(q.spec)?.danger) continue
+          // Neither can an INSTRUCTION, whose card offers "Couldn't do it" instead (survivesDismissal).
+          if (survivesDismissal(parseQuestionSpec(q.spec))) continue
           if (ctx.storage.dismissThreadQuestion(id, now)) dismissed.push(id)
         }
         // NO WAKE. The human dismissing questions is almost always dismissing several in a row and is
@@ -3209,10 +3282,18 @@ export function createRouter(ctx: AppContext) {
         // registered does not block this: frizz cannot tell a build from a dev server, only the worker
         // can, and the registration IS that judgement. Gating on raw liveness would make `done`
         // unreachable for any thread that left a log tail running.
-        const blockingQuestions = ctx.storage.listThreadQuestions(input.slug, { openOnly: true }).flatMap((q) => {
+        //
+        // AN OPEN INSTRUCTION BLOCKS IT TOO, and that is most of the reason instructions are rows: steps
+        // the human has not reported on are work still owed, and a done card would file them away unread
+        // — the fate of every "what you must do" paragraph written into a handoff before 2026-10-03.
+        const blockingQuestions: MarkOwnDoneResult["blockingQuestions"] = []
+        const blockingInstructions: MarkOwnDoneResult["blockingInstructions"] = []
+        for (const q of ctx.storage.listThreadQuestions(input.slug, { openOnly: true })) {
           const spec = parseQuestionSpec(q.spec)
-          return spec ? [{ id: q.id, question: spec.question }] : []
-        })
+          if (!spec) continue
+          if (isInstructions(spec)) blockingInstructions.push({ id: q.id, title: spec.question })
+          else blockingQuestions.push({ id: q.id, question: spec.question })
+        }
         const blockingWatches = [
           ...armedOwnWatchViews(input.slug).map((w) => ({
             id: w.id,
@@ -3223,12 +3304,12 @@ export function createRouter(ctx: AppContext) {
             .listThreadTimers(input.slug, { armedOnly: true })
             .map((t) => ({ id: t.id, what: `timer, fires ${new Date(t.fire_at).toISOString()}` })),
         ]
-        if (blockingQuestions.length > 0 || blockingWatches.length > 0) {
-          return { done: false, blockingQuestions, blockingWatches }
+        if (blockingQuestions.length > 0 || blockingInstructions.length > 0 || blockingWatches.length > 0) {
+          return { done: false, blockingQuestions, blockingInstructions, blockingWatches }
         }
         ctx.storage.markThreadDone(input.slug, input.body, Date.now())
         ctx.board.refresh()
-        return { done: true, blockingQuestions: [], blockingWatches: [] }
+        return { done: true, blockingQuestions: [], blockingInstructions: [], blockingWatches: [] }
       },
     }),
 
