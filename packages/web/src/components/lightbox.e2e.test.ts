@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { readFileSync } from "node:fs"
 import test from "node:test"
 import { crc32, deflateSync } from "node:zlib"
 
@@ -13,7 +14,10 @@ import { crc32, deflateSync } from "node:zlib"
 //
 // The pictures are drawn HERE. A plain Vite has no /_frizz/local-image route, so the test intercepts it
 // and answers with a PNG of the size the fixture's path names; `missing` paths get the real route's 404.
+// A `.webm` gets CLIP — 1.5s of ffmpeg's `testsrc2` at 320×180, VP9, which every Chrome decodes — in the
+// byte ranges a <video> asks for, as the real route answers them (server/local-image.ts).
 const baseUrl = process.env.FRIZZ_LIGHTBOX_E2E_URL
+const CLIP = readFileSync(new URL("./lightbox-e2e-clip.webm", import.meta.url))
 
 // A solid-colour RGB PNG of the given size — enough to give the gallery real shapes to lay out.
 function png(width: number, height: number): Buffer {
@@ -42,9 +46,10 @@ function png(width: number, height: number): Buffer {
 
 const DESKTOP = { width: 1000, height: 900, deviceScaleFactor: 1 }
 const PHONE = { width: 390, height: 844, deviceScaleFactor: 1, isMobile: true, hasTouch: true }
-// Every gallery tile on the fixture page: 2 + 3 + 2 in the transcript's galleries (the missing file is
-// listed, not tiled), 2 in the done card and 2 in the question option.
-const TILES = 11
+// Every gallery tile on the fixture page: 2 + 3 + 2 + 2 in the transcript's galleries (the missing file
+// is listed, not tiled), 2 in the done card and 2 in the question option. One of them is a video.
+const TILES = 13
+const VIDEO_TILES = 1
 
 async function launch(viewport: typeof DESKTOP | typeof PHONE = DESKTOP) {
   const { default: puppeteer } = await import("puppeteer")
@@ -60,15 +65,30 @@ async function launch(viewport: typeof DESKTOP | typeof PHONE = DESKTOP) {
     const url = new URL(request.url())
     if (url.pathname !== "/_frizz/local-image") return void request.continue()
     const path = url.searchParams.get("path") ?? ""
+    if (path.endsWith(".webm")) {
+      const range = /^bytes=(\d+)-(\d*)$/.exec(request.headers().range ?? "")
+      if (!range) return void request.respond({ status: 200, contentType: "video/webm", headers: { "accept-ranges": "bytes" }, body: CLIP })
+      const start = Number(range[1])
+      const end = range[2] ? Math.min(Number(range[2]), CLIP.length - 1) : CLIP.length - 1
+      return void request.respond({
+        status: 206,
+        contentType: "video/webm",
+        headers: { "accept-ranges": "bytes", "content-range": `bytes ${start}-${end}/${CLIP.length}` },
+        body: CLIP.subarray(start, end + 1),
+      })
+    }
     const size = /-(\d+)x(\d+)\.png$/.exec(path)
     if (!size || path.includes("missing")) return void request.respond({ status: 404, body: "404" })
     void request.respond({ status: 200, contentType: "image/png", body: png(Number(size[1]), Number(size[2])) })
   })
   await page.goto(new URL("/lightbox-fixture.html", baseUrl).href, { waitUntil: "networkidle2" })
-  // Every picture settled — decoded, or failed and dropped — and the rows re-justified on real shapes.
-  await page.waitForFunction((tiles) =>
-    document.querySelectorAll("[data-lightbox-tile] img").length === tiles
-    && [...document.images].every((img) => img.complete && img.naturalWidth > 0), {}, TILES)
+  // Every picture settled — decoded, or failed and dropped — every video's shape known, and the rows
+  // re-justified on real shapes.
+  await page.waitForFunction((tiles, videos) =>
+    document.querySelectorAll("[data-lightbox-tile]").length === tiles
+    && document.querySelectorAll<HTMLVideoElement>("[data-lightbox-tile] video").length === videos
+    && [...document.querySelectorAll<HTMLVideoElement>("[data-lightbox-tile] video")].every((v) => v.readyState >= 1 && v.videoWidth > 0)
+    && [...document.images].every((img) => img.complete && img.naturalWidth > 0), {}, TILES, VIDEO_TILES)
   await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))))
   return { browser, page, errors }
 }
@@ -129,7 +149,7 @@ test("a lightbox fence lays its pictures out in justified rows at their real sha
         missing: [...gallery.querySelectorAll("[data-lightbox-missing]")].map((el) => el.textContent),
       }
     }))
-    assert.equal(galleries.length, 3)
+    assert.equal(galleries.length, 4)
     // The three widths of one page share ONE row, at one height, each at its own shape, edge to edge.
     const [widths] = galleries[1].rows
     assert.equal(galleries[1].rows.length, 1)
@@ -520,6 +540,120 @@ test("a fence is a gallery on a done card and in a question option, and any pict
     await page.click("[data-fixture-loose] a[data-local-image]")
     await page.waitForSelector("[data-lightbox]")
     assert.deepEqual(await viewer(page), { counter: null, title: "the log view", picture: "/fixture/lightbox/log-800x600.png" })
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+// A video in a fence (maintainer 2026-10-03: the lightbox is the way to show "images … and other forms of
+// multimedia, I suppose, like videos"): a tile of its first frame with a play mark, at the video's own
+// shape, that plays in the viewer — and does not zoom, because a player is not a picture.
+test("a video is a tile of its first frame with a play mark, and plays in the viewer without zooming", { skip: !baseUrl, timeout: 120_000 }, async () => {
+  const { browser, page, errors } = await launch()
+  try {
+    const tile = await page.$eval("[data-fixture-message='3'] [data-lightbox-video]", (button) => {
+      const box = button.querySelector("span")!.getBoundingClientRect()
+      const mark = button.querySelector("[data-lightbox-play]")!.getBoundingClientRect()
+      const video = button.querySelector("video")!
+      return {
+        label: button.getAttribute("aria-label"),
+        ratio: box.width / box.height,
+        natural: video.videoWidth / video.videoHeight,
+        // The play mark sits on the tile's centre.
+        dx: mark.left + mark.width / 2 - (box.left + box.width / 2),
+        dy: mark.top + mark.height / 2 - (box.top + box.height / 2),
+        playing: !video.paused,
+        controls: video.controls,
+      }
+    })
+    assert.equal(tile.label, "Play The whole flow")
+    assert.ok(close(tile.natural, 16 / 9, 0.01), `natural ${tile.natural}`)
+    assert.ok(close(tile.ratio, tile.natural, 0.02), `the tile takes the video's shape: ${tile.ratio}`)
+    assert.ok(close(tile.dx, 0) && close(tile.dy, 0), `the play mark is off centre: ${tile.dx}, ${tile.dy}`)
+    assert.deepEqual([tile.playing, tile.controls], [false, false], "a tile is a still, never a player")
+
+    await (await page.$("[data-fixture-message='3'] [data-lightbox-video]"))!.click()
+    await page.waitForSelector("[data-lightbox] video")
+    const opened = await page.evaluate(() => {
+      const v = document.querySelector("[data-lightbox]")!
+      return {
+        counter: v.querySelector("[data-lightbox-counter]")?.textContent,
+        title: v.querySelector("h2")?.textContent,
+        controls: v.querySelector("video")!.controls,
+        buttons: [...v.querySelectorAll<HTMLElement>("header button")].map((b) => b.getAttribute("aria-label")),
+      }
+    })
+    assert.deepEqual(opened, { counter: "2 / 2", title: "The whole flow", controls: true, buttons: ["Open in default player", "Close"] })
+    // It plays as it opens: the click that opened it asked for it.
+    await page.waitForFunction(() => {
+      const v = document.querySelector<HTMLVideoElement>("[data-lightbox] video")
+      return !!v && !v.paused && v.currentTime > 0
+    }, { timeout: 5000 })
+
+    // Space pauses and resumes it from anywhere in the viewer, and reaches nothing behind it.
+    await page.keyboard.press(" ")
+    assert.equal(await page.$eval("[data-lightbox] video", (v) => (v as HTMLVideoElement).paused), true)
+    await page.keyboard.press(" ")
+    await page.waitForFunction(() => !document.querySelector<HTMLVideoElement>("[data-lightbox] video")!.paused)
+    // The zoom keys and a ctrl-wheel do nothing to a video.
+    await page.keyboard.press("+")
+    const box = (await (await page.$("[data-lightbox] video"))!.boundingBox())!
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+    await page.keyboard.down("Control")
+    await page.mouse.wheel({ deltaY: -200 })
+    await page.keyboard.up("Control")
+    assert.equal(await page.$eval("[data-lightbox] video", (v) => (v as HTMLElement).style.transform), "translate(0px, 0px)")
+    // A click on the video is the player's, never the backdrop's: the viewer stays open.
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
+    await new Promise((r) => setTimeout(r, 300))
+    assert.notEqual(await viewer(page), null, "a click on the video closed the viewer")
+    // The bare Control held for the ctrl-wheel is no key of the viewer's, so it alone reaches the page.
+    assert.deepEqual(await pageKeys(page), ["Control"], "a key the viewer handled must not reach the page")
+
+    // Paging from the video lands on the picture beside it, which zooms again.
+    await page.keyboard.press("ArrowLeft")
+    await page.waitForSelector("[data-lightbox] img")
+    assert.equal((await viewer(page))?.counter, "1 / 2")
+    assert.equal(await page.$("[data-lightbox] video"), null, "the video unmounted, and stopped, as it paged away")
+    assert.deepEqual(
+      await page.$$eval("[data-lightbox] header button", (bs) => bs.map((b) => b.getAttribute("aria-label"))),
+      ["Zoom out", "Zoom in", "Open in default viewer", "Close"],
+    )
+    await page.keyboard.press("Escape")
+    await page.waitForFunction(() => !document.querySelector("[data-lightbox]"))
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test("on a phone, a swipe that starts on a video is the player's, and one from the backdrop around it pages", { skip: !baseUrl, timeout: 120_000 }, async () => {
+  const { browser, page, errors } = await launch(PHONE)
+  try {
+    await (await page.$("[data-fixture-message='3'] [data-lightbox-video]"))!.tap()
+    await page.waitForSelector("[data-lightbox] video")
+    await page.waitForFunction(() => (document.querySelector<HTMLVideoElement>("[data-lightbox] video")?.videoWidth ?? 0) > 0)
+    const cdp = await page.createCDPSession()
+    const touch = (type: string, points: [number, number][]) =>
+      cdp.send("Input.dispatchTouchEvent", { type: type as "touchStart", touchPoints: points.map(([x, y], id) => ({ x, y, id })) })
+    const swipe = async (x: number, y: number, dx: number) => {
+      await touch("touchStart", [[x, y]])
+      for (let i = 1; i <= 8; i++) await touch("touchMove", [[x + (dx * i) / 8, y]])
+      await touch("touchEnd", [])
+    }
+    const video = (await (await page.$("[data-lightbox] video"))!.boundingBox())!
+    const stage = (await (await page.$("[data-lightbox-stage]"))!.boundingBox())!
+    // A 16:9 video on a portrait phone leaves backdrop above and below it.
+    assert.ok(video.y - stage.y > 60, `no backdrop above the video: ${JSON.stringify({ video, stage })}`)
+
+    await swipe(video.x + video.width / 2, video.y + video.height / 2, 160)
+    await new Promise((r) => setTimeout(r, 300))
+    assert.equal((await viewer(page))?.counter, "2 / 2", "a swipe across the video paged away from it")
+
+    await swipe(stage.x + stage.width / 2, stage.y + (video.y - stage.y) / 2, 160)
+    await page.waitForSelector("[data-lightbox] img")
+    assert.equal((await viewer(page))?.counter, "1 / 2")
     assert.deepEqual(errors, [])
   } finally {
     await browser.close()
