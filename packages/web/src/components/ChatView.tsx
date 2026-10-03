@@ -86,7 +86,7 @@ import { isAnswerable } from "../lib/registeredQuestion.ts"
 // surface can render them without importing the thread view. QuestionBlockCard in particular is
 // shared with the native-AskUserQuestion path, which reaches it through InteractionCards.tsx —
 // a file THIS one imports, so the card could not have stayed here without a module cycle.
-import { BLOCK_RADIUS, CARD_ACTION_EXPLAINER, CARD_ACTION_RADIUS, CARD_BODY, CARD_LINK, CARD_PRIMARY_ACTION, CARD_PRIMARY_BUTTON, CardActions, CardContent, CardHead, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
+import { BLOCK_RADIUS, CARD_ACTION_EXPLAINER, CARD_ACTION_RADIUS, CARD_BODY, CARD_LINK, CARD_PRIMARY_ACTION, CARD_PRIMARY_BUTTON, CARD_SECONDARY_ACTION, CardActions, CardContent, CardHead, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
 import { QuestionBlockCard } from "./QuestionBlockCard.tsx"
 import { settledAskView } from "../lib/interactionQuestion.ts"
 // ONE frame for every image the chat renders — border, inset mat, centered picture. See its module
@@ -4034,9 +4034,9 @@ export function ProviderFaultCard({
             disabled={retrying}
             onMouseDown={(e) => e.preventDefault()}
             // The secondary sibling departs from the primary on FILL only — it stays outlined so the
-            // pair keeps a hierarchy — never on the corner, which is a property of sitting in a card's
-            // action row rather than of being the card's verb.
-            className={`shrink-0 ${CARD_ACTION_RADIUS} border border-border px-2 py-1 text-[11px] text-fg/90 transition-colors hover:bg-panel hover:border-border-strong disabled:opacity-60`}
+            // pair keeps a hierarchy — never on the corner or the box: CARD_SECONDARY_ACTION takes its
+            // border out of the padding, so it stands exactly as tall as the Sign in beside it.
+            className={`${CARD_SECONDARY_ACTION} disabled:opacity-60`}
           >
             Retry
           </button>

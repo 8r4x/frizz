@@ -20,7 +20,7 @@ import { INSTRUCTIONS_DONE, INSTRUCTIONS_NOT_DONE, type AskedInstructions, type 
 import { shouldSubmitStagedEnter } from "../lib/composerKeyboard.ts"
 import { useInlineMarkdownHtml, useMarkdownHtml } from "../lib/useMarkdown.ts"
 import { LinkedHtml } from "./LinkedHtml.tsx"
-import { CARD_ACTION_RADIUS, CARD_PRIMARY_ACTION, CardActions, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
+import { CARD_PRIMARY_ACTION, CARD_SECONDARY_ACTION, CardActions, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
 
 /** The card's kind title, open and settled alike. */
 export const INSTRUCTION_LABEL = "For you to do"
@@ -101,15 +101,13 @@ export function InstructionCard({
         >
           {INSTRUCTIONS_DONE}
         </button>
-        {/* The secondary sibling departs from the primary on FILL only, as the provider-fault card's
-            Retry does beside its Sign in. */}
         <button
           type="button"
           data-instruction-not-done
           disabled={sending}
           onClick={() => onComplete(INSTRUCTIONS_NOT_DONE)}
           onMouseDown={(e) => e.preventDefault()}
-          className={`shrink-0 ${CARD_ACTION_RADIUS} border border-border px-2.5 py-1 text-[11px] font-medium text-fg/90 outline-none transition-colors hover:border-border-strong hover:bg-panel focus-visible:ring-1 focus-visible:ring-focus-ink-60 disabled:opacity-60`}
+          className={`${CARD_SECONDARY_ACTION} disabled:opacity-60`}
         >
           {INSTRUCTIONS_NOT_DONE}
         </button>
