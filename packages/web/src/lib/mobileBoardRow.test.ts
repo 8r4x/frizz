@@ -48,14 +48,6 @@ test("an ask's line is its question, or the count when there are several", () =>
     { id: "q2", askedAt: ahead(0), spec: { question: "B?", kind: "question" } },
   ] as ThreadView["questions"] })
   assert.deepEqual(rowSecondLine(two, "needs-input", false), { text: "2 questions" })
-  // An instruction shares the registry but is not a question: alone it reads its title, and in a mix it
-  // is counted as a thing to do.
-  const sign = { id: "ins_a", askedAt: ahead(0), spec: { kind: "instructions", question: "Sign in to npm", steps: ["Run `npm login`."] } }
-  assert.deepEqual(rowSecondLine(thread({ questions: [sign] as ThreadView["questions"] }), "needs-input", false), { text: "Sign in to npm" })
-  const mixed = thread({ questions: [two.questions![0], sign] as ThreadView["questions"] })
-  assert.deepEqual(rowSecondLine(mixed, "needs-input", false), { text: "1 question, 1 thing to do" })
-  const tasks = thread({ questions: [sign, { ...sign, id: "ins_b" }] as ThreadView["questions"] })
-  assert.deepEqual(rowSecondLine(tasks, "needs-input", false), { text: "2 things to do" })
   const native = thread({ pendingAsk: { questions: [{ question: "Post it?", header: "", multiSelect: false, options: [] }] } as unknown as ThreadView["pendingAsk"] })
   assert.deepEqual(rowSecondLine(native, "needs-input", false), { text: "Post it?" })
   // No question text anywhere: the handoff says what was asked.

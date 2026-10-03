@@ -8,7 +8,7 @@ import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import watcher from "@parcel/watcher"
 import type { BoardSnapshot, ClaudeModel, ThreadView, RuntimeState, ThreadRecurringPrompt, ProviderError } from "@frizz/shared"
-import { RegisteredAskSchema, BoardDiffer, PermissionMode, SnoozeUntil, ThreadSlug, awaitingNeedsInput, isDirectSubAgent, needsInputRequired, questionAnswerMessage, questionsCancelledWakeMessage, type RegisteredAsk, type PermissionMode as PermissionModeValue, type QuestionAnswer, type QuestionDismissal } from "@frizz/shared"
+import { AskedQuestionSchema, BoardDiffer, PermissionMode, SnoozeUntil, ThreadSlug, awaitingNeedsInput, awaitingSteps, isDirectSubAgent, needsInputRequired, questionAnswerMessage, questionsCancelledWakeMessage, type AskedQuestion, type PermissionMode as PermissionModeValue, type QuestionAnswer, type QuestionDismissal } from "@frizz/shared"
 import type { Bus } from "./bus.ts"
 import type { Project } from "./project.ts"
 import { isHeadlessRow, isBrokerClaudeRow, sessionTitleLocked, type ThreadQuestionRow } from "./storage.ts"
@@ -454,13 +454,13 @@ export function hasDeclaredBackgroundPark(
   return true
 }
 
-/** A stored question's spec — or an instruction's, the registry's other kind (`isInstructions`) — or
- *  undefined when it no longer parses: a schema change, a hand-written row. Undefined is DROPPED by every
- *  caller rather than thrown on: one unreadable row must not blank a card carrying three good ones.
- *  Duplicated in router.ts for the worker's own read-back, which cannot reach into the board. */
-export function safeQuestionSpec(spec: string): RegisteredAsk | undefined {
+/** A stored question's spec, or undefined when it no longer parses — a schema change, a hand-written
+ *  row. Undefined is DROPPED by every caller rather than thrown on: one unreadable row must not blank a
+ *  card carrying three good ones. Duplicated in router.ts for the worker's own read-back, which cannot
+ *  reach into the board. */
+export function safeQuestionSpec(spec: string): AskedQuestion | undefined {
   try {
-    const parsed = RegisteredAskSchema.safeParse(JSON.parse(spec))
+    const parsed = AskedQuestionSchema.safeParse(JSON.parse(spec))
     return parsed.success ? parsed.data : undefined
   } catch {
     return undefined
@@ -596,9 +596,15 @@ export function hasParkedTimerWatch(
   return tele.lastFence.hints.some((hint) => hint.kind === "timer" && armedTimerIds.has(hint.value.trim()))
 }
 
-/** Does the thread DECLARE a wait of any kind — its own background work, a parked PR watcher, or a
- *  parked timer? This is what the resting card states. It is wider than the queue excusal above by
- *  exactly the PR and timer waits, which card but never park. */
+/** Is the thread's last word a fence handing the HUMAN steps to perform (`steps:`, 2026-10-03)? That
+ *  is a wait on them rather than on anything running, and the resting card is where they read it. */
+export function hasHumanSteps(tele: SessionTelemetry | undefined): boolean {
+  return tele?.lastFence?.kind === "awaiting" && awaitingSteps(tele.lastFence.hints).length > 0
+}
+
+/** Does the thread DECLARE a wait of any kind — its own background work, a parked PR watcher, a parked
+ *  timer, or steps for the human? This is what the resting card states. It is wider than the queue
+ *  excusal above by exactly the PR, timer and steps waits, which card but never park. */
 export function hasDeclaredWait(
   tele: SessionTelemetry | undefined,
   nowMs: number,
@@ -608,6 +614,7 @@ export function hasDeclaredWait(
   // for the same reason the two sets above are: only it has the storage handle.
   armedWatches: readonly RegisteredWatch[] = [],
 ): boolean {
+  if (hasHumanSteps(tele)) return true
   if (hasDeclaredBackgroundPark(tele, nowMs)) return true
   // A REGISTRATION IS A WAIT WITHOUT A FENCE. It is the same fact the `shells:` line states, made
   // durable: it outlives the message that created it, so it survives the worker saying something else.
@@ -1232,7 +1239,10 @@ export function deriveAwaitingBackground(
     !hasRegisteredBackgroundPark(tele, armedWatches, nowMs) &&
     // A TIMER PARK IS THE SAME EXCEPTION AGAIN (2026-08-24): its fence has no park action either, so
     // suppressing this card left the wait stated nowhere but the fence's own machinery footer.
-    !hasParkedTimerWatch(tele, armedTimerIds)
+    !hasParkedTimerWatch(tele, armedTimerIds) &&
+    // STEPS FOR THE HUMAN carry the card's own Done, so this card is the one place it can be pressed
+    // from — the queue, the drawer and the full-screen page alike.
+    !hasHumanSteps(tele)
   ) return false
   // Every OTHER excusal deriveNeedsYou applies still outranks the card (a user wall-clock snooze, a
   // delivered-but-unobserved follow-up); only the queue-owned event-snooze is dropped,

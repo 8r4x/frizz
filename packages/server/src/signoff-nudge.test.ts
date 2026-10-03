@@ -11,7 +11,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createStorage, type SessionRow } from "./storage.ts"
-import { INSTRUCT_AVAILABLE_AT, NEEDS_INPUT_REQUIRED_AT, QUESTION_FENCE_RETIRED_AT, retiredAwaitingKindsIn, SIGNOFF_NUDGE_MESSAGE } from "@frizz/shared"
+import { NEEDS_INPUT_REQUIRED_AT, QUESTION_FENCE_RETIRED_AT, retiredAwaitingKindsIn, SIGNOFF_NUDGE_MESSAGE } from "@frizz/shared"
 import { Bus } from "./bus.ts"
 import type { Project } from "./project.ts"
 import { applyRecord, createTailer, newTailState, type SessionTelemetry, type Tailer } from "./tailer.ts"
@@ -183,29 +183,6 @@ test("a rest with no fence is told how to sign off, and the text names all three
     assert.match(h.delivered[0], /done[\s\S]{0,220}1-3 sentences/)
     assert.doesNotMatch(h.delivered[0], /^Keep it SHORT/m)
   } finally { h.close() }
-})
-
-// `mcp__frizz__instruct` (2026-10-03) is taught only to a worker dispatched WITH it: an older worker's
-// MCP server was spawned without the tool, so naming it would send that worker to a call that fails.
-// Both instants are explicit, because "now" sits on either side of INSTRUCT_AVAILABLE_AT depending on
-// when the suite runs.
-test("the reminder names instruct only to a worker dispatched with the verb", async () => {
-  const cut = Date.parse(INSTRUCT_AVAILABLE_AT)
-  const after = nudger({}, { spawnedAt: new Date(cut + 60_000).toISOString() })
-  const before = nudger({}, { spawnedAt: new Date(cut - 60_000).toISOString() })
-  try {
-    await after.s.tick()
-    await before.s.tick()
-    assert.equal(after.delivered.length, 1)
-    assert.equal(before.delivered.length, 1)
-    assert.match(after.delivered[0], /`mcp__frizz__instruct` — the human must PERFORM something you cannot/)
-    assert.match(after.delivered[0], /an open\s+instruction is the sign-off/)
-    // The control: dispatched a minute earlier, under the same `needs_input:` contract, and the line is
-    // absent — so the gate, not the contract, is what put it there.
-    assert.match(before.delivered[0], /needs_input: false/)
-    assert.doesNotMatch(before.delivered[0], /mcp__frizz__instruct/)
-    assert.doesNotMatch(SIGNOFF_NUDGE_MESSAGE, /mcp__frizz__instruct/)
-  } finally { after.close(); before.close() }
 })
 
 // A thread that signed off is not an untriageable item, whichever way it signed off. `awaiting` counts

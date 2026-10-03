@@ -71,7 +71,7 @@ test("the contract teaches ask as the only way to ask, and the empty marker as t
     const c = prompt.replace(/\s+/g, " ")
     assert.match(c, /THERE IS NO `question` FENCE ANY MORE/)
     assert.match(c, /A QUESTION HAS NO FENCE ANY MORE/)
-    assert.match(c, /WAITING ON A PERSON IS A REGISTERED QUESTION/)
+    assert.match(c, /WAITING ON A PERSON TO DECIDE IS A REGISTERED QUESTION/)
     assert.match(c, /AN OPEN REGISTERED QUESTION IS THE HANDBACK/)
     // The marker, taught by example, and its two properties: optional, and one per question.
     assert.match(prompt, /```question qst_ab12cd34\n```/)
@@ -91,18 +91,31 @@ test("the contract teaches ask as the only way to ask, and the empty marker as t
   }
 })
 
-// `mcp__frizz__instruct` (2026-10-03) is ROUTED to at the places a worker decides how to hand over — the
-// sign-off verbs, `done`'s blockers, the recommendation rule and the dangling-idea rule — and the prose
-// home it replaces is gone: "what the human must do" used to be told to go in the handoff, where nothing
-// tracked it and the `done` card archived it.
-test("the contract routes an act only the human can perform to instruct, not to the handoff prose", () => {
-  for (const backend of ["claude", "codex", "acp"] as const) {
-    const c = buildWorkerPrompt(backend).replace(/\s+/g, " ")
-    assert.match(c, /`mcp__frizz__done`, `mcp__frizz__ask` and `mcp__frizz__instruct` each record a ROW/)
-    assert.match(c, /AN OPEN INSTRUCTION STANDS EXACTLY THE SAME WAY/)
-    assert.match(c, /An open question, an open instruction or an armed registration blocks it/)
-    assert.match(c, /Once nothing is left to DECIDE and only the human's act remains, the steps go to them with `mcp__frizz__instruct`/)
-    assert.match(c, /A REGISTERED INSTRUCTION — `mcp__frizz__instruct`/)
+// STEPS FOR THE HUMAN (2026-10-03) ride the awaiting fence, and the contract has to route to them at the
+// places a worker decides how to hand over — or "what the human must do" stays a sentence in a handoff
+// that nothing tracks and nothing wakes on.
+test("the contract teaches steps: as the wait on a human's act, and routes to it where a worker hands over", () => {
+  for (const backend of ["claude", "codex"] as const) {
+    const prompt = buildWorkerPrompt(backend)
+    const c = prompt.replace(/\s+/g, " ")
+    // Taught by example, in the grammar the parser reads: one `- ` item per step under the key.
+    assert.match(prompt, /```awaiting\n {2}title: Sign in to npm so the release can publish\n {2}steps:\n {4}- Run `npm login --auth-type=web`/)
+    // Its properties: verbatim, names the human (so no other name and no `for:`), always queues, and its
+    // one verb comes back as the human's own reply — anything else is a message of their own.
+    assert.match(c, /The `title:` and `steps:` values are the exceptions: frizz reads them verbatim/)
+    assert.match(c, /Steps NAME THE HUMAN as the wait, so the fence needs no other name and no `for:`/)
+    assert.match(c, /it always puts the thread in their queue/)
+    assert.match(c, /card shows the steps over one \*\*Done\*\* button, and its click comes back to you as their reply, `Done`/)
+    assert.match(c, /anything else they need to tell you — a step that failed, the account they used — comes as a message of their own/)
+    assert.doesNotMatch(c, /Couldn't do it/)
+    assert.match(c, /\(`steps:` count: they name the human\.\)/)
+    // A decision is still a question; an act is steps — at every place the two used to blur.
+    assert.match(c, /A DECISION you need from them is a question, never a fence/)
+    assert.match(c, /WAITING ON ONE TO ACT IS `steps:`/)
+    assert.match(c, /Once nothing is left to DECIDE and only the human's act remains, the steps go to them under `steps:`/)
+    assert.match(c, /Something the human must DO \("re-pull before you restart"\) is not a dangling idea either: hand it to them under `steps:`/)
     assert.doesNotMatch(c, /that is the handoff, and it belongs in the prose/)
+    // And the registered first cut is gone from the contract entirely.
+    assert.doesNotMatch(c, /mcp__frizz__instruct|\buninstruct\b/)
   }
 })

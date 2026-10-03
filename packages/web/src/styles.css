@@ -1025,6 +1025,18 @@ a[href] {
   border-radius: 4px;
   padding: 0.05em 0.3em;
 }
+/* …except INSIDE A TRANSCRIPT CARD, whose own fill is panel-2 too (TranscriptCard): there the chip
+   vanished into the card and left only its padding, so a command read as mono text with stray gaps on
+   either side — most visibly in a steps list, where nearly every item carries one (2026-10-03). The
+   question option's translucent mix (below) gives the same one-step contrast on any fill a card takes.
+   Fenced code keeps no chip: the re-reset outranks this rule as the base one does `.md-body code`. */
+.card-md .md-body code,
+.card-md .md-inline code {
+  background: color-mix(in srgb, var(--color-fg) 8%, transparent);
+}
+.card-md .md-body pre code {
+  background: none;
+}
 /* Inline-only markdown (answer chips, the recommendation caption): honor inline emphasis/strong/del/
    links without md-body's block chrome. Code shares the prose chip above; emphasis maps to weight/style. */
 .md-inline strong {

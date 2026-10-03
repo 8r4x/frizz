@@ -488,6 +488,11 @@ export function parseAskUserQuestionAnswers(result: unknown, questions: readonly
 //                                    The worker's own answer to "does the human need to look now?" —
 //                                    `false` keeps the thread out of the queue, `true` puts it in the
 //                                    queue while the work keeps running (see awaitingNeedsInput).
+//   steps:                           OPTIONAL. Steps only the HUMAN can perform — a sign-in, an
+//     - Run `npm login`              approval, a merge the worker may not make — one `- ` item per
+//     - Approve the browser prompt   line, read VERBATIM (see awaitingSteps). A fence carrying them
+//                                    waits on the human: it needs no other name and no `for:`, and it
+//                                    always queues (awaitingNeedsInput reads it as `true`).
 //
 // THE FRONTMATTER IS REAL YAML (2026-08-24), parsed by the `yaml` package — the keys are PLURAL and take
 // SEQUENCES, block or flow. A bare scalar where a sequence is expected is accepted and normalised to a
@@ -527,8 +532,9 @@ export function parseAskUserQuestionAnswers(result: unknown, questions: readonly
 // does not park: a wait that cannot resolve must never be able to look like one that can.
 //
 // WHAT WAS DELETED, AND WHY, BECAUSE EACH ONE WAS A WAY TO STALL SILENTLY:
-//   `human: <person>`  parked a thread in Held and NOTHING EVER FIRED IT. Waiting on a person is a
-//                      ```question — that is what a question is for.
+//   `human: <person>`  parked a thread in Held and NOTHING EVER FIRED IT. Waiting on a person to DECIDE
+//                      is a registered question; waiting on one to ACT is `steps:` (2026-10-03), which
+//                      keeps the thread IN the queue — and the human's reply is the wake.
 //   `timer: <instant>` an absolute instant the worker computed. One was written 5h55m in the past; it
 //                      parsed, armed nothing, and stalled its thread for 5.5 hours. `for:` is a duration
 //                      precisely so this cannot be expressed (see parseAwaitingDurationRaw).
@@ -542,7 +548,7 @@ export function parseAskUserQuestionAnswers(result: unknown, questions: readonly
 //   prose bodies       narrowed to `reason:` so the fence is machine-checkable — then given back in full
 //                      below the `---` delimiter, where prose cannot be mistaken for structure.
 export const AwaitingHint = z.object({
-  kind: z.enum(["shell", "agent", "timer", "pr", "issue", "for", "title", "needs_input"]),
+  kind: z.enum(["shell", "agent", "timer", "pr", "issue", "for", "title", "needs_input", "step"]),
   value: z.string(),
 })
 export type AwaitingHint = z.infer<typeof AwaitingHint>
@@ -583,7 +589,7 @@ export function retiredAwaitingKindsIn(body: string): RetiredAwaitingKind[] {
 export const RETIRED_AWAITING_REPLACEMENT: Record<RetiredAwaitingKind, string> = {
   "watch": "`shells: [<the id your runtime gave you>]` (or `agents: [<id>]`) — the same id, in the current sequence",
   "pr-watch": "register the PR with `mcp__frizz__watch_pr`, then name it `prs: [owner/repo#123]`",
-  "human": "there is no human gate any more — if you need a person, register a question with `mcp__frizz__ask` instead of parking",
+  "human": "there is no human gate any more — steps only the human can perform go under `steps:`, one `- ` item per line; a decision you need from them is a question, registered with `mcp__frizz__ask`",
   "ci": "CI is not a wait of its own: register the PR with `mcp__frizz__watch_pr` and you are woken when its checks settle",
   "session": "there is no cross-session wait — name the sub-agent you dispatched with `agents: [<id>]`",
   // THE 2026-08-24 CUTOVER. The frontmatter is YAML now, and YAML has no repeated keys — so the four
@@ -623,10 +629,11 @@ export const RETIRED_AWAITING_REPLACEMENT: Record<RetiredAwaitingKind, string> =
 const AWAITING_KEY_RE = /^([a-z][a-z_-]*):\s*(\S.*)?$/i
 
 /** The keys the frontmatter recognises as STRUCTURE: four PLURAL sequences of things frizz can look up,
- *  the scalars `for:` and `needs_input:`, and `title:` — which is recognised here so it never falls to
- *  the body, but is read verbatim rather than as YAML (see splitAwaitingFrontmatter). Anything else falls
- *  through to the body. `needs-input` is the same key spelled the way the other hyphenated kinds are. */
-const AWAITING_YAML_KEYS = new Set(["shells", "agents", "timers", "prs", "issues", "for", "title", "needs_input", "needs-input"])
+ *  the scalars `for:` and `needs_input:`, and `title:` and `steps:` — which are recognised here so they
+ *  never fall to the body, but are read verbatim rather than as YAML (see splitAwaitingFrontmatter).
+ *  Anything else falls through to the body. `needs-input` is the same key spelled the way the other
+ *  hyphenated kinds are. */
+const AWAITING_YAML_KEYS = new Set(["shells", "agents", "timers", "prs", "issues", "for", "title", "steps", "needs_input", "needs-input"])
 
 /** Which singular hint kind each plural sequence key produces. The WIRE SHAPE is unchanged by the
  *  2026-08-24 cutover — every consumer still reads a flat `{kind, value}` list with SINGULAR kinds — so
@@ -645,6 +652,12 @@ const AWAITING_SEQUENCE_KEYS: { [key: string]: AwaitingItemKind | undefined } = 
 /** Defensive caps, shared so the sidebar gloss and the in-chat card can never render a divergent row. */
 export const AWAITING_HINT_MAX = 8
 export const AWAITING_HINT_VALUE_MAX = 200
+
+/** `steps:` has caps of its own. A step is a SENTENCE rather than an id, so it gets a sentence's length;
+ *  and the list is appended AFTER the hints capped above, so a long list can never crowd a `prs:` entry
+ *  or the `needs_input:` answer out of AWAITING_HINT_MAX. */
+export const AWAITING_STEPS_MAX = 12
+export const AWAITING_STEP_VALUE_MAX = 500
 
 /** `title:` — the resting card's heading in the WORKER'S OWN WORDS, replacing the derived one
  *  ("Awaiting" / "Background shells running", see awaitingBackgroundLabel).
@@ -698,7 +711,14 @@ export function trimAwaitingTitle(raw: string): string {
  *  every resting message — and the card drew "De-slop rewrite of the" with no ellipsis and no error,
  *  because YAML had read the PR number as a comment. A colon would have been worse: the whole
  *  frontmatter fails to parse, and a fence that named a live sub-agent and a PR parks NOTHING. So the
- *  title is read verbatim off its line (plus any indented continuation), and only the lookups stay YAML. */
+ *  title is read verbatim off its line (plus any indented continuation), and only the lookups stay YAML.
+ *
+ *  `steps:` IS READ VERBATIM FOR THE SAME REASON, and more urgently: a step is an instruction, and an
+ *  instruction is the prose most likely to carry what YAML cannot hold. `- Run \`npm login\`` is a parse
+ *  error outright (a backtick may not open a plain scalar), `- Approve it: use the org account` silently
+ *  becomes a one-key mapping, and either failure would cost the fence every lookup beside it. So each
+ *  `- ` item under the key is taken as written, an indented line continues the item above it, and a
+ *  value on the key line itself is one step — or, written `[a, b]`, a flow list YAML is allowed to try. */
 export function splitAwaitingFrontmatter(raw: string): { body: string; hints: AwaitingHint[] } {
   const lines = raw.split("\n").map((l) => l.replace(/\r$/, ""))
   const delimiter = lines.findIndex((l) => /^\s*---+\s*$/.test(l))
@@ -707,18 +727,22 @@ export function splitAwaitingFrontmatter(raw: string): { body: string; hints: Aw
   const rest: string[] = []
   const yamlLines: string[] = []
   const titleLines: string[] = []
+  const steps: string[] = []
   // `structural` tracks whether the line we are on belongs to the YAML document. A block sequence's items
   // and any indented continuation belong to the KEY ABOVE THEM, so they follow that key's fate — which is
   // what keeps a retired `pr:` with its list underneath from orphaning a bare sequence into the parser.
-  // `inTitle` is the same rule for the one key that is prose: its continuation lines follow it verbatim.
+  // `inTitle` and `inSteps` are the same rule for the two keys that are prose: their lines follow them
+  // verbatim.
   let structural = true
   let inTitle = false
+  let inSteps = false
   for (const line of frontmatter) {
     const m = line.match(AWAITING_KEY_RE)
     const key = m?.[1].toLowerCase()
     if (m && key) {
       structural = AWAITING_YAML_KEYS.has(key)
       inTitle = key === "title"
+      inSteps = key === "steps"
     }
     // A LINE THAT IS NOT A KEY AND NOT A CONTINUATION IS PROSE, exactly as it was under the line grammar:
     // a worker that omits the `---` and writes its handoff straight into the frontmatter must still park.
@@ -726,8 +750,17 @@ export function splitAwaitingFrontmatter(raw: string): { body: string; hints: Aw
     else if (line.trim() !== "" && !/^\s/.test(line) && !/^\s*-\s/.test(line)) {
       structural = false
       inTitle = false
+      inSteps = false
     }
     if (inTitle) titleLines.push(m && key === "title" ? (m[2] ?? "") : line)
+    else if (inSteps) {
+      if (m && key === "steps") steps.push(...inlineSteps(m[2] ?? ""))
+      else {
+        const item = /^\s*-\s+(.*)$/.exec(line)
+        if (item) steps.push(item[1])
+        else if (line.trim() && steps.length > 0) steps[steps.length - 1] += ` ${line.trim()}`
+      }
+    }
     else (structural ? yamlLines : rest).push(line)
   }
   const parsed = parseAwaitingYaml(yamlLines.join("\n"))
@@ -739,7 +772,34 @@ export function splitAwaitingFrontmatter(raw: string): { body: string; hints: Aw
   // no consumer can draw a longer one. A title alone still parks nothing (see readAwaitingPark).
   const title = trimAwaitingTitle(titleLines.join(" "))
   if (title) parsed.hints.push({ kind: "title", value: title })
-  return { body: rest.join("\n").trim(), hints: parsed.hints.slice(0, AWAITING_HINT_MAX) }
+  const stepHints: AwaitingHint[] = steps
+    .map((step) => step.trim())
+    .filter(Boolean)
+    .slice(0, AWAITING_STEPS_MAX)
+    .map((step) => ({ kind: "step", value: step.slice(0, AWAITING_STEP_VALUE_MAX) }))
+  return { body: rest.join("\n").trim(), hints: [...parsed.hints.slice(0, AWAITING_HINT_MAX), ...stepHints] }
+}
+
+/** The steps written ON the `steps:` line: none, one, or a flow list. A flow list YAML cannot read — a
+ *  step opening on a backtick, a colon inside one — stays ONE step with its brackets off, so the human
+ *  still reads every word rather than the fence losing them. */
+function inlineSteps(value: string): string[] {
+  const v = value.trim()
+  if (!v) return []
+  if (!(v.startsWith("[") && v.endsWith("]"))) return [v]
+  try {
+    const list = parseYaml(v)
+    if (Array.isArray(list) && list.every((s) => typeof s === "string" || typeof s === "number")) return list.map(String)
+  } catch {
+    // fall through to the one-step reading
+  }
+  return [v.slice(1, -1)]
+}
+
+/** The fence's steps for the human, in the order written — empty for every fence that is not waiting on
+ *  one, which is how every reader tells the two shapes apart. */
+export function awaitingSteps(hints: readonly AwaitingHint[] | undefined): string[] {
+  return (hints ?? []).filter((h) => h.kind === "step").map((h) => h.value)
 }
 
 function parseAwaitingYaml(text: string): { ok: boolean; hints: AwaitingHint[] } {
@@ -801,8 +861,14 @@ export function awaitingFenceTitle(hints: readonly AwaitingHint[] | undefined): 
 /** The fence's `needs_input:` answer: `true` (the human should look now, while the work keeps running),
  *  `false` (nothing for the human yet), or null when the fence gave no answer or one that is neither —
  *  which a new-contract thread is bumped for and queued on, never parked on. The LAST one wins, as
- *  awaitingFenceTitle's does. */
+ *  awaitingFenceTitle's does.
+ *
+ *  STEPS ARE THE ANSWER, whatever the line says. A fence listing `steps:` is waiting on the human to
+ *  perform them, so the human is needed now by construction: the line may be left out, and a `false`
+ *  beside steps is a contradiction read the safe way — a thread that is waiting on its human must never
+ *  be the one that disappears from their queue. */
 export function awaitingNeedsInput(hints: readonly AwaitingHint[] | undefined): boolean | null {
+  if (awaitingSteps(hints).length > 0) return true
   let answer: boolean | null = null
   for (const h of hints ?? []) {
     if (h.kind !== "needs_input") continue
@@ -1509,12 +1575,9 @@ export function liveOpsLines(ops?: SignoffLiveOps, needsInput = false): string[]
 
 /** The reminder for a fenceless rest. `needsInput` is the worker's contract (`needsInputRequired`): a
  *  worker dispatched under the `needs_input:` cut is taught the key, and one dispatched before it is
- *  taught the grammar it can actually satisfy. `instruct` is the same kind of answer for the
- *  `mcp__frizz__instruct` verb (`instructAvailable`), and is only ever true alongside `needsInput`. */
-export function signoffNudgeMessage(ops?: SignoffLiveOps, needsInput = false, instruct = false): string {
-  const base = needsInput
-    ? (instruct ? SIGNOFF_NUDGE_MESSAGE_INSTRUCT : SIGNOFF_NUDGE_MESSAGE_NEEDS_INPUT)
-    : SIGNOFF_NUDGE_MESSAGE
+ *  taught the grammar it can actually satisfy. */
+export function signoffNudgeMessage(ops?: SignoffLiveOps, needsInput = false): string {
+  const base = needsInput ? SIGNOFF_NUDGE_MESSAGE_NEEDS_INPUT : SIGNOFF_NUDGE_MESSAGE
   const lines = liveOpsLines(ops, needsInput)
   if (lines.length) {
     lines.push("", "An ```awaiting fence names only what you are ACTUALLY waiting on, one such list per kind, plus")
@@ -1570,14 +1633,7 @@ function signoffNudgeAwaitingLines(needsInput: boolean): string[] {
   ]
 }
 
-/** The `mcp__frizz__instruct` bullet, for a worker dispatched with the verb (`instructAvailable`). */
-const SIGNOFF_NUDGE_INSTRUCT_LINES = [
-  "- `mcp__frizz__instruct` — the human must PERFORM something you cannot: sign in, approve, merge, press a",
-  "  button you may not. Register the steps, written to be followed cold, then rest normally — an open",
-  "  instruction is the sign-off, and the human's \"Done\" or \"Couldn't do it\" wakes you.",
-]
-
-function signoffNudgeText(needsInput: boolean, instruct = false): string {
+function signoffNudgeText(needsInput: boolean): string {
   return [
   `${SIGNOFF_NUDGE_MARKER} Nothing about your task has changed, and no new work is being asked of you.`,
   "",
@@ -1611,7 +1667,6 @@ function signoffNudgeText(needsInput: boolean, instruct = false): string {
   "- `mcp__frizz__ask` — you need the human. NOT a fence: the ```question fence is retired, and a fence",
   "  with a question in its body is plain prose. Register it (options with one-line trade-offs, the",
   "  recommended one first), then rest normally — an open registered question is the sign-off.",
-  ...(instruct ? SIGNOFF_NUDGE_INSTRUCT_LINES : []),
   "- `` ```done `` — genuinely FINISHED. A DISMISSAL: the card is filed away and nobody looks again, so",
   "  if anything is still owed, it is not done. Body: 1-3 sentences, then bullets, each opening with a",
   "  **bolded verb phrase**.",
@@ -1621,6 +1676,11 @@ function signoffNudgeText(needsInput: boolean, instruct = false): string {
   "  A fence that names NOTHING is not a park at all — if you are not waiting on anything, you are not",
   "  awaiting, you are done. Register a PR with `mcp__frizz__watch_pr` and a timer with",
   "  `mcp__frizz__timer`; `mcp__frizz__activity` reads back everything you have running, with its id.",
+  "- `` ```awaiting `` with `steps:` — the human must PERFORM something you cannot: sign in, approve,",
+  "  merge, press a button you may not. List each step as a `- ` line under `steps:`, written to be",
+  "  followed cold; frizz reads them verbatim. Steps name the HUMAN as the wait, so the fence needs no",
+  "  other name and no `for:`, and the thread goes into their queue. Their Done comes back to you as",
+  "  their reply; anything else they need to say comes as a message of their own.",
   "",
   "**STILL OWED counts things you are not going to do yourself.** A decision you are RECOMMENDING, a",
   "draft you wrote but did not send, follow-up work you discovered — all of it dies with the card, even",
@@ -1645,8 +1705,6 @@ function signoffNudgeText(needsInput: boolean, instruct = false): string {
 export const SIGNOFF_NUDGE_MESSAGE = signoffNudgeText(false)
 /** The same reminder for a worker dispatched under the `needs_input:` contract (NEEDS_INPUT_REQUIRED_AT). */
 export const SIGNOFF_NUDGE_MESSAGE_NEEDS_INPUT = signoffNudgeText(true)
-/** …and for a worker also dispatched with `mcp__frizz__instruct` (INSTRUCT_AVAILABLE_AT). */
-export const SIGNOFF_NUDGE_MESSAGE_INSTRUCT = signoffNudgeText(true, true)
 
 // ---- THE FENCE CORRECTIONS (scheduler SOURCE 12) -------------------------------------------------
 // Frizz refusing a park and telling the worker why: a fence naming something that is not running, a
@@ -2253,25 +2311,6 @@ export function needsInputRequired(spawnedAt: string | number | undefined | null
   return at >= Date.parse(NEEDS_INPUT_REQUIRED_AT)
 }
 
-// THE `instruct` VERB (2026-10-03) — steps only the human can perform, registered as a row
-// (AskedInstructions). The sign-off reminder names it only for a worker dispatched at or after this
-// instant: an older worker's MCP server was spawned without the tool — and its broker daemon outlives a
-// Frizz restart — so a reminder naming it would send that worker to a call that fails. BY DISPATCH
-// INSTANT for the reason QUESTION_FENCE_RETIRED_AT gives, and an unknown instant reads as LEGACY — the
-// reminder it then gets is the one it can satisfy. The instant is no EARLIER than the commit landing on
-// `main`: a worker dispatched before that ran on code that had no tool to give it. (A Frizz still
-// running an older release after it dispatches one too, until it runs a release that carries the tool;
-// no instant can see that.)
-export const INSTRUCT_AVAILABLE_AT = "2026-10-03T21:45:00Z"
-
-/** Was this thread's worker dispatched with `mcp__frizz__instruct` — at or after INSTRUCT_AVAILABLE_AT? */
-export function instructAvailable(spawnedAt: string | number | undefined | null): boolean {
-  if (spawnedAt === undefined || spawnedAt === null) return false
-  const at = typeof spawnedAt === "number" ? spawnedAt : Date.parse(spawnedAt)
-  if (!Number.isFinite(at)) return false
-  return at >= Date.parse(INSTRUCT_AVAILABLE_AT)
-}
-
 // WHY A ROW AND NOT A FENCE. A ```question block has the lifetime of the MESSAGE carrying it: the
 // tailer recomputes `pendingQuestion` from the latest assistant text on every assistant record
 // (`lastAssistantHasQuestion = hasQuestionBlock(raw)`, an assignment and not an OR), and clears it on
@@ -2409,103 +2448,18 @@ export const AskInput = z.object({
 }).strict()
 export type AskInput = z.infer<typeof AskInput>
 
-// ---- INSTRUCTIONS: steps only the HUMAN can perform, as a registered row ---------------------------
-//
-// A question asks the human to DECIDE; an instruction asks them to DO — sign in, approve a held workflow
-// run, dispatch a release, restart something, run a command that needs their credentials. Until
-// 2026-10-03 the only place a worker could put that was the prose of its handoff, which has the lifetime
-// of the message carrying it: nothing tracked whether the human did it, nothing woke the worker once they
-// had, and a `done` card filed the instruction away with the thread. The retired `human:` fence key was
-// the first attempt and the cautionary one — it took the thread OUT of the queue on the worker's word,
-// and nothing ever fired it. An instruction is the opposite on both counts: it keeps the thread IN the
-// queue as a card the human acts on, and the human's own click is the wake.
-//
-// IT RIDES THE QUESTION REGISTRY (`thread_question`), as a spec kind of its own. Everything that makes a
-// registered question work is what an instruction needs too — the open row queues its thread at rest,
-// blocks `done`, silences the sign-off reminder and refuses a park beside it; the human's reply is
-// stored, then delivered through the durable outbox; the card anchors at the rest it was registered at
-// and greys in place once settled. A parallel registry would have duplicated every one of those
-// predicates, and the first one it missed would have drawn "Rested without a sign-off" beside a live
-// instruction. What differs is decided by the KIND, at the few places it matters: the worker's verb
-// (`instruct`, which an autonomous thread does not refuse), arming a Goal (which cancels questions, never
-// instructions — autonomy is consent to decide, not a way to perform an act only the human can), and the
-// card.
-//
-// THE TITLE IS STORED UNDER `question`, deliberately. Every reader that restates a registered ask — the
-// answer wire, the dismissal row, the `done` refusal, `activity`, the board's mobile row — reads that
-// one field, so an instruction is restated by its title everywhere with no second code path to drift.
-export const INSTRUCTIONS_KIND = "instructions" as const
-
-export interface AskedInstructions {
-  kind: typeof INSTRUCTIONS_KIND
-  /** THE TITLE: one line naming what the human is asked to get done ("Publish frizz-server 0.15.10").
-   *  Stored under `question` so every restating reader shares one field — see above. */
-  question: string
-  /** Why it is needed and what happens once it is done, as markdown. Optional: a good title and good
-   *  steps often say it all. */
-  context?: string
-  /** The steps, in order, each one markdown — a command in backticks or a fenced block, a link to the
-   *  page with the button on it. The card numbers them. */
-  steps: string[]
-}
-
-// No cap on the step COUNT, for the reason `options` has none (2026-09-03): the count is the worker's
-// to choose. The per-field caps match their question twins — the title is one line like an option
-// label, a step or the context may carry a command block like an option's body.
-export const AskedInstructionsSchema: z.ZodType<AskedInstructions> = z.object({
-  kind: z.literal(INSTRUCTIONS_KIND),
-  question: z.string().trim().min(1).max(400),
-  context: z.string().trim().max(8000).optional(),
-  steps: z.array(z.string().trim().min(1).max(8000)).min(1),
-}).strict()
-
-/** Every shape a `thread_question` row's spec can take: a question the human answers, or instructions
- *  they perform. Discriminated on `kind`; `isInstructions` narrows. */
-export type RegisteredAsk = AskedQuestion | AskedInstructions
-export const RegisteredAskSchema: z.ZodType<RegisteredAsk> = z.union([AskedInstructionsSchema, AskedQuestionSchema])
-
-export function isInstructions(spec: RegisteredAsk): spec is AskedInstructions {
-  return spec.kind === INSTRUCTIONS_KIND
-}
-
-/** The two replies the instruction card offers, verbatim. They ARE the answer the worker reads back
- *  (`“Publish frizz-server 0.15.10” → Done`), so the card that sends them and the RPC that validates
- *  them share these strings rather than spelling them twice. */
-export const INSTRUCTIONS_DONE = "Done"
-export const INSTRUCTIONS_NOT_DONE = "Couldn't do it"
-export const INSTRUCTIONS_OUTCOMES: readonly string[] = [INSTRUCTIONS_DONE, INSTRUCTIONS_NOT_DONE]
-
-/** One registered question — or instruction — as every reader sees it: the worker's read-back, the
- *  board, and the card. */
+/** One registered question, as every reader sees it: the worker's read-back, the board, and the card. */
 export const RegisteredQuestionView = z.object({
   /** Minted by frizz. The worker never chose it, which is why an answer RESTATES the question text —
    *  an id alone cannot be correlated back to what was asked. */
   id: z.string(),
-  spec: RegisteredAskSchema,
+  spec: AskedQuestionSchema,
   askedAt: z.string(),
 }).strict()
 export type RegisteredQuestionView = z.infer<typeof RegisteredQuestionView>
 
-/** `mcp__frizz__instruct`: ONE instruction per call — a title and its ordered steps. Unlike a question
- *  there is nothing to batch: each instruction is completed on its own card, by its own click. */
-export const InstructInput = z.object({
-  slug: ThreadSlug,
-  title: z.string().trim().min(1).max(400),
-  steps: z.array(z.string().trim().min(1).max(8000)).min(1),
-  context: z.string().trim().max(8000).optional(),
-}).strict()
-export type InstructInput = z.infer<typeof InstructInput>
-
-export const InstructResult = z.object({
-  registered: RegisteredQuestionView,
-  /** Every instruction still open on this thread afterwards, so a worker never needs a second call. */
-  open: z.array(RegisteredQuestionView),
-}).strict()
-export type InstructResult = z.infer<typeof InstructResult>
-
 export const AskResult = z.object({
-  /** Always questions — `ask` cannot register an instruction (AskInput takes `AskedQuestionSchema`). */
-  registered: z.array(RegisteredQuestionView.extend({ spec: AskedQuestionSchema })),
+  registered: z.array(RegisteredQuestionView),
   /** Everything still open on this thread afterwards, so a worker never needs a second call. */
   open: z.array(RegisteredQuestionView),
 }).strict()
@@ -2588,7 +2542,7 @@ export type DismissQuestionsResult = z.infer<typeof DismissQuestionsResult>
  *  history is dead weight to every surface but the one reading that thread. */
 export const SettledQuestionView = z.object({
   id: z.string(),
-  spec: RegisteredAskSchema,
+  spec: AskedQuestionSchema,
   askedAt: z.string(),
   /** When the human sent the answer — what decides which rest the card stood at when it was answered. */
   settledAt: z.string(),
@@ -2714,17 +2668,11 @@ export type MarkOwnDoneInput = z.infer<typeof MarkOwnDoneInput>
  *  guess. There is deliberately NO `force` flag anywhere in this contract — a bypass riding the gated
  *  call gets learned (the first refusal teaches it, it is then passed pre-emptively) and the gate
  *  degrades to a two-token tax. Any gate whose escape hatch is a parameter on the gated call is not a
- *  gate; the escape hatches here are `unask`, `uninstruct` and `unwatch`, which are the worker deciding
- *  on purpose. */
+ *  gate; the escape hatches here are `unask` and `unwatch`, which are the worker deciding on purpose. */
 export const MarkOwnDoneResult = z.object({
   done: z.boolean(),
   /** Open questions, by id and question text. */
   blockingQuestions: z.array(z.object({ id: z.string(), question: z.string() }).strict()),
-  /** Open instructions — steps the human has not reported on — by id and title. Their own list rather
-   *  than rows of `blockingQuestions`, because the way out differs: a question can be decided and
-   *  withdrawn, an instruction is waited for. Defaults empty so a worker's MCP binary built before
-   *  instructions existed still parses the result (it cannot hold one open). */
-  blockingInstructions: z.array(z.object({ id: z.string(), title: z.string() }).strict()).default([]),
   /** Armed registrations, by id and what each names. Watches, PR watchers and timers alike. */
   blockingWatches: z.array(z.object({ id: z.string(), what: z.string() }).strict()),
 }).strict()
@@ -2924,11 +2872,6 @@ export const ThreadView = z.object({
   // the LATEST assistant text on every assistant record and cleared by any human turn, so it cannot
   // outlive the message that carried it. These rows can, and they carry the question itself rather than
   // merely asserting one exists — the card renders from this instead of re-parsing prose.
-  //
-  // INSTRUCTIONS RIDE HERE TOO (`spec.kind === "instructions"`, 2026-10-03): steps the worker needs the
-  // human to PERFORM are rows of the same registry, so every predicate that reads this list — the queue,
-  // the rest card ladder, the asks-first sort — treats an open instruction as the human owing the thread
-  // something, which it is. Only the cards tell the two kinds apart (`isInstructions`).
   questions: z.array(RegisteredQuestionView).default([]),
   /** The answer the human has already SENT that the worker has not received yet, as the exact message
    *  the delivery will carry (board.answersInFlight → questionAnswerMessage). The chat parses it with
@@ -4056,9 +3999,6 @@ export const OwnThreadActivityResult = z.object({
    *  that block `done` were readable only by mutating something (maintainer: "Is there a way for the
    *  agent to read out the current set of watchers and questions?"). */
   questions: z.array(RegisteredQuestionView).default([]),
-  /** Every instruction the human has not reported on yet (`mcp__frizz__instruct`). Same registry as the
-   *  questions, listed apart for the reason `blockingInstructions` is: the worker's move differs. */
-  instructions: z.array(RegisteredQuestionView).default([]),
 }).strict()
 export type OwnThreadActivityResult = z.infer<typeof OwnThreadActivityResult>
 

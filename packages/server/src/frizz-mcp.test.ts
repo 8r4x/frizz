@@ -64,8 +64,7 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
     rpc.send({ jsonrpc: "2.0", method: "notifications/initialized" })
     rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/list" })
     const list = await rpc.next(2)
-    assert.deepEqual(list.result.tools.map((t: { name: string }) => t.name), ["spawn_thread", "goal", "timer", "watch_pr", "watch", "unwatch", "ask", "unask", "done", "title", "activity", "link", "unlink", "watch_issue", "instruct", "uninstruct"])
-    assert.deepEqual(list.result.tools.find((t: { name: string }) => t.name === "instruct").inputSchema.required, ["title", "steps"])
+    assert.deepEqual(list.result.tools.map((t: { name: string }) => t.name), ["spawn_thread", "goal", "timer", "watch_pr", "watch", "unwatch", "ask", "unask", "done", "title", "activity", "link", "unlink", "watch_issue"])
     assert.deepEqual(list.result.tools.find((t: { name: string }) => t.name === "link").inputSchema.required, ["label", "target"])
     assert.deepEqual(list.result.tools.find((t: { name: string }) => t.name === "unlink").inputSchema.required, ["id"])
     for (const required of ["prompt", "model", "effort"]) {
@@ -155,18 +154,13 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
     // `wch_…` id of any watch holding one. It takes NOTHING: there is no thread parameter and no filter,
     // because the only correct answer is "everything you have running", and a worker that has lost its
     // ids cannot be trusted to name them.
-    assert.equal(list.result.tools.length, 16)
+    assert.equal(list.result.tools.length, 14)
     assert.deepEqual(list.result.tools[10].inputSchema.required, [])
     assert.deepEqual(Object.keys(list.result.tools[10].inputSchema.properties), [])
     // `watch_issue` — the issue twin of `watch_pr`, same shape: `action` alone is required, and NO thread
     // parameter a model could aim at somebody else's thread.
     assert.deepEqual(list.result.tools[13].inputSchema.required, ["action"])
     assert.deepEqual(Object.keys(list.result.tools[13].inputSchema.properties), ["action", "target", "for", "id"])
-    // `instruct` — a title and ordered steps, an optional context, and NO thread parameter; `uninstruct`
-    // takes only the id, like `unask`.
-    assert.deepEqual(Object.keys(list.result.tools[14].inputSchema.properties), ["title", "steps", "context"])
-    assert.deepEqual(list.result.tools[15].inputSchema.required, ["id"])
-    assert.deepEqual(Object.keys(list.result.tools[15].inputSchema.properties), ["id"])
 
     // An unregistered name is a protocol error, not a crash — the registry routes by name now.
     rpc.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "spawn_frizz_thread", arguments: {} } })
@@ -1033,88 +1027,13 @@ test("`ask` and `unask` register and withdraw the CALLING thread's questions, tr
   }
 })
 
-// `instruct` / `uninstruct` OVER THE REAL STDIO TRANSPORT. An instruction is a row of the question
-// registry, so the two things worth pinning here are the ones that are its own: the call carries the
-// title and the ordered steps to the `instruct` RPC (never to `ask`, which an autonomous thread refuses),
-// and the withdrawal reaches the registry's `unask` RPC while each verb refuses the other kind's id by
-// name rather than quietly settling the wrong row.
-test("`instruct` and `uninstruct` register and withdraw the CALLING thread's steps for the human", async () => {
-  const seen: Array<{ url: string; body: any }> = []
-  const spec = { kind: "instructions", question: "Publish frizz-server 0.15.10", steps: ["Run `gh workflow run release.yml --ref release`", "Wait for npm to serve it"] }
-  const question = { question: "Ship it?", kind: "question" }
-  const replies: any[] = [
-    { registered: { id: "ins_aaa111", spec, askedAt: "2026-10-03T00:00:00.000Z" }, open: [{ id: "ins_aaa111", spec, askedAt: "2026-10-03T00:00:00.000Z" }] },
-    // The registry echoes every open row; a question left open must not read back as an instruction.
-    { withdrawn: true, open: [{ id: "qst_bbb222", spec: question, askedAt: "2026-10-03T00:00:00.000Z" }] },
-    { withdrawn: true, open: [] },
-  ]
-  const http = createServer((req, res) => {
-    let body = ""
-    req.on("data", (c) => (body += c))
-    req.on("end", () => {
-      seen.push({ url: req.url ?? "", body: JSON.parse(body) })
-      res.writeHead(200, { "content-type": "application/json" })
-      res.end(JSON.stringify({ result: replies.shift() ?? null }))
-    })
-  })
-  await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve))
-  const port = (http.address() as { port: number }).port
-  const stateDir = mkdtempSync(join(tmpdir(), "frizz-mcp-"))
-  writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ port }))
-  const rpc = startServer({ FRIZZ_STATE_DIR: stateDir, FRIZZ_THREAD_SLUG: "instructing-thread" })
-  try {
-    rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
-    await rpc.next(1)
-
-    rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "instruct", arguments: { title: " Publish frizz-server 0.15.10 ", steps: [...spec.steps, "  "], context: "" } } })
-    const instructed = await rpc.next(2)
-    assert.equal(instructed.result.isError, undefined)
-    // Trimmed, the blank step dropped, the empty context omitted — and the slug from the env, never an argument.
-    assert.deepEqual(seen[0], { url: "/_frizz/rpc/instruct", body: { slug: "instructing-thread", title: "Publish frizz-server 0.15.10", steps: spec.steps } })
-    assert.match(instructed.result.content[0].text, /Registered instruction ins_aaa111: Publish frizz-server 0\.15\.10/)
-    assert.match(instructed.result.content[0].text, /"Done" and "Couldn't do it"/)
-    assert.match(instructed.result.content[0].text, /ins_aaa111 {2}Publish frizz-server 0\.15\.10/)
-
-    // `unask` handed an instruction id routes to the instruction's withdrawal and says so in its words.
-    rpc.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "unask", arguments: { id: "ins_aaa111" } } })
-    const routed = await rpc.next(3)
-    assert.deepEqual(seen[1], { url: "/_frizz/rpc/unask", body: { slug: "instructing-thread", id: "ins_aaa111" } })
-    assert.match(routed.result.content[0].text, /Instruction ins_aaa111 withdrawn/)
-    assert.match(routed.result.content[0].text, /No instruction is open on this thread/)
-
-    rpc.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "uninstruct", arguments: { id: "ins_ccc333" } } })
-    const withdrawn = await rpc.next(4)
-    assert.deepEqual(seen[2], { url: "/_frizz/rpc/unask", body: { slug: "instructing-thread", id: "ins_ccc333" } })
-    assert.match(withdrawn.result.content[0].text, /Instruction ins_ccc333 withdrawn/)
-
-    // The refusals live in the HANDLER, not only in the schema — and none of them reaches the server.
-    const before = seen.length
-    rpc.send({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "instruct", arguments: { title: "Sign in", steps: ["  "] } } })
-    const noSteps = await rpc.next(5)
-    assert.equal(noSteps.result.isError, true)
-    assert.match(noSteps.result.content[0].text, /`steps` is required/)
-    rpc.send({ jsonrpc: "2.0", id: 6, method: "tools/call", params: { name: "instruct", arguments: { steps: ["Run it"] } } })
-    const noTitle = await rpc.next(6)
-    assert.equal(noTitle.result.isError, true)
-    assert.match(noTitle.result.content[0].text, /`title` is required/)
-    rpc.send({ jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "uninstruct", arguments: { id: "qst_bbb222" } } })
-    const wrongKind = await rpc.next(7)
-    assert.equal(wrongKind.result.isError, true)
-    assert.match(wrongKind.result.content[0].text, /is a question, not an instruction — withdraw it with `unask`/)
-    assert.equal(seen.length, before, "none reached the server")
-  } finally {
-    rpc.kill()
-    http.close()
-  }
-})
-
 // `done` OVER THE REAL STDIO TRANSPORT. The refusal is the half worth pinning end to end: it is an
 // ordinary RESULT rather than an error (a gate doing its job is not a fault), and it has to name every
 // blocker by the id the worker resolves it with — otherwise the next move is a guess.
 test("`done` marks the CALLING thread finished, and reports a refusal as an actionable result", async () => {
   const seen: Array<{ url: string; body: any }> = []
   const replies: any[] = [
-    { done: false, blockingQuestions: [{ id: "qst_aaa111", question: "Ship it?" }], blockingInstructions: [{ id: "ins_ccc333", title: "Sign in to npm" }], blockingWatches: [{ id: "wch_bbb222", what: "shell: nub --test (bzvtnt3ig)" }] },
+    { done: false, blockingQuestions: [{ id: "qst_aaa111", question: "Ship it?" }], blockingWatches: [{ id: "wch_bbb222", what: "shell: nub --test (bzvtnt3ig)" }] },
     { done: true, blockingQuestions: [], blockingWatches: [] },
   ]
   const http = createServer((req, res) => {
@@ -1143,9 +1062,6 @@ test("`done` marks the CALLING thread finished, and reports a refusal as an acti
     assert.equal(refused.result.isError, undefined)
     assert.match(refused.result.content[0].text, /NOT marked done/)
     assert.match(refused.result.content[0].text, /qst_aaa111 {2}Ship it\?/)
-    // An open instruction is named in its own section, with ITS way out — waiting, or `uninstruct`.
-    assert.match(refused.result.content[0].text, /1 instruction the human has not reported on:\n {2}ins_ccc333 {2}Sign in to npm/)
-    assert.match(refused.result.content[0].text, /`uninstruct`/)
     assert.match(refused.result.content[0].text, /wch_bbb222 {2}shell: nub --test \(bzvtnt3ig\)/)
     assert.match(refused.result.content[0].text, /There is no force parameter/)
 

@@ -12,7 +12,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { AskedQuestion, BoardSnapshot, Settings } from "@frizz/shared"
-import { AnswerQuestionsInput, AskInput, BURIED_ANSWERS_HEADER, INSTRUCT_AVAILABLE_AT, INSTRUCTIONS_DONE, INSTRUCTIONS_NOT_DONE, InstructInput, parseQuestionsCancelledWake, questionAnswerMessage, questionsCancelledWakeMessage } from "@frizz/shared"
+import { AnswerQuestionsInput, AskInput, BURIED_ANSWERS_HEADER, parseQuestionsCancelledWake, questionAnswerMessage, questionsCancelledWakeMessage } from "@frizz/shared"
 import type { BoardManager } from "./board.ts"
 import { createRouter } from "./router.ts"
 import { createStorage, type SessionRow } from "./storage.ts"
@@ -371,8 +371,7 @@ const goal = (h: ReturnType<typeof harness>, slug: string, prompt = "Keep going.
 test("`ask` is REFUSED on an autonomous thread, and the refusal quotes the standing instruction", async () => {
   const h = harness()
   try {
-    // Dispatched AT the cut, so its MCP server has `instruct` and the refusal may name it.
-    h.storage.upsertSession(row("t", { spawned_at: INSTRUCT_AVAILABLE_AT }))
+    h.storage.upsertSession(row("t"))
     goal(h, "t", "Finish the migration. Decide the small things yourself.")
     await assert.rejects(
       () => h.router.ask.handler({ input: { slug: "t", questions: [simple()] } }),
@@ -384,31 +383,10 @@ test("`ask` is REFUSED on an autonomous thread, and the refusal quotes the stand
         // And it names the way out that is NOT asking, so a genuinely human-owned call is not simply
         // swallowed by the mode.
         assert.match(e.message, /say so in your final message/)
-        // An ACT the human must perform is not a call, and has a verb autonomous mode allows.
-        assert.match(e.message, /hand them the steps with `instruct`, which autonomous mode allows/)
         return true
       },
     )
     assert.deepEqual(h.storage.listThreadQuestions("t", { openOnly: true }), [])
-  } finally { h.close() }
-})
-
-// A worker dispatched before the verb existed has no `instruct` in its MCP server — its broker daemon
-// outlives the Frizz that learned the verb — so its refusal must not send it to a call that fails. The
-// sign-off reminder's rule (INSTRUCT_AVAILABLE_AT), for the same reason.
-test("an autonomous refusal names `instruct` only to a worker dispatched with it", async () => {
-  const h = harness()
-  try {
-    h.storage.upsertSession(row("old")) // dispatched 2026-08-26, before INSTRUCT_AVAILABLE_AT
-    goal(h, "old")
-    await assert.rejects(
-      () => h.router.ask.handler({ input: { slug: "old", questions: [simple()] } }),
-      (e: Error) => {
-        assert.match(e.message, /say so in your final message/, "the way out it CAN take is still named")
-        assert.doesNotMatch(e.message, /`instruct`/)
-        return true
-      },
-    )
   } finally { h.close() }
 })
 
@@ -580,181 +558,5 @@ test("questions asked in ONE call keep their order — the tiebreak is insertion
     const out = await h.router.listOwnThreadActivity.handler({ input: { slug: "t" } })
     assert.deepEqual(out.questions.map((q) => q.spec.question), asked, "the readout must not shuffle a batch")
     assert.deepEqual(out.questions.map((q) => q.id), registered.map((q) => q.id))
-  } finally { h.close() }
-})
-
-// ---- INSTRUCTIONS: steps for the human to PERFORM, as rows of the same registry -----------------------
-//
-// `mcp__frizz__instruct` (2026-10-03). An instruction rides the question registry with a kind of its own,
-// so everything above that is about the REGISTRY holds for it too. What these pin is where the kind
-// changes the outcome: the verb an autonomous thread does not refuse, the Goal arming and the × that do
-// not settle one, the two replies it accepts, and the `done` gate and readout that name it apart.
-
-const steps = (title = "Publish frizz-server 0.15.10") => ({
-  title,
-  context: "The release workflow only starts on a maintainer's dispatch.",
-  steps: ["Run `gh workflow run release.yml --ref release` from the repo root", "Wait until npm serves the new version"],
-})
-
-test("instruct registers steps as a row of the question registry, with its own id and kind", async () => {
-  const h = harness()
-  try {
-    h.storage.upsertSession(row("t"))
-    const asked = await h.router.ask.handler({ input: { slug: "t", questions: [simple()] } })
-    const before = h.refreshes()
-    const result = await h.router.instruct.handler({ input: InstructInput.parse({ slug: "t", ...steps() }) })
-    assert.match(result.registered.id, /^ins_[0-9a-f]{12}$/)
-    // The TITLE is stored under `question`, so every reader that restates a registered ask reads one field.
-    assert.deepEqual(result.registered.spec, {
-      kind: "instructions",
-      question: "Publish frizz-server 0.15.10",
-      context: "The release workflow only starts on a maintainer's dispatch.",
-      steps: steps().steps,
-    })
-    // The read-back is the open INSTRUCTIONS — the question beside it is not something to perform.
-    assert.deepEqual(result.open.map((q) => q.id), [result.registered.id])
-    const row_ = h.storage.getThreadQuestion(result.registered.id)!
-    assert.equal(row_.state, "open")
-    assert.equal(row_.thread_slug, "t")
-    assert.equal(h.refreshes() > before, true, "the board must re-derive: an open instruction queues its thread")
-    assert.deepEqual(h.storage.listThreadQuestions("t", { openOnly: true }).map((q) => q.id), [asked.registered[0].id, result.registered.id])
-  } finally { h.close() }
-})
-
-test("the instruct boundary refuses no steps and a blank step, and ask cannot smuggle an instruction", async () => {
-  assert.equal(InstructInput.safeParse({ slug: "t", title: "Sign in", steps: [] }).success, false)
-  assert.equal(InstructInput.safeParse({ slug: "t", title: "Sign in", steps: ["   "] }).success, false)
-  assert.equal(InstructInput.safeParse({ slug: "t", title: "  ", steps: ["Run it"] }).success, false)
-  // `ask` takes QUESTIONS only: an instructions spec through it would dodge `instruct`'s own boundary.
-  assert.equal(AskInput.safeParse({ slug: "t", questions: [{ kind: "instructions", question: "Sign in", steps: ["Run it"] }] }).success, false)
-})
-
-test("instruct refuses an archived thread, like every registering verb", async () => {
-  const h = harness()
-  try {
-    h.storage.upsertSession(row("t", { state: "archived", archived: 1 }))
-    await assert.rejects(() => h.router.instruct.handler({ input: InstructInput.parse({ slug: "t", ...steps() }) }), /Reopen this thread/)
-    assert.deepEqual(h.storage.listThreadQuestions("t"), [])
-  } finally { h.close() }
-})
-
-test("instruct is NOT refused on an autonomous thread — a Goal decides, it cannot sign in", async () => {
-  const h = harness()
-  try {
-    h.storage.upsertSession(row("t"))
-    h.storage.setRecurringPromptBySlug("t", {
-      prompt: "Keep going until it ships.", stopHook: true, heartbeat: false, postCompaction: false, intervalMs: null,
-      armedAt: new Date().toISOString(),
-    })
-    // The contrast is the point: the same thread refuses a question…
-    await assert.rejects(() => h.router.ask.handler({ input: { slug: "t", questions: [simple()] } }), /running autonomously/)
-    // …and takes the steps, because there is nothing in them for the worker to decide.
-    const result = await h.router.instruct.handler({ input: InstructInput.parse({ slug: "t", ...steps() }) })
-    assert.equal(h.storage.getThreadQuestion(result.registered.id)!.state, "open")
-  } finally { h.close() }
-})
-
-test("arming a Goal cancels the questions and LEAVES the instruction — autonomy cannot perform an act", async () => {
-  const h = harness()
-  try {
-    h.storage.upsertSession(row("t"))
-    const question = (await h.router.ask.handler({ input: { slug: "t", questions: [simple()] } })).registered[0]
-    const instruction = (await h.router.instruct.handler({ input: InstructInput.parse({ slug: "t", ...steps() }) })).registered
-    await h.router.setOwnThreadRecurringPrompt.handler({
-      input: { slug: "t", prompt: "Keep going.", stopHook: true, heartbeat: false, postCompaction: false },
-    })
-    assert.equal(h.storage.getThreadQuestion(question.id)!.state, "dismissed")
-    assert.equal(h.storage.getThreadQuestion(instruction.id)!.state, "open")
-    // Only the question rides the cancellation wake — the instruction was never cancelled.
-    assert.deepEqual(h.storage.undeliveredSettlements().map((q) => q.id), [question.id])
-  } finally { h.close() }
-})
-
-test("the human's × cannot dismiss an instruction — its card offers \"Couldn't do it\" instead", async () => {
-  const h = harness()
-  try {
-    h.storage.upsertSession(row("t"))
-    const instruction = (await h.router.instruct.handler({ input: InstructInput.parse({ slug: "t", ...steps() }) })).registered
-    const result = await h.router.dismissQuestions.handler({ input: { slug: "t", ids: [instruction.id] } })
-    assert.deepEqual(result.dismissed, [])
-    assert.equal(h.storage.getThreadQuestion(instruction.id)!.state, "open")
-  } finally { h.close() }
-})
-
-test("an instruction takes exactly one of its two replies, and the reply is delivered like an answer", async () => {
-  const h = harness()
-  try {
-    h.storage.upsertSession(row("t"))
-    const instruction = (await h.router.instruct.handler({ input: InstructInput.parse({ slug: "t", ...steps() }) })).registered
-    const title = instruction.spec.question
-    // A label the card never offers is a claim nobody made — skipped, the row left open, no sweep kicked.
-    for (const chosen of [["Maybe"], [], [INSTRUCTIONS_DONE, INSTRUCTIONS_NOT_DONE]]) {
-      const refused = await h.router.answerQuestions.handler({ input: { slug: "t", answers: [{ questionId: instruction.id, question: title, chosen }] } })
-      assert.deepEqual(refused.answered, [], `chosen ${JSON.stringify(chosen)} must not settle an instruction`)
-    }
-    // …and so is a right label carrying follow-up rows: an instruction has none, and the wake would quote them.
-    const withFollowUps = { questionId: instruction.id, question: title, chosen: [INSTRUCTIONS_DONE], followUps: [{ questionId: instruction.id, question: "And?", chosen: ["Yes"] }] }
-    assert.deepEqual((await h.router.answerQuestions.handler({ input: { slug: "t", answers: [withFollowUps] } })).answered, [])
-    assert.equal(h.kicks(), 0)
-    assert.equal(h.storage.getThreadQuestion(instruction.id)!.state, "open")
-
-    const reply = { questionId: instruction.id, question: title, chosen: [INSTRUCTIONS_NOT_DONE], text: "npm asked for a 2FA code I do not have here" }
-    const result = await h.router.answerQuestions.handler({ input: { slug: "t", answers: [reply] } })
-    assert.deepEqual(result.answered, [instruction.id])
-    assert.equal(h.kicks(), 1, "the human is right here — the delivery sweep runs now")
-    // Stored answered and undelivered: the scheduler hands it over through the outbox, as for any answer…
-    assert.deepEqual(h.storage.undeliveredSettlements().map((q) => q.id), [instruction.id])
-    // …in the one wire form the chat reads as the human's own turn, restating the TITLE.
-    assert.equal(questionAnswerMessage([reply]), `${BURIED_ANSWERS_HEADER}\n1. “Publish frizz-server 0.15.10” → Couldn't do it — npm asked for a 2FA code I do not have here`)
-    // And the settled card keeps its slot, with the instruction's own spec to draw from.
-    const { questions } = await h.router.threadSettledQuestions.handler({ input: { slug: "t" } })
-    assert.deepEqual(questions.map((q) => [q.id, q.spec.kind, q.answer.chosen]), [[instruction.id, "instructions", [INSTRUCTIONS_NOT_DONE]]])
-  } finally { h.close() }
-})
-
-test("done refuses while an instruction is open, naming it apart from the questions", async () => {
-  const h = harness()
-  try {
-    h.storage.upsertSession(row("t"))
-    const instruction = (await h.router.instruct.handler({ input: InstructInput.parse({ slug: "t", ...steps() }) })).registered
-    const refused = await h.router.markOwnDone.handler({ input: { slug: "t", body: "- **Released** it" } })
-    assert.equal(refused.done, false)
-    assert.deepEqual(refused.blockingQuestions, [])
-    assert.deepEqual(refused.blockingInstructions, [{ id: instruction.id, title: "Publish frizz-server 0.15.10" }])
-    assert.equal(h.storage.getThreadDone("t"), undefined)
-
-    await h.router.answerQuestions.handler({ input: { slug: "t", answers: [{ questionId: instruction.id, question: instruction.spec.question, chosen: [INSTRUCTIONS_DONE] }] } })
-    const marked = await h.router.markOwnDone.handler({ input: { slug: "t", body: "- **Released** it" } })
-    assert.equal(marked.done, true)
-    assert.deepEqual(marked.blockingInstructions, [])
-  } finally { h.close() }
-})
-
-test("a fresh instruction clears a recorded done — an instruction trumps a done, as every registration does", async () => {
-  const h = harness()
-  try {
-    h.storage.upsertSession(row("t"))
-    assert.equal((await h.router.markOwnDone.handler({ input: { slug: "t", body: "- **Fixed** it" } })).done, true)
-    await h.router.instruct.handler({ input: InstructInput.parse({ slug: "t", ...steps("Restart frizz to load the fix") }) })
-    assert.equal(h.storage.getThreadDone("t"), undefined)
-  } finally { h.close() }
-})
-
-test("activity lists instructions apart from questions, and unask is the withdrawal uninstruct rides", async () => {
-  const h = harness()
-  try {
-    h.storage.upsertSession(row("t"))
-    const question = (await h.router.ask.handler({ input: { slug: "t", questions: [simple()] } })).registered[0]
-    const instruction = (await h.router.instruct.handler({ input: InstructInput.parse({ slug: "t", ...steps() }) })).registered
-    const out = await h.router.listOwnThreadActivity.handler({ input: { slug: "t" } })
-    assert.deepEqual(out.questions.map((q) => q.id), [question.id])
-    assert.deepEqual(out.instructions.map((q) => q.id), [instruction.id])
-
-    const withdrawn = await h.router.unask.handler({ input: { slug: "t", id: instruction.id } })
-    assert.equal(withdrawn.withdrawn, true)
-    assert.equal(h.storage.getThreadQuestion(instruction.id)!.state, "withdrawn")
-    assert.deepEqual((await h.router.listOwnThreadActivity.handler({ input: { slug: "t" } })).instructions, [])
-    // Withdrawn is the worker's own act, so nothing about it is queued for delivery back to the worker.
-    assert.deepEqual(h.storage.undeliveredSettlements(), [])
   } finally { h.close() }
 })

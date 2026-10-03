@@ -1,4 +1,4 @@
-import { futureSnoozedUntil, isInstructions, type RegisteredQuestionView, type ThreadView } from "@frizz/shared"
+import { futureSnoozedUntil, type ThreadView } from "@frizz/shared"
 import type { SessionIndicatorKind } from "../groups.ts"
 import { hintGloss } from "./awaitingPresentation.ts"
 import { toolActivityLabel } from "./toolActivity.ts"
@@ -71,16 +71,6 @@ function questionsLine(texts: readonly string[]): string | null {
   return texts.length === 1 ? questionText(texts[0]!) : null
 }
 
-/** The registered rows' line. An instruction (`mcp__frizz__instruct`) shares the registry but is not a
- *  question, so a mix counts it as a thing to do — "1 question, 1 thing to do" — while a lone one reads
- *  its own title, exactly as a lone question does. */
-function registeredLine(open: readonly RegisteredQuestionView[]): string | null {
-  const tasks = open.filter((q) => isInstructions(q.spec)).length
-  if (open.length <= 1 || tasks === 0) return questionsLine(open.map((q) => q.spec.question))
-  const asks = open.length - tasks
-  return [asks > 0 ? `${asks} question${asks === 1 ? "" : "s"}` : "", `${tasks} thing${tasks === 1 ? "" : "s"} to do`].filter(Boolean).join(", ")
-}
-
 /** A thread parked on an armed timer: its earliest future fire instant. */
 function armedTimerFireAt(t: Pick<ThreadView, "watches">, nowMs: number): string | undefined {
   let best: { at: string; ms: number } | undefined
@@ -130,7 +120,7 @@ export function rowSecondLine(
   // mark strips to nothing, and then the preview's approximation is still better than no line.
   const handoff = () => handoffLine(t.lastAssistantLine, true) ?? handoffLine(t.lastAssistant)
   if (kind === "needs-input") {
-    const registered = registeredLine(t.questions ?? [])
+    const registered = questionsLine((t.questions ?? []).map((q) => q.spec.question))
     if (registered) return { text: registered }
     const native = questionsLine((t.pendingAsk?.questions ?? []).map((q) => q.question))
     if (native) return { text: native }

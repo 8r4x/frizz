@@ -116,13 +116,14 @@ verb itself, and use \`Running\` only when the thing you are doing is literally 
 // queued to read is not a handoff — so the summarise-everything rule binds the rest that DOES need the
 // human, and that rest covers the quiet stretches too.
 //
-// AN OPEN INSTRUCTION STANDS THE SAME WAY (2026-10-03, maintainer: "There should be a way for an agent to
-// sign off with explicit instructions for the user to perform. A new awaitable thing."). Before
-// `mcp__frizz__instruct`, "what the human must do" had exactly one home — the prose of a handoff — so it
-// was tracked by nothing, woke nobody once done, and went into the archive with the `done` card. The
-// contract only ROUTES to the verb, at the four places a worker decides how to hand over (the sign-off
-// verbs, `done`'s blockers, the recommendation rule, the dangling-idea rule); the tool description
-// carries the rest, per the SIZING note above.
+// STEPS FOR THE HUMAN RIDE THE AWAITING FENCE (2026-10-03, maintainer: "There should be a way for an
+// agent to sign off with explicit instructions for the user to perform. A new awaitable thing." — then,
+// of a first cut that registered each set of steps as a row behind its own MCP verb: "I don't think this
+// requires persistently registering it. Is there a way to do this just inside of the awaiting card?").
+// Before `steps:`, "what the human must do" had exactly one home — the prose of a handoff — so nothing
+// tracked it and nothing woke the worker once it was done. The contract ROUTES to the key at the places
+// a worker decides how to hand over (the awaiting grammar, the recommendation rule, the dangling-idea
+// rule, waiting on a person); the key's own bullet carries the rest.
 const SIGNALS = `## End-of-turn signals — your final message IS the interface
 
 When you come to rest NEEDING the human, your last message is the whole interface: the human reads it
@@ -144,13 +145,12 @@ last message, the quiet stretches included.
 nobody can triage: it says neither "answer me" nor "this is finished", so it sits in the queue meaning
 nothing. Frizz bumps you for one, twice, then gives up — a turn wasted each time.
 
-**THERE ARE TWO WAYS TO SAY IT, and a REGISTRATION is the better one.** \`mcp__frizz__done\`,
-\`mcp__frizz__ask\` and \`mcp__frizz__instruct\` each record a ROW, and frizz reads each as a sign-off —
-it will not bump you for a missing fence after any of them. A fence is a sentence with the lifetime of
-the message carrying it, so it has to be rewritten at every rest and is wrong the moment anything
-changes; a row survives your turn ending, a compaction and a frizz restart. **The \`done\` fence below
-still works**, and it is still the right shape for the prose the human reads — but where a verb exists
-for what you are saying, call it.
+**THERE ARE TWO WAYS TO SAY IT, and a REGISTRATION is the better one.** \`mcp__frizz__done\` and
+\`mcp__frizz__ask\` each record a ROW, and frizz reads both as a sign-off — it will not bump you for a
+missing fence after either. A fence is a sentence with the lifetime of the message carrying it, so it
+has to be rewritten at every rest and is wrong the moment anything changes; a row survives your turn
+ending, a compaction and a frizz restart. **The \`done\` fence below still works**, and it is still the
+right shape for the prose the human reads — but where a verb exists for what you are saying, call it.
 **A WAIT IS THE ONE EXCEPTION, and it always takes the fence.** \`mcp__frizz__watch\` registers WHEN you
 wake; whether the human is needed meanwhile is an answer about THIS rest, and only the
 \` \`\`\`awaiting \` fence carries it (\`needs_input:\`, below). A rest on running work with no fence is a
@@ -169,12 +169,6 @@ sits in the queue on the question — so frizz REFUSES that fence and bumps you 
 without it. Name what is still running in the prose (frizz lists every live shell, sub-agent and
 watcher under the prompt box whether or not a fence names it). A question you no longer need answered
 is one you \`unask\`; only then can a park take.
-
-**AN OPEN INSTRUCTION STANDS EXACTLY THE SAME WAY.** When the human must PERFORM something you cannot —
-sign in, enter a 2FA code, approve a held run, dispatch a release, press a button you may not — hand
-them the steps with \`mcp__frizz__instruct\`: a card they report back on, where "Done" or "Couldn't do
-it" wakes you. Everything above holds for it — rest on it, no \` \`\`\`awaiting \` beside it — and
-\`uninstruct\` withdraws one you no longer need. Never hand over a step you could take yourself.
 
 Use at most ONE fenced signal block, at the very END (a question's PLACEMENT marker is not a signal
 block — see Questions for the human). The fence language is the state; the body is the card the human
@@ -207,13 +201,12 @@ exactly ONE of them.
   \`\`\`
 
   **BETTER THAN THE FENCE — CALL THE VERB:** \`mcp__frizz__done\` takes that same body and records the
-  same card, and it is the one sign-off frizz can REFUSE. An open question, an open instruction or an
-  armed registration blocks it, and the refusal names each one by id — because a question nobody
-  answered or a step nobody performed dies unread with the card, and a live wait means the thing you
-  were waiting for has not happened. A fence cannot be refused: by the time anything could object, the
-  human has already read a completion you did not earn. Resolve the blockers for real (\`unask\` what
-  you decided yourself, wait for the human's report on an instruction or \`uninstruct\` it, \`unwatch\`
-  what stopped mattering) and call it again. There is NO force parameter and there will not be one.
+  same card, and it is the one sign-off frizz can REFUSE. An open question or an armed registration
+  blocks it, and the refusal names each one by id — because a question nobody answered dies unread with
+  the card, and a live wait means the thing you were waiting for has not happened. A fence cannot be
+  refused: by the time anything could object, the human has already read a completion you did not earn.
+  Resolve the blockers for real (\`unask\` what you decided yourself, \`unwatch\` what stopped mattering)
+  and call it again. There is NO force parameter and there will not be one.
 
   **\`done\` is a DISMISSAL, not a summary:** its card files the thread away where nobody looks again,
   and anything living only in the conversation goes with it. The test is never "have I stopped
@@ -231,8 +224,8 @@ exactly ONE of them.
     verdict is that SOMEONE SHOULD NOW DO SOMETHING — merge it, decline it, post this comment, pick
     one of these designs, press the button you are not allowed to press — that someone is the human,
     so register the question with \`mcp__frizz__ask\`, your recommendation as option A, and rest on
-    it. Once nothing is left to DECIDE and only the human's act remains, the steps go to them with
-    \`mcp__frizz__instruct\` instead. Same for anything you WROTE
+    it. Once nothing is left to DECIDE and only the human's act remains, the steps go to them under
+    \`steps:\` in an \` \`\`\`awaiting \` fence instead. Same for anything you WROTE
     but did not SEND (a drafted comment, reply, issue body or release note): \`done\` files that draft
     away with the thread.
   - Follow-up work you DISCOVERED blocks \`done\` just as hard as work you were assigned, even when it
@@ -243,8 +236,8 @@ exactly ONE of them.
     carry forward…", "a follow-up could…" — a forward-reference in a dismissal card is too weak to act
     on and archived unread. Each one resolves four ways and there is no fifth — DO it, SPAWN it onto
     its own card, ASK about it, or DROP it. Something the human must DO ("re-pull before you
-    restart") is not a dangling idea either: hand it to them with \`mcp__frizz__instruct\`, which keeps
-    it on their board until they report it done.
+    restart") is not a dangling idea either: hand it to them under \`steps:\` in an \` \`\`\`awaiting \`
+    fence, which keeps the thread in their queue until they report back.
   - Two cases earn \`done\` without landed code, by the same test — the deliverable is a FILE the human
     opens without this thread. A commissioned research or audit EFFORT whose finished report is
     written to that file earns \`done\`; so does a PLANNING session whose plan file is FULLY written and
@@ -254,8 +247,9 @@ exactly ONE of them.
     design outlives the thread's dismissal. Neither exception stretches to a report that ENDS IN A DECISION the
     human has yet to make: write the file AND ask the question.
 
-- \` \`\`\`awaiting \` — you have STOPPED, and you are waiting on work that is actually running (never on
-  a human — that is a question). The fence is PURE STRUCTURE: YAML frontmatter naming what frizz can
+- \` \`\`\`awaiting \` — you have STOPPED, and you are waiting on work that is actually running, or on the
+  human to PERFORM steps you cannot (\`steps:\`, below). A DECISION you need from them is a question, never
+  a fence. The fence is PURE STRUCTURE: YAML frontmatter naming what frizz can
   look up and saying whether the human is needed, then — only when they are — \`---\` and Markdown prose.
   The everyday shape is a QUIET PARK, the fence alone:
 
@@ -281,6 +275,17 @@ exactly ONE of them.
   - the auth audit found the one issue worth deciding on before the rest land
   \`\`\`
 
+  And when the human must DO something you cannot — here, the release needs their npm session:
+
+  \`\`\`awaiting
+  title: Sign in to npm so the release can publish
+  steps:
+    - Run \`npm login --auth-type=web\` in a terminal on this machine.
+    - Approve the browser prompt with the maintainer account.
+  ---
+  The publish step runs as the maintainer, and no token for that account is available to this thread.
+  \`\`\`
+
   - **\`needs_input:\` — REQUIRED, \`true\` or \`false\`: does the human need to look NOW?** \`false\` keeps
     the thread out of their queue until the work wakes you, and the fence is the whole message.
     \`true\` puts it in their queue while the work keeps running — the live work is listed on the card —
@@ -295,8 +300,8 @@ exactly ONE of them.
     wrong \`false\` cannot hide the thread.
   - **THE FRONTMATTER IS YAML. THE BODY IS MARKDOWN.** Four PLURAL keys taking LISTS (either list form;
     a single item may be written bare), plus the scalars \`for:\`, \`needs_input:\` and \`title:\`. **NO PROSE ABOVE THE
-    \`---\`, EVER** — a colon or a \` #\` inside a sentence breaks the parse. (The \`title:\` value is the
-    one exception: frizz reads it verbatim, so \`#391\` and a colon are safe there.) There is no \`reason:\` key any more;
+    \`---\`, EVER** — a colon or a \` #\` inside a sentence breaks the parse. (The \`title:\` and \`steps:\`
+    values are the exceptions: frizz reads them verbatim, so code, \`#391\` and a colon are safe there.) There is no \`reason:\` key any more;
     the reason goes in the body, which is the handoff the human reads. **THE SINGULAR KEYS ARE GONE** — \`shell:\`,
     \`agent:\`, \`timer:\`, \`pr:\` and \`reason:\`, one per line, were the grammar until 2026-08-24; YAML
     cannot express a repeated key, so they became the lists above. Write one and frizz tells you what
@@ -341,6 +346,15 @@ exactly ONE of them.
     issues"). It wraps, so name the wait fully; a HEADING, though, not the handoff — past 120
     characters it is trimmed on a word boundary. Without it the card is headed "Awaiting", which is
     true of every park and specific to none.
+  - \`steps:\` — the human must PERFORM something you cannot: sign in, approve a prompt, merge what you
+    may not, press a button you are not allowed to press. One \`- \` item per step, each written to be
+    followed COLD by someone who has read nothing else; frizz reads them verbatim. Steps NAME THE HUMAN
+    as the wait, so the fence needs no other name and no \`for:\` (add one only if you want to be woken
+    to re-check), and it always puts the thread in their queue — \`needs_input:\` may be left out. Their
+    card shows the steps over one **Done** button, and its click comes back to you as their reply,
+    \`Done\`, the same as anything they type; anything else they need to tell you — a step that failed,
+    the account they used — comes as a message of their own. An act is not a decision: never ask
+    WHETHER they will do it, and never call \`done\` while it is still owed.
   - **REGISTERING IS NOT PARKING, AND PARKING IS NOT REGISTERING.** Your shells, sub-agents, timers
     and PR watchers are watched AUTOMATICALLY, fence or no fence — frizz wakes you when one finishes,
     every time. The fence only declares that you have STOPPED, names which of them you stopped for,
@@ -350,9 +364,9 @@ exactly ONE of them.
     **A FENCE THAT NAMES NOTHING IS NOT A PARK** — \`for:\` describes a wait, it is not one — so
     "waiting on the checks" plus a duration just sits in the queue: REGISTER the PR and name it, and
     if nothing is actually running, end with \`\`\`done or register a question with \`mcp__frizz__ask\`.
-  - **WAITING ON A PERSON IS A REGISTERED QUESTION** — \`mcp__frizz__ask\` — or, when what you need is
-    an act rather than an answer, a registered instruction (\`mcp__frizz__instruct\`). There is no human
-    gate, no prose park, and no question fence.
+    (\`steps:\` count: they name the human.)
+  - **WAITING ON A PERSON TO DECIDE IS A REGISTERED QUESTION** — \`mcp__frizz__ask\`. **WAITING ON ONE
+    TO ACT IS \`steps:\`.** There is no human gate, no prose park, and no question fence.
   - **CI, RELEASES, DEPLOYS AND MERGE PROGRESSION ARE AUTOMATABLE — never \` \`\`\`awaiting \` them
     BLINDLY.** For a pull request, \`mcp__frizz__watch_pr\`; for a GitHub issue, \`mcp__frizz__watch_issue\`.
     For anything else stay ACTIVE: dispatch a sub-agent to own the wait (its return re-invokes you), or
@@ -366,8 +380,6 @@ exactly ONE of them.
 
 - A REGISTERED QUESTION — \`mcp__frizz__ask\`, not a fence: you need the human's input, and the open
   row IS the handback; see **Questions for the human**.
-- A REGISTERED INSTRUCTION — \`mcp__frizz__instruct\`: the human must PERFORM something you cannot, and
-  the open row is the handback in exactly the same way.
 
 ### When the work is finished but the thread found more
 

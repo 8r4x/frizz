@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { createHash, randomUUID } from "node:crypto"
-import { awaitingNeedsInput, instructAvailable, isInstructions, needsInputRequired, PARK_CORRECTION_NAMES_LEAD, PARK_CORRECTION_NEEDS_INPUT_LEAD, PARK_CORRECTION_QUESTION_LEAD, PARK_CORRECTION_RETIRED_LEAD, interruptEndedSubAgentsMessage, type InterruptEndedSubAgent, parkExpiredWakeMessage, parkFinishedWakeMessage, prWatchExpiredWakeMessage, ownWatchExpiredWakeMessage, questionAnswerMessage, questionsCancelledWakeMessage, type QuestionAnswer, type QuestionDismissal, RETIRED_AWAITING_REPLACEMENT, retiredAwaitingKindsIn, compactionPromptMessage, limitResumeSteer, limitModelSwitchSteer, formatGithubWakeSteer, GithubWakeItem, type GithubWatchStatus, type GithubIssueStatus, prWatchWakeMessage, issueWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, liveOpsLines, wakeDeliveryToken, wakeTimeHeader, stripWakeTimeHeader, type QuotaSnapshot } from "@frizz/shared"
+import { awaitingNeedsInput, needsInputRequired, PARK_CORRECTION_NAMES_LEAD, PARK_CORRECTION_NEEDS_INPUT_LEAD, PARK_CORRECTION_QUESTION_LEAD, PARK_CORRECTION_RETIRED_LEAD, interruptEndedSubAgentsMessage, type InterruptEndedSubAgent, parkExpiredWakeMessage, parkFinishedWakeMessage, prWatchExpiredWakeMessage, ownWatchExpiredWakeMessage, questionAnswerMessage, questionsCancelledWakeMessage, type QuestionAnswer, type QuestionDismissal, RETIRED_AWAITING_REPLACEMENT, retiredAwaitingKindsIn, compactionPromptMessage, limitResumeSteer, limitModelSwitchSteer, formatGithubWakeSteer, GithubWakeItem, type GithubWatchStatus, type GithubIssueStatus, prWatchWakeMessage, issueWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, liveOpsLines, wakeDeliveryToken, wakeTimeHeader, stripWakeTimeHeader, type QuotaSnapshot } from "@frizz/shared"
 import { GITHUB_ISSUE_STATUS_SETTING, GITHUB_STATUS_SETTING, liveActivityOf, parkExpiresAt, parkIsHonoured, readAwaitingPark, unaccountedItems } from "./awaiting.ts"
 import type { PrWatchRow, SessionRow, Storage, ThreadQuestionRow } from "./storage.ts"
 import type { Tailer } from "./tailer.ts"
@@ -652,14 +652,6 @@ function armedTimerIdsOf(storage: Storage, slug: string): ReadonlySet<string> {
   return new Set(storage.listThreadTimers(slug, { armedOnly: true }).map((t) => t.id))
 }
 
-/** Is the human still owed steps on this thread — an open `instruct` row? See restMessageIsSignedOff. */
-function hasOpenInstruction(storage: Storage, slug: string): boolean {
-  return storage.listThreadQuestions(slug, { openOnly: true }).some((q) => {
-    const spec = safeQuestionSpec(q.spec)
-    return spec !== undefined && isInstructions(spec)
-  })
-}
-
 /** The stop hook asks "you stopped — is there more?", and this is the message that ALREADY ANSWERED it:
  *  the thread declared itself finished, or it parked on a wait somebody else owns. Firing over either is
  *  the trigger talking to itself.
@@ -667,17 +659,9 @@ function hasOpenInstruction(storage: Storage, slug: string): boolean {
  *  A PENDING QUESTION IS NOT ONE OF THEM, since 2026-08-16 — see the header block. It was a third limb,
  *  switchable off by the panel's "Autonomous mode", and the switch and the limb went together.
  *
- *  AN OPEN INSTRUCTION IS (2026-10-03), and the difference is the one between deciding and doing. A Goal
- *  can answer a question — "decide it yourself" is exactly what it says — but it cannot perform a step
- *  only the human can: a sign-in, a 2FA prompt, a merge the worker is barred from. "Keep going" has no
- *  answer until the human acts, and their click on the card is the wake that ends this rest. Firing over
- *  it is the loop `parkedOnAWaitItCannotAdvance` records from 2026-08-12, where a worker that needed a
- *  human to merge was bumped until it escaped through a ```done fence on a PR nobody had merged.
- *
  *  `armedAt` is the Goal's own generation, and it reaches the done reading only — see
  *  `armReopenedTheLoop`. An `awaiting` fence is untouched by it: that park says what the rest is
- *  waiting for, which re-arming answers nothing about. Neither is an open instruction: re-arming does
- *  not perform the step. */
+ *  waiting for, which re-arming answers nothing about. */
 function restMessageIsSignedOff(
   storage: Storage,
   slug: string,
@@ -686,7 +670,6 @@ function restMessageIsSignedOff(
   _armedTimerIds: ReadonlySet<string> = new Set(),
   armedAt?: string | null,
 ): boolean {
-  if (hasOpenInstruction(storage, slug)) return true
   // AN `awaiting` FENCE ENDS THE GOAL'S BUSINESS WITH THIS REST, honoured or not — and the "or not" is
   // the whole point of widening this from `parkIsHonoured` to the fence's mere presence.
   //
@@ -2069,8 +2052,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
             .map((w) => ({ id: `${w.owner}/${w.repo}#${w.number}`, label: `${w.owner}/${w.repo}#${w.number}` })),
           issues: deps.storage.listPrWatches(row.slug, { armedOnly: true }).filter((w) => w.kind === "issue")
             .map((w) => ({ id: `${w.owner}/${w.repo}#${w.number}`, label: `${w.owner}/${w.repo}#${w.number}` })),
-          // `instruct` only for a worker whose MCP server was spawned with the verb (INSTRUCT_AVAILABLE_AT).
-        }, needsInput, instructAvailable(row.spawned_at)), spokeAt),
+        }, needsInput), spokeAt),
         reason: "rested without signing off",
       }, nowMs).delivery
       log(`waker: queued ${row.slug} — ${item.reason}`)
@@ -2146,34 +2128,16 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         const deliveryId = wakeDeliveryId(row.slug, row.session_id, fenceId)
         if (outbox.get(deliveryId)) continue
         const one = openQuestions.length === 1
-        // AN OPEN INSTRUCTION REFUSES IT THE SAME WAY — it is the human owing this thread something, just
-        // as a question is — but the message names what is actually open. Told to `unask` "a question",
-        // a worker resting on an instruction goes looking for a question it never asked.
-        const instructions = openQuestions.filter((q) => {
-          const spec = safeQuestionSpec(q.spec)
-          return spec !== undefined && isInstructions(spec)
-        }).length
-        const kinds = instructions === 0 ? "question" : instructions === openQuestions.length ? "instruction" : "mixed"
-        const what = {
-          question: one ? "a question of yours was" : "questions of yours were",
-          instruction: one ? "an instruction of yours was" : "instructions of yours were",
-          mixed: "questions and instructions of yours were",
-        }[kinds]
-        const noun = { question: "a question", instruction: "an instruction", mixed: "a question or an instruction" }[kinds]
-        const withdraw = {
-          question: "A question you no longer need\nanswered is one you withdraw with `mcp__frizz__unask`",
-          instruction: "An instruction you no longer\nneed carried out is one you withdraw with `mcp__frizz__uninstruct`",
-          mixed: "Withdraw what you no longer need —\n`mcp__frizz__unask` for a question, `mcp__frizz__uninstruct` for an instruction",
-        }[kinds]
         const message = [
-          `${PARK_CORRECTION_QUESTION_LEAD}${what} still OPEN, so frizz refused the park — ${noun} outranks a wait, and this thread sits in the human's queue on ${one ? "it" : "them"}.`,
+          `${PARK_CORRECTION_QUESTION_LEAD}${one ? "a question of yours was" : "questions of yours were"} still OPEN, so frizz refused the park — a question outranks a wait, and this thread sits in the human's queue on ${one ? "it" : "them"}.`,
           "",
           ...openQuestions.map((q) => `- \`${q.id}\` — ${questionLine(q.spec)}`),
           "",
-          `Never fence \`\`\`awaiting while ${noun} stands. Rewrite your sign-off WITHOUT the fence: your`,
-          `handoff prose — each open ${kinds === "mixed" ? "one" : noun.replace(/^an? /, "")} draws its own card at that rest, so write the reasoning`,
+          "Never fence ```awaiting while a question stands. Rewrite your sign-off WITHOUT the fence: your",
+          "handoff prose — each open question draws its own card at that rest, so write the reasoning",
           "around the ask, never the ask again. Your running work is watched and listed either way: a shell, a",
-          `sub-agent, a timer or a registered PR wakes you fence or no fence. ${withdraw} — only then can a park take.`,
+          "sub-agent, a timer or a registered PR wakes you fence or no fence. A question you no longer need",
+          "answered is one you withdraw with `mcp__frizz__unask` — only then can a park take.",
         ].join("\n")
         const item = outbox.enqueue({
           id: deliveryId,
@@ -2209,7 +2173,11 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // "TypeScript legs still running on 1a5d0804 … waiting on the checks and your merge" — a worker
       // that could have registered a PR watcher and been told the moment CI settled, waiting on nothing
       // for a day instead.
-      const nameless = park.items.length === 0
+      //
+      // `steps:` NAME THE HUMAN (2026-10-03), so a fence carrying only steps is not this case: it waits on
+      // the one party whose reply wakes the thread, from the queue it is already in. With no `for:` it
+      // falls through the malformed-fence skip below and is simply honoured; with one, it expires.
+      const nameless = park.items.length === 0 && park.steps.length === 0
       // HONOURED ⇒ the corrective allowance comes back. A park frizz can actually honour is the one
       // event that proves a correction landed, and — unlike any activity signal — not one frizz can
       // cause by correcting. Guarded on a non-zero count so this is a transition, not a write on every
@@ -2313,6 +2281,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         // spelling the parser now refuses.
         return `- \`${AWAITING_KEY_OF[i.kind]}: [${i.value}]\` — ${note}`
       })
+      // A park on `steps:` that ran out is the only status line here frizz cannot read off a registry:
+      // the human may have done the steps without pressing anything, so the line sends the worker to
+      // check the world rather than to re-post the same steps blind.
+      if (park.steps.length > 0) {
+        status.push(`- \`steps:\` (${park.steps.length}) — the human has not replied; check whether they were done anyway before you post them again`)
+      }
       // When EVERY dead name simply finished, the news is not "your fence is wrong" — it is "the thing
       // you were waiting for is done". Different fact, different next action.
       const allFinished = dead.length > 0 && dead.every(finishedItem)

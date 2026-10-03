@@ -125,7 +125,6 @@ function AnswerSheet() {
     dismiss: () => {},
     dismissing: false,
     submit: () => {},
-    complete: () => {},
     staged: 0,
     sending: false,
     error: undefined,

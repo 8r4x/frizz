@@ -12,27 +12,8 @@
 // A BRANCH NOT TAKEN CONTRIBUTES NOTHING. Deselecting an option does not blank its follow-ups' staged
 // answers (the human may come back), but they stop being live, so they never reach the payload: an
 // absent follow-up means "not asked", never "asked and skipped".
-//
-// AN INSTRUCTION IS NOT ONE OF THESE. `mcp__frizz__instruct` (2026-10-03) registers its steps in the same
-// registry, so `thread.questions` carries both kinds — but an instruction has no options to stage and no
-// tree to walk: the human does the steps and reports "Done" or "Couldn't do it" in one click
-// (components/InstructionCard). Everything here that walks a question takes an AnswerableQuestion, and
-// the surfaces split the list with `isAnswerable` / `isInstruction` before they reach it.
-import { isInstructions, type AskedInstructions, type AskedOption, type AskedQuestion, type RegisteredQuestionView, type QuestionAnswer } from "@frizz/shared"
+import type { AskedOption, AskedQuestion, RegisteredQuestionView, QuestionAnswer } from "@frizz/shared"
 import type { BlockAnswer, ParsedQuestion } from "./questionBlocks.ts"
-
-/** An open registration the human ANSWERS — options, a tree, a staged reply and the one Send. */
-export type AnswerableQuestion = RegisteredQuestionView & { spec: AskedQuestion }
-/** An open registration the human PERFORMS — steps, then "Done" or "Couldn't do it". */
-export type RegisteredInstruction = RegisteredQuestionView & { spec: AskedInstructions }
-
-export function isAnswerable(q: RegisteredQuestionView): q is AnswerableQuestion {
-  return !isInstructions(q.spec)
-}
-
-export function isInstruction(q: RegisteredQuestionView): q is RegisteredInstruction {
-  return isInstructions(q.spec)
-}
 
 /** `A.`, `B.`, … then `AA.` past 26 — the same identifiers every other producer letters options with.
  *  Not decoration: the card derives its free-text row's own identifier from the last option's prefix,
@@ -138,16 +119,12 @@ export function nodeAnswered(spec: AskedQuestion, answer: BlockAnswer | undefine
  *
  *  Note the asymmetry with `liveQuestionNodes`: a live-but-unanswered FOLLOW-UP is included with an
  *  empty `chosen`, because the human seeing a question and leaving it blank is itself information the
- *  worker should have. Only a branch that was never opened is absent.
- *
- *  An INSTRUCTION is never staged — its reply is a click, sent on its own (see InstructionCard) — so it
- *  folds to nothing here, and a note typed on one can never ride a question batch's Send. */
+ *  worker should have. Only a branch that was never opened is absent. */
 export function registeredAnswer(
   view: Pick<RegisteredQuestionView, "id" | "spec">,
   answers: ReadonlyMap<string, BlockAnswer>,
 ): QuestionAnswer | undefined {
-  const spec = view.spec
-  if (isInstructions(spec) || !nodeAnswered(spec, answers.get(ROOT_PATH))) return undefined
+  if (!nodeAnswered(view.spec, answers.get(ROOT_PATH))) return undefined
   const build = (node: AskedQuestion, path: string): QuestionAnswer => {
     const answer = answers.get(path)
     const labels = (node.options ?? []).map((o) => o.label)
@@ -169,14 +146,7 @@ export function registeredAnswer(
       ...(followUps.length > 0 ? { followUps } : {}),
     }
   }
-  return build(spec, ROOT_PATH)
-}
-
-/** The reply to an instruction: the outcome the human clicked, and the note they typed, if any. The
- *  title rides as `question` because every reader that restates a registration reads that one field. */
-export function instructionAnswer(q: Pick<RegisteredInstruction, "id" | "spec">, outcome: string, note: string): QuestionAnswer {
-  const text = note.trim()
-  return { questionId: q.id, question: q.spec.question, chosen: [outcome], ...(text ? { text } : {}) }
+  return build(view.spec, ROOT_PATH)
 }
 
 /** One question of an ANSWERED registration as its settled card draws it: the ask, and ONLY the
