@@ -536,6 +536,23 @@ function useRailCounts(currentSlug: string | undefined, projects: readonly Proje
   return (project) => (project.id === currentId && live ? live : polled.data?.[project.id])
 }
 
+/**
+ * Have the server build the folder picker NOW, because the pointer or keyboard focus has reached an
+ * "Add a project" control and the click is a moment behind it. On macOS a panel built at the click
+ * took 0.8-1.0s to draw — the whole delay the operator saw after pressing the button — and a panel
+ * built ahead draws in ~0.09s (server/directory-picker.ts). Shared with the grid's phantom card.
+ *
+ * At most once every 10s: the server keeps a built panel for a minute and answers a repeat by keeping
+ * it, so asking more often only adds requests. A failed ask clears the stamp, so the next hover retries.
+ */
+let pickerWarmedAt = 0
+export function warmProjectPicker(): void {
+  const now = Date.now()
+  if (now - pickerWarmedAt < 10_000) return
+  pickerWarmedAt = now
+  rpc.projectPickWarm({}).catch(() => { pickerWarmedAt = 0 })
+}
+
 export function ProjectRail() {
   const queryClient = useQueryClient()
   const { data } = useQuery({ queryKey: ["projectsList"], queryFn: () => rpc.projectsList() })
@@ -549,7 +566,13 @@ export function ProjectRail() {
   const pick = useMutation({
     mutationFn: () => rpc.projectPick({}),
     onSuccess: (result) => {
-      if (result.kind === "picked") navigate(projectHref(result.project.slug))
+      if (result.kind === "picked") {
+        // The square for what was just added. Without this the rail kept drawing the list it loaded
+        // before the pick — nothing else refetches it, since refetchOnWindowFocus is off app-wide — so
+        // the project you were now looking at had no square, and nothing on the rail was current.
+        void queryClient.invalidateQueries({ queryKey: ["projectsList"] })
+        navigate(projectHref(result.project.slug))
+      }
       // No picker on this machine, or it failed: the grid owns the typed-path fallback dialog, and
       // sending someone there is better than growing a second copy of it in a 57px column.
       else if (result.kind === "unavailable") navigate("/")
@@ -742,6 +765,8 @@ export function ProjectRail() {
         <button
           type="button"
           disabled={adding}
+          onPointerEnter={warmProjectPicker}
+          onFocus={warmProjectPicker}
           onClick={() => { setAdding(true); pick.mutate() }}
           aria-label="Add a project"
           // A DOTTED squircle, matching the project squares' own `rounded-[30%]` so it reads as an empty

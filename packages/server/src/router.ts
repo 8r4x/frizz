@@ -191,7 +191,7 @@ import { homedir } from "node:os"
 import { chosenProjectRoot, ensureProjectIdFile, existingProjectId, isHomeDirectory, writeProjectIdFile } from "./project-root.ts"
 import { resolveProjectLabel } from "./project-identity.ts"
 import { registerProject } from "./project-registry.ts"
-import { pickDirectory, pickImageFile } from "./directory-picker.ts"
+import { pickDirectory, pickImageFile, warmDirectoryPicker } from "./directory-picker.ts"
 import Database from "./sqlite.ts"
 import { projectStateDir } from "./frizz-paths.ts"
 
@@ -3988,9 +3988,23 @@ export function createRouter(ctx: AppContext) {
       output: DirectoryPickResult,
       handler: async () => {
         const picked = await pickDirectory()
+        // Folders tend to be added several at a time (2026-10-03: three dialogs inside 33 seconds), so
+        // the next panel is built while this one's board loads. One that is never asked for dies idle.
+        if (picked.kind !== "unavailable") warmDirectoryPicker()
         if (picked.kind !== "picked") return picked
         return { kind: "picked" as const, project: addProjectAtPath(picked.path) }
       },
+    }),
+
+    /**
+     * Build the folder picker now: the pointer or keyboard focus has reached "Add a project", and the
+     * click is a moment away. On macOS a cold panel takes ~0.9s to draw and a built one ~0.09s (see
+     * directory-picker.ts); everywhere else nothing is built ahead and this answers `false`.
+     */
+    projectPickWarm: mutation({
+      input: z.object({}),
+      output: z.object({ warming: z.boolean() }),
+      handler: async () => ({ warming: warmDirectoryPicker() }),
     }),
 
     /**

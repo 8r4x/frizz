@@ -23,7 +23,7 @@ import { projectHref } from "../lib/base-path.ts"
 import { useIsMobile } from "../lib/mobile.ts"
 import { showToast, store } from "../store.ts"
 import { Dialog } from "./ui/Dialog.tsx"
-import { ProjectIconMenu, ProjectSquare } from "./ProjectRail.tsx"
+import { ProjectIconMenu, ProjectSquare, warmProjectPicker } from "./ProjectRail.tsx"
 import { SettingsDrawer } from "./SettingsDrawer.tsx"
 
 /**
@@ -443,6 +443,9 @@ function PhantomCard({
   return (
     <button
       type="button"
+      // The picker is built while the pointer is on its way to the click — see warmProjectPicker.
+      onPointerEnter={warmProjectPicker}
+      onFocus={warmProjectPicker}
       onClick={onClick}
       disabled={pending}
       className={`${CARD_BASE} items-center justify-center gap-1.5 border-dashed border-border-strong bg-transparent text-muted hover:border-accent hover:text-fg ${

@@ -320,6 +320,8 @@ export interface Api {
   // Opens the machine NATIVE folder picker, server-side, and adds what comes back. The browser API
   // withholds absolute paths on purpose, and a project is a path — so the picker cannot live here.
   projectPick(input: Record<never, never>): Promise<DirectoryPickResult>
+  // Builds that picker ahead of the click, so the click only has to show it (macOS; `false` elsewhere).
+  projectPickWarm(input: Record<never, never>): Promise<{ warming: boolean }>
   projectAdd(input: { path: string }): Promise<ProjectCard>
   // The rail's squares. `projectIconSet` takes base64 from a browser file input (the bytes land in the
   // project's state dir, never in its working tree); clearing hands the square back to the automatic
@@ -459,6 +461,7 @@ export const PROCEDURES = {
   threadLocate: "query",
   projectsList: "query",
   projectPick: "mutation",
+  projectPickWarm: "mutation",
   projectAdd: "mutation",
   projectsReorder: "mutation",
   projectRemove: "mutation",

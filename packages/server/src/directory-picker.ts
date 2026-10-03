@@ -1,4 +1,5 @@
-import { execFile } from "node:child_process"
+import { execFile, spawn } from "node:child_process"
+import { createInterface } from "node:readline"
 import { promisify } from "node:util"
 
 const run = promisify(execFile)
@@ -38,12 +39,177 @@ const unanswered = (what: "folder" | "image"): DirectoryPick => ({
   reason: `no ${what} was chosen within 5 minutes`,
 })
 
+// THE MACOS FOLDER PANEL IS BUILT BEFORE THE CLICK THAT SHOWS IT.
+//
+// Building one takes most of a second, and almost none of that is Frizz. Measured 2026-10-03 on macOS
+// 26.6 against the live server: the request reached the server and spawned the helper in ~0.1s, and the
+// dialog then took 0.8-1.0s to draw. The unified log of the operator's own three adds that afternoon
+// has the same split: osascript and AppKit up in ~0.18s, then ~0.6s waiting on
+// `com.apple.appkit.xpc.openAndSavePanelService`, the separate process every NSOpenPanel is hosted in
+// (the private `NSUseRemoteSavePanel=NO` keeps it in-process and saves only ~0.2s). An AppleScript
+// `choose folder` cannot be split, so the panel is an NSOpenPanel driven from JXA: the helper BUILDS
+// it and then waits on stdin, and a built panel draws 82-94ms after the line that shows it arrives.
+//
+// So the browser asks for one when the pointer or keyboard focus reaches an "Add a project" control
+// (`warmDirectoryPicker`, through the `projectPickWarm` RPC), and the click only shows it. A panel
+// nobody shows is killed after WARM_PANEL_IDLE_MS, because while it waits it holds ~150 MB — osascript
+// ~60 MB and its own instance of the panel service ~90 MB: fine for a minute, not for the server's life.
+
+/** How long a panel built ahead of a click waits for it. */
+const WARM_PANEL_IDLE_MS = 60_000
+
 /**
- * `choose folder` returns an alias; `POSIX path of` is what turns it into something openable, and it
- * comes back with a trailing slash that every path comparison in the codebase would then miss on.
+ * The helper. It builds the panel at once and draws it only when a line `{"prompt":…}` arrives on
+ * stdin, then prints ONE line — `{"path":…}` or `{"cancelled":true}` — and exits. End of input before
+ * that line means nobody is going to ask: it exits without drawing anything, which is also what ends a
+ * waiting panel whose server has gone.
+ *
+ * Kept a `choose folder` in every visible respect: folders only, New Folder offered, the button reads
+ * Choose, and the panel floats above the browser at the modal-panel level without activating itself.
+ * Accessory, so it never puts an icon in the Dock. JXA hands enum values over as STRINGS ("1") — the
+ * constants and a method's return alike (`activationPolicy` reads back "1") — hence the Number() on
+ * both sides of the comparison.
  */
-const OSASCRIPT = (prompt: string) =>
-  `POSIX path of (choose folder with prompt ${JSON.stringify(prompt)})`
+const FOLDER_PANEL_SCRIPT = String.raw`
+ObjC.import("AppKit")
+function say(message) {
+  const line = $.NSString.alloc.initWithUTF8String(JSON.stringify(message) + "\n")
+  $.NSFileHandle.fileHandleWithStandardOutput.writeData(line.dataUsingEncoding($.NSUTF8StringEncoding))
+}
+function readLine() {
+  const input = $.NSFileHandle.fileHandleWithStandardInput
+  let text = ""
+  while (text.indexOf("\n") < 0) {
+    const data = input.availableData
+    if (Number(data.length) === 0) return undefined
+    text += $.NSString.alloc.initWithDataEncoding(data, $.NSUTF8StringEncoding).js
+  }
+  return text.slice(0, text.indexOf("\n"))
+}
+function run() {
+  $.NSApplication.sharedApplication.setActivationPolicy($.NSApplicationActivationPolicyAccessory)
+  const panel = $.NSOpenPanel.openPanel
+  panel.canChooseFiles = false
+  panel.canChooseDirectories = true
+  panel.canCreateDirectories = true
+  panel.allowsMultipleSelection = false
+  panel.prompt = "Choose"
+  const line = readLine()
+  if (line === undefined) return
+  panel.message = JSON.parse(line).prompt
+  const chosen = Number(panel.runModal) === Number($.NSModalResponseOK)
+  say(chosen ? { path: panel.URL.path.js } : { cancelled: true })
+}
+`
+
+/** One folder panel: built when it is opened, drawn only when `show` hands it the prompt. */
+export interface FolderPanel {
+  /** Draw it. Settles with what the operator did, or with why the panel could not be drawn. */
+  show(prompt: string): Promise<DirectoryPick>
+  /** Kill a panel nobody showed. Never touches one that is showing. */
+  discard(): void
+  readonly exited: boolean
+}
+
+/**
+ * Start building a panel. Exported, with the command as a parameter, for the test that drives this
+ * protocol with a stand-in helper — a real panel is a window on the operator's desktop.
+ */
+export function openFolderPanel(
+  command: readonly string[] = ["osascript", "-l", "JavaScript", "-e", FOLDER_PANEL_SCRIPT],
+): FolderPanel {
+  const [bin = "osascript", ...args] = command
+  const child = spawn(bin, args, { stdio: ["pipe", "pipe", "pipe"] })
+  let exited = false
+  let shown = false
+  let reaped = false
+  let stderr = ""
+  let settle!: (pick: DirectoryPick) => void
+  const outcome = new Promise<DirectoryPick>((resolve) => { settle = resolve })
+  createInterface({ input: child.stdout }).on("line", (line) => {
+    let message: { path?: unknown; cancelled?: unknown }
+    try {
+      message = JSON.parse(line) as typeof message
+    } catch {
+      return
+    }
+    // NSURL.path carries no trailing slash, except on `/` itself — which `choose folder`'s
+    // `POSIX path of` also reduced to nothing, and so to "cancelled". Kept that way.
+    if (typeof message.path === "string") {
+      const path = message.path.replace(/\/+$/u, "")
+      settle(path ? { kind: "picked", path } : { kind: "cancelled" })
+    } else if (message.cancelled === true) {
+      settle({ kind: "cancelled" })
+    }
+  })
+  child.stderr.setEncoding("utf8")
+  child.stderr.on("data", (chunk: string) => { stderr += chunk })
+  // Showing a helper that has already died writes to a closed pipe, and an EPIPE nobody listens for
+  // would throw out of the event loop.
+  child.stdin.on("error", () => {})
+  child.on("error", (error) => {
+    exited = true
+    settle({ kind: "unavailable", reason: error.message })
+  })
+  child.on("close", () => {
+    exited = true
+    // A settled outcome ignores this: the answer line always arrives before the pipes close.
+    settle(reaped ? unanswered("folder") : { kind: "unavailable", reason: firstLine(stderr) || "the folder picker did not open" })
+  })
+  // A panel built ahead of a click is speculative and must never be what holds the event loop open;
+  // one that is showing is somebody's answer, and is held like any other.
+  const handles = [child, child.stdin, child.stdout, child.stderr] as { ref?: () => void; unref?: () => void }[]
+  for (const handle of handles) handle.unref?.()
+  return {
+    get exited() {
+      return exited
+    },
+    show(prompt) {
+      shown = true
+      for (const handle of handles) handle.ref?.()
+      child.stdin.write(`${JSON.stringify({ prompt })}\n`)
+      const timer = setTimeout(() => {
+        reaped = true
+        child.kill()
+      }, PICKER_TIMEOUT_MS)
+      timer.unref()
+      return outcome.finally(() => clearTimeout(timer))
+    },
+    discard() {
+      if (!shown) child.kill()
+    },
+  }
+}
+
+let warm: { panel: FolderPanel; idle: ReturnType<typeof setTimeout> } | undefined
+
+/** The panel built ahead of this click, if it is still alive. It is the caller's from here on. */
+function takeWarmPanel(): FolderPanel | undefined {
+  const taken = warm
+  warm = undefined
+  if (!taken) return undefined
+  clearTimeout(taken.idle)
+  return taken.panel.exited ? undefined : taken.panel
+}
+
+/**
+ * Build the folder panel now, because a click is about to ask for it. False where no panel is built
+ * ahead (every platform but macOS). Asking again keeps the panel already built and restarts its clock.
+ */
+export function warmDirectoryPicker(
+  platform: NodeJS.Platform = process.platform,
+  open: () => FolderPanel = openFolderPanel,
+): boolean {
+  if (platform !== "darwin") return false
+  const panel = takeWarmPanel() ?? open()
+  const idle = setTimeout(() => {
+    if (warm?.panel === panel) warm = undefined
+    panel.discard()
+  }, WARM_PANEL_IDLE_MS)
+  idle.unref()
+  warm = { panel, idle }
+  return true
+}
 
 /**
  * Choose an IMAGE, with the dialog already standing in `startIn`.
@@ -97,19 +263,11 @@ export async function pickImageFile(
 export async function pickDirectory(
   prompt = "Choose a folder to open in Frizz",
   platform: NodeJS.Platform = process.platform,
+  open: () => FolderPanel = openFolderPanel,
 ): Promise<DirectoryPick> {
-  if (platform === "darwin") {
-    try {
-      const { stdout } = await run("osascript", ["-e", OSASCRIPT(prompt)], { timeout: PICKER_TIMEOUT_MS })
-      const path = stdout.trim().replace(/\/+$/u, "")
-      return path ? { kind: "picked", path } : { kind: "cancelled" }
-    } catch (error) {
-      if (timedOut(error)) return unanswered("folder")
-      // AppleScript reports a dismissed dialog as an ERROR (-128), not as empty output.
-      if (/User canceled|-128/u.test(stderrOf(error))) return { kind: "cancelled" }
-      return { kind: "unavailable", reason: firstLine(stderrOf(error)) || "the folder picker did not open" }
-    }
-  }
+  // The panel built when the pointer reached the button, or — a click nothing warned of — one built now,
+  // which costs the whole build. See THE MACOS FOLDER PANEL above.
+  if (platform === "darwin") return (takeWarmPanel() ?? open()).show(prompt)
   if (platform === "linux") {
     // Neither is guaranteed present; try the GNOME one, then the KDE one, then give up gracefully.
     for (const [bin, args] of [
