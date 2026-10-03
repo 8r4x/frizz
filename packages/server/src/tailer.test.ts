@@ -3169,8 +3169,16 @@ test("tailer: a PRESENT transcript binds directly — no discovery, transcript_i
   assert.equal(h.storage.getSession("t")?.transcript_id ?? null, null, "no drift → transcript_id never written")
 })
 
+// The stall sink of a fixture project (which has no stateDir) is the per-INSTALL directory, shared by
+// every run of this suite on the machine — and several agents run it at once here. A fixed slug let one
+// run's leading rmSync delete the log another run had just written, between its write and its read
+// (ENOENT on `really-stalled.stall.log`, 2026-10-03). The pid keeps each run's file its own.
+function stallSlug(base: string): string {
+  return `${base}-${process.pid}`
+}
+
 test("tailer: a transcript missing past the grace window → noTranscript degraded state (not an eternal spinner)", () => {
-  const slug = "stall-thread"
+  const slug = stallSlug("stall-thread")
   const h = harness()
   // Per-project now — keyed on the tailer's project.stateDir. This fixture project has none, so both
   // sides fall back to the per-install directory; ask for it the same way or this looks in an empty one.
@@ -3201,7 +3209,7 @@ test("tailer: a transcript missing past the grace window → noTranscript degrad
 // `lastActivityAt` never satisfy sniffPane's quiet gate — the pane was never captured and the row
 // carded as a bare "Stalled" while the reason sat unread in the stall log.
 test("tailer: a present-but-EMPTY (0-byte) transcript past grace is treated as MISSING → degraded (0-byte crash-net hole closed)", () => {
-  const slug = "empty-thread"
+  const slug = stallSlug("empty-thread")
   const stallLog = join(frizzTempDir("frizz-worker-logs"), `${slug}.stall.log`)
   try { rmSync(stallLog) } catch { /* not there */ }
   const h = harness()
@@ -4231,7 +4239,7 @@ test("tailer: the BACKOFF never delays a transcript that appears at the pinned p
 
 test("tailer: an exited+archived row flags noTranscript but raises NO boot-failure alarm", () => {
   const h = harness()
-  const slug = "filed-away"
+  const slug = stallSlug("filed-away")
   const stallLog = join(frizzTempDir("frizz-worker-logs"), `${slug}.stall.log`)
   try { rmSync(stallLog) } catch { /* not there */ }
   // A thread the operator finished with and archived. Its transcript never existed and never will.
@@ -4250,7 +4258,7 @@ test("tailer: an exited+archived row flags noTranscript but raises NO boot-failu
 
 test("tailer: a LIVE row still raises the boot-failure alarm (the archived skip is not a blanket mute)", () => {
   const h = harness()
-  const slug = "really-stalled"
+  const slug = stallSlug("really-stalled")
   const stallLog = join(frizzTempDir("frizz-worker-logs"), `${slug}.stall.log`)
   try { rmSync(stallLog) } catch { /* not there */ }
   h.storage.upsertSession(row({ slug, thread_name: `frizz-${slug}`, exited: 0, archived: 0 }))
