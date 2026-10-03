@@ -19,6 +19,8 @@ the bug.
 This is not a style note. It was a real, repeated complaint (maintainer 2026-07-28: *"it keeps opening
 tabs in my actual real Chrome"*), and the cause was a skill file recommending the MCP first.
 
+**A raw Chrome command carries `--use-mock-keychain`.** `shot.mjs` and the MCP pass it already. If you start `"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless` yourself, or write a prompt that tells a worker to, add the flag: without it, a Chrome under a temporary `HOME` (every sandbox) makes macOS put a modal "Keychain Not Found" dialog on the maintainer's screen. AGENTS.md § Never put a macOS keychain dialog on the maintainer's screen has the rest.
+
 ---
 
 ## 1. The default: `scripts/shot.mjs` (puppeteer)
