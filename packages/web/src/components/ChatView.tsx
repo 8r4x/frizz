@@ -9,7 +9,6 @@ import type { AskQuestion, AwaitingHint, BgShellView, PendingAsk, RegisteredQues
 import { store, threadBySlug, pushDrawer, pushSubAgentDrawer, pushBackgroundShellDrawer, showToast } from "../store.ts"
 import { useBackgroundShellLines, useBoard, useProjectDir, useTranscript, type ChatMessage, type TranscriptData } from "../hooks.ts"
 import { rpc } from "../api/rpc.ts"
-import { lastActiveLabelAt } from "../groups.ts"
 import { stripFrontmatter } from "../lib/markdown.ts"
 import { useMarkdownHtml, useInlineMarkdownHtml } from "../lib/useMarkdown.ts"
 import { splitComposerValue, splitProseAttachments } from "../lib/imagePaths.ts"
@@ -62,7 +61,8 @@ import { THREAD_HEADER_CLASS, THREAD_HEADER_CONTROLS_CLASS, THREAD_HEADER_TITLE_
 import { ThreadActionBar } from "./ThreadActionBar.tsx"
 import { MobileThreadHeader } from "./MobileThreadHeader.tsx"
 import { HeaderActions } from "./HeaderActions.tsx"
-import { ThreadLifecycleFooter, StateButton } from "./ThreadLifecycleFooter.tsx"
+import { ThreadLifecycleActions, StateButton } from "./ThreadLifecycle.tsx"
+import { ThreadHeaderFacts } from "./ThreadHeaderFacts.tsx"
 import { ThreadTitle } from "./ThreadTitle.tsx"
 import { threadLifecycleAvailability } from "../lib/threadLifecycle.ts"
 import { ToolDisclosureHeader } from "./ToolDisclosureHeader.ts"
@@ -99,7 +99,6 @@ import { SnoozeCard, showsSnoozeCard } from "./SnoozeCard.tsx"
 // import path while the definitions live where both question producers can reach them.
 export { CARD_BODY, CARD_PRIMARY_BUTTON, CardActions, TranscriptCard } from "./TranscriptCard.tsx"
 export { QuestionBlockCard } from "./QuestionBlockCard.tsx"
-import { LastActive } from "./LastActive.tsx"
 import { CopyTerminalCommandButton, useCopyTerminalCommand } from "./ExternalTerminalCommand.tsx"
 import { SignInModal } from "./SignInModal.tsx"
 import { PROVIDER_LABEL } from "../lib/signIn.ts"
@@ -215,10 +214,12 @@ export function withoutLiveTranscriptBackgroundTools(messages: readonly ChatMess
 // and the per-thread persisted tab preference all go with it. The thread is its conversation.
 //
 // ON A PHONE (below 700px, in the drawer — the only way a phone opens a thread) the chrome is the phone's
-// own (mockup v2 §2): a 56px MobileThreadHeader in place of the two-row header and its icon strip, and NO
-// lifecycle footer — Snooze, Goal, the context reading and the maintenance verbs moved into the header's
-// ⋯ sheet, and the one lifecycle verb that matters at rest belongs to the bottom bar. The /full page (no
-// `onClose`) keeps the desktop chrome on every width; a phone never links to it.
+// own (mockup v2 §2): a 56px MobileThreadHeader in place of the two-row header and its icon strip —
+// Snooze, Goal, the context reading and the maintenance verbs live in the header's ⋯ sheet, and the one
+// lifecycle verb that matters at rest belongs to the bottom bar. The /full page (no `onClose`) keeps the
+// desktop chrome on every width; a phone never links to it. (Desktop had a lifecycle footer under the
+// prompt box until 2026-10-05; its verbs and the context reading moved into ThreadHeader, and the Goal
+// into the prompt box's rail.)
 export function ThreadView({ slug, onStatusApplied, onClose, virtualized = false, showReturnToQueue = false }: { slug: string; onStatusApplied?: () => void; onClose?: () => void; virtualized?: boolean; showReturnToQueue?: boolean }) {
   const board = useBoard()
   const thread = threadBySlug(board, slug)
@@ -236,7 +237,6 @@ export function ThreadView({ slug, onStatusApplied, onClose, virtualized = false
         <ThreadHeader slug={slug} onStatusApplied={onStatusApplied} onClose={onClose} showReturnToQueue={showReturnToQueue} />
       )}
       <ChatView slug={slug} virtualized={virtualized} phone={phone} railBeside={showReturnToQueue && splitFileViewer} />
-      {thread && !phone && <ThreadLifecycleFooter thread={thread} sticky safeArea onArchived={onStatusApplied} />}
     </div>
   )
 }
@@ -646,7 +646,11 @@ function ChatView({ slug, virtualized, phone = false, railBeside = false }: { sl
           card draws under its header (TodosView); the chat footer used to draw full-strength
           `border-border` AND have ThreadActionBar draw a second one under it, which stacked into a
           2px rule. Keep the separator on THIS wrapper only — the bar inside is padding-only. */}
-      <div data-thread-chat-footer className="z-10 shrink-0 border-t border-border/60 bg-panel">
+      {/* The device's bottom inset is the LAST thing in the column, under the prompt box — the drawer
+          reaches the physical bottom edge of a tablet or a notched screen. The lifecycle footer used to
+          sit under this and carried it, until the footer went on 2026-10-05. Not on a phone: its bar
+          (Composer's phone layout) pads itself for the inset and the keyboard together. */}
+      <div data-thread-chat-footer className={`z-10 shrink-0 border-t border-border/60 bg-panel ${phone ? "" : "pb-[env(safe-area-inset-bottom)]"}`}>
         <ThreadActionBar
           slug={slug}
           onTerminal={copyTerminalCommand}
@@ -1661,9 +1665,10 @@ function JumpToLatest({ overlay, hidden, onJump }: { overlay: HTMLElement | null
   )
 }
 
-// The thread's top bar: title and — at the far right — the shared non-lifecycle HeaderActions. Snooze
-// and Archive stay in the persistent thread footer. Owned sessions expose a command-copy icon; foreign
-// rows do not. It carried a Chat|Doc tab strip until 2026-08-06; see ThreadView for why that went.
+// The thread's top bar: title, then "Last active · context" (ThreadHeaderFacts), and at the far right the
+// shared HeaderActions closed by the two lifecycle verbs, snooze and mark as done (ThreadLifecycleActions)
+// — the same strip the queue card's header draws. Owned sessions expose a command-copy icon; foreign rows
+// do not. It carried a Chat|Doc tab strip until 2026-08-06; see ThreadView for why that went.
 export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue = false }: { slug: string; onStatusApplied?: () => void; onClose?: () => void; showReturnToQueue?: boolean }) {
   const board = useBoard()
   const thread = threadBySlug(board, slug)
@@ -1692,7 +1697,7 @@ export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue
           {/* The name and both rename verbs — click to type, hover for the Claude refresh — are the
               shared ThreadTitle, the same element the queue card's header renders. */}
           <ThreadTitle thread={thread} />
-          <LastActive at={lastActiveLabelAt(thread)} fallbackAt={thread.spawnedAt} className="mt-0.5 block truncate text-[11px] leading-tight text-muted-75" />
+          <ThreadHeaderFacts thread={thread} />
         </div>
       </div>
       {/* At constrained drawer widths, controls get their own deliberate row. This keeps the
@@ -1717,6 +1722,7 @@ export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue
           {/* The fullscreen door, drawer header edition — same component as the queue card's, so the two
               cannot drift. Only where there is a drawer to leave: the /full page is already there. */}
           {onClose && <ExpandThreadLink slug={slug} />}
+          <ThreadLifecycleActions thread={thread} onArchived={onStatusApplied} />
         </div>
         {/* Close-X for the DRAWER context (onClose passed by ThreadSheet) — parity with the Settings,
             sub-agent, and Doc drawers, all of which carry a corner "Close". Wired to the SAME animated
@@ -3930,7 +3936,7 @@ export function InlineVisualization({ file }: { file: string }) {
 
 // A SIGNAL fence rendered as a card in place of the raw ```done / ```awaiting block (the fence
 // language IS the state; the body is the message). `done` → a compact presentation-only success card;
-// its thread's Archive lives in the stable lifecycle footer. `awaiting` → THE RESTING CARD ITSELF
+// its thread's Archive is the header's check (ThreadLifecycleActions). `awaiting` → THE RESTING CARD ITSELF
 // (AwaitingBackgroundCard), which is the whole point: one component draws that card on every surface and
 // at every runtime, so steering a worker cannot re-shape it. See the branch below.
 export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKind; body: string; hints: AwaitingHint[]; wrap?: boolean }) {
@@ -3982,7 +3988,7 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
       // 2026-07-10). The Check + "Done" label carries the meaning; no color needed.
       <TranscriptCard icon={Check} label="Done">
         {html && <LinkedHtml className={`md-body${wrap ? ` ${QUEUE_WRAP}` : ""}`} html={html} />}
-        {/* A white "Mark as done" button, deliberately redundant with the stable lifecycle footer — the
+        {/* A white "Mark as done" button, deliberately redundant with the header's check — the
             same completion mutation, styled as the primary (light-on-dark) verb. Only shown when the
             thread can actually take the action, and never on a phone (see `isMobile` above). */}
         {doneThread && !isMobile && (

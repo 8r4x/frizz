@@ -29,8 +29,9 @@ export { STALLED_RETRY_MESSAGE } from "../lib/retrySession.ts"
 //     TOGETHER: the plug glyph was chosen only because it sits beside the restart refresh and must not
 //     share its vocabulary, so splitting them would orphan it. Each still gates itself (dev build,
 //     broker-backed Claude, live process), so both render nothing on most rows.
-//     Other lifecycle verbs (Mark as done / Snooze) live in ThreadLifecycleFooter; the AI rename
-//     refresh is revealed by the title's own hover, in both this component's surfaces.
+//     The two lifecycle verbs (snooze, mark as done) close the same strip after this component, from
+//     ThreadLifecycleActions; the AI rename refresh is revealed by the title's own hover, in both this
+//     component's surfaces.
 //   • SESSION (foreign): read-only. Only the doc/open NAVIGATION affordances — no kill/archive.
 //   • LEGACY (kind !== "session"): the vestigial Mark-as split button, exactly as before.
 export function HeaderActions({
@@ -55,7 +56,7 @@ export function HeaderActions({
   collapsed?: boolean
   doneBusy?: boolean
   // Mutation pass-through for the LEGACY MarkAsButton choreography. Archive/Snooze callbacks belong
-  // to ThreadLifecycleFooter.
+  // to ThreadLifecycleActions.
   onStatusMutate?: () => void
   onStatusApplied?: () => void
   onStatusFailed?: () => void
@@ -88,7 +89,7 @@ export function HeaderActions({
       {isSession ? (
         // A STALLED session (process gone, work unfinished) or one KILLED by an auto-resume usage limit
         // leads with recovery — Retry is the only exit/wait-state verb here; clearing a finished row is
-        // the footer's job (Mark as done / Snooze). offersRetry already excludes foreign (read-only)
+        // the lifecycle verbs' job (snooze, mark as done — ThreadLifecycleActions, after this). offersRetry already excludes foreign (read-only)
         // sessions, and — the point of the 2026-07-23 fix — archived and done-fenced ones, which are at
         // rest on purpose and must not advertise a recovery verb their rail row does not also mark.
         offersRetry(thread) ? <RetryButton slug={thread.id} /> : null
@@ -125,6 +126,9 @@ function RetryButton({ slug }: { slug: string }) {
         onClick={apply}
         disabled={busy}
         aria-label="Retry exited session"
+        // A bordered pill paints its whole box, so the lifecycle rule after it takes a wider margin
+        // (styles.css, `[data-header-pill]`) to keep the same ink distance a bare icon gets.
+        data-header-pill
         onMouseDown={(e) => e.preventDefault()}
         className="ml-1 flex items-center gap-1.5 rounded-md border border-accent/45 bg-accent/10 px-2.5 py-1 text-[12px] font-medium text-accent outline-none transition-colors hover:border-accent/70 hover:bg-accent/15 disabled:opacity-50"
       >

@@ -7,7 +7,7 @@ import type { PhoneBarApi } from "./Composer.tsx"
 // The bar under the chat/terminal is now JUST the follow-up composer — the Done button and the
 // ⋯ menu live in the workpane header (ThreadHeaderActions) next to the tabs. `ops` (the live
 // background-operations strip) renders INSIDE the padded box rather than beside it, so those rows
-// hang tight off the prompt and the box's own pb becomes their gap to the lifecycle footer.
+// hang tight off the prompt and the box's own pb becomes their gap to the drawer's bottom edge.
 //
 // This is now a THIN wrapper around <ThreadComposerBox> — the same block the queue card renders.
 // Everything the two surfaces must agree on (the draft key, the `/login`/`/logout` intercept, the
@@ -47,4 +47,4 @@ export function ThreadActionBar({ slug, ops, phoneBarOverride }: { slug: string;
 
 // The old ⋯ overflow menu is gone: the frizz-document, retry, and done actions all live as direct
 // icons in the shared <HeaderActions> (Kill and Dismiss were dropped entirely — an exited session
-// is retried from the header, or cleared through the lifecycle footer).
+// is retried from the header, or cleared through the header's check).

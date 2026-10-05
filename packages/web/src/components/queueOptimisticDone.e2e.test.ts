@@ -32,7 +32,7 @@ test("Mark-as-done dismisses a resting card instantly — the fade precedes the 
 
     await page.evaluate((slug) => {
       const card = document.querySelector(`[data-queue-card-root="${slug}"]`)!
-      card.querySelector<HTMLButtonElement>('[data-thread-lifecycle-footer] button[aria-label="Mark as done"]')!.click()
+      card.querySelector<HTMLButtonElement>('[data-thread-lifecycle] button[aria-label="Mark as done"]')!.click()
     }, SLUG)
 
     // ~150ms in: the card is already fading and the (1500ms-delayed) RPC has NOT resolved.
@@ -86,7 +86,7 @@ test("a needsConfirmation reply reinstates the optimistically-dismissed card and
 
     await page.evaluate((slug) => {
       const card = document.querySelector(`[data-queue-card-root="${slug}"]`)!
-      card.querySelector<HTMLButtonElement>('[data-thread-lifecycle-footer] button[aria-label="Mark as done"]')!.click()
+      card.querySelector<HTMLButtonElement>('[data-thread-lifecycle] button[aria-label="Mark as done"]')!.click()
     }, SLUG)
 
     // The fast decline lands before the ~320ms exit: the card must snap back and the dialog must open.

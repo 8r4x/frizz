@@ -77,7 +77,7 @@ export class RetryableDeliveryError extends Error {
 /**
  * A bump/resume REACTIVATES an archived thread: the maintainer messaging an Inactive (archived) thread
  * expects it back in Active. There is deliberately no Reopen verb anywhere in frizz — the composer under
- * the "Done" readout IS the reopen affordance (see web ThreadLifecycleFooter) — so this un-archive is
+ * the "Done" readout IS the reopen affordance (see web ThreadLifecycle.tsx, DoneReadout) — so this un-archive is
  * the entire mechanism behind that promise, and every runtime has to honour it.
  *
  * It lives HERE, above `resumeThreadOwned`, because that function only ever served the retired

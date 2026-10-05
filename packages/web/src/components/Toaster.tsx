@@ -12,12 +12,13 @@ export function Toaster() {
   const snap = useSnapshot(store)
   const toast = snap.toast
   const [visible, setVisible] = useState(false)
-  // A thread drawer's lifecycle footer (Snooze / Mark as done) also anchors bottom-right, one layer
-  // BELOW this toast (footer z-20 inside a z-51 drawer; toast z-70). At the resting bottom-4 the toast
-  // sat directly on top of those buttons, and a `link` toast — whose pill used to be pointer-events-auto
-  // — swallowed every click meant for them for its full (5s) life. So: keep the strip click-through and
-  // only let the explicit action button intercept (below), AND lift the whole toast above the footer
-  // whenever a drawer is open so it never covers those controls in the first place.
+  // A thread drawer's prompt box also anchors bottom-right — its send button — one layer BELOW this
+  // toast (inside a z-51 drawer; toast z-70). The drawer's lifecycle footer sat there until 2026-10-05
+  // (its Snooze and Mark as done are in the header now), and at the resting bottom-4 the toast sat
+  // directly on top of those buttons: a `link` toast — whose pill used to be pointer-events-auto —
+  // swallowed every click meant for them for its full (5s) life. So: keep the strip click-through and
+  // only let the explicit action button intercept (below), AND lift the whole toast above the drawer's
+  // bottom controls whenever a drawer is open so it does not cover them in the first place.
   const drawerOpen = snap.drawers.some((drawer) => !drawer.closing)
 
   useEffect(() => {

@@ -6,7 +6,7 @@ import { completionHoldSummary } from "../lib/threadLifecycle.ts"
 import { Dialog } from "./ui/Dialog.tsx"
 
 // The phone thread bar's Done: the verb a resting thread's empty bar offers (approved phone design,
-// 2026-09-30). It files the thread through the lifecycle footer's own completion path and opens the
+// 2026-09-30). It files the thread through the desktop check's own completion path and opens the
 // next thread that needs you (lib/mobileTriage.ts).
 //
 // The server can still decline — a resting thread whose sub-agents or background shells are running,

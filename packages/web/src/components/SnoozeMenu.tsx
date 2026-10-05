@@ -1,26 +1,38 @@
 import { useId, useMemo, useState } from "react"
-import { useSnapshot } from "valtio"
-import { AlarmClock, ChevronDown, Loader2 } from "lucide-react"
+import { AlarmClock, AlarmClockOff, Loader2 } from "lucide-react"
 import { SNOOZE_PROMPT_MAX, type ThreadView } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { futureSnoozedUntil } from "../groups.ts"
 import {
+  DEFAULT_SNOOZE_PRESET,
   SNOOZE_PRESETS,
   formatSnoozeWake,
   localDateTimeInputValue,
   parseLocalSnooze,
-  snoozePresetAction,
   snoozePresetInstant,
-  snoozePresetLabel,
-  type SnoozePreset,
 } from "../lib/snooze.ts"
+import { HEADER_ICON_CLASS } from "../lib/headerIcon.ts"
 import { showToast } from "../store.ts"
-import { prefs } from "../lib/prefs.ts"
 import { shouldSubmitStagedEnter } from "../lib/composerKeyboard.ts"
 import { Dialog } from "./ui/Dialog.tsx"
 import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "./ui/Menu.tsx"
+import { Tooltip } from "./Tooltip.tsx"
 
-export function SnoozeButton({ thread, onSnoozed }: { thread: ThreadView; onSnoozed?: () => void }) {
+// THE SNOOZE VERB: an alarm clock in the thread header's action strip whose click opens every preset.
+//
+// It was a split button in the lifecycle footer until 2026-10-05 — "Snooze 1d" plus a chevron — whose
+// one-click half relabelled itself to whatever was picked last (`prefs.snoozePreset`), so the same
+// click parked a thread for a different span depending on what you did on some other card yesterday
+// (maintainer: "I don't really like the fact that the snooze duration right now is sticky and it just
+// gets stuck to the most recently selected value"). The menu has no default to drift: every click
+// lists every preset, each with the moment it would bring the thread back. The phone keeps its own
+// "Snooze length" setting for its swipe, which this control no longer reads or writes.
+//
+// The clock is AMBER while a snooze is armed — the goal mark's "something is set" tone — so the verb is
+// also the presence marker the footer's grey alarm glyph used to be: a thread opened with a bump armed
+// for Friday says so in its header, and the menu then leads with when it wakes and Wake now.
+export function SnoozeMenu({ thread, onSnoozed }: { thread: ThreadView; onSnoozed?: () => void }) {
+  const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [customOpen, setCustomOpen] = useState(false)
   const [customValue, setCustomValue] = useState("")
@@ -30,19 +42,29 @@ export function SnoozeButton({ thread, onSnoozed }: { thread: ThreadView; onSnoo
   const promptInputId = useId()
   const customFormId = useId()
   const snoozedUntil = futureSnoozedUntil(thread)
-  const selectedPreset = useSnapshot(prefs).snoozePreset
-  const selectedLabel = snoozePresetLabel(selectedPreset)
-  const selectedAction = snoozePresetAction(selectedPreset)
+  const prompt = thread.snoozePrompt?.trim()
   const minCustom = useMemo(() => localDateTimeInputValue(new Date(Date.now() + 60_000)), [customOpen])
+  // Recomputed when the menu opens, so each row's wake time is read off the clock at the moment it is
+  // offered rather than when the header first rendered.
+  const rows = useMemo(() => SNOOZE_PRESETS.map((preset) => {
+    const wake = formatSnoozeWake(snoozePresetInstant(preset.value))
+    return preset.value === "tomorrow"
+      ? { value: preset.value, label: "Tomorrow", wake: wake.replace(/^Tomorrow at /, "") }
+      : { value: preset.value, label: preset.label, wake }
+  }), [open])
+  // Two shapes: a plain park only re-surfaces the card, while an armed one resumes the agent with that
+  // text — so naming the follow-up IS the detail.
+  const state = snoozedUntil ? (prompt ? `Bumps ${formatSnoozeWake(snoozedUntil)}` : `Snoozed until ${formatSnoozeWake(snoozedUntil)}`) : null
+  const label = state ? (prompt ? `${state}\n${prompt}` : state) : "Snooze"
 
-  // `prompt` is what upgrades a park into a scheduled BUMP: the server arms a durable wake that resumes
+  // `bump` is what upgrades a park into a scheduled BUMP: the server arms a durable wake that resumes
   // this thread with exactly that text at `until`. null keeps the historical reminder behavior.
-  async function apply(until: string | null, prompt: string | null = null): Promise<void> {
+  async function apply(until: string | null, bump: string | null = null): Promise<void> {
     setBusy(true)
     try {
-      await rpc.setThreadSnooze({ slug: thread.id, sessionId: thread.sessionId ?? "", until, prompt: until ? prompt : null })
+      await rpc.setThreadSnooze({ slug: thread.id, sessionId: thread.sessionId ?? "", until, prompt: until ? bump : null })
       if (until) {
-        showToast(`${prompt ? "Bump scheduled" : "Snoozed"} · ${formatSnoozeWake(until)}`)
+        showToast(`${bump ? "Bump scheduled" : "Snoozed"} · ${formatSnoozeWake(until)}`)
         onSnoozed?.()
       } else {
         showToast("Snooze cleared")
@@ -58,16 +80,10 @@ export function SnoozeButton({ thread, onSnoozed }: { thread: ThreadView; onSnoo
     }
   }
 
-  function applyPreset(preset: SnoozePreset) {
-    prefs.snoozePreset = preset
-    void apply(snoozePresetInstant(preset))
-  }
-
-  // Opens on the CURRENTLY SELECTED preset rather than a fixed 1-day default, so the dialog is the
-  // "…and send this" continuation of the quick action beside it. An existing snooze re-opens as itself
-  // so editing the follow-up never silently moves the deadline.
+  // An existing snooze re-opens as itself so editing the follow-up never silently moves the deadline;
+  // otherwise the dialog starts a day out.
   function openCustom() {
-    setCustomValue(localDateTimeInputValue(new Date(snoozedUntil ?? snoozePresetInstant(selectedPreset))))
+    setCustomValue(localDateTimeInputValue(new Date(snoozedUntil ?? snoozePresetInstant(DEFAULT_SNOOZE_PRESET))))
     setPromptValue(thread.snoozePrompt ?? "")
     setCustomError("")
     setCustomOpen(true)
@@ -79,66 +95,59 @@ export function SnoozeButton({ thread, onSnoozed }: { thread: ThreadView; onSnoo
       setCustomError(parsed.message)
       return
     }
-    const prompt = promptValue.trim()
-    if (prompt.length > SNOOZE_PROMPT_MAX) {
-      setCustomError(`Prompt is too long (${prompt.length}/${SNOOZE_PROMPT_MAX})`)
+    const bump = promptValue.trim()
+    if (bump.length > SNOOZE_PROMPT_MAX) {
+      setCustomError(`Prompt is too long (${bump.length}/${SNOOZE_PROMPT_MAX})`)
       return
     }
-    void apply(parsed.until, prompt || null)
+    void apply(parsed.until, bump || null)
   }
 
   return (
     <>
-      <div className="inline-flex items-stretch rounded-md border border-border-strong bg-panel-2/60">
-        <button
-          type="button"
-          disabled={busy}
-          aria-label={snoozedUntil ? "Wake thread now" : selectedAction}
-          title={snoozedUntil ? `Wake now · ${formatSnoozeWake(snoozedUntil)}` : selectedAction}
-          onClick={() => void apply(snoozedUntil ? null : snoozePresetInstant(selectedPreset))}
-          className="flex items-center gap-1.5 rounded-l-md px-2.5 py-1 text-[12px] font-medium text-fg/75 outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60 disabled:cursor-not-allowed disabled:opacity-45"
-        >
-          {busy && <Loader2 size={12} className="animate-spin" />}
-          {snoozedUntil ? "Wake now" : selectedAction}
-        </button>
-        <span aria-hidden className="my-1 w-px bg-border" />
-        <Menu>
+      <Menu open={open} onOpenChange={setOpen}>
+        {/* The tooltip stands down while the menu is open: the menu's own first line already says it. */}
+        <Tooltip label={label} multiline={Boolean(prompt)} disabled={open}>
           <MenuTrigger asChild>
             <button
               type="button"
               disabled={busy}
-              aria-label="Snooze options"
-              title={`Selected snooze: ${selectedLabel}`}
-              className="flex min-w-0 items-center justify-center gap-1 rounded-r-md px-2 text-fg/75 outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60 disabled:cursor-not-allowed disabled:opacity-45"
+              data-snooze-menu
+              data-snoozed={snoozedUntil ? "true" : "false"}
+              aria-label={state ?? "Snooze"}
+              // Focus must not leave the composer: same discipline as every other header verb.
+              onMouseDown={(event) => event.preventDefault()}
+              className={`${snoozedUntil ? HEADER_ICON_CLASS.replace(/(^| )text-muted( |$)/, "$1text-attention-90$2") : HEADER_ICON_CLASS} ${open ? "bg-panel-2" : ""}`}
             >
-              <ChevronDown size={12} />
+              {busy ? <Loader2 size={14} strokeWidth={2} className="animate-spin" /> : <AlarmClock size={14} strokeWidth={2} />}
             </button>
           </MenuTrigger>
-          <MenuContent align="end">
-            {SNOOZE_PRESETS.map((preset) => (
-              <MenuItem key={preset.value} onSelect={() => applyPreset(preset.value)} icon={<AlarmClock size={12} />}>
-                <span className="flex min-w-0 flex-1 items-center justify-between gap-4">
-                  <span>{preset.label}</span>
-                  <span className="text-[10px] text-muted-55">{preset.detail}</span>
-                </span>
-              </MenuItem>
-            ))}
-            <MenuSeparator />
-            <MenuItem onSelect={openCustom}>Custom time &amp; prompt…</MenuItem>
-            {snoozedUntil && (
-              <>
-                <MenuSeparator />
-                <MenuItem onSelect={() => void apply(null)}>Wake now</MenuItem>
-              </>
-            )}
-          </MenuContent>
-        </Menu>
-      </div>
+        </Tooltip>
+        <MenuContent align="end">
+          <div className="px-2.5 pb-1 pt-1.5 text-[11px] text-muted-60">{state ?? "Snooze"}</div>
+          {snoozedUntil && (
+            <>
+              <MenuItem onSelect={() => void apply(null)} icon={<AlarmClockOff size={12} />}>Wake now</MenuItem>
+              <MenuSeparator />
+            </>
+          )}
+          {rows.map((row) => (
+            <MenuItem key={row.value} onSelect={() => void apply(snoozePresetInstant(row.value))} icon={<AlarmClock size={12} />}>
+              <span data-snooze-preset={row.value} className="flex min-w-0 flex-1 items-center justify-between gap-6">
+                <span>{row.label}</span>
+                <span className="text-[10.5px] text-muted-55">{row.wake}</span>
+              </span>
+            </MenuItem>
+          ))}
+          <MenuSeparator />
+          <MenuItem onSelect={openCustom}>Custom time &amp; prompt…</MenuItem>
+        </MenuContent>
+      </Menu>
 
       <Dialog
         open={customOpen}
-        onOpenChange={(open) => {
-          if (!busy) setCustomOpen(open)
+        onOpenChange={(next) => {
+          if (!busy) setCustomOpen(next)
         }}
         title="Snooze thread"
         className="w-[360px] max-w-[92vw]"
