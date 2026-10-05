@@ -8,7 +8,7 @@ import { queueCardTargetY, showToast, store } from "../store.ts"
 import { pageScrollY } from "../lib/pageScrollLock.ts"
 import { rpc } from "../api/rpc.ts"
 import { useBoard, asThreads, useTranscript } from "../hooks.ts"
-import { orderQueue, queued, lastActiveLabelAt } from "../groups.ts"
+import { orderQueue, queued } from "../groups.ts"
 import { tailAskIdx, useLiveAnswering } from "../lib/answering.ts"
 import { shouldSubmitStagedEnter } from "../lib/composerKeyboard.ts"
 import { hasQuestionBlock } from "../lib/questionBlocks.ts"
@@ -19,26 +19,26 @@ import { pairAllAnswers, unrenderedAnswers } from "../lib/answersMessage.ts"
 import { lastHumanTurnIndex } from "../lib/messagePresentation.ts"
 import { isOptimisticallySteering, useSteeredAt } from "../lib/steering.ts"
 import { questionsByAnchor } from "../lib/questionAnchor.ts"
-import { allFencesShadowed, placeQuestions, registeredStandingAt } from "../lib/questionShadow.ts"
+import { allFencesShadowed, placedFrom, placedRestEnds, placeQuestions, questionsAtCurrentRest, registeredStandingAt } from "../lib/questionShadow.ts"
 import { settledQuestionPositions } from "../lib/settledQuestions.ts"
 import { FenceCard, LimitPauseCard, Message, PermPolicyDenialCard, PermPromptBanner, PendingAskCard, VSpace, STEP, messageTailIsMeta, messageHeadIsMeta, messageRendersNothing, messageHasRenderableText, lastAssistantIndex } from "./ChatView.tsx"
-import { BLOCK_RADIUS, BLOCK_RADIUS_TOP } from "./TranscriptCard.tsx"
+import { BLOCK_RADIUS, BLOCK_RADIUS_TOP, BLOCK_RADIUS_INNER_BOTTOM } from "./TranscriptCard.tsx"
 import { AwaitingBackgroundCard, showsRestingCard } from "./AwaitingBackgroundCard.tsx"
 import { agentCompletionCall } from "../lib/subAgentCompletion.ts"
 import { coalesceToolActivityMessages } from "../lib/toolActivity.ts"
 import { prefs } from "../lib/prefs.ts"
 import { ThreadComposerBox } from "./ThreadComposerBox.tsx"
-import { BackgroundOpsStrip, ThreadSlugContext, QueueDismissContext } from "./ChatView.tsx"
+import { ThreadSlugContext, QueueDismissContext } from "./ChatView.tsx"
 import { HeaderActions } from "./HeaderActions.tsx"
-import { ThreadLifecycleFooter } from "./ThreadLifecycleFooter.tsx"
+import { ThreadLifecycleActions } from "./ThreadLifecycle.tsx"
+import { ThreadHeaderFacts } from "./ThreadHeaderFacts.tsx"
+import { QueueOpsSummary } from "./QueueOpsSummary.tsx"
 import { ThreadTitle } from "./ThreadTitle.tsx"
 import { DispatchForm } from "./NewThreadModal.tsx"
 import { StatusRow } from "./StatusRow.tsx"
 import { InteractionStack } from "./InteractionCards.tsx"
 import { RegisteredAnsweringProvider, RegisteredQuestionStack, SettledQuestionStack, openQuestionsOf, useSettledQuestions } from "./RegisteredQuestionCards.tsx"
-import { QueueSubAgentLines, hasQueueSubAgentLines } from "./QueueSubAgentLines.tsx"
 import { WakeDivider } from "./WakeDivider.tsx"
-import { LastActive } from "./LastActive.tsx"
 import { CopyTerminalCommandButton, useCopyTerminalCommand } from "./ExternalTerminalCommand.tsx"
 import {
   captureTranscriptViewportAnchor,
@@ -171,8 +171,12 @@ export function TodosView() {
   // adjustments are one-shot and deterministic: (1) at a card's unmount (the useLayoutEffect below) — a
   // USER-INITIATED dismissal auto-scrolls the next card to the viewport top (maintainer 2026-07-21),
   // while a pure board departure only holds a visible neighbour in place — and (2) the sidebar's
-  // scroll-to-card (scrollToQueueCard in store.ts), a direct response to a click. Neither is a background
-  // auto-scroll or a running observer; the browser's native scroll anchoring handles ordinary reflow.
+  // scroll-to-card (scrollToQueueCard in store.ts), a direct response to a click or a deep link. Neither
+  // is a background auto-scroll; the browser's native scroll anchoring handles ordinary reflow. The one
+  // observer is scoped to (2) and never standing: scrollToQueueCard HOLDS its landing while the queue
+  // above is still sizing, and drops it at the reader's first wheel, touch, press, key or scrollbar drag,
+  // or after a fixed bound (lib/queueLandingHold, 2026-10-05: a cold deep link's card was pushed out of
+  // view by the transcripts and pictures that loaded above it, at scrollY 0, where nothing anchors).
 
   // OPTIMISTIC EXIT: a dismissed card leaves the list the instant the human acts, without waiting for the
   // board push (which lags seconds behind on some paths — a sent message clears the queue only once the
@@ -891,8 +895,8 @@ const QueueCard = memo(function QueueCard({ thread, leaving, frozen, onResolve, 
   // The card is a triage surface, and its shape is "your last message, a bit of text, the fold, more
   // text" (maintainer 2026-08-12: "I don't know why the bash calls weren't folded in to the click to
   // expand section that's kind of weird"). Nothing is lost by folding them: a task still RUNNING is
-  // already listed under the card's own prompt box (BackgroundOpsStrip / QueueSubAgentLines, which read
-  // live board telemetry rather than the transcript), and a FINISHED one is history the fold carries.
+  // already counted above the card's docked prompt box, its row one hover away (QueueOpsSummary, which
+  // reads live board telemetry rather than the transcript), and a FINISHED one is history the fold carries.
   //
   // Whole MESSAGES are still lifted out, but only two: an open ask, and the scheduler wake that says
   // what re-invoked the agent. See lib/queueCollapse.survivesQueueCollapse, which this walk and the
@@ -997,32 +1001,39 @@ const QueueCard = memo(function QueueCard({ thread, leaving, frozen, onResolve, 
     () => coalesceToolActivityMessages(visible).map((entry) => ({ ...entry, messageIndex: entry.messageIndex + visibleStart })),
     [visible, visibleStart],
   )
-  // WHERE EACH OPEN QUESTION SITS: at the thread's CURRENT rest while it is at rest, and at the rest it
-  // was asked at while it is mid-flight — keyed by index into the FULL message list (the loop below
-  // carries that index as `globalIdx`). `tail` is the ordinary case — the worker asked and rested —
-  // above the composer, and `atRest` is what keeps a question the human replied PAST there rather than
-  // stranded above their reply while the card's newest handoff reads as a bare stop. A question a
-  // marker PLACED inside a message is subtracted here (lib/questionShadow placeQuestions, below).
+  // WHERE EACH OPEN QUESTION SITS: at the newest rest that CLAIMS it — the rest that asked it, or a later
+  // one whose ```awaiting fence names it under `questions:` (lib/questionAnchor) — keyed by index into the
+  // FULL message list (the loop below carries that index as `globalIdx`). `tail` is the ordinary case —
+  // the worker asked and rested, or named it in the fence it rested on — above the composer. A question
+  // a later rest says nothing about stays at its own rest, which on this card is usually above the window
+  // and flushes first; the worker is bumped until it names or withdraws one (server scheduler).
   // Where the worker PLACED its registered questions — the message whose empty ```question qst_… marker
   // names each one (lib/questionShadow). A placed card renders inside that message and leaves its
-  // anchor group; the tail stack still carries the one "Send answers" for the whole rest.
-  // At rest only a marker in the CURRENT rest places; a stale one from the asking rest lets the card
-  // fall back to the tail, where the rest the human is reading actually is.
-  const atRest = thread.runtime !== "running" && thread.runtime !== "spawning"
-  const placement = useMemo(() => placeQuestions(messages, openQuestions, { atRest }), [atRest, messages, openQuestions])
+  // anchor group; its rest's stack still carries a Send for it (placedRestEnds). A marker ABOVE the
+  // window places nothing here — that message is not drawn — so its card flushes first (placedFrom).
+  const placement = useMemo(() => placedFrom(placeQuestions(messages, openQuestions), visibleStart), [messages, openQuestions, visibleStart])
+  // Whether an open question is THIS rest's ending, for the residual card below (RestedCard).
+  const questionsHere = useMemo(() => questionsAtCurrentRest(messages, openQuestions), [messages, openQuestions])
   const questionAnchors = useMemo(() => {
     const tail: RegisteredQuestionView[] = []
     const byAnchor = new Map<number, RegisteredQuestionView[]>()
     const tailAnchor = messages.length - 1
     const unplaced = openQuestions.filter((q) => !placement.placedIds.has(q.id))
-    for (const [anchor, group] of questionsByAnchor(messages, unplaced, { atRest })) {
+    for (const [anchor, group] of questionsByAnchor(messages, unplaced)) {
       if (anchor >= tailAnchor) { tail.push(...group); continue }
       const at = byAnchor.get(anchor)
       if (at) at.push(...group)
       else byAnchor.set(anchor, [...group])
     }
-    return { byAnchor, tail }
-  }, [atRest, messages, openQuestions, placement.placedIds])
+    let tailSend = false
+    const sendAnchors = new Set<number>()
+    for (const end of placedRestEnds(messages, placement)) {
+      if (end >= tailAnchor) { tailSend = true; continue }
+      sendAnchors.add(end)
+      if (!byAnchor.has(end)) byAnchor.set(end, [])
+    }
+    return { byAnchor, tail, tailSend, sendAnchors }
+  }, [messages, openQuestions, placement])
   const settledPlacement = useMemo(() => settledQuestionPositions(messages, settledQuestions), [messages, settledQuestions])
   // A thread dispatched after the free-form fence was retired never gets a fence controller: a
   // ```question with a body is prose there, drawn read-only, and the registered card is the only
@@ -1271,27 +1282,27 @@ const QueueCard = memo(function QueueCard({ thread, leaving, frozen, onResolve, 
       data-vt-chat
       className={`flex flex-col min-w-0 max-w-full ${BLOCK_RADIUS} border border-border-strong bg-panel shadow-lg shadow-shadow-ink/25 transition-opacity ${resolving ? "opacity-40" : ""}`}
     >
-      {/* Sticky-header CONTAINING BLOCK, deliberately EXCLUDING the footer: position:sticky is clamped
-          to its containing block, so wrapping only the header + body here stops the header at the
-          footer's top edge as the card scrolls off. Without it the header rides all the way to the
+      {/* Sticky-header CONTAINING BLOCK, deliberately EXCLUDING the docked prompt box: position:sticky is
+          clamped to its containing block, so wrapping only the header + body here stops the header at
+          the dock's top edge as the card scrolls off. Without it the header rides all the way to the
           card-root bottom, where its square bottom corners jut past the root's rounded border — the
-          sticky header "breaking out" of the card border during the scroll-off unstick. The footer sits
-          BELOW this wrapper, so the root's rounded bottom corners are always the footer's, never the
+          sticky header "breaking out" of the card border during the scroll-off unstick. The dock sits
+          BELOW this wrapper, so the root's rounded bottom corners are always the dock's, never the
           square-cornered header's. (No overflow here — that would neuter the header's stickiness.) */}
       <div className="flex flex-col min-w-0">
       {/* STICKY header: title + backing-doc filename + status_text on the left, whole-item icon actions
           on the right. Pins to the scroll container's top (opaque bg + bottom rule) as the body scrolls
           under it, so the actions stay reachable through a long card. Rounding is STATE-DEPENDENT:
-          collapsed with no footer (a foreign/archived card) the header IS the whole card and takes the full
-          block radius; otherwise it is rounded-top-only + a border-b, the root's radius carrying the
-          bottom corners (a rounded-top + border-b would read as squared/doubled edges inside the shell). */}
+          collapsed, the header IS the whole card and takes the full block radius; otherwise it is
+          rounded-top-only + a border-b, the dock carrying the bottom corners (a rounded-top + border-b
+          would read as squared/doubled edges inside the shell). */}
       <div className={`sticky top-0 z-10 flex items-center gap-2 bg-panel px-5 py-3.5 max-[800px]:top-10 ${collapsed ? BLOCK_RADIUS : `${BLOCK_RADIUS_TOP} border-b border-border/60`}`}>
         <div className="min-w-0 flex-1">
           {/* The name is the same ThreadTitle the drawer header renders: click it to type a new title,
               hover it for the Claude refresh mark. It was a plain div with only the refresh mark until
               2026-09-13 ("I should be able to click on it to retitle it"). */}
           <ThreadTitle thread={thread} className="leading-snug" />
-          <LastActive at={lastActiveLabelAt(thread)} fallbackAt={thread.spawnedAt} className="mt-0.5 block truncate text-[11px] leading-tight text-muted-75" />
+          <ThreadHeaderFacts thread={thread} />
           {/* status_text is worker-authored frontmatter prose — only decision-relevant when the
               thread is actually waiting on the human, so it renders ONLY for needs-human threads (the
               declared awaiting-you state; blocked is now a pure machine-wait and never cards). */}
@@ -1308,9 +1319,9 @@ const QueueCard = memo(function QueueCard({ thread, leaving, frozen, onResolve, 
             that ONE predicate across every surface is load-bearing: each time a surface kept its own
             gate, a thread ended up carrying a Retry button while reading as calm at-rest elsewhere
             (maintainer 2026-07-23, twice). A card that stalled out is the one queue state with an obvious
-            recovery verb, so it surfaces here rather than forcing you to open the thread; other lifecycle actions
-            (Mark as done / Snooze) stay in the footer; both rename verbs live on the title itself
-            (ThreadTitle). The open arrow is a LINK to the
+            recovery verb, so it surfaces here rather than forcing you to open the thread. The two
+            lifecycle verbs — snooze and mark as done — close the strip after a rule (ThreadLifecycleActions);
+            both rename verbs live on the title itself (ThreadTitle). The open arrow is a LINK to the
             standalone thread page and opens it in a NEW TAB (maintainer 2026-08-03) — it used to slide
             the side drawer over the card, re-painting the panel you were already reading. Either way
             the queue's own scroll position is untouched. */}
@@ -1338,6 +1349,12 @@ const QueueCard = memo(function QueueCard({ thread, leaving, frozen, onResolve, 
             onStatusMutate={() => setResolving(true)}
             onStatusApplied={() => onResolve(thread.id)}
             onStatusFailed={() => setResolving(false)}
+          />
+          <ThreadLifecycleActions
+            thread={thread}
+            onArchived={() => onResolve(thread.id)}
+            onDismissCancel={() => onUnresolve(thread.id)}
+            onSnoozed={() => onResolve(thread.id)}
           />
         </div>
       </div>
@@ -1400,7 +1417,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, frozen, onResolve, 
                   const [anchor, group] = pending.shift()!
                   if (prevTailIsMeta !== null) out.push(<VSpace key={`qa-space-${anchor}`} h={STEP} />)
                   out.push(
-                    <RegisteredQuestionStack key={`qa-${anchor}`} thread={thread} questions={group} />,
+                    <RegisteredQuestionStack key={`qa-${anchor}`} thread={thread} questions={group} showSend={questionAnchors.sendAnchors.has(anchor)} />,
                   )
                   prevTailIsMeta = false
                 }
@@ -1697,7 +1714,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, frozen, onResolve, 
           </div>
         )}
         {/* The residual rung, same as the thread view: a rest with no other card still states itself. */}
-        {!q.isLoading && showsRestedCard(thread, lastAgentIdx >= 0 ? messages[lastAgentIdx]?.text : undefined) && (
+        {!q.isLoading && showsRestedCard(thread, lastAgentIdx >= 0 ? messages[lastAgentIdx]?.text : undefined, questionsHere) && (
           <div className="mt-4">
             <RestedCard thread={thread} />
           </div>
@@ -1708,7 +1725,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, frozen, onResolve, 
           is a gate on a turn already in flight. The tail IS the context for the question, so the card
           reads top to bottom: what happened, then what the worker needs decided, then the prompt box.
           It carries its own Send answers verb, so it sits above the fence path's identical button. */}
-      <RegisteredQuestionStack thread={thread} questions={questionAnchors.tail} inFlight={inFlightAnswers} showSend={placement.placedIds.size > 0} className="shrink-0 px-5 pb-4 pt-0" />
+      <RegisteredQuestionStack thread={thread} questions={questionAnchors.tail} inFlight={inFlightAnswers} showSend={questionAnchors.tailSend} className="shrink-0 px-5 pb-4 pt-0" />
       {/* Bottom of the card. Answerable question blocks add a "Send answers" action that composes the
           per-block answers into one reply — but the free-form composer stays PRESENT underneath it
           (maintainer 2026-07-22): answering the question is the primary path, not the only one, and
@@ -1731,62 +1748,38 @@ const QueueCard = memo(function QueueCard({ thread, leaving, frozen, onResolve, 
           </div>
         </div>
       )}
+      </>
+      )}
+      </div>
       {/* THE standard prompt box — the exact block the drawer renders (ThreadActionBar), differing only
-          in its padding wrapper, the ops rows beneath it, and the send. `submitOverride` routes this
-          box through the card's own answering controller so a free-form reply and a "Send answers"
-          reply are one send: same optimistic dissolve, same suppressed bottom-pin. */}
+          in its padding wrapper, the line of op counts above it, and the send. `submitOverride` routes
+          this box through the card's own answering controller so a free-form reply and a "Send answers"
+          reply are one send: same optimistic dissolve, same suppressed bottom-pin.
+
+          DOCKED: `sticky bottom-0` holds it to the bottom of the screen while any of the card is above
+          it, the way /full holds its prompt box, so a reply never means scrolling to the card's end
+          (maintainer 2026-10-01: "have the prompt box be sticky at the bottom of the queue page the same
+          way that it is on the full screen view"). It sits OUTSIDE the header's wrapper above, so the
+          header's stickiness stops at the dock's top edge and the two never overlap. The rule and the
+          upward shade are always drawn, docked or not — the shade is what separates it from the
+          transcript scrolling under it, and a rule that came and went would move the box by a pixel.
+          The bottom corners are the root's arc one pixel in (BLOCK_RADIUS_INNER_BOTTOM): the root has no
+          overflow clip, so a square-cornered dock would paint through its rounded border. The lifecycle
+          footer that used to close the card went to the header on 2026-10-05 (ThreadLifecycle.tsx). */}
+      {collapsed ? null : (
       <ThreadComposerBox
         slug={thread.id}
         surface="queueComposer"
-        className="shrink-0 px-5 pb-3 pt-0"
+        className={`sticky bottom-0 z-10 shrink-0 ${BLOCK_RADIUS_INNER_BOTTOM} border-t border-border/60 bg-panel px-5 pb-3 pt-3 shadow-[0_-12px_18px_-14px_var(--dock-shadow)]`}
         // With an open ask the box is the deliberate escape hatch, so say so — otherwise "Reply to the
         // agent…" reads as a second way to answer the question rather than a way around it. A
         // REGISTERED question counts: it is answered on this same card, so with one open the box is the
         // same escape hatch it is for a fenced one.
         placeholder={answerable || (thread.questions?.length ?? 0) > 0 ? "Or skip the questions and reply…" : "Reply to the agent…"}
         submitOverride={sendMessage}
-        ops={
-          <>
-            {/* ONE column, two positional paddings, whichever of the two lists happen to be present:
-                6px hanging off the prompt box, 2px between rows. NEITHER list carries a bottom pad —
-                the gap to the lifecycle footer is the composer box's own `pb-3` and nothing else
-                (maintainer 2026-08-01: the space under the last row read as too much). It used to be
-                that pb-3 PLUS an 8px `pb-2` on whichever list came last, which put 20px under a
-                column that hangs off the prompt at 6px. With the extra pad gone the bottom inset is
-                12px — exactly the drawer footer's inset above and beside its composer — and the
-                "which list is last" conditional this className used to carry goes with it. */}
-            <QueueSubAgentLines slug={thread.id} subAgents={thread.subAgents ?? []} className="px-1 pt-1.5" />
-            {/* Background shells / Monitors remain a runtime strip below the reply area. Live sub-agents are
-                intentionally excluded here because their compact ⤷ child lines sit directly above it.
-                It HANGS off the composer at the same pt-1.5 as those child lines — the prompt box's own
-                bottom padding already supplies the optical air, so a larger gap here reads as a break —
-                and carries NO pb of its own: the box's pb-3 is the whole gap to the lifecycle footer.
-
-                UNLESS the sub-agent lines are already there. Then this strip is not hanging off the
-                composer at all, it is CONTINUING the column those lines opened, so it takes the rows'
-                own 2px pitch instead of the 6px hang. With pt-1.5 in that case the ⤷ agent row sat 6px
-                off the ⤷ shell row beneath it while the shell rows sat 2px apart from each other —
-                three times the pitch, inside one column of identical rows, which read as a group break
-                that means nothing (maintainer 2026-07-30). MEASURED in queue-ops-spacing-fixture:
-                6/2/2 before, 2/2/2 after. The drawer never had the split — it renders agents and
-                shells inside ONE BackgroundOpsStrip, so its column has always been a flat 2px. */}
-            <BackgroundOpsStrip
-              slug={thread.id}
-              includeAgents={false}
-              className={`px-1 ${hasQueueSubAgentLines(thread.subAgents ?? []) ? "pt-0.5" : "pt-1.5"}`}
-            />
-          </>
-        }
+        above={<QueueOpsSummary thread={thread} />}
       />
-      </>
       )}
-      </div>
-      <ThreadLifecycleFooter
-        thread={thread}
-        onArchived={() => onResolve(thread.id)}
-        onDismissCancel={() => onUnresolve(thread.id)}
-        onSnoozed={() => onResolve(thread.id)}
-      />
     </div>
     </RegisteredAnsweringProvider>
     </QueueDismissContext.Provider>

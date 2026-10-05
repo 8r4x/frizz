@@ -595,10 +595,13 @@ const ASK = {
     "ASKING DOES NOT END YOUR TURN. A question waits on a person, so it carries no timeout and expires " +
     "never — but you keep working. Do everything that does NOT depend on the answer first, and register " +
     "the question at the moment you find it rather than saving it for the end.\n\n" +
-    "AND WHEN YOU DO STOP, THE OPEN QUESTION IS YOUR SIGN-OFF — rest normally. Frizz draws every open " +
-    "question at the rest you stopped at whether you mention it or not, so nothing you write can hide " +
-    "one. The card draws itself at the tail of the rest the question was asked — never write the " +
-    "question into your handoff (one question, one card). TO PLACE IT INSIDE YOUR PROSE instead, write " +
+    "AND WHEN YOU DO STOP, THE QUESTION IS THAT REST'S SIGN-OFF — rest normally. Frizz draws the card " +
+    "at the rest that asked it whether you mention it or not, so nothing you write can hide one. The " +
+    "card draws itself at the tail of the rest the question was asked — never write the question into " +
+    "your handoff (one question, one card). AT EVERY LATER REST it is no longer your sign-off and frizz " +
+    "does not redraw it under your newer handoff: name it under `questions:` in an ```awaiting fence " +
+    "while you still need the answer (its card is drawn there), or withdraw it with `unask`. TO PLACE IT " +
+    "INSIDE YOUR PROSE instead, write " +
     "an EMPTY fence naming the id this tool returned — ```question qst_ab12cd34 on one line, ``` on " +
     "the next — and the card renders there. One marker per question; nothing in the body; placement is " +
     "optional, and every answer of the rest still sends together.\n\n" +
@@ -847,22 +850,26 @@ async function activity() {
   const links = Array.isArray(result?.links) ? result.links : []
   const linksBlock = links.length === 0 ? "" : "\n\nSaved links and files (not running work; remove with unlink):\n" +
     links.map((link) => `  ${link.id}  ${link.kind}: ${link.label}\n    ${link.target}`).join("\n")
-  // THE QUESTIONS ARE NOT PART OF THE FENCE, so they are printed in their own section and never fed to
-  // the fence builder below. A question waits on a person; there is no `questions:` key to write it into.
+  // THE QUESTIONS GET THEIR OWN SECTION, because they are not running work: a question waits on a
+  // person. Since 2026-10-05 a fence names the ones still needed under `questions:` (and must name every
+  // open one), so the ready-to-paste fence below carries them too.
   const askedBlock = questions.length === 0 ? "" : (
     `\n\n${questions.length} question${questions.length === 1 ? "" : "s"} still owed an answer:\n\n` +
     questions.map((q) => `  question: ${q.id}\n    ${String(q?.spec?.question ?? "").replace(/\s+/g, " ").slice(0, 160)}`).join("\n") +
     "\n\nEach one blocks `done` until it is answered or withdrawn, and draws its own card at the rest " +
     "it was asked — never write it into a handoff; an EMPTY ```question fence naming its id places it " +
-    "inside your prose. `unask` the ones since decided. A question is never named in an ```awaiting " +
-    "fence."
+    "inside your prose. `unask` the ones since decided. Any ```awaiting fence names EVERY open one " +
+    "under `questions:` or is refused, and at a rest after the one that asked, a question you neither " +
+    "name nor withdraw gets you bumped. In a fence: `questions: [" +
+    questions.map((q) => q.id).join(", ") + "]`"
   )
   if (!items.length) {
     if (questions.length > 0) {
       return (
         "Nothing is RUNNING on this thread — no background shells, no sub-agents, no armed timers, no " +
-        "registered PRs. So an ```awaiting fence would have nothing to name, and a fence naming nothing " +
-        "is not a park." + askedBlock + linksBlock
+        "registered PRs. An ```awaiting fence can still wait on your open questions alone — " +
+        "`questions:` names the human as the wait, so it needs no other name and no `for:`." +
+        askedBlock + linksBlock
       )
     }
     return (
@@ -888,6 +895,10 @@ async function activity() {
   const block = Object.entries({ shells: byKind.shell, agents: byKind.agent, timers: byKind.timer, prs: byKind.pr, issues: byKind.issue })
     .filter(([, ids]) => ids.length > 0)
     .map(([key, ids]) => `  ${key}: [${ids.join(", ")}]`)
+  // Every open question rides the fence too: a fence that leaves one out is refused, and a fence on
+  // questions always queues, so its `needs_input:` answer is `true` whatever else it names.
+  const questionIds = questions.map((q) => q.id).filter(Boolean)
+  if (questionIds.length > 0) block.push(`  questions: [${questionIds.join(", ")}]`)
   return (
     `${items.length} thing${items.length === 1 ? "" : "s"} running on this thread:\n\n${lines.join("\n")}\n\n` +
     "Name the ones you are ACTUALLY waiting on in your ```awaiting fence. The frontmatter is YAML — one " +
@@ -896,7 +907,7 @@ async function activity() {
     "out of their queue and needs no prose at all; `needs_input: true` puts it in their queue, with what " +
     "to look at BELOW a `---` line (there is no `reason:` key).\n\nEverything above, as a fence:\n\n" +
     "```awaiting\n" +
-    `${block.join("\n")}\n  needs_input: false\n  for: 2h\n` +
+    `${block.join("\n")}\n  needs_input: ${questionIds.length > 0 ? "true" : "false"}\n  for: 2h\n` +
     "```\n\nDrop the lines you are not actually waiting on — a dev server you left running is not a wait." +
     "\n\nA `watch` registration (marked `[watched as …]` above) keeps the WAKE across a compaction and a " +
     "restart, but it does not replace the fence: name the work in the fence all the same." +

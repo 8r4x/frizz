@@ -201,6 +201,17 @@ body {
   margin-bottom: var(--ops-column-optical-inset);
 }
 
+/* The header's lifecycle rule (ThreadLifecycleActions) after the Retry PILL. The rule's `mx-2.5` is
+   sized for a bare icon before it, whose 28px square carries ~8px of dead space: 20px of ink each side.
+   A bordered pill paints its whole box, so the same margin drew 11.96px of ink on its left against
+   19.5px on its right (scripts/ink-gaps.mjs, dsf 4, 2026-10-05). 17.5px is the 10px margin plus the
+   7.5px the pill lacks. It reaches across component boundaries (HeaderActions renders the pill as the
+   last item of its own row), which is why it is a selector and not a utility. In the drawer header the
+   fullscreen icon sits between the two, so this does not match there, as intended. */
+:has(> [data-header-pill]:last-child) + [data-thread-lifecycle] > [data-lifecycle-rule] {
+  margin-left: 17.5px;
+}
+
 /* System sans-serif already centres small label icons optically: measured nudge 0px. */
 :root {
   --icon-label-nudge: 0px;
@@ -490,11 +501,15 @@ body {
    live child record — and the right-hand slot is words only. Do not reintroduce a second indicator here
    without a signal that can actually go false. */
 
-/* QUIET-LIVE dot: a background subshell / Monitor that is still a live process but has not touched its
-   output in a while (a dev server waiting, a Monitor with no output file at all). It is ALIVE, not
-   idle — a flat gray dot mislabels it. So it BREATHES: a slow, soft in/out that reads as a calm,
-   resting pulse (distinct from the brighter, faster accent pulse that signals fresh output). Muted
-   tone keeps the accent reserved for active work; the motion alone carries "still alive". */
+/* QUIET-LIVE dot — THE PRODUCT NO LONGER DRAWS IT. Only the mobile mockup kit's `LiveDot quiet` does
+   (mobile-mockup-kit.tsx, a design record from 2026-08-17). It marked a background shell that was still
+   a live process but had not touched its output in a while: the July meaning of a "stale" shell. Since
+   2026-08-19 a shell reads stale only once the OS confirms its process is gone (tailer `shellIsGone`),
+   so breathing drew a DEAD process as a live one, and since 2026-10-05 the card, the drawer and the
+   transcript give that shell the flat stale dot instead (CHILD_STALE_SHELL_TITLE, lib/childOps.ts). Do
+   not bring it back for a shell without a signal that can tell "alive and quiet" from "gone".
+   As designed, it BREATHES: a slow, soft in/out that reads as a calm, resting pulse (distinct from the
+   brighter, faster accent pulse that signals fresh output), muted, with the motion alone saying alive. */
 .frizz-live-dot-quiet {
   display: block;
   width: 6px;

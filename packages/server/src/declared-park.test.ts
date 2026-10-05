@@ -15,7 +15,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { declaredWaitIds, hasDeclaredBackgroundPark, hasDeclaredWait } from "./board.ts"
-import { parkExpiresAt, parkForMaxMs, parkIsHonoured, readAwaitingPark, unaccountedItems } from "./awaiting.ts"
+import { parkExpiresAt, parkForMaxMs, parkIsHonoured, parkOnHuman, readAwaitingPark, unaccountedItems } from "./awaiting.ts"
 import { AWAITING_FOR_MAX_MS, isParkCorrection, NEEDS_INPUT_REQUIRED_AT, PARK_CORRECTION_NEEDS_INPUT_LEAD, PR_WATCH_FOR_MAX_MS } from "@frizz/shared"
 import { createScheduler } from "./scheduler.ts"
 import type { FenceView, SessionTelemetry } from "./tailer.ts"
@@ -136,12 +136,12 @@ test("a park expires, so nothing parks forever", () => {
 // short-lived kind at all. Capping that one at a day is what bumped a thread daily for four days against
 // an external PR nobody had touched: the watcher could be armed for months and the fence expired first.
 test("a park naming only PRs may stand for months; anything else is still capped at a day", () => {
-  const prs = { items: [{ kind: "pr" as const, value: "acme/app#391" }], forMs: 180 * 24 * 60 * 60_000, steps: [] }
+  const prs = { items: [{ kind: "pr" as const, value: "acme/app#391" }], forMs: 180 * 24 * 60 * 60_000, steps: [], questions: [] }
   const at = Date.parse(AT)
   assert.equal(parkForMaxMs(prs), PR_WATCH_FOR_MAX_MS)
   assert.equal(parkExpiresAt(prs, at), at + 180 * 24 * 60 * 60_000, "the duration as written, uncapped")
   // MIXED ⇒ THE LOW CEILING. The shell in the list is still a shell, and the sentence covers it too.
-  const mixed = { items: [...prs.items, { kind: "shell" as const, value: "bzvtnt3ig" }], forMs: prs.forMs, steps: [] }
+  const mixed = { items: [...prs.items, { kind: "shell" as const, value: "bzvtnt3ig" }], forMs: prs.forMs, steps: [], questions: [] }
   assert.equal(parkForMaxMs(mixed), AWAITING_FOR_MAX_MS)
   assert.equal(parkExpiresAt(mixed, at), at + AWAITING_FOR_MAX_MS)
   // …and a year is a ceiling, not a floor: a PR park asking for hours gets hours.
@@ -662,6 +662,23 @@ test("a park on a timer that already FIRED says so, not the wrong-fence wording"
   } finally { h.close() }
 })
 
+// A DEMOTED shell is neither finished nor a typo: frizz has its launch and saw no completion notice, but
+// can no longer find its process. "nothing by that name" sent the worker hunting for a mistake in an id it
+// had copied exactly (2026-10-03, on a shell the probe had wrongly demoted while it ran).
+test("a park on a shell frizz demoted to stale says it is gone without a notice, not that the id is unknown", async () => {
+  const h = parkHarness([{ kind: "shell", value: "bv8wnkd2q" }, { kind: "for", value: "2h" }], {
+    shells: [{ id: "toolu_e2e", taskId: "bv8wnkd2q", label: "Running the released e2e", startedAt: AT, state: "stale" }],
+  })
+  try {
+    await h.s.tick()
+    const msg = h.queued()[0].message
+    assert.match(msg, /`shells: \[bv8wnkd2q\]` — GONE WITHOUT A COMPLETION NOTICE/)
+    assert.match(msg, /read its output to see how it ended/)
+    assert.doesNotMatch(msg, /nothing by that name/)
+    assert.doesNotMatch(msg, /has FINISHED/, "no notice arrived, so nothing says it finished")
+  } finally { h.close() }
+})
+
 test("a park naming something that never existed still reads as a wrong fence", async () => {
   const h = parkHarness([{ kind: "shell", value: "bGHOST" }, { kind: "for", value: "2h" }], { shells: [] })
   try {
@@ -755,34 +772,88 @@ test("the correction lists a running sub-agent by its runtime agentId, not its t
   } finally { h.close() }
 })
 
-// AN OPEN QUESTION REFUSES THE PARK OUTRIGHT (2026-08-28). A question outranks a wait everywhere else —
-// the queue rule and the resting card both put the ask first — and a fence beside one drew a
-// parked-looking card, hourglass and shell table, stacked above the ask (maintainer: "Weird that there's
-// both an awaiting block and open questions"). Drawing the fence as plain prose instead was rejected the
-// same day ("it should not be allowed, basically"), so the fence is refused like one naming a dead id:
-// the correction folds out of the transcript and the worker rewrites its sign-off without it.
-test("a park beside an OPEN registered question is refused, even when everything it names is live", async () => {
+// AN OPEN QUESTION THE FENCE DOES NOT NAME REFUSES THE PARK (2026-08-28, narrowed 2026-10-05). Until
+// 2026-10-05 any open question refused every park outright (maintainer 2026-08-28: "Weird that there's
+// both an awaiting block and open questions … it should not be allowed, basically"), which forced every
+// later rest of a thread with an old question open to be a bare one — and the old card was redrawn under
+// it as the sign-off. Now a fence may stand beside open questions by naming each one under `questions:`;
+// one it leaves out is refused, so the worker names it or withdraws it.
+const ELECTRON = { id: "qst_6506c36d2f28", question: "Nub still breaks Electron 34 and older — how should that flag be handled?" }
+const askElectron = (h: ReturnType<typeof parkHarness>, askedAtMs = Date.now() - 90 * 60_000) =>
+  h.storage.askThreadQuestion({ id: ELECTRON.id, slug: "parked", askedAtMs, spec: JSON.stringify({ question: ELECTRON.question, kind: "question", options: [{ label: "Add it only when coverage is detectable" }] }) })
+
+test("a park that leaves an OPEN registered question unnamed is refused, even when everything it names is live", async () => {
   const h = parkHarness([{ kind: "shell", value: "bzvtnt3ig" }, { kind: "for", value: "1h" }], { shells: [LIVE_SHELL] })
   try {
-    h.storage.askThreadQuestion({ id: "qst_6506c36d2f28", slug: "parked", askedAtMs: Date.now() - 90 * 60_000, spec: JSON.stringify({ question: "Nub still breaks Electron 34 and older — how should that flag be handled?", kind: "question", options: [{ label: "Add it only when coverage is detectable" }] }) })
+    askElectron(h)
     await h.s.tick()
     const rows = h.queued()
-    assert.equal(rows.length, 1, "a live park is still not a park while a question stands")
+    assert.equal(rows.length, 1, "a live park is still not a park while it leaves a question out")
     assert.match(rows[0].fence_id, /^park:question:/)
     // NAMED, with the question's own words: the worker never saw the id frizz minted, so the id alone
     // would not tell it which question is meant.
-    assert.match(rows[0].message, /qst_6506c36d2f28.*Electron 34/s)
-    assert.match(rows[0].message, /mcp__frizz__unask/, "…and says how to clear the way for a park it actually wants")
-    assert.match(rows[0].message, /draws its own card/, "…and that the question needs no restating")
+    assert.match(rows[0].message, /Open, and not named under `questions:`:\n- `qst_6506c36d2f28` — Nub still breaks Electron 34/)
+    assert.match(rows[0].message, /`questions: \[qst_…\]`/, "…says how to keep the question")
+    assert.match(rows[0].message, /mcp__frizz__unask/, "…and how to drop it")
     assert.doesNotMatch(rows[0].message, /NOT RUNNING|still running/, "the live shell is not the news")
     // The transcript reads this delivery as a correction, so the refused fence stops drawing.
     assert.equal(isParkCorrection(rows[0].message), true)
     // COUNTED against the cap: a worker whose contract predates the rule re-fences at every rest.
     assert.equal(h.storage.getSession("parked")?.park_bumps, 1)
-    // …and DELIVERED, through the same outbox branch as the other three causes.
+    // …and DELIVERED, through the same outbox branch as the other causes.
     assert.equal(h.sent.length, 1)
     assert.deepEqual(h.state().map((r) => r.state), ["delivered"])
   } finally { h.close() }
+})
+
+test("a park that NAMES every open question under `questions:` stands beside them", async () => {
+  const h = parkHarness([{ kind: "shell", value: "bzvtnt3ig" }, { kind: "question", value: "QST_6506C36D2F28" }, { kind: "for", value: "1h" }], { shells: [LIVE_SHELL] })
+  try {
+    askElectron(h)
+    await h.s.tick()
+    assert.equal(h.queued().length, 0, "named (case-blind) and live: nothing to correct")
+  } finally { h.close() }
+})
+
+test("a fence naming ONLY questions is a park on the human: no other name and no `for:` needed", async () => {
+  const h = parkHarness([{ kind: "question", value: ELECTRON.id }], { spawnedAt: "2026-10-05T09:00:00.000Z" })
+  try {
+    askElectron(h)
+    await h.s.tick()
+    assert.equal(h.queued().length, 0, "not nameless, not missing `needs_input:` (implied), not malformed")
+    assert.equal(parkIsHonoured(readAwaitingPark([{ kind: "question", value: ELECTRON.id }]), { shells: new Set(), agents: new Set(), timers: new Set(), prs: new Set() }), true)
+  } finally { h.close() }
+})
+
+test("a park naming a question that is NOT open is refused — unless it settled after the rest", async () => {
+  const stale = parkHarness([{ kind: "question", value: "qst_0000deadbeef" }, { kind: "question", value: ELECTRON.id }])
+  try {
+    askElectron(stale)
+    await stale.s.tick()
+    const rows = stale.queued()
+    assert.equal(rows.length, 1)
+    assert.match(rows[0].message, /names a question that is not open/)
+    assert.match(rows[0].message, /Named, but not an open question of yours:\n- `qst_0000deadbeef`/)
+    assert.doesNotMatch(rows[0].message, /Open, and not named/, "the open one IS named")
+  } finally { stale.close() }
+
+  // Answered WHILE the park stood: the fence was right when it was written, and the answer's own wake
+  // carries the news — no correction.
+  const answered = parkHarness([{ kind: "question", value: ELECTRON.id }])
+  try {
+    const q = askElectron(answered)
+    answered.storage.answerThreadQuestion(q.id, JSON.stringify({ questionId: q.id, question: ELECTRON.question, answer: "Detect it" }), Date.now())
+    await answered.s.tick()
+    assert.equal(answered.queued().length, 0)
+  } finally { answered.close() }
+})
+
+test("readAwaitingPark carries `questions:` lowercased, and they count as naming the human", () => {
+  const park = readAwaitingPark([{ kind: "question", value: "QST_AB12" }, { kind: "question", value: "qst_cd34 — the cache call" }])
+  assert.deepEqual(park.questions, ["qst_ab12", "qst_cd34"])
+  assert.deepEqual(park.items, [])
+  assert.equal(parkOnHuman(park), true)
+  assert.equal(parkForMaxMs(park), parkForMaxMs({ ...park, questions: [], steps: ["x"] }), "the same ceiling a park on steps gets")
 })
 
 test("an ANSWERED question no longer refuses the park", async () => {
@@ -809,9 +880,9 @@ test("unaccountedItems: an `issues:` entry is checked against the ISSUE registra
 })
 
 test("parkForMaxMs: a park naming only issues and PRs earns the year; an issue beside a shell keeps the day", () => {
-  assert.equal(parkForMaxMs({ items: [{ kind: "issue", value: "acme/app#9" }], forMs: 1, steps: [] }), PR_WATCH_FOR_MAX_MS)
-  assert.equal(parkForMaxMs({ items: [{ kind: "issue", value: "acme/app#9" }, { kind: "pr", value: "acme/app#7" }], forMs: 1, steps: [] }), PR_WATCH_FOR_MAX_MS)
-  assert.equal(parkForMaxMs({ items: [{ kind: "issue", value: "acme/app#9" }, { kind: "shell", value: "bash_1" }], forMs: 1, steps: [] }), AWAITING_FOR_MAX_MS)
+  assert.equal(parkForMaxMs({ items: [{ kind: "issue", value: "acme/app#9" }], forMs: 1, steps: [], questions: [] }), PR_WATCH_FOR_MAX_MS)
+  assert.equal(parkForMaxMs({ items: [{ kind: "issue", value: "acme/app#9" }, { kind: "pr", value: "acme/app#7" }], forMs: 1, steps: [], questions: [] }), PR_WATCH_FOR_MAX_MS)
+  assert.equal(parkForMaxMs({ items: [{ kind: "issue", value: "acme/app#9" }, { kind: "shell", value: "bash_1" }], forMs: 1, steps: [], questions: [] }), AWAITING_FOR_MAX_MS)
 })
 
 // ---- THE `needs_input:` ANSWER (2026-10-01) -------------------------------------------------------

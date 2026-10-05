@@ -17,6 +17,7 @@ import { canInterruptAndSend } from "../lib/composerKeyboard.ts"
 import { useIsMobile } from "../lib/mobile.ts"
 import { threadLifecycleAvailability } from "../lib/threadLifecycle.ts"
 import { PhoneDoneButton } from "./PhoneDoneButton.tsx"
+import { RecurringPromptControl } from "./RecurringPromptControl.tsx"
 import type { PhoneBarApi } from "./Composer.tsx"
 
 // THE prompt box for a registered thread — the single block every "steer this thread" surface renders.
@@ -32,9 +33,9 @@ import type { PhoneBarApi } from "./Composer.tsx"
 //   · the {controls.status} line under the box.
 //
 // The two call sites keep their DELIBERATE differences as props, never as a forked tree: the padding
-// wrapper (`className`), the running-operations rows rendered under the box (`ops` — the drawer passes
-// BackgroundOpsStrip, the queue passes its ⤷ sub-agent lines plus a narrowed strip), and the send itself
-// (`submitOverride`). Everything else is identical by construction.
+// wrapper (`className`), the running-operations reading (`ops` under the box — the drawer passes
+// BackgroundOpsStrip — or `above` it — the queue card's one line of counts), and the send itself
+// (`submitOverride`). Everything else is identical by construction, the Goal in the rail included.
 // The skills typeahead's per-thread cache, shared by BOTH composer surfaces (the drawer and the queue
 // card render the same thread) so opening either only ever asks the harness once. A failure is NOT
 // cached: the common failure is "the session is not running yet", and the next `/` should ask again
@@ -61,6 +62,7 @@ export function ThreadComposerBox({
   className,
   id,
   ops,
+  above,
   submitOverride,
   phoneBarOverride,
 }: {
@@ -77,6 +79,9 @@ export function ThreadComposerBox({
   // Running background operations, rendered INSIDE the padded box under the prompt so those rows hang
   // tight off it. Composed by the caller — this component does not decide which ops a surface shows.
   ops?: ReactNode
+  // Rendered INSIDE the padded box ABOVE the prompt: the queue card's line of live-op counts, which
+  // rides its docked prompt box rather than hanging rows beneath it.
+  above?: ReactNode
   // Replaces the default eager follow-up send. The queue card passes its useLiveAnswering `sendMessage`,
   // so the card's free-form reply and its "Send answers" reply are literally the same send — one
   // controller, one optimistic card dissolve, one scroll policy (the queue suppresses the bottom pin;
@@ -131,6 +136,9 @@ export function ThreadComposerBox({
   // and two Done verbs one above the other on a phone read as the same button.
   const stepsOpen = thread?.lastFence?.kind === "awaiting" && awaitingSteps(thread.lastFence.hints).length > 0
   const canComplete = thread ? threadLifecycleAvailability(thread).archive && !turnRunning && !stepsOpen : false
+  // THE GOAL rides the rail on every desktop surface that steers a Frizz-owned session — the same
+  // threads the lifecycle verbs in the header serve. The phone reaches it from the header's ⋯ sheet.
+  const goal = thread && thread.kind === "session" && thread.foreign !== true ? <RecurringPromptControl thread={thread as ThreadView} /> : undefined
 
   function send(interrupt = false) {
     const text = message.trim()
@@ -214,6 +222,7 @@ export function ThreadComposerBox({
       {...(surface === "chatComposer" ? { "data-thread-action-bar": "" } : {})}
       className={className}
     >
+      {above}
       <Composer
         contextTokens={contextTokens}
         id={id}
@@ -231,6 +240,7 @@ export function ThreadComposerBox({
         // fence: a permission/profile change owning the runtime.
         busy={controls.busy}
         footer={controls.footer}
+        railLead={goal}
       />
       {controls.status}
       {/* The ops column's OPTICAL bottom inset, in ONE place for every surface that renders one — the

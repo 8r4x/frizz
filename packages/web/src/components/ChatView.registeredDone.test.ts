@@ -47,5 +47,5 @@ test("every gate is the ladder's own answer, so the slot opens exactly when a ru
 test("the queue card draws the same card off the same predicate", () => {
   assert.match(queue, /showsRegisteredDoneCard\(thread, lastAgentIdx >= 0 \? messages\[lastAgentIdx\]\?\.text : undefined\) && \(/)
   assert.match(queue, /<FenceCard fenceKind="done" body=\{thread\.lastFence!\.body\} hints=\{\[\]\} wrap \/>/)
-  assert.match(queue, /showsRestedCard\(thread, lastAgentIdx >= 0 \? messages\[lastAgentIdx\]\?\.text : undefined\) && \(/)
+  assert.match(queue, /showsRestedCard\(thread, lastAgentIdx >= 0 \? messages\[lastAgentIdx\]\?\.text : undefined, questionsHere\) && \(/)
 })

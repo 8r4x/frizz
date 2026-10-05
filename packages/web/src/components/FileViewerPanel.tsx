@@ -3,14 +3,14 @@ import { useQuery } from "@tanstack/react-query"
 import { closeFilePanel, addContextItem, store } from "../store.ts"
 import { draftKey, draftStore, useProjectDir, useThreadSessionId } from "../lib/drafts.ts"
 import { joinComposerValue, splitComposerValue } from "../lib/imagePaths.ts"
-import { useLiveLocalFile } from "../hooks.ts"
+import { useHomeDir, useLiveLocalFile } from "../hooks.ts"
 import { useInnerHtml } from "../lib/innerHtml.ts"
 import { LOCAL_FILE_POLL_MS, highlightedSource, localFileQuery } from "../lib/localFileQuery.ts"
 import { useLocalFileCodeLinks } from "../lib/localFileCode.ts"
 import { useMarkdownHtml } from "../lib/useMarkdown.ts"
 import { splitFrontmatter } from "../lib/frontmatter.ts"
 import { isLocalMarkdownFile, localFileDir } from "../lib/markdownTargets.ts"
-import { basename } from "../lib/paths.ts"
+import { basename, tildePath } from "../lib/paths.ts"
 import { contextChipLabel, insertTokenIntoProse, locateInSource, uniqueToken } from "../lib/composerContext.ts"
 import { Frontmatter, FOOTER_STYLE, OpenAction } from "./MarkdownDrawer.tsx"
 import { useLightboxIslands } from "./Lightbox.tsx"
@@ -89,6 +89,7 @@ export function FileViewerPanel({ slug, path, active }: { slug: string; path: st
   // A ```lightbox fence renders as the gallery it is in the transcript, against the document's directory.
   const galleries = useLightboxIslands(renderedRef, html, baseDir)
   const title = basename(resolved)
+  const homeDir = useHomeDir()
 
   // ⌘I / Ctrl-I: stage the current selection (when it lives inside this panel) as a context item —
   // splicing its `@file:line` token into the draft AT THE CARET — then FOCUS the composer
@@ -177,7 +178,9 @@ export function FileViewerPanel({ slug, path, active }: { slug: string; path: st
     <div ref={rootRef} data-file-viewer-panel className="flex h-full min-h-0 flex-col">
       <SheetHeader
         title={title}
-        subtitle={resolved}
+        // Written from `~`, as the rail beneath writes the row that opened it. Display only: links and
+        // context items keep the canonical `resolved`.
+        subtitle={tildePath(resolved, homeDir)}
         onClose={closeFilePanel}
         actions={
           // The active segment's fill must contrast the HEADER it sits on (bg-panel) — an earlier

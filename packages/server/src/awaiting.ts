@@ -1,4 +1,4 @@
-import { AWAITING_FOR_MAX_MS, awaitingNeedsInput, awaitingSteps, GithubIssueStatus, GithubWatchStatus, isAwaitingItemKind, parseAwaitingDurationRaw, PR_WATCH_FOR_MAX_MS, type AwaitingHint, type AwaitingItemKind } from "@frizz/shared"
+import { AWAITING_FOR_MAX_MS, awaitingNeedsInput, awaitingQuestions, awaitingSteps, GithubIssueStatus, GithubWatchStatus, isAwaitingItemKind, parseAwaitingDurationRaw, PR_WATCH_FOR_MAX_MS, type AwaitingHint, type AwaitingItemKind } from "@frizz/shared"
 
 // The PR-reference vocabulary shared by the PR-watching scheduler and the board. It lives here rather
 // than in scheduler.ts so a reader can resolve a ref without pulling in the whole waker; scheduler.ts
@@ -58,6 +58,10 @@ export interface AwaitingPark {
   /** `steps:` — what the HUMAN must perform. Non-empty means the park waits on them, which needs no
    *  item and no `for:`: their reply is the wake (see parkIsHonoured). */
   steps: string[]
+  /** `questions:` — the worker's registered questions it is still waiting on, as lowercased ids (see
+   *  awaitingQuestions). Like steps, a wait on the HUMAN: their answer is the wake. Whether every open
+   *  question is named is checked against the question rows, which only the scheduler has (2026-10-05). */
+  questions: string[]
 }
 
 /** Read the structural fence. Unknown keys are already dropped by the tailer's parse, so everything
@@ -77,7 +81,7 @@ export function readAwaitingPark(hints: readonly AwaitingHint[]): AwaitingPark {
       forMs = parseAwaitingDurationRaw(value)
     }
   }
-  return { items, forMs, steps: awaitingSteps(hints) }
+  return { items, forMs, steps: awaitingSteps(hints), questions: awaitingQuestions(hints) }
 }
 
 /** What frizz can see running for one thread, in the shape the check needs. Every id a fence may name
@@ -178,12 +182,22 @@ function liveKey(i: AwaitingItem): string {
  *  and the human is the one party frizz never has to watch: the thread sits in their queue
  *  (awaitingNeedsInput reads steps as `true`), and their reply — the card's Done, or anything they
  *  type — is itself the wake. Any item named beside the steps must still be live, and a
- *  `for:` beside them still runs out (parkExpiresAt), as a re-check the worker asked for. */
+ *  `for:` beside them still runs out (parkExpiresAt), as a re-check the worker asked for.
+ *
+ *  QUESTIONS ARE THE SAME WAIT (2026-10-05): `questions:` names registered questions the worker still
+ *  needs answered, and the answer is the wake. That every open question is named is the scheduler's
+ *  check (evalParkIntegrity), not this one's — it needs the question rows. */
 export function parkIsHonoured(park: AwaitingPark, live: LiveActivity): boolean {
-  const onHuman = park.steps.length > 0
+  const onHuman = parkOnHuman(park)
   if (park.items.length === 0 && !onHuman) return false
   if (park.forMs === null && !onHuman) return false
   return unaccountedItems(park.items, live).length === 0
+}
+
+/** Does the park wait on the HUMAN — steps to perform, or questions to answer? Either needs no item and
+ *  no `for:`, because the human's reply is the wake and the thread sits in their queue meanwhile. */
+export function parkOnHuman(park: AwaitingPark): boolean {
+  return park.steps.length > 0 || park.questions.length > 0
 }
 
 /** Does this fence keep a NEW-CONTRACT thread out of the queue (see `needsInputRequired` in
@@ -210,8 +224,9 @@ export function needsInputParkHolds(hints: readonly AwaitingHint[], live: LiveAc
  *  maintainers take — and capping that one at a day is what woke a thread daily for four days against a
  *  PR nobody had touched. Mixed ⇒ the low ceiling, because the shell in the list is still a shell. */
 export function parkForMaxMs(park: AwaitingPark): number {
-  // Steps alone move on the HUMAN's clock, which is no more a day's than a maintainer's review is.
-  if (park.items.length === 0) return park.steps.length > 0 ? PR_WATCH_FOR_MAX_MS : AWAITING_FOR_MAX_MS
+  // Steps or questions alone move on the HUMAN's clock, which is no more a day's than a maintainer's
+  // review is.
+  if (park.items.length === 0) return parkOnHuman(park) ? PR_WATCH_FOR_MAX_MS : AWAITING_FOR_MAX_MS
   // An issue earns the PR's ceiling for the PR's reason: it sits on its maintainers' clock too.
   return park.items.every((i) => i.kind === "pr" || i.kind === "issue") ? PR_WATCH_FOR_MAX_MS : AWAITING_FOR_MAX_MS
 }

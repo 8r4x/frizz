@@ -444,8 +444,9 @@ export function completionConfirmationHold(telemetry: SessionTelemetry | undefin
   if (telemetry.permPrompt || telemetry.pendingAsk) return undefined
 
   // Only ACTIVELY-running work holds Done back. A `stale` sub-agent — its completion signal lost AND its
-  // transcript silent past the 15-min staleness ceiling (which already clears Claude's 600s foreground
-  // cap) — is far closer to finished/dead than to working, and counting it here contradicted the queue:
+  // transcript silent 15 min past its last write, or past the deadline of a Bash wait it declared
+  // (tailer `quietPastWindow`) — is far closer to finished/dead than to working, and counting it here
+  // contradicted the queue:
   // hasLiveBackgroundWork (board.ts) holds a thread out of the queue on `running` ONLY, so a stale-only
   // parent read as at-rest in the rail yet Mark-as-done warned it was busy. The two must agree, so match
   // it — running only. (The parenthetical here read "bgShells have no stale state; this narrows

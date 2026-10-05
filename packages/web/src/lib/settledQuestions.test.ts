@@ -19,14 +19,26 @@ test("an answered question stays after the rest it was answered at, not after th
   assert.equal(placed.size, 0)
 })
 
-test("a question the human replied past and answered later stays at the rest they answered it at", () => {
-  // Open questions re-anchor to the CURRENT rest while at rest (questionAnchor); the card the human
-  // clicked was therefore under the second handoff, not the first.
+test("a question the human replied past and answered later stays at the rest that asked it", () => {
+  // An open card stays where it was asked until a later ```awaiting fence names it (questionAnchor), so
+  // the card the human clicked sat under the first handoff, and the settled card stays there.
   const messages = [
     msg("user", "2026-09-25T10:00:00Z"),
     msg("assistant", "2026-09-25T10:02:00Z"), // asked here
     msg("user", "2026-09-25T10:03:00Z"), // replied past it
-    msg("assistant", "2026-09-25T10:04:00Z"), // rested again, question still open
+    msg("assistant", "2026-09-25T10:04:00Z"), // rested again, question still open, not named
+    msg("user", "2026-09-25T10:09:00Z"), // the answer
+  ]
+  const { anchored } = settledQuestionPositions(messages, [settled("qst_a", "2026-09-25T10:01:30Z", "2026-09-25T10:08:00Z")])
+  assert.deepEqual([...anchored.keys()], [1])
+})
+
+test("a question a later fence claimed and the human then answered stays at the claiming rest", () => {
+  const messages = [
+    msg("user", "2026-09-25T10:00:00Z"),
+    msg("assistant", "2026-09-25T10:02:00Z"), // asked here
+    msg("user", "2026-09-25T10:03:00Z"), // replied past it
+    msg("assistant", "2026-09-25T10:04:00Z", "Still needed.\n\n```awaiting\nquestions: [qst_a]\nneeds_input: true\n```"),
     msg("user", "2026-09-25T10:09:00Z"), // the answer
   ]
   const { anchored } = settledQuestionPositions(messages, [settled("qst_a", "2026-09-25T10:01:30Z", "2026-09-25T10:08:00Z")])

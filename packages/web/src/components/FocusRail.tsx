@@ -3,13 +3,14 @@ import { useEffect, useMemo, useRef } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { useSnapshot } from "valtio"
 import { isDirectSubAgent, type EditedFile, type ThreadLinkView, type ThreadView } from "@frizz/shared"
-import { useProjectDir, useTranscript } from "../hooks.ts"
+import { useHomeDir, useProjectDir, useTranscript } from "../hooks.ts"
 import { mergeBackgroundShells } from "../lib/childOps.ts"
 import { editedFileTree, flattenEditedFileTree } from "../lib/editedFileTree.ts"
 import { newestFileChangeKey } from "../lib/editedFilesRefresh.ts"
 import { openLocalPath } from "../lib/local-file-links.ts"
 import { prewarmLocalFile } from "../lib/localFileQuery.ts"
 import { useNowMs } from "../lib/liveClock.ts"
+import { basename, tildePath } from "../lib/paths.ts"
 import { prefs } from "../lib/prefs.ts"
 import { PRIMER } from "../lib/primer.ts"
 import { AgentRow, BgShellRow, GithubWatchRow, ON_CAP, TimerRow, WaitGrid, WaitRow, type WaitGroup } from "./AwaitingBackgroundCard.tsx"
@@ -79,7 +80,8 @@ function DirRow({ name, depth }: { name: string; depth: number }) {
 
 function EditedFileTree({ files }: { files: readonly EditedFile[] }) {
   const projectDir = useProjectDir()
-  const rows = flattenEditedFileTree(editedFileTree(files, projectDir))
+  const homeDir = useHomeDir()
+  const rows = flattenEditedFileTree(editedFileTree(files, projectDir, homeDir))
   return (
     // ONE cell of the shared grid, holding its own column of rows: the tree's rows must not share the
     // grid's tracks (the indent is the whole point), and a `gap-y-px` between them keeps the rhythm
@@ -88,13 +90,13 @@ function EditedFileTree({ files }: { files: readonly EditedFile[] }) {
       {rows.map((node) =>
         node.kind === "dir"
           ? <DirRow key={`d:${node.path}`} name={node.name} depth={node.depth} />
-          : <FileRow key={node.file.path} file={node.file} name={node.name} depth={node.depth} />,
+          : <FileRow key={node.file.path} file={node.file} name={node.name} depth={node.depth} homeDir={homeDir} />,
       )}
     </div>
   )
 }
 
-function FileRow({ file, name, depth }: { file: EditedFile; name: string; depth: number }) {
+function FileRow({ file, name, depth, homeDir }: { file: EditedFile; name: string; depth: number; homeDir: string | undefined }) {
   // EAGER READ ON HOVER (maintainer 2026-09-01): the pointer resting on a row is the earliest honest
   // signal that this file is the next one to open, and it buys the whole server round trip plus the
   // highlight pass before the click. The viewer then mounts against a warm cache and paints on the
@@ -117,13 +119,13 @@ function FileRow({ file, name, depth }: { file: EditedFile; name: string; depth:
       // lands it at 6.33, the same reading as the directory row above it.
       mark={<FileDiff size={12} className={`${ON_CAP} -mr-[2px] text-muted-60`} />}
       // The basename is the name and the directory row above it says where; the full path is the
-      // tooltip. A 340px rail truncates from the end, and a repo path truncated from the end lost
-      // exactly the part that names the file.
+      // tooltip, its home written as `~` the way the tree writes it. A 340px rail truncates from the
+      // end, and a repo path truncated from the end lost exactly the part that names the file.
       name={name}
       indent={depth * TREE_INDENT}
       onOpen={() => openLocalPath(file.path)}
       onPrewarm={() => prewarmLocalFile(client, file.path)}
-      title={file.path}
+      title={tildePath(file.path, homeDir)}
       status={
         <>
           {(file.added ?? 0) > 0 && <span style={{ color: PRIMER.fgSuccess }}>+{file.added}</span>}
@@ -137,11 +139,13 @@ function FileRow({ file, name, depth }: { file: EditedFile; name: string; depth:
 
 // A file or link the worker SAVED for the human (`mcp__frizz__link`). The card's row shape again: the
 // label it was saved under is the name, and the status is the short reading of where it goes — a URL's
-// host, a file's basename — with the full target in the tooltip. Never the whole URL or path: the status
-// track is shared by every row in the grid, so one long target there would truncate every name above it
-// (see WaitGrid's `fit-content(50%)`). A file opens in the page's viewer, a link in a new tab.
+// host, a file's basename — with the full target in the tooltip (a file's home written as `~`, as the
+// edited-files tree writes it). Never the whole URL or path: the status track is shared by every row in
+// the grid, so one long target there would truncate every name above it (see WaitGrid's
+// `fit-content(50%)`). A file opens in the page's viewer, a link in a new tab.
 function SavedLinkRow({ link }: { link: ThreadLinkView }) {
   const client = useQueryClient()
+  const homeDir = useHomeDir()
   if (link.kind === "link") {
     return (
       <WaitRow
@@ -166,8 +170,9 @@ function SavedLinkRow({ link }: { link: ThreadLinkView }) {
       name={link.label}
       onOpen={() => openLocalPath(link.target)}
       onPrewarm={() => prewarmLocalFile(client, link.target)}
-      title={link.target}
-      status={link.target.split("/").filter(Boolean).pop() ?? link.target}
+      title={tildePath(link.target, homeDir)}
+      // Either separator: a `/`-only split left a Windows target's whole `C:\Users\…` path as the status.
+      status={basename(link.target)}
     />
   )
 }

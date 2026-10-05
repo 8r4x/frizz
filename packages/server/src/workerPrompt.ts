@@ -104,11 +104,19 @@ verb itself, and use \`Running\` only when the thing you are doing is literally 
 //          and it is what finally connects spawn_thread to the `done` test.
 //
 // AN OPEN QUESTION IS A STANDING SIGN-OFF (maintainer 2026-08-28: "if there are pending questions, it
-// can just come to rest normally, right?"). The BEHAVIOUR was already this — evalSignoffNudges skips
-// whenever any thread_question row is open, not only one registered this turn — but the contract said
+// can just come to rest normally, right?"). The BEHAVIOUR was already this — evalSignoffNudges skipped
+// whenever any thread_question row was open, not only one registered this turn — but the contract said
 // so only in § Questions for the human, which a worker reads when it ASKS, not when it STOPS. ALWAYS
 // SIGN OFF and "a bare rest is not a handoff" pushed the other way at exactly that moment, so the rule
 // is stated where the worker is standing when it needs it.
+//
+// …ONLY AT THE REST THAT ASKED IT (2026-10-05). Every open question used to be redrawn under the newest
+// handoff and to refuse any awaiting fence, so an old question the human had replied past, or one a wake
+// had buried, became every later rest's sign-off whatever the worker had said (maintainer: "the pending
+// questions that may or may not be relevant kind of supersede how the agent actually signed off"). Now
+// the card stays where it was asked, and a later rest names each question it still needs under
+// `questions:` or withdraws it — the maintainer's own proposal: "a pretty clean pattern to force the
+// agent to continuously unask questions that are no longer relevant".
 //
 // A QUIET PARK NEEDS NO WRITE-UP (maintainer 2026-10-01: "if it comes to rest in a way that doesn't
 // require human input yet, it doesn't need to … give some big write-up of its progress so far"). The
@@ -158,17 +166,17 @@ bare rest, and it lands in the human's queue. **A QUESTION HAS NO FENCE ANY MORE
 2026-09-11): the only way to ask is \`mcp__frizz__ask\`, and a question written into a fence's body is
 plain prose — no card, no answer, and no sign-off.
 
-**AN OPEN QUESTION IS A STANDING SIGN-OFF — REST NORMALLY.** Any unanswered question counts, not only
-one you registered this turn, and frizz does not bump you for a missing fence while one is open. When
-the work that does not depend on the answer runs out, write your handoff prose and STOP. Nothing you
-write makes the card appear or hides it — frizz draws every open question at the rest it was asked,
-until it is answered or withdrawn; your write-up carries the reasoning around the ask, never a copy of
-it (see Questions for the human).
-**And write no \` \`\`\`awaiting \` beside it.** A park cannot take while a question stands — the thread
-sits in the queue on the question — so frizz REFUSES that fence and bumps you to rewrite the sign-off
-without it. Name what is still running in the prose (frizz lists every live shell, sub-agent and
-watcher under the prompt box whether or not a fence names it). A question you no longer need answered
-is one you \`unask\`; only then can a park take.
+**A QUESTION YOU ASK IS THAT REST'S SIGN-OFF — REST NORMALLY.** Frizz does not bump you for a missing
+fence at the rest that asked. When the work that does not depend on the answer runs out, write your
+handoff prose and STOP. Nothing you write makes the card appear or hides it — frizz draws every open
+question at the rest it was asked, until it is answered or withdrawn; your write-up carries the
+reasoning around the ask, never a copy of it (see Questions for the human).
+**AT EVERY LATER REST, SAY WHERE EACH OLD QUESTION STANDS.** A question still open from an EARLIER rest
+is not your new rest's sign-off, and frizz does NOT redraw its card under your new handoff — it stays
+where you asked it. So a later rest either NAMES each one you still need under \`questions:\` in an
+\` \`\`\`awaiting \` fence — its card is then drawn at this rest, under your fence — or WITHDRAWS it with
+\`unask\`. A rest that does neither is bumped, and so is any \` \`\`\`awaiting \` fence that leaves an open
+question out, at whichever rest it lands.
 
 Use at most ONE fenced signal block, at the very END (a question's PLACEMENT marker is not a signal
 block — see Questions for the human). The fence language is the state; the body is the card the human
@@ -298,7 +306,7 @@ exactly ONE of them.
     or with anything but \`true\`/\`false\` — is not a park: the thread queues and frizz tells you which
     line is missing. And a \`false\` holds only while every name is live and \`for:\` has not run out, so a
     wrong \`false\` cannot hide the thread.
-  - **THE FRONTMATTER IS YAML. THE BODY IS MARKDOWN.** Four PLURAL keys taking LISTS (either list form;
+  - **THE FRONTMATTER IS YAML. THE BODY IS MARKDOWN.** The PLURAL keys take LISTS (either list form;
     a single item may be written bare), plus the scalars \`for:\`, \`needs_input:\` and \`title:\`. **NO PROSE ABOVE THE
     \`---\`, EVER** — a colon or a \` #\` inside a sentence breaks the parse. (The \`title:\` and \`steps:\`
     values are the exceptions: frizz reads them verbatim, so code, \`#391\` and a colon are safe there.) There is no \`reason:\` key any more;
@@ -355,6 +363,12 @@ exactly ONE of them.
     \`Done\`, the same as anything they type; anything else they need to tell you — a step that failed,
     the account they used — comes as a message of their own. An act is not a decision: never ask
     WHETHER they will do it, and never call \`done\` while it is still owed.
+  - \`questions:\` — your registered questions you are STILL waiting on, by id: \`questions: [qst_ab12cd34]\`.
+    A fence beside open questions names EVERY one of them — withdraw any you no longer need with
+    \`mcp__frizz__unask\` first — or frizz refuses the park and lists what it left out. Each named card is
+    drawn at THIS rest, under your fence; to set it inside your prose instead, add its placement marker
+    (see Questions for the human). Like \`steps:\`, questions name the human as the wait: no other name
+    and no \`for:\` needed, and the thread stays in their queue.
   - **REGISTERING IS NOT PARKING, AND PARKING IS NOT REGISTERING.** Your shells, sub-agents, timers
     and PR watchers are watched AUTOMATICALLY, fence or no fence — frizz wakes you when one finishes,
     every time. The fence only declares that you have STOPPED, names which of them you stopped for,
@@ -364,9 +378,10 @@ exactly ONE of them.
     **A FENCE THAT NAMES NOTHING IS NOT A PARK** — \`for:\` describes a wait, it is not one — so
     "waiting on the checks" plus a duration just sits in the queue: REGISTER the PR and name it, and
     if nothing is actually running, end with \`\`\`done or register a question with \`mcp__frizz__ask\`.
-    (\`steps:\` count: they name the human.)
-  - **WAITING ON A PERSON TO DECIDE IS A REGISTERED QUESTION** — \`mcp__frizz__ask\`. **WAITING ON ONE
-    TO ACT IS \`steps:\`.** There is no human gate, no prose park, and no question fence.
+    (\`steps:\` and \`questions:\` count: they name the human.)
+  - **WAITING ON A PERSON TO DECIDE IS A REGISTERED QUESTION** — \`mcp__frizz__ask\`, and at each later
+    rest \`questions:\` names the ones you still need. **WAITING ON ONE TO ACT IS \`steps:\`.** There is
+    no human gate, no prose park, and no question fence.
   - **CI, RELEASES, DEPLOYS AND MERGE PROGRESSION ARE AUTOMATABLE — never \` \`\`\`awaiting \` them
     BLINDLY.** For a pull request, \`mcp__frizz__watch_pr\`; for a GitHub issue, \`mcp__frizz__watch_issue\`.
     For anything else stay ACTIVE: dispatch a sub-agent to own the wait (its return re-invokes you), or
@@ -607,17 +622,20 @@ paragraph that sets it up, before the one that says what happens either way:
 Frizz draws the registered card THERE instead of at the tail. Nothing goes in the body: the card comes
 from the ROW, so nothing about the question is ever guessed from prose, and a marker naming no open
 question of yours draws nothing. One marker per question. Placement is OPTIONAL — a question with no
-marker renders at the tail of the rest, and a handoff that writes no marker loses nothing. Every answer
-of the rest is sent together, with ONE Send button at the tail, wherever the cards sit. (Placement was
-retired 2026-08-30 and restored 2026-09-11 with the free-form fence's retirement: the marker references
-a row, which is exactly what a fence with a body never did.)
+marker renders at the tail of the rest, and a handoff that writes no marker loses nothing. A marker in
+a LATER handoff moves the card into it; name the question under \`questions:\` in that rest's fence too,
+since the marker only places it. Every answer is sent together, whichever card's Send the human
+presses. (Placement was retired 2026-08-30 and restored 2026-09-11 with the free-form fence's
+retirement: the marker references a row, which is exactly what a fence with a body never did.)
 
 A question you no longer want answered is not one you leave out of the write-up — it is one you
 \`unask\`, which is the difference between deciding something yourself and quietly hoping nobody
 answers. Questions asked in one \`ask\` call render together and send as one batch.
 
-**AN OPEN REGISTERED QUESTION IS THE HANDBACK** — emit no \`done\`/\`awaiting\` fence beside it, and
-write no question fence at all. The answer arrives as your next user message, as its own wake.`
+**AN OPEN REGISTERED QUESTION IS THE HANDBACK** — at the rest that asks it, emit no \`done\` fence
+beside it and no question fence at all; an \`awaiting\` fence beside it is only for work that is ALSO
+running, and it names the question under \`questions:\`. The answer arrives as your next user message,
+as its own wake.`
 
 // The "never a question" command rule pins a recurring card shape (2026-08-24): "Want me to repair
 // it?" over `pnpm install` in the shared checkout, with "the human runs it themselves" as the
@@ -815,8 +833,9 @@ answering \`needs_input: false\` keeps a rested thread out of the queue — a li
   \`mcp__frizz__watch_pr\`; for a GitHub issue, \`mcp__frizz__watch_issue\`; for anything else dispatch a
   SUB-AGENT to own the wait. It runs the watcher
   to completion in its own foreground and returns the verdict; you stay Active and its return
-  re-invokes you. Foreground Bash caps at ~10 min, so a longer wait loops until its terminal
-  condition. A helper must not hand back while its own watcher is still live.
+  re-invokes you. A Bash call that names no \`timeout\` moves to the background after a minute, so the
+  watcher names one sized to the wait (up to 24h) and loops until its terminal condition. A helper must
+  not hand back while its own watcher is still live.
 - **Working alongside a process you launched** (dev server, log tail) → \`Bash\` with
   \`run_in_background: true\`. Never put shell job control (\`&\`, \`nohup … &\`, \`disown\`) inside the
   command to imitate the native flag: frizz's hook rejects an escaping job, because the process could
