@@ -662,6 +662,23 @@ test("a park on a timer that already FIRED says so, not the wrong-fence wording"
   } finally { h.close() }
 })
 
+// A DEMOTED shell is neither finished nor a typo: frizz has its launch and saw no completion notice, but
+// can no longer find its process. "nothing by that name" sent the worker hunting for a mistake in an id it
+// had copied exactly (2026-10-03, on a shell the probe had wrongly demoted while it ran).
+test("a park on a shell frizz demoted to stale says it is gone without a notice, not that the id is unknown", async () => {
+  const h = parkHarness([{ kind: "shell", value: "bv8wnkd2q" }, { kind: "for", value: "2h" }], {
+    shells: [{ id: "toolu_e2e", taskId: "bv8wnkd2q", label: "Running the released e2e", startedAt: AT, state: "stale" }],
+  })
+  try {
+    await h.s.tick()
+    const msg = h.queued()[0].message
+    assert.match(msg, /`shells: \[bv8wnkd2q\]` — GONE WITHOUT A COMPLETION NOTICE/)
+    assert.match(msg, /read its output to see how it ended/)
+    assert.doesNotMatch(msg, /nothing by that name/)
+    assert.doesNotMatch(msg, /has FINISHED/, "no notice arrived, so nothing says it finished")
+  } finally { h.close() }
+})
+
 test("a park naming something that never existed still reads as a wrong fence", async () => {
   const h = parkHarness([{ kind: "shell", value: "bGHOST" }, { kind: "for", value: "2h" }], { shells: [] })
   try {
