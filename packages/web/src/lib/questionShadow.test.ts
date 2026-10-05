@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { allFencesShadowed, fenceRestatesRegistered, fenceStandsFor, markerIdsIn, placeQuestions, registeredStandingAt } from "./questionShadow.ts"
+import { allFencesShadowed, fenceRestatesRegistered, fenceStandsFor, markerIdsIn, placedFrom, placeQuestions, questionsAtCurrentRest, registeredStandingAt } from "./questionShadow.ts"
 import { type MessageSegment, splitQuestionBlocks } from "./questionBlocks.ts"
 
 // The pair from the 2026-08-28 report, verbatim: the registration (a plain string — the `ask` schema
@@ -170,12 +170,14 @@ test("a marker in a HUMAN turn places nothing", () => {
   assert.equal(placeQuestions(messages, [QUESTION]).placed.size, 0)
 })
 
-// ---- THE STALE MARKER (2026-09-13) ----
+// ---- THE STALE MARKER (2026-09-13, reversed 2026-10-05) ----
 // The worker asked, wrote its marker into THAT handoff, the human replied past the question without
-// answering, and the worker worked on and rested again — with the question still open and no marker in
-// the new handoff. The card stayed at the old rest, thousands of pixels up, and the tail drew the
-// group's bare disabled "Send answers" with nothing above it: "How did this thread pause without a
-// sign-off?". At rest the placement is scoped to the CURRENT rest, so the card falls back to the tail.
+// answering, and the worker worked on and rested again with the question still open. From 2026-09-13
+// the placement was scoped to the CURRENT rest whenever the thread was at rest, so the card left the
+// prose it was couched in and fell to the tail — under a handoff that said nothing about it, where it
+// superseded the worker's own sign-off (maintainer 2026-10-05). Now the card stays in its old prose
+// until a later rest CLAIMS it by naming it under `questions:` in its ```awaiting fence; the server
+// makes the worker either name it or withdraw it at that later rest (scheduler.evalSignoffNudges).
 
 const STALE = [
   { role: "user", at: at(0), text: "Do the thing." },
@@ -183,20 +185,44 @@ const STALE = [
   { role: "user", at: at(20), text: "Here's my answer to the OTHER question." },
   { role: "assistant", at: at(25), text: "Done. The first question is still open." },
 ]
+const CLAIM = (id: string, prose = "") => `${prose}\n\n\`\`\`awaiting\nquestions: [${id}]\nneeds_input: true\n\`\`\``
 
-test("a marker from an older rest stops placing once the thread rests again — the card returns to the tail", () => {
-  const { placed, placedIds } = placeQuestions(STALE, [QUESTION], { atRest: true })
-  assert.equal(placed.size, 0, "the stale marker no longer owns the card")
-  assert.equal(placedIds.size, 0, "so the anchor path draws it, and at rest that is the tail")
-})
-
-test("the same stale marker still places while the thread is MID-FLIGHT — the ask belongs to its own rest", () => {
+test("a marker from an older rest keeps placing after the thread rests again — a rest that says nothing about the card leaves it", () => {
   const { placed } = placeQuestions(STALE, [QUESTION])
   assert.deepEqual([...placed.keys()], [1])
 })
 
-test("a marker the worker re-wrote into the NEW handoff places there at rest", () => {
-  const rewritten = STALE.map((m, i) => (i === 3 ? { ...m, text: MARKER(QUESTION.id) } : m))
-  const { placed } = placeQuestions(rewritten, [QUESTION], { atRest: true })
+test("a later fence naming the question claims it out of the old prose — the card renders under that fence", () => {
+  const claimed = STALE.map((m, i) => (i === 3 ? { ...m, text: CLAIM(QUESTION.id, "Done. The first question still decides the release.") } : m))
+  const { placed, placedIds } = placeQuestions(claimed, [QUESTION])
+  assert.equal(placed.size, 0, "the old marker no longer owns the card")
+  assert.equal(placedIds.size, 0, "so the anchor path draws it, at the claiming rest")
+})
+
+// THE QUEUE CARD'S WINDOW is cut at the previous rest, so the stale marker above sits in a message the
+// card never draws. Left placed there, the card vanished and its rest's Send flushed alone at the top of
+// the window — a Send with nothing above it to answer (seen on a seeded stack, 2026-10-05).
+test("a placement above a surface's window is dropped there, so the card rejoins its anchor group", () => {
+  const full = placeQuestions(STALE, [QUESTION])
+  const windowed = placedFrom(full, 2)
+  assert.equal(windowed.placed.size, 0)
+  assert.equal(windowed.placedIds.size, 0, "so the anchor path draws the card, at the top of the window")
+  assert.deepEqual([...placedFrom(full, 1).placed.keys()], [1], "a placement inside the window stays")
+  assert.equal(placedFrom(full, 0), full, "no window, nothing to drop")
+})
+
+test("questionsAtCurrentRest: a question carried from an older rest is not the current rest's ending until something here names it", () => {
+  assert.equal(questionsAtCurrentRest(STALE, [QUESTION]), false, "asked and placed at the older rest, named nowhere since")
+  const claimed = STALE.map((m, i) => (i === 3 ? { ...m, text: CLAIM(QUESTION.id) } : m))
+  assert.equal(questionsAtCurrentRest(claimed, [QUESTION]), true, "a fence here names it")
+  const marked = STALE.map((m, i) => (i === 3 ? { ...m, text: MARKER(QUESTION.id) } : m))
+  assert.equal(questionsAtCurrentRest(marked, [QUESTION]), true, "a marker here places it")
+  assert.equal(questionsAtCurrentRest(STALE, [{ ...QUESTION, askedAt: at(25) }]), true, "asked at this rest")
+  assert.equal(questionsAtCurrentRest(STALE, []), false)
+})
+
+test("a claiming rest that also writes the marker places the card in its own prose", () => {
+  const claimed = STALE.map((m, i) => (i === 3 ? { ...m, text: `${MARKER(QUESTION.id)}${CLAIM(QUESTION.id)}` } : m))
+  const { placed } = placeQuestions(claimed, [QUESTION])
   assert.deepEqual([...placed.keys()], [3])
 })

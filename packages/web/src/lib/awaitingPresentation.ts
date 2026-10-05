@@ -165,6 +165,7 @@ export function awaitingWaitClause(hints: readonly AwaitingHint[]): string | nul
   const parts = [
     // Steps first: the reader is the one being waited on, which outranks anything frizz is watching.
     plural(count("step"), "step from you", "steps from you"),
+    plural(count("question"), "answer from you", "answers from you"),
     ...prWatchRefs(hints).map((pr) => pr.ref),
     plural(count("shell"), "background shell", "background shells"),
     plural(count("agent"), "sub-agent", "sub-agents"),

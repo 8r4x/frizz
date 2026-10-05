@@ -11,6 +11,10 @@
 // along the bottom edge, leaving a soft notch on the corner of every cue card (maintainer 2026-08-01).
 // Its `backdrop-blur` widened the damage by smearing the border it was already covering.
 //
+// The card's bottom edge has been the DOCKED PROMPT BOX since 2026-10-05, when the footer's verbs moved
+// to the header. It meets the same padding box with the same kind of opaque fill, so the same probe runs
+// against it — the bug is a property of whatever ends the card, not of the footer.
+//
 // It has to be a PIXEL measurement. Every DOM number was innocent: the root reported a 12px radius, a
 // 1px border and the right color, the footer reported its own box inset by exactly 1px on three sides.
 // Nothing in the geometry says one shape is painting over the other's border. Only the rendered pixels
@@ -31,6 +35,8 @@
 const args = process.argv.slice(2)
 const opt = (k, d) => { const hit = args.find((a) => a.startsWith(`--${k}=`)); return hit ? hit.slice(k.length + 3) : d }
 const url = opt("url", "http://localhost:5412/queue-ops-spacing-fixture.html")
+// Whatever ends the card: the docked prompt box (it was the lifecycle footer until 2026-10-05).
+const DOCK = '[data-queue-card-root] [data-thread-composer-box="queueComposer"]'
 // High enough that a 1px border is 8 device px, so a centreline sample lands well inside it and no
 // reading is antialiasing noise.
 const DSF = Number(opt("dsf", "8"))
@@ -58,14 +64,14 @@ try {
   // element that is not fully in view screenshots unreliably.
   await page.setViewport({ width: 1100, height: 1600, deviceScaleFactor: DSF })
   await page.goto(url, { waitUntil: "networkidle0", timeout: 30_000 })
-  await page.waitForSelector("[data-thread-lifecycle-footer]", { timeout: 20_000 })
+  await page.waitForSelector(DOCK, { timeout: 20_000 })
 
-  // One probe run = "measure all four corners at the footer's current radius". Called twice: once as
+  // One probe run = "measure all four corners at the dock's current radius". Called twice: once as
   // shipped, once with the pre-fix radius forced back on.
   async function probe() {
-    const shell = await page.evaluate(() => {
+    const shell = await page.evaluate((dock) => {
       const root = document.querySelector("[data-queue-card-root]")
-      const footer = document.querySelector("[data-thread-lifecycle-footer]")
+      const footer = document.querySelector(dock)
       const cs = getComputedStyle(root)
       const r = root.getBoundingClientRect()
       return {
@@ -75,7 +81,7 @@ try {
         footerRadius: parseFloat(getComputedStyle(footer).borderBottomLeftRadius),
         rect: { left: r.left, right: r.right, top: r.top, bottom: r.bottom },
       }
-    })
+    }, DOCK)
     const rows = []
     for (const corner of CORNERS) {
       const R = shell.radius
@@ -128,22 +134,22 @@ try {
 
   const shipped = await probe()
   console.log(`shell radius ${shipped.shell.radius}px / border ${shipped.shell.border}px → inner ${shipped.shell.radius - shipped.shell.border}px`)
-  console.log(`footer bottom radius: ${shipped.shell.footerRadius}px`)
+  console.log(`dock bottom radius: ${shipped.shell.footerRadius}px`)
   for (const row of shipped.rows) {
     const ok = row.minContrast >= MIN_CONTRAST
     console.log(`${ok ? "PASS" : "FAIL"} ${row.corner}: border visible at every one of ${row.samples} samples (weakest ${row.minContrast} at ${row.atDeg}°)`)
     if (!ok) failures.push(`${row.corner}: border vanishes on the arc (contrast ${row.minContrast} at ${row.atDeg}°, need ≥ ${MIN_CONTRAST})`)
   }
   if (shipped.shell.footerRadius !== shipped.shell.radius - shipped.shell.border) {
-    failures.push(`footer bottom radius is ${shipped.shell.footerRadius}px; the shell's padding box is ${shipped.shell.radius - shipped.shell.border}px`)
-    console.log(`FAIL footer radius ${shipped.shell.footerRadius}px ≠ shell inner ${shipped.shell.radius - shipped.shell.border}px`)
+    failures.push(`dock bottom radius is ${shipped.shell.footerRadius}px; the shell's padding box is ${shipped.shell.radius - shipped.shell.border}px`)
+    console.log(`FAIL dock radius ${shipped.shell.footerRadius}px ≠ shell inner ${shipped.shell.radius - shipped.shell.border}px`)
   } else {
-    console.log(`PASS footer bottom radius matches the shell's padding box`)
+    console.log(`PASS dock bottom radius matches the shell's padding box`)
   }
 
   // NEGATIVE CONTROL — put the bug back and require the probe to catch it. Without this the run above
   // proves only that the script does not crash.
-  const revert = await page.addStyleTag({ content: "[data-thread-lifecycle-footer]{border-bottom-left-radius:7px;border-bottom-right-radius:7px}" })
+  const revert = await page.addStyleTag({ content: `${DOCK}{border-bottom-left-radius:7px;border-bottom-right-radius:7px}` })
   const broken = await probe()
   // Hold the HANDLE and remove that: sweeping <style> tags by content would take out Vite's injected
   // app stylesheet and every measurement after it.
@@ -155,7 +161,7 @@ try {
       failures.push(`negative control: ${row.corner} still reads clean at the pre-fix 7px radius (contrast ${row.minContrast}) — the probe cannot see the bug it exists to catch`)
       console.log(`FAIL control ${row.corner}: probe blind to the 7px regression (weakest ${row.minContrast})`)
     } else if (!isBottom && caught) {
-      failures.push(`negative control: ${row.corner} broke when only the footer changed — the probe is reading the wrong thing`)
+      failures.push(`negative control: ${row.corner} broke when only the dock changed — the probe is reading the wrong thing`)
       console.log(`FAIL control ${row.corner}: unrelated corner moved (weakest ${row.minContrast})`)
     } else {
       console.log(`PASS control ${row.corner}: ${isBottom ? `regression caught (weakest ${row.minContrast})` : `unaffected (weakest ${row.minContrast})`}`)

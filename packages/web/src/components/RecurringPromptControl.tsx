@@ -14,7 +14,7 @@ import { Switch } from "./ui/Switch.tsx"
 // THE GOAL MARK — `target-arrow` from Tabler Icons 3.46.0 (MIT, https://tabler.io/icons/icon/target-arrow),
 // inlined rather than pulled in as a dependency: it is one glyph out of a 5,900-icon package, and this
 // file is the only caller. Tabler draws on the SAME grid as lucide — 24 viewBox, 2px stroke, round caps
-// and joins — so it sits in the footer strip as one of the family rather than as a foreign mark.
+// and joins — so it sits in the prompt box's rail beside lucide's paperclip as one of the family.
 //
 // It replaces lucide's `Target`, which the maintainer read as not-a-target at all (2026-08-13: "Targets
 // are supposed to have a filled circle in the middle. Maybe you should find a different icon that has an
@@ -55,8 +55,11 @@ export function GoalMark({ size = 12, className = "" }: { size?: number; classNa
   )
 }
 
-// THE GOAL PANEL: one glyph in the thread footer holding what this thread is TRYING TO ACHIEVE, which
-// frizz re-sends so the operator does not have to type it again.
+// THE GOAL PANEL: one glyph in the prompt box's rail, beside attach and send, holding what this thread is
+// TRYING TO ACHIEVE, which frizz re-sends so the operator does not have to type it again. It sat at the
+// left of the thread's lifecycle footer until 2026-10-05; the footer went, and a standing message is
+// something you send, so it moved to the box it is sent from (maintainer: "move the goal icon over to
+// the bottom right of the prompt box").
 //
 // It was called "the recurring prompt" until 2026-08-11, which named the MECHANISM rather than the
 // content and left the panel describing itself by how it is delivered. What an operator writes here is
@@ -79,8 +82,7 @@ export function GoalMark({ size = 12, className = "" }: { size?: number; classNa
 // the other two toggles."
 //
 // The trigger renders ALWAYS, muted when nothing is armed — a control that only appears once its own
-// feature is on cannot be used to turn the feature on. That makes it the one permanent child of the
-// footer's left cluster, where everything else is a reading that hides itself when it has nothing to say.
+// feature is on cannot be used to turn the feature on.
 export function RecurringPromptControl({ thread }: { thread: ThreadView }) {
   // THREE STATES, not two: shut, the HOVER PREVIEW, and the full panel. A single boolean cannot hold
   // them, because the preview and the panel are the same anchored surface showing different things and
@@ -141,7 +143,9 @@ export function RecurringPromptControl({ thread }: { thread: ThreadView }) {
           // what is armed, exactly as hovering it would.
           onFocus={() => setMode((m) => (m === "closed" ? "preview" : m))}
           onBlur={closePreview}
-          className="group/goal icon-hover-outline flex items-center rounded-md p-1 outline-none"
+          // The paperclip's own square, hover fill and tone beside it (Composer), so the rail reads as
+          // one family; ThreadComposerBox places it through the composer's `railLead` slot.
+          className="group/goal icon-hover-outline flex h-7 w-7 items-center justify-center rounded-lg outline-none transition-[color,background-color] hover:bg-panel-2/70"
         >
           {/* A TARGET WITH AN ARROW IN IT (see GoalMark for the geometry and why it is drawn rather
               than imported), and the ONLY surface that says this exists (the rail deliberately carries
@@ -160,17 +164,15 @@ export function RecurringPromptControl({ thread }: { thread: ThreadView }) {
               lucide's `Target` here — and it did not read as one, because its centre is a HOLE where a
               bullseye should be (maintainer 2026-08-13).
 
-              GREY by default and coloured only while something is actually armed: the footer's left
-              cluster is a status strip first, so a control with nothing to report has to read as quiet
-              as the empty slot it would otherwise leave. Amber, not the app's accent yellow, so it
-              reads as a state rather than the focus motif.
+              GREY by default and coloured only while something is actually armed, so a control with
+              nothing to report reads as quiet as the paperclip beside it. Amber, not the app's accent
+              yellow, so it reads as a state rather than the focus motif.
 
-              QUIET, NOT DIMMER THAN ITS NEIGHBOURS. This was `text-muted-45` against the meter's and
-              the hourglass's `text-muted-60`, and the left cluster consequently read as three marks
-              from three different families (maintainer 2026-08-04: "the icon brightnesses and spacing
-              look absolutely terrible"). The cluster is one status group, so it takes one tone — the
-              armed/idle distinction is carried by the amber, which is the state worth seeing, and not
-              by holding the resting glyph a step below the readouts beside it.
+              QUIET, NOT DIMMER THAN ITS NEIGHBOURS. Its resting tone is the paperclip's `text-muted`:
+              when it sat in the footer at `text-muted-45` beside two readouts at `text-muted-60`, the
+              cluster read as three marks from three families (maintainer 2026-08-04: "the icon
+              brightnesses and spacing look absolutely terrible"). The armed/idle distinction is the
+              amber, never a dimmer resting glyph.
 
               THE GLYPH BRIGHTENS ON THE BUTTON'S HOVER, NOT ITS OWN. It carried a bare `hover:`, so the
               outline lit the moment the pointer crossed the button's padding while the glyph waited for
@@ -178,16 +180,18 @@ export function RecurringPromptControl({ thread }: { thread: ThreadView }) {
               "As soon as I'm hovering over the box at all, the icon and the border should both
               animate"). The group is NAMED because Tailwind's `group-hover` matches ANY `.group`
               ancestor, not the nearest one. */}
+          {/* 15px with the lucide paperclip's 2-unit pen on the same 24-unit grid, so the two glyphs
+              paint the same 1.25px line. */}
           <GoalMark
-            size={12}
-            className={live ? "text-attention-90" : "text-muted-60 group-hover/goal:text-muted group-focus-visible/goal:text-muted"}
+            size={15}
+            className={live ? "text-attention-90" : "text-muted group-hover/goal:text-fg group-focus-visible/goal:text-fg"}
           />
         </button>
       </PopoverAnchor>
       {mode === "preview" ? (
         <PopoverContent
           side="top"
-          align="start"
+          align="end"
           data-recurring-preview
           onPointerDownOutside={keepAnchorClicks}
           // INERT. The preview is a reading, not a surface: it must never take the pointer, because the
@@ -204,7 +208,7 @@ export function RecurringPromptControl({ thread }: { thread: ThreadView }) {
       ) : (
         <PopoverContent
           side="top"
-          align="start"
+          align="end"
           // WIDE, and it takes the whole viewport when the viewport is small. A 21rem cap made this a
           // narrow column for prose that can run to 4000 characters, and on a phone-width screen it was
           // narrower than the space actually available. The panel is a writing surface, so it is sized
@@ -222,8 +226,8 @@ export function RecurringPromptControl({ thread }: { thread: ThreadView }) {
   )
 }
 
-// Long enough that dragging the pointer ACROSS the strip on the way to the send button does not flash a
-// panel over the footer, short enough that deliberately resting on the glyph answers immediately.
+// Long enough that dragging the pointer ACROSS the rail on the way to the send button does not flash a
+// panel over the prompt box, short enough that deliberately resting on the glyph answers immediately.
 const HOVER_DELAY_MS = 260
 
 // WHAT THE HOVER SAYS. Not the panel in miniature and not the whole prompt — the two questions you ask
@@ -358,7 +362,7 @@ function sameAsSent(next: Draft, sent: ReturnType<typeof draftAsSent>): boolean 
  *  Extracted and exported so the test beside this file can pin all three branches cheaply. Both are
  *  ALSO driven in a real browser — an archived thread's panel opens empty and its dismissal writes
  *  nothing. Watch the selector when you re-check that: `/thread/<slug>` leaves the BOARD rendered
- *  behind the drawer, and a rested thread's queue card carries its own footer, so an unscoped
+ *  behind the drawer, and a rested thread's queue card carries its own prompt box, so an unscoped
  *  `querySelector("[data-recurring-prompt]")` finds the board's heart rather than the drawer's and
  *  reports the wrong thread's panel. Scope to `[role=dialog]`. */
 export function seedsDefaults(
@@ -380,7 +384,7 @@ function triggerClauses(d: Pick<Draft, "stopHook" | "heartbeat" | "postCompactio
 }
 
 // Exported for the phone's ⋯ sheet (MobileThreadActionsSheet), which shows this same panel full-width
-// in a bottom sheet instead of a popover over the footer. Same draft, same dismissal-is-the-save: the
+// in a bottom sheet instead of a popover over the prompt box. Same draft, same dismissal-is-the-save: the
 // sheet unmounting the panel is the dismissal. `heading` is false there because the sheet's own title
 // row already says "Goal".
 export function PromptPanel({ thread, armed, close, heading = true }: {

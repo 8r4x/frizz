@@ -6,7 +6,7 @@ import { joinComposerValue, splitComposerValue } from "../lib/imagePaths.ts"
 import { splitProseByTokens } from "../lib/composerContext.ts"
 import { shouldInterruptSubmitComposerEnter, shouldRestoreOptionEnterNewline, shouldSubmitComposerEnter } from "../lib/composerKeyboard.ts"
 import { queueComposerHandlesOptionEnter } from "../lib/queueComposerKeyboard.ts"
-import { RAIL_ACTION_OFFSET, RAIL_PAPERCLIP_OFFSET, RAIL_PAPERCLIP_PLAIN_OFFSET, RAIL_RESERVE_PLAIN, RAIL_RESERVE_WITH_ACTION, RAIL_SEND_OFFSET } from "../lib/iconRhythm.ts"
+import { RAIL_ACTION_OFFSET, RAIL_LEAD_OFFSET, RAIL_LEAD_WITH_ACTION_OFFSET, RAIL_PAPERCLIP_OFFSET, RAIL_PAPERCLIP_PLAIN_OFFSET, RAIL_RESERVE_PLAIN, RAIL_RESERVE_WITH_ACTION, RAIL_RESERVE_WITH_BOTH, RAIL_SEND_OFFSET } from "../lib/iconRhythm.ts"
 import { apiBase } from "../lib/base-path.ts"
 import { localImageUrl } from "../lib/markdownTargets.ts"
 import { basename } from "../lib/paths.ts"
@@ -134,6 +134,7 @@ export function Composer({
   busy,
   footer,
   leftAction,
+  railLead,
   contextTokens,
   slashSuggest,
   onInterruptSubmit,
@@ -167,6 +168,9 @@ export function Composer({
   // A small action rendered just LEFT of the send button (the dispatch composer's GitHub-picker icon).
   // Only surfaces that pass it get it; reply/queue composers omit it.
   leftAction?: React.ReactNode
+  // A control at the rail's LEFT end, beyond the paperclip — the thread composer's Goal
+  // (ThreadComposerBox). It owns its own popover; this component only places it.
+  railLead?: React.ReactNode
   // SKILLS TYPEAHEAD. When set, a draft that is exactly one `/`-led token opens a suggestion menu of
   // the thread's invocable skills above the box (fetched lazily, once, on first trigger). The list is
   // whatever the thread's own harness reports — the caller owns sourcing entirely; this component only
@@ -472,6 +476,8 @@ export function Composer({
   // (the dispatch composer's GitHub picker); interrupt-and-send gave up its button here and kept only
   // ⌘/Ctrl-Enter — see the `onInterruptSubmit` prop doc.
   const railAction = leftAction ?? null
+  // The padding every text row keeps clear of the absolutely-placed rail, from its leftmost button.
+  const railReserve = railAction && railLead ? RAIL_RESERVE_WITH_BOTH : railAction || railLead ? RAIL_RESERVE_WITH_ACTION : RAIL_RESERVE_PLAIN
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     const el = e.currentTarget
@@ -890,7 +896,7 @@ export function Composer({
             ref={contextRef}
             aria-hidden
             data-composer-context-backdrop
-            className={`pointer-events-none absolute inset-0 select-none overflow-hidden whitespace-pre-wrap [overflow-wrap:break-word] px-3.5 ${footer ? "py-2.5 pb-3" : `py-2.5 ${railAction ? RAIL_RESERVE_WITH_ACTION : RAIL_RESERVE_PLAIN}`} text-[13px] leading-relaxed text-transparent`}
+            className={`pointer-events-none absolute inset-0 select-none overflow-hidden whitespace-pre-wrap [overflow-wrap:break-word] px-3.5 ${footer ? "py-2.5 pb-3" : `py-2.5 ${railReserve}`} text-[13px] leading-relaxed text-transparent`}
           >
             {backdropSegments}
           </div>
@@ -931,7 +937,7 @@ export function Composer({
           // out of every line). Without a footer the box is a single compact row and the right padding is
           // what keeps text from sliding under the floating paperclip/send buttons. `relative` keeps the
           // caret and text painting above the marker backdrop behind it.
-          className={`relative block w-full resize-none bg-transparent px-3.5 ${footer ? "py-2.5 pb-3" : `py-2.5 ${railAction ? RAIL_RESERVE_WITH_ACTION : RAIL_RESERVE_PLAIN}`} text-[13px] leading-relaxed text-fg outline-none placeholder:text-muted scrollbar-none disabled:opacity-60`}
+          className={`relative block w-full resize-none bg-transparent px-3.5 ${footer ? "py-2.5 pb-3" : `py-2.5 ${railReserve}`} text-[13px] leading-relaxed text-fg outline-none placeholder:text-muted scrollbar-none disabled:opacity-60`}
         />
       </div>
       {/* Attachment chips along the bottom row — one square tile per attached file (image thumbnail or
@@ -939,7 +945,7 @@ export function Composer({
           instead of the raw absolute-path text. Reserve the right rail so tiles never slip under the
           paperclip/send buttons on the last row. */}
       {attachments.length > 0 && (
-        <div className={`flex flex-wrap gap-1.5 px-3 pb-2 ${railAction ? RAIL_RESERVE_WITH_ACTION : RAIL_RESERVE_PLAIN}`}>
+        <div className={`flex flex-wrap gap-1.5 px-3 pb-2 ${railReserve}`}>
           {attachments.map((a, i) => (
             <AttachmentChip
               key={`${a.path}-${i}`}
@@ -957,9 +963,10 @@ export function Composer({
           inside the box arc and read misaligned. */}
       {/* Reserve the right-side action rail. Without this, three shrinkable readouts can extend under
           the absolutely positioned GitHub/send buttons on narrow composers. */}
-      {footer && <div className={`flex min-w-0 flex-wrap items-center gap-1 pl-1.5 pb-1.5 ${railAction ? RAIL_RESERVE_WITH_ACTION : RAIL_RESERVE_PLAIN}`}>{footer}</div>}
+      {footer && <div className={`flex min-w-0 flex-wrap items-center gap-1 pl-1.5 pb-1.5 ${railReserve}`}>{footer}</div>}
       {/* Outlined controls keep 8px between edges; prose reserves the same clearance. */}
       {railAction && <div className={`absolute bottom-2 ${RAIL_ACTION_OFFSET} flex items-center`}>{railAction}</div>}
+      {railLead && <div className={`absolute bottom-2 ${railAction ? RAIL_LEAD_WITH_ACTION_OFFSET : RAIL_LEAD_OFFSET} flex items-center`}>{railLead}</div>}
       {/* Attach: a hidden file input driven by the paperclip. Sits in the right rail LEFT of the send
           button (and left of any railAction), so it never overlaps the mode/model footer or the send
           affordance. Accept is the shared extension allowlist; the /attach route re-validates. */}

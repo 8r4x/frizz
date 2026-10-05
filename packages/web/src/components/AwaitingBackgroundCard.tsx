@@ -1006,7 +1006,7 @@ export function AwaitingBackgroundCard({ thread, fence, onSnooze, onSnoozeFailed
   // fence's prose is this card's opening stratum, so the card reads it directly off the thread.
   // `kind`/`foreign`/`state`/`archived`/`sessionId` joined the Pick on 2026-08-31, when the card took
   // ownership of its own Snooze: the control renders for an actionable owned thread and for nothing
-  // else, on the SAME test the lifecycle footer uses (threadLifecycleAvailability).
+  // else, on the SAME test the header's lifecycle verbs use (threadLifecycleAvailability).
   // `awaitingBackground`/`runtime`/`bgSnoozed` joined on 2026-09-04, when the card took ownership of
   // WHETHER to draw the Snooze at all rather than being drawn only where one applied (showsRestingCard).
   //
@@ -1074,7 +1074,7 @@ export function AwaitingBackgroundCard({ thread, fence, onSnooze, onSnoozeFailed
   //
   // NOT ON A STEPS CARD. The thread is waiting on the reader, so the footer carries the steps' own verbs;
   // an event-snooze ("until new activity") would hide a card whose only new activity is the reader's own
-  // reply. The lifecycle footer's wall-clock Snooze still parks it for anyone who means "not now".
+  // reply. The header's wall-clock snooze (the alarm clock) still parks it for anyone who means "not now".
   const snoozable = thread !== undefined && steps.length === 0 && showsRestingCard(thread) && threadLifecycleAvailability(thread).snooze
   return (
     // The SAME shell as every transcript card (TranscriptCard). This card stacks directly under an
