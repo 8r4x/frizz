@@ -108,7 +108,7 @@ test("the contract teaches steps: as the wait on a human's act, and routes to it
     assert.match(c, /card shows the steps over one \*\*Done\*\* button, and its click comes back to you as their reply, `Done`/)
     assert.match(c, /anything else they need to tell you — a step that failed, the account they used — comes as a message of their own/)
     assert.doesNotMatch(c, /Couldn't do it/)
-    assert.match(c, /\(`steps:` count: they name the human\.\)/)
+    assert.match(c, /\(`steps:` and `questions:` count: they name the human\.\)/)
     // A decision is still a question; an act is steps — at every place the two used to blur.
     assert.match(c, /A DECISION you need from them is a question, never a fence/)
     assert.match(c, /WAITING ON ONE TO ACT IS `steps:`/)

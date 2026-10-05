@@ -1403,7 +1403,7 @@ test("a call landing in a restart window waits for the server instead of failing
 // THE QUESTIONS ARE READ OUT TOO, in their own section (maintainer 2026-08-28: "Is there a way for the
 // agent to read out the current set of watchers and questions?"). They must NOT reach the fence block:
 // a question waits on a person, and there is no `questions:` key in the awaiting grammar to hold one.
-test("`activity` reads the open questions back, with the ids a ```question fence places them by", async () => {
+test("`activity` reads the open questions back, with the ids a marker places them by and a fence names them by", async () => {
   const http = createServer((_req, res) => {
     res.writeHead(200, { "content-type": "application/json" })
     res.end(JSON.stringify({ result: {
@@ -1427,10 +1427,12 @@ test("`activity` reads the open questions back, with the ids a ```question fence
     assert.match(text, /2 questions still owed an answer/)
     for (const id of ["qst_ab12cd34ef56", "qst_0011223344ff"]) assert.match(text, new RegExp(id))
     assert.match(text, /Should the settings store use SQLite or a JSON file\?/)
-    // The fence block names the SHELL and nothing else — no question id may appear inside it.
+    // The ready fence names the shell AND every open question under `questions:` (2026-10-05): a fence
+    // beside open questions must name each one the worker still needs, or frizz refuses the park.
     const fence = text.slice(text.indexOf("```awaiting"), text.indexOf("```\n\nDrop the lines"))
     assert.match(fence, /shells: \[bzvtnt3ig\]/)
-    assert.doesNotMatch(fence, /qst_/, "a question is never named in an awaiting fence")
+    assert.match(fence, /questions: \[qst_ab12cd34ef56, qst_0011223344ff\]/)
+    assert.match(fence, /needs_input: true/, "a fence on questions always needs the human")
   } finally {
     rpc.kill()
     http.close()

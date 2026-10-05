@@ -22,10 +22,13 @@ import "./styles.css"
 // session resumes, then the questions are taken out of the place where they were sort of embedded in the
 // transcript and all just show up in a bunch at the bottom of the chat is not working very well."
 //
-// Today (lib/questionAnchor + lib/questionShadow placeQuestions, `atRest`): once the thread rests again
-// with the worker last to speak, EVERY open question anchors to the newest rest, and a placement marker
-// in an older handoff stops placing. The cards leave the prose that set them up and stack at the tail.
-// That move exists for two reports (2026-08-31, 2026-09-13) where the newest rest showed no ask at all.
+// "Today" in the sheet is the behaviour until 2026-10-05 (lib/questionAnchor + lib/questionShadow
+// placeQuestions, `atRest`): once the thread rested again with the worker last to speak, EVERY open
+// question anchored to the newest rest, and a placement marker in an older handoff stopped placing. The
+// cards left the prose that set them up and stacked at the tail. That move existed for two reports
+// (2026-08-31, 2026-09-13) where the newest rest showed no ask at all. The maintainer then chose none of
+// the options drawn here: a card now stays where it was asked until a later ```awaiting fence names it
+// under `questions:`, and the server makes the worker name or withdraw each old question at a later rest.
 //
 // Every frame below is the REAL Message renderer and the REAL RegisteredQuestionCard / Stack, sharing one
 // useRegisteredAnswering per frame, so picks and Send behave as they do in the app (the RPC is stubbed).
