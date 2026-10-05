@@ -445,17 +445,11 @@ test("hasAwaitingWaitRows agrees with the table", () => {
 
 // ---- STEPS FOR THE HUMAN (2026-10-03) --------------------------------------------------------------
 // A fence carrying `steps:` waits on the READER. The steps themselves render through the markdown
-// sanitizer, which needs a real DOM this runner does not have — the drawn card and its one verb are
-// pinned in a real browser by AwaitingSteps.e2e.test.ts. What is DOM-free is pinned here: the
-// heading, and the one test that decides whether the verbs may be offered at all.
+// sanitizer, which needs a real DOM this runner does not have — the drawn card, its "To do" chip head
+// and its one verb are pinned in a real browser by AwaitingSteps.e2e.test.ts (the chip head's structure
+// is TranscriptCard's, in TranscriptCard.test.ts). What is DOM-free is pinned here: the one test that
+// decides whether the verbs may be offered at all.
 const stepHints = [{ kind: "step" as const, value: "Run `npm login`" }, { kind: "step" as const, value: "Approve the prompt" }]
-
-test("a steps card is headed for the reader unless the worker titled it", () => {
-  assert.equal(awaitingBackgroundLabel(thread([], []), stepHints), "For you to do")
-  // It outranks the shape headings: the reader is the wait even while a shell runs beside it.
-  assert.equal(awaitingBackgroundLabel(thread([], [shell("running")]), stepHints), "For you to do")
-  assert.equal(awaitingBackgroundLabel(thread([], []), [{ kind: "title", value: "Sign in to npm" }, ...stepHints]), "Sign in to npm")
-})
 
 test("the steps' Done is offered only while the thread rests on exactly those steps", () => {
   const steps = stepHints.map((h) => h.value)

@@ -12,9 +12,10 @@ export const AWAITING_FALLBACK_TITLE = "Awaiting"
  *  less than a sentence does. */
 export const AWAITING_NO_PROSE = "Waiting for an external update."
 
-/** The heading of a card handing the human `steps:` when the worker named no `title:` — the one fence
- *  shape whose wait is on the READER, so the fallback says so instead of the generic "Awaiting". */
-export const STEPS_FALLBACK_TITLE = "For you to do"
+/** The KIND CHIP over a card handing the human `steps:` — the one fence shape whose wait is on the
+ *  READER (TranscriptCard's KindChip). The worker's `title:` goes under it; with none, the chip alone
+ *  heads the card. */
+export const STEPS_CHIP = "To do"
 
 /** The steps card's one verb, and EXACTLY the message it sends — an ordinary reply from the human, the
  *  same thing typing the word would send. Nothing marks it as frizz's, because nothing about it is: the
