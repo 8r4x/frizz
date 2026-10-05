@@ -71,7 +71,7 @@ import { FOREGROUND_MARK_AFTER_MS, foregroundToolIsRunning, hasRunningToolIndica
 import { formatRuntimeElapsed, formatToolDuration } from "../lib/durationLabels.ts"
 import { githubRefUrl } from "../lib/githubRef.ts"
 import { useNowMs } from "../lib/liveClock.ts"
-import { CHILD_OPEN_TITLE, CHILD_QUIET_SHELL_TITLE, CHILD_RESTED_DOT_CLASS, CHILD_RESTED_TITLE, CHILD_STALE_DOT_CLASS, CHILD_STALE_TITLE, checksCounterLabel, childOpSubtree, issueCounterLabel, mergeBackgroundShells, shellLinesLabel, visibleChildOps, type TranscriptShellRecord } from "../lib/childOps.ts"
+import { CHILD_OPEN_TITLE, CHILD_RESTED_DOT_CLASS, CHILD_RESTED_TITLE, CHILD_STALE_DOT_CLASS, CHILD_STALE_SHELL_TITLE, CHILD_STALE_TITLE, checksCounterLabel, childOpSubtree, issueCounterLabel, mergeBackgroundShells, shellLinesLabel, visibleChildOps, type TranscriptShellRecord } from "../lib/childOps.ts"
 import { childOpDismisser } from "../lib/dismissChildOp.ts"
 import { agentCompletionCall, subAgentCompletionOutcome } from "../lib/subAgentCompletion.ts"
 import { agentReading } from "../lib/agentReading.ts"
@@ -2387,15 +2387,16 @@ function useForegroundRunning(status: ToolStatus | undefined, backgroundState: T
 function ToolLiveMark({ status, backgroundState, liveBackgroundState, startedAt }: { status?: ToolStatus; backgroundState?: TranscriptToolCall["backgroundState"]; liveBackgroundState?: "running" | "stale"; startedAt?: string }) {
   const foregroundRunning = useForegroundRunning(status, backgroundState, startedAt)
   // Precedence follows the READING beside it, exactly: a tracked op's own observed state outranks the
-  // call's pending-ness, so a shell frizz watches and finds quiet draws the breathing mark next to the
-  // word "stale". The old right-hand indicator tested `running || pending-background` first and so
+  // call's pending-ness, so a shell whose process the OS has confirmed gone draws the flat stale dot next
+  // to the word "stale" — the same mark the dispatch card gives a stale child — even while its call still
+  // reads pending. The old right-hand indicator tested `running || pending-background` first and so
   // pulsed at full brightness beside its own "stale" — the same self-contradiction the agent rows had
   // to unlearn. `pending && background` is the fallback: detached, but no live op correlated to it.
   const mark =
     liveBackgroundState === "running" ? (
       <span aria-hidden className="frizz-live-dot frizz-live-dot--shell" data-running-indicator="tool-disclosure" />
     ) : liveBackgroundState === "stale" ? (
-      <span aria-hidden className="frizz-live-dot-quiet frizz-live-dot-quiet--shell" data-running-indicator="tool-quiet" title={CHILD_QUIET_SHELL_TITLE} />
+      <span className={CHILD_STALE_DOT_CLASS} title={CHILD_STALE_SHELL_TITLE} />
     ) : hasRunningToolIndicator(status, backgroundState) || foregroundRunning ? (
       <span aria-hidden className="frizz-live-dot frizz-live-dot--shell" data-running-indicator="tool-disclosure" />
     ) : null
