@@ -14,6 +14,9 @@
 // - `question-claims-both`: the control. The final fence names both, and its prose carries the cache
 //   question's marker — so the cache card moves INTO the final handoff and the dist-tag card sits under
 //   the fence. A run that draws the two threads identically proves nothing.
+// - `question-claims-bare`: only the cache question is open, and the final rest is BARE — no fence, no
+//   marker. The card stays in the asking handoff, and the tail draws "Rested without a sign-off": the
+//   old question is not that rest's ending (RestedCard questionsHere). The server nudges this shape.
 //
 // Follows the frizz-stack recipe: a session row + a JSONL the REAL tailer reads. No process.
 // Usage: nub scripts/seed-question-claims.mjs --home=/abs/temp-home --port=NNNN
@@ -44,7 +47,7 @@ const at = (m) => new Date(T0 + m * 60_000).toISOString()
 const fence = (body) => `\`\`\`awaiting\n${body}\n\`\`\``
 const marker = (id) => `\`\`\`question ${id}\n\`\`\``
 
-function seed({ slug, sessionId, cache, distTag, title, finalHandoff }) {
+function seed({ slug, sessionId, cache, distTag, title, finalHandoff, register = [cache, distTag] }) {
   let n = 0
   const uuid = () => `${sessionId.slice(0, 24)}${String(++n).padStart(12, "0")}`
   const user = (min, content) => ({
@@ -108,7 +111,7 @@ function seed({ slug, sessionId, cache, distTag, title, finalHandoff }) {
       ],
     }],
   ]
-  for (const [id, spec] of questions) {
+  for (const [id, spec] of questions.filter(([id]) => register.includes(id))) {
     execFileSync("sqlite3", [
       db,
       `INSERT OR REPLACE INTO thread_question (id, project_id, thread_slug, spec, state, answer, delivered, asked_at, settled_at)
@@ -146,9 +149,19 @@ seed({
   ].join("\n"),
 })
 
+seed({
+  slug: "question-claims-bare",
+  sessionId: "c3a1e000-0000-4000-9000-0000000000cc",
+  cache: "qst_c3cache00001",
+  distTag: "qst_c3dist000001",
+  register: ["qst_c3cache00001"],
+  title: "Resolver fix — bare rest beside an old question",
+  finalHandoff: "CI is green on acme/resolver#391 with the changelog entry.",
+})
+
 const api = createRpcClient(`http://127.0.0.1:${port}/`)
 await api.waitForHealth()
-const slugs = ["question-claims-left", "question-claims-both"]
+const slugs = ["question-claims-left", "question-claims-both", "question-claims-bare"]
 for (let i = 0; i < 40; i++) {
   const board = await api.query("board")
   if (slugs.every((s) => board.threads.some((t) => t.id === s))) break
