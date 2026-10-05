@@ -6,7 +6,10 @@ import test from "node:test"
 // the strip did, and the strip has to come back the moment the window is too narrow to show the rail.
 // Real server, real tailer, real broker-row thread; only the absent launcher status probe is stubbed.
 // Boot scripts/adhoc-stack.mjs, then scripts/seed-full-rail-ops.mjs --port=<its port> --home=<its HOME>.
-// FRIZZ_FULL_RAIL_OPS_E2E_URL=http://127.0.0.1:<port> nub --test <this file>
+// FRIZZ_FULL_RAIL_OPS_E2E_URL=http://127.0.0.1:<port> nub run test <this file>
+// Through the suite's runner, not a bare `nub --test`: nub 0.9.5 runs a file handed to `nub --test` twice
+// at once (in the runner process AND in its test child), and two copies of this test race one stack.
+// Step 4 clears a row, so every run needs a fresh seed.
 const baseUrl = process.env.FRIZZ_FULL_RAIL_OPS_E2E_URL
 
 test("/full lists the thread's ops in its rail, and under the prompt box only once the rail is gone", { skip: !baseUrl, timeout: 120_000 }, async () => {
@@ -64,6 +67,15 @@ test("/full lists the thread's ops in its rail, and under the prompt box only on
     // 3. Back to wide: the strip yields to the rail again.
     await page.setViewport({ width: 1440, height: 900 })
     await page.waitForFunction(() => !document.querySelector("main[data-standalone-thread] [data-background-ops]"))
+
+    // 4. …and with it the strip's ×, which the rail carries under the strip's own gate (it had none until
+    // 2026-10-05, so /full wide offered no way to stop or clear a row). A stale row's × CLEARS — nothing
+    // runs to stop — so pressing the gone shell's retires it through the real server, without opening
+    // the drawer the rest of its row opens.
+    assert.ok(await page.$(`${railRow("toolu_fro_agent2")} button[aria-label="Clear sub-agent: Audit the old projection"]`), "the stale child offers Clear")
+    await page.click(`${railRow("toolu_fro_sh2")} button[aria-label="Clear background shell: Tail the old log"]`)
+    await page.waitForFunction((sel) => !document.querySelector(sel), {}, railRow("toolu_fro_sh2"))
+    assert.equal(await page.$(".frizz-sheet-panel"), null, "the × did not open the shell's drawer")
 
     assert.deepEqual(errors, [])
   } finally {

@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
-import { AgentRow, AwaitingBackgroundCard, AwaitingWaitTable, awaitingBackgroundLabel, awaitingBackgroundSubject, hasAwaitingWaitRows, restingOnSteps } from "./AwaitingBackgroundCard.tsx"
+import { AgentRow, AwaitingBackgroundCard, AwaitingWaitTable, BgShellRow, awaitingBackgroundLabel, awaitingBackgroundSubject, hasAwaitingWaitRows, restingOnSteps } from "./AwaitingBackgroundCard.tsx"
 import { CHILD_STALE_DOT_CLASS, CHILD_STALE_SHELL_TITLE, CHILD_STALE_TITLE } from "../lib/childOps.ts"
 import type { ThreadView } from "@frizz/shared"
 
@@ -283,6 +283,21 @@ test("the rail's row for a stale sub-agent wears the stale dot, never the spinne
   const live = renderToStaticMarkup(createElement(AgentRow, { agent: agent("running"), slug: "demo-thread", now }))
   assert.match(live, /animate-spin/)
   assert.doesNotMatch(live, /stale/)
+})
+
+// On /full the rail REPLACES the ops strip, so its agent and shell rows carry the strip's × — STOP while
+// running, CLEAR once not, with ChildOpRow's own words. The card passes none (the strip sits beneath it).
+test("a rail row given onDismiss carries the strip's stop/clear ×, directly after its name", () => {
+  const now = Date.parse("2026-07-28T09:30:00.000Z")
+  const noop = () => {}
+  const stopX = renderToStaticMarkup(createElement(AgentRow, { agent: agent("running"), slug: "demo-thread", now, onDismiss: noop }))
+  assert.match(stopX, /aria-label="Stop sub-agent: Audit the parser"/)
+  assert.ok(stopX.indexOf("Audit the parser</button>") < stopX.indexOf('aria-label="Stop sub-agent'), "the × follows the name")
+  assert.ok(stopX.indexOf('aria-label="Stop sub-agent') < stopX.indexOf("data-wait-status"), "…and precedes the status")
+  const clearX = renderToStaticMarkup(createElement(BgShellRow, { shell: { ...shell("running"), state: "stale" }, slug: "demo-thread", now, onDismiss: noop }))
+  assert.match(clearX, /aria-label="Clear background shell: vite dev"/)
+  assert.match(clearX, /title="Clear — stop tracking this finished operation"/)
+  assert.doesNotMatch(renderToStaticMarkup(createElement(AgentRow, { agent: agent("running"), slug: "demo-thread", now })), /aria-label="Stop/, "no onDismiss, no ×")
 })
 
 test("sub-agent rows are DIRECT and RUNNING only", () => {

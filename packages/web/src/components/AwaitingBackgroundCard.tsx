@@ -26,13 +26,13 @@
 // and the parent genuinely resumes; measured 15/15 times on a live worker thread, with idle windows as
 // short as 0.13s. This card is what makes that alternation legible.)
 import { Fragment, useEffect, useState, type ReactNode } from "react"
-import { Bot, ChevronRight, CircleAlert, CircleCheck, CircleDashed, CircleDot, CircleSlash, CircleX, Clock, GitMerge, GitPullRequestClosed, Hourglass, ListTodo, TerminalSquare } from "lucide-react"
+import { Bot, ChevronRight, CircleAlert, CircleCheck, CircleDashed, CircleDot, CircleSlash, CircleX, Clock, GitMerge, GitPullRequestClosed, Hourglass, ListTodo, TerminalSquare, X } from "lucide-react"
 import type { AwaitingHint, GithubIssueStatus, GithubWatchStatus, ThreadView, ThreadWatchView } from "@frizz/shared"
 import { awaitingFenceTitle, awaitingSteps, isDirectSubAgent } from "@frizz/shared"
 import { githubRefUrl } from "../lib/githubRef.ts"
 import { noteGithubRefs } from "../lib/githubHovercards.ts"
 import { AWAITING_FALLBACK_TITLE, AWAITING_NO_PROSE, awaitingProseBlock, prWatchRefs, STEPS_CHIP } from "../lib/awaitingPresentation.ts"
-import { CHILD_STALE_DOT_CLASS, CHILD_STALE_SHELL_TITLE, CHILD_STALE_TITLE } from "../lib/childOps.ts"
+import { CHILD_DISMISS_NOUN, CHILD_DISMISS_TITLE, CHILD_DISMISS_VERB, CHILD_STALE_DOT_CLASS, CHILD_STALE_SHELL_TITLE, CHILD_STALE_TITLE } from "../lib/childOps.ts"
 import { compactElapsedSince, formatCompactElapsed } from "../lib/durationLabels.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { useMarkdownHtml } from "../lib/useMarkdown.ts"
@@ -439,11 +439,15 @@ function Chevron() {
   return <ChevronRight size={13} aria-hidden className={`${ON_CAP} ml-[3px] -mr-[4px] text-muted-35 transition-colors group-hover:text-muted-70`} />
 }
 
-export function WaitRow({ mark, name, status, onOpen, onPrewarm, href, ghRef, title, testKind, testId, indent }: {
+export function WaitRow({ mark, name, status, onOpen, onPrewarm, href, ghRef, title, testKind, testId, indent, dismiss }: {
   mark: ReactNode
   name: string
   status: ReactNode
   onOpen?: () => void
+  /** The ops strip's stop/clear × (ChildOpRow), for the rows that REPLACE that strip: the /full rail's
+   *  sub-agents and shells (maintainer 2026-07-30: "the X button to stop a sub-agent should show up
+   *  everywhere sub-agents are listed"). Absent ⇒ no ×; the card leaves it to the strip beneath it. */
+  dismiss?: { onDismiss: () => void; title: string; label: string }
   /** Left inset in px for a row in a TREE (the rail's edited files). Switches the row from the shared
    *  subgrid to its own flex line — see ROW_FLEX for why subgrid cannot indent. */
   indent?: number
@@ -492,6 +496,26 @@ export function WaitRow({ mark, name, status, onOpen, onPrewarm, href, ghRef, ti
     )
     : <span className={nameClass} title={title}>{name}</span>
   const interactive = !!(href || onOpen)
+  // DIRECTLY AFTER THE NAME and always visible, quietly — the strip's placement and tone (ChildOpRow:
+  // at the far right it read as too subtle to find). `relative` lifts it over the name's stretched
+  // overlay, as the PR row's failures link is lifted, so pressing it never opens the row.
+  // `ml-0.5`, not the strip's 6px gap, and measured (ink-gaps.mjs, dsf 4, sans): 6.6–7.1px of ink after
+  // an untruncated name, the row's tight mark-to-name figure, because the × is the name's handle. A
+  // TRUNCATED name — the rail's usual case — adds its ellipsis remainder, which no margin removes:
+  // 8.6–13.6px, against 16.75px from the × to the widest status. At 6px the rows read 12.5–15.7px, the
+  // worst all but halfway to the status. Its ink centre is 0.23px under the cap band's: no nudge.
+  const x = dismiss && (
+    <button
+      type="button"
+      onClick={dismiss.onDismiss}
+      onMouseDown={(e) => e.stopPropagation()}
+      title={dismiss.title}
+      aria-label={dismiss.label}
+      className="relative ml-0.5 shrink-0 self-center rounded-sm p-0.5 text-muted-45 outline-none transition-colors hover:text-fg focus-visible:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60"
+    >
+      <X size={11} />
+    </button>
+  )
   return (
     <div
       data-wait-row={testId}
@@ -502,7 +526,7 @@ export function WaitRow({ mark, name, status, onOpen, onPrewarm, href, ghRef, ti
       className={`${tree ? ROW_FLEX : ROW} ${interactive ? "cursor-pointer transition-colors hover:bg-fg/[0.045]" : ""}`}
     >
       <span className="flex shrink-0">{mark}</span>
-      {open}
+      {x ? <span className="flex min-w-0 items-baseline">{open}{x}</span> : open}
       <span data-wait-status className={STATUS}>{status}</span>
       {interactive ? <Chevron /> : <span />}
     </div>
@@ -649,6 +673,14 @@ function ShellWatchRow({ watch, thread, slug, now }: {
   )
 }
 
+/** The strip's × for a rail row: STOP while the op runs, CLEAR once it does not — ChildOpRow's two
+ *  meanings and words. Whether there is a × at all is the caller's `childOpDismisser`, as on the strip. */
+function railDismiss(onDismiss: (() => void) | undefined, running: boolean, kind: "AGENT" | "SHELL", label: string) {
+  if (!onDismiss) return undefined
+  const tone = running ? "running" : "settled"
+  return { onDismiss, title: CHILD_DISMISS_TITLE[tone], label: `${CHILD_DISMISS_VERB[tone]} ${CHILD_DISMISS_NOUN[kind]}: ${label}` }
+}
+
 /** A background shell as a row — the declared-watch row above once its target resolved, and the
  *  fullscreen rail's row for EVERY shell the thread tracks, declared or not (a dev server the worker
  *  walked away from is still what is going on in the thread).
@@ -656,11 +688,12 @@ function ShellWatchRow({ watch, thread, slug, now }: {
  *  A STALE shell is a process the OS has confirmed gone (CHILD_STALE_SHELL_TITLE), so it drops the
  *  shell blue and says "stale". It read "running · 3h" here until 2026-10-05: a declared watch keeps
  *  its row after the shell it names dies, and that row is the reason the thread is back in the queue. */
-export function BgShellRow({ shell, slug, now, testId }: {
+export function BgShellRow({ shell, slug, now, testId, onDismiss }: {
   shell: ThreadView["bgShells"][number]
   slug: string
   now: number
   testId?: string
+  onDismiss?: () => void
 }) {
   const elapsed = compactElapsedSince(shell.startedAt, now)
   const running = shell.state === "running"
@@ -679,6 +712,7 @@ export function BgShellRow({ shell, slug, now, testId }: {
       onOpen={openable ? () => pushBackgroundShellDrawer(slug, shell.id!, { label: shell.label, startedAt: shell.startedAt }) : undefined}
       title={openable ? `Read this shell's output — ${state}` : running ? shell.label : `${shell.label} — ${state}`}
       status={elapsed ? `${word} · ${elapsed}` : word}
+      dismiss={railDismiss(onDismiss, running, "SHELL", shell.label)}
     />
   )
 }
@@ -721,7 +755,7 @@ export function liveAgents(thread: Pick<ThreadView, "subAgents">) {
   return (thread.subAgents ?? []).filter((a) => isDirectSubAgent(a) && a.state === "running")
 }
 
-export function AgentRow({ agent, slug, now }: { agent: ThreadView["subAgents"][number]; slug: string; now: number }) {
+export function AgentRow({ agent, slug, now, onDismiss }: { agent: ThreadView["subAgents"][number]; slug: string; now: number; onDismiss?: () => void }) {
   const elapsed = compactElapsedSince(agent.startedAt, now)
   // The profile without its namespace: `frizz:opus-high` is how it is dispatched, `opus-high` is how the
   // maintainer says it, and the row has no width to spend on a prefix every row would repeat.
@@ -744,6 +778,7 @@ export function AgentRow({ agent, slug, now }: { agent: ThreadView["subAgents"][
       onOpen={agent.id ? () => pushSubAgentDrawer(slug, agent.id!, { label: agent.label, subagentType: agent.subagentType, startedAt: agent.startedAt }) : undefined}
       title={agent.id ? `Open this sub-agent — ${stale ? CHILD_STALE_TITLE : `working for ${elapsed}`}` : agent.label}
       status={[stale ? "stale" : undefined, profile, elapsed].filter(Boolean).join(" · ")}
+      dismiss={railDismiss(onDismiss, agent.state === "running", "AGENT", agent.label)}
     />
   )
 }

@@ -5,6 +5,7 @@ import { useSnapshot } from "valtio"
 import { isDirectSubAgent, type EditedFile, type ThreadLinkView, type ThreadView } from "@frizz/shared"
 import { useHomeDir, useProjectDir, useTranscript } from "../hooks.ts"
 import { mergeBackgroundShells } from "../lib/childOps.ts"
+import { childOpDismisser } from "../lib/dismissChildOp.ts"
 import { editedFileTree, flattenEditedFileTree } from "../lib/editedFileTree.ts"
 import { newestFileChangeKey } from "../lib/editedFilesRefresh.ts"
 import { openLocalPath } from "../lib/local-file-links.ts"
@@ -226,7 +227,8 @@ export function FocusRail({ thread }: { thread: ThreadView }) {
   // still working (the server emits it only while that fan-out runs, tailer anchorRoots), so it stands
   // for the branch; a STALE one is quiet past its window and draws as such (AgentRow). This rail kept
   // only running and rested until 2026-10-05, so a stale child vanished from /full altogether. The card
-  // keeps its own set: it counts the results the thread still AWAITS (`liveAgents`).
+  // keeps its own set: it counts the results the thread still AWAITS (`liveAgents`). For the same reason
+  // each agent and shell row carries the strip's stop/clear ×, under the strip's own gate.
   const agents = (thread.subAgents ?? []).filter(isDirectSubAgent)
   // The board's shells PLUS the transcript's: a Codex background exec is transcript-native and the board
   // reports none for it (ChatView.transcriptBackgroundShells). A Claude shell arrives through both, and
@@ -249,8 +251,8 @@ export function FocusRail({ thread }: { thread: ThreadView }) {
   // rail with them, and the wait rows above are what the reader came for. The fold is a saved view
   // preference (lib/prefs.ts), so it holds across threads and reloads.
   const groups: WaitGroup[] = [
-    { head: "Sub-agents", rows: agents.map((a) => <AgentRow key={a.id ?? a.label} agent={a} slug={thread.id} now={now} />) },
-    { head: "Background shells", rows: shells.map((s) => <BgShellRow key={s.id ?? s.label} shell={s} slug={thread.id} now={now} />) },
+    { head: "Sub-agents", rows: agents.map((a) => <AgentRow key={a.id ?? a.label} agent={a} slug={thread.id} now={now} onDismiss={childOpDismisser(thread.id, a)} />) },
+    { head: "Background shells", rows: shells.map((s) => <BgShellRow key={s.id ?? s.label} shell={s} slug={thread.id} now={now} onDismiss={childOpDismisser(thread.id, s, "SHELL")} />) },
     { head: "Pull requests", rows: prs.map((w) => <GithubWatchRow key={w.id} watch={w} />) },
     { head: "Issues", rows: issues.map((w) => <GithubWatchRow key={w.id} watch={w} />) },
     { head: "Timers", rows: timers.map((w) => <TimerRow key={w.id} watch={w} now={now} />) },
