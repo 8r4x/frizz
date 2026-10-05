@@ -171,8 +171,12 @@ export function TodosView() {
   // adjustments are one-shot and deterministic: (1) at a card's unmount (the useLayoutEffect below) — a
   // USER-INITIATED dismissal auto-scrolls the next card to the viewport top (maintainer 2026-07-21),
   // while a pure board departure only holds a visible neighbour in place — and (2) the sidebar's
-  // scroll-to-card (scrollToQueueCard in store.ts), a direct response to a click. Neither is a background
-  // auto-scroll or a running observer; the browser's native scroll anchoring handles ordinary reflow.
+  // scroll-to-card (scrollToQueueCard in store.ts), a direct response to a click or a deep link. Neither
+  // is a background auto-scroll; the browser's native scroll anchoring handles ordinary reflow. The one
+  // observer is scoped to (2) and never standing: scrollToQueueCard HOLDS its landing while the queue
+  // above is still sizing, and drops it at the reader's first wheel, touch, press, key or scrollbar drag,
+  // or after a fixed bound (lib/queueLandingHold, 2026-10-05: a cold deep link's card was pushed out of
+  // view by the transcripts and pictures that loaded above it, at scrollY 0, where nothing anchors).
 
   // OPTIMISTIC EXIT: a dismissed card leaves the list the instant the human acts, without waiting for the
   // board push (which lags seconds behind on some paths — a sent message clears the queue only once the

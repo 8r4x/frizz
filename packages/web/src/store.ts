@@ -6,6 +6,7 @@ import type { LightboxImage } from "./lib/lightbox.ts"
 import { disarmFullscreenMorph } from "./lib/fullscreenMorph.ts"
 import { closeDrawerAnimated, focusDrawer } from "./lib/overlays.ts"
 import { isPageScrollLocked, pageScrollY, requestScrollAfterUnlock } from "./lib/pageScrollLock.ts"
+import { holdQueueCardLanding } from "./lib/queueLandingHold.ts"
 import { resolveThreadRoute } from "./lib/threadRouteState.ts"
 import { standaloneThreadHref } from "./lib/standaloneThreadRoute.ts"
 import { ownedByThisPage } from "./lib/projectOwnership.ts"
@@ -417,6 +418,12 @@ export function scrollToQueueCard(slug: string): boolean {
     if (isPageScrollLocked()) requestScrollAfterUnlock(targetY)
     else if (Math.abs(window.scrollY - targetY) > 0.5) window.scrollTo({ top: targetY, left: 0, behavior: "auto" })
   }
+  // And KEEP it there while the queue above is still settling, until the reader scrolls for themselves
+  // (lib/queueLandingHold). A cold `/thread/<slug>` deep link lands before the cards above it have
+  // their transcripts or pictures, and those then pushed the routed card ~1,400px out of view
+  // (2026-10-05). Armed for every door, not only the deep link: a sidebar click into a queue whose
+  // pictures are still decoding has the same race, just a smaller one.
+  holdQueueCardLanding(() => queueCardRoot(slug), () => queueCardTargetY(slug))
   flashQueueCard(slug, root)
   return true
 }
