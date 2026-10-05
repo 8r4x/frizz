@@ -1164,6 +1164,20 @@ a[href] {
 [data-question-option] .md-body pre code {
   background: none;
 }
+/* An option's DETAIL steps down half a size from its 12px label (QuestionBlockCard's Chip), and its
+   paragraph rhythm follows. The `text-[11.5px]` that said so sat on the element and never applied:
+   `.md-body` and `.card-md .md-body` are unlayered, so they outrank every Tailwind utility, and the
+   detail rendered at the card's 13px — LARGER than the label it explains (measured 2026-10-05). The
+   worker's trailing "Note: …" lost its 12px the same way. Both rules match `.card-md .md-body`'s
+   specificity and come after it. */
+[data-question-option] .md-body {
+  --md-step: 11.5px;
+  font-size: 11.5px;
+}
+[data-question-note] .md-body {
+  --md-step: 12px;
+  font-size: 12px;
+}
 [data-question-option] .md-body table,
 [data-question-option] .md-body th,
 [data-question-option] .md-body td {
