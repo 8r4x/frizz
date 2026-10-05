@@ -3628,7 +3628,7 @@ export function createRouter(ctx: AppContext) {
     quota: query({
       input: z.object({ force: z.boolean().optional() }).strict().optional(),
       output: QuotaSnapshot,
-      handler: async ({ input }) => readQuota({ claudeBin: ctx.claudeBin, force: input?.force }),
+      handler: async ({ input }) => readQuota({ claudeBin: ctx.claudeBin, codexBin: ctx.codexBin, force: input?.force }),
     }),
 
     // Per-provider LOCAL credential presence for the new-thread dispatch gate. Distinct from `quota`

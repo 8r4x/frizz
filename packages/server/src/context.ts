@@ -938,8 +938,9 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     // Second wake source: every thread a subscription window cut off mid-turn gets its own "continue"
     // once that window rolls, over this same delivery path. The quota reader supplies the fallback
     // instant for a weekly limit, whose message text carries a clock but no date; readQuota memoizes,
-    // so consulting it per tick costs a live request only every few minutes.
-    readQuota,
+    // so consulting it per tick costs a live request only every few minutes. Read through the resolved
+    // runtimes, as the quota RPC does: a bare call would start whatever `codex` is first on PATH.
+    readQuota: () => readQuota({ claudeBin: opts.claudeBin, codexBin: opts.codexBin }),
     // The only runtime that can answer is the broker: its daemon record is on disk while the daemon
     // lives and is unlinked when it dies (liveBrokerRecords checks the pid), so "did the process that
     // took this wake survive" is one directory read. Codex and any row whose session moved on answer
