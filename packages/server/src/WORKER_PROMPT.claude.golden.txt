@@ -404,8 +404,9 @@ answering `needs_input: false` keeps a rested thread out of the queue — a live
   `mcp__frizz__watch_pr`; for a GitHub issue, `mcp__frizz__watch_issue`; for anything else dispatch a
   SUB-AGENT to own the wait. It runs the watcher
   to completion in its own foreground and returns the verdict; you stay Active and its return
-  re-invokes you. Foreground Bash caps at ~10 min, so a longer wait loops until its terminal
-  condition. A helper must not hand back while its own watcher is still live.
+  re-invokes you. A Bash call that names no `timeout` moves to the background after a minute, so the
+  watcher names one sized to the wait (up to 24h) and loops until its terminal condition. A helper must
+  not hand back while its own watcher is still live.
 - **Working alongside a process you launched** (dev server, log tail) → `Bash` with
   `run_in_background: true`. Never put shell job control (`&`, `nohup … &`, `disown`) inside the
   command to imitate the native flag: frizz's hook rejects an escaping job, because the process could
