@@ -116,6 +116,13 @@ window.fetch = async (input, init) => {
     }
     return new Response(JSON.stringify({ result: {} }), { headers: { "content-type": "application/json" } })
   }
+  // The settled-questions read every card makes (RegisteredQuestionCards): an empty list, not the
+  // catch-all's `{}`, whose missing `questions` reached React Query as undefined data and logged an
+  // error per card — which the e2e's "no console errors" assertion then failed on (the same fix as
+  // optimistic-done-fixture, b78fe15d).
+  if (url.pathname === "/_frizz/rpc/threadSettledQuestions") {
+    return new Response(JSON.stringify({ result: { questions: [] } }), { headers: { "content-type": "application/json" } })
+  }
   if (url.pathname.startsWith("/_frizz/rpc/")) {
     return new Response(JSON.stringify({ result: {} }), { headers: { "content-type": "application/json" } })
   }
