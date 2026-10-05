@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react"
 import { ExternalLink, FileText } from "lucide-react"
 import type { ThreadView } from "@frizz/shared"
-import { mergeBackgroundShells, visibleChildOps } from "../lib/childOps.ts"
+import { CHILD_RESTED_DOT_CLASS, CHILD_STALE_DOT_CLASS, mergeBackgroundShells, visibleChildOps } from "../lib/childOps.ts"
 import { isRunningOperation } from "../lib/operationIndicators.ts"
 import { BackgroundOpsStrip } from "./ChatView.tsx"
 import { QueueSubAgentLines, hasQueueSubAgentLines } from "./QueueSubAgentLines.tsx"
@@ -25,8 +25,8 @@ import { Popover, PopoverAnchor, PopoverContent } from "./ui/Popover.tsx"
 // the line and the panel cannot disagree about how many there are.
 //
 // THE MARK IS THE ROWS' OWN LIVENESS DOT, in the row's hue (yellow agent, blue shell, violet watch), and
-// it pulses only while at least one row of that kind is running — a settled shell's row does not pulse,
-// so neither does its count.
+// it pulses only while at least one row of that kind is running. Otherwise it is the rows' own settled
+// mark (lib/childOps.ts): the hollow ring when one of them rested, the flat dot when they went stale.
 export function QueueOpsSummary({ thread }: { thread: ThreadView }) {
   const [open, setOpen] = useState(false)
   const closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
@@ -40,11 +40,11 @@ export function QueueOpsSummary({ thread }: { thread: ThreadView }) {
   const files = links.filter((link) => link.kind === "file")
   const urls = links.filter((link) => link.kind === "link")
   const groups: { key: string; n: number; one: string; many: string; mark: ReactNode }[] = [
-    { key: "agent", n: agents.length, one: "agent", many: "agents", mark: <Dot hue="agent" live={agents.some((agent) => isRunningOperation(agent.state))} /> },
-    { key: "shell", n: shells.length, one: "shell", many: "shells", mark: <Dot hue="shell" live={shells.some((shell) => isRunningOperation(shell.state))} /> },
+    { key: "agent", n: agents.length, one: "agent", many: "agents", mark: <Dot hue="agent" states={agents.map((agent) => agent.state)} /> },
+    { key: "shell", n: shells.length, one: "shell", many: "shells", mark: <Dot hue="shell" states={shells.map((shell) => shell.state)} /> },
     // A parked watcher IS live — its row is always `running` (BackgroundOpsStrip) — so its dot pulses.
-    { key: "pr", n: prs.length, one: "PR", many: "PRs", mark: <Dot hue="github" live /> },
-    { key: "issue", n: issues.length, one: "issue", many: "issues", mark: <Dot hue="github" live /> },
+    { key: "pr", n: prs.length, one: "PR", many: "PRs", mark: <Dot hue="github" states={["running"]} /> },
+    { key: "issue", n: issues.length, one: "issue", many: "issues", mark: <Dot hue="github" states={["running"]} /> },
     { key: "file", n: files.length, one: "file", many: "files", mark: <FileText aria-hidden className="h-[1em] w-[1em] text-muted-45" /> },
     { key: "link", n: urls.length, one: "link", many: "links", mark: <ExternalLink aria-hidden className="h-[1em] w-[1em] text-muted-45" /> },
   ].filter((group) => group.n > 0)
@@ -120,10 +120,7 @@ export function QueueOpsSummary({ thread }: { thread: ThreadView }) {
   )
 }
 
-function Dot({ hue, live }: { hue: "agent" | "shell" | "github"; live: boolean }) {
-  return live ? (
-    <span className={`frizz-live-dot frizz-live-dot--${hue}`} />
-  ) : (
-    <span className="block h-1.5 w-1.5 rounded-full border border-muted/45" />
-  )
+function Dot({ hue, states }: { hue: "agent" | "shell" | "github"; states: readonly (string | undefined)[] }) {
+  if (states.some(isRunningOperation)) return <span className={`frizz-live-dot frizz-live-dot--${hue}`} />
+  return <span className={states.includes("rested") ? CHILD_RESTED_DOT_CLASS : CHILD_STALE_DOT_CLASS} />
 }
