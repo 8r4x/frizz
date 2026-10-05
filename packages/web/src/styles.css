@@ -716,10 +716,22 @@ a[href] {
    CARD_BODY's 13px — the exact "a two-line explanation in one card is visibly larger than the same
    sentence in the card above it" inconsistency the shared chrome exists to kill. Colour is inherited
    so the card's own description strength wins; --md-step follows the size so the paragraph rhythm
-   stays proportional. */
+   stays proportional.
+
+   THE LINE HEIGHT FOLLOWS TOO (2026-10-05): CARD_BODY's 20px, not the transcript's 1.7. The size was
+   matched and the leading was not, so a card's markdown set its 13px lines 22.1px apart while the plain
+   sentence in the card above it set them 20px apart — the same inconsistency one property over, and it
+   is most of why prose inside a card read loose (maintainer: "in terms of prose rendering inside of
+   these cards … The spacing isn't quite right"). Measured on the steps card, ink to ink: 9.75px between
+   a paragraph's lines and 16px between list items at 1.7; 7.75px and 14px at 20px.
+   Written as a RATIO (20px at this 13px) so it inherits the way the transcript's 1.7 does: a smaller
+   inline code chip or table cell takes proportionally smaller leading instead of a pinned 20px.
+   --md-task-line must track it, as it tracks the 1.7 below. */
 .card-md .md-body {
   --md-step: 13px;
   font-size: 13px;
+  line-height: calc(20 / 13);
+  --md-task-line: calc(20em / 13);
   color: inherit;
 }
 .md-body > :first-child {
@@ -841,8 +853,9 @@ a[href] {
   list-style: none;
   position: relative;
   /* An EMPTY item (`- [ ]`, an unfilled task-list entry) has no in-flow content once the box is
-     positioned out, so its `<li>` would collapse to zero height and hide the box. One line's worth. */
-  min-height: 1.7em;
+     positioned out, so its `<li>` would collapse to zero height and hide the box. One line's worth —
+     the line the box itself is placed on, so a card's tighter leading (`.card-md .md-body`) holds too. */
+  min-height: var(--md-task-line);
 }
 .md-body .md-task {
   position: absolute;
@@ -1043,6 +1056,15 @@ a[href] {
 }
 .card-md .md-body pre code {
   background: none;
+}
+/* An inline chip must not make its LINE taller. The mono stack's metrics push a code fragment's line
+   box above the sans strut, so a line carrying a command stood 1.9px taller than one without (21.98px
+   against 20px; 23.98px against 22.09px at the old 1.7) — and a steps list, where some items carry a
+   command and some do not, spaced its items unevenly. `line-height: 1` keeps the fragment inside the
+   strut; the chip's fill paints the content area, which leading does not touch. Fenced code is left
+   alone: its lines are the `<pre>`'s own. */
+.card-md .md-body :not(pre) > code {
+  line-height: 1;
 }
 /* Inline-only markdown (answer chips, the recommendation caption): honor inline emphasis/strong/del/
    links without md-body's block chrome. Code shares the prose chip above; emphasis maps to weight/style. */

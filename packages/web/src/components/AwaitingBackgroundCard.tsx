@@ -31,7 +31,7 @@ import type { AwaitingHint, GithubIssueStatus, GithubWatchStatus, ThreadView, Th
 import { awaitingFenceTitle, awaitingSteps, isDirectSubAgent } from "@frizz/shared"
 import { githubRefUrl } from "../lib/githubRef.ts"
 import { noteGithubRefs } from "../lib/githubHovercards.ts"
-import { AWAITING_FALLBACK_TITLE, AWAITING_NO_PROSE, awaitingProseBlock, prWatchRefs, STEPS_FALLBACK_TITLE } from "../lib/awaitingPresentation.ts"
+import { AWAITING_FALLBACK_TITLE, AWAITING_NO_PROSE, awaitingProseBlock, prWatchRefs, STEPS_CHIP } from "../lib/awaitingPresentation.ts"
 import { compactElapsedSince, formatCompactElapsed } from "../lib/durationLabels.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { useMarkdownHtml } from "../lib/useMarkdown.ts"
@@ -146,7 +146,7 @@ export function awaitingBackgroundLabel(
   thread: Pick<ThreadView, "subAgents" | "bgShells" | "watches">,
   hints: readonly AwaitingHint[],
 ): string {
-  return awaitingFenceTitle(hints) ?? (awaitingSteps(hints).length > 0 ? STEPS_FALLBACK_TITLE : shellsAlone(thread) ? "Background shells running" : AWAITING_FALLBACK_TITLE)
+  return awaitingFenceTitle(hints) ?? (shellsAlone(thread) ? "Background shells running" : AWAITING_FALLBACK_TITLE)
 }
 
 /** Background shells and nothing else — the one shape with a title of its own. An armed timer
@@ -1042,6 +1042,7 @@ export function AwaitingBackgroundCard({ thread, fence, onSnooze, onSnoozeFailed
   // `steps:` — the fence is waiting on the HUMAN to perform these (2026-10-03). Drawn under the prose on
   // every surface; the verbs that answer them only while the thread rests on them (restingOnSteps).
   const steps = awaitingSteps(hints)
+  const stepsTitle = steps.length > 0 ? awaitingFenceTitle(hints) : null
   const stepsLive = thread !== undefined && restingOnSteps(thread, steps)
   const waiting = awaitsResults(work)
   // THE WORKER'S OWN HANDOFF, opening the card (maintainer 2026-08-24: "the rendered message at the
@@ -1088,14 +1089,19 @@ export function AwaitingBackgroundCard({ thread, fence, onSnooze, onSnoozeFailed
       // watcher genuinely IS waiting on something to come back. A per-kind glyph would rebuild the
       // per-kind card the consolidation removed, exactly as a per-kind title did.
       // STEPS TAKE A THIRD, and only because their wait is of a different kind: the reader is the one
-      // being waited on, so the card is a to-do rather than a status.
+      // being waited on, so the card is a to-do rather than a status. It rides a KIND CHIP rather than
+      // the title (2026-10-05, TranscriptCard's KindChip): "To do" over the worker's own title, which is
+      // left out when the worker named none — the chip already says what the card is for.
       icon={steps.length > 0 ? ListTodo : shellsAlone(work) ? TerminalSquare : Hourglass}
+      chip={steps.length > 0 ? STEPS_CHIP : undefined}
       // WRAPPED AT ANY CHARACTER, because this heading can now be WORKER-AUTHORED. Every other card in
       // the family carries a code-authored label, so the header's wrap-don't-truncate rule never had to
       // survive an unbreakable token; a `title:` naming a branch, a URL or a base64 id is one. Measured
       // at the queue card's narrowest (368px content box, sans): a 40-character single token bled 135.64px
       // PAST the card's right edge without this, and wraps inside it with it.
-      label={<span className="[overflow-wrap:anywhere]">{awaitingBackgroundLabel(work, hints)}</span>}
+      label={steps.length > 0
+        ? (stepsTitle ? <span className="[overflow-wrap:anywhere]">{stepsTitle}</span> : null)
+        : <span className="[overflow-wrap:anywhere]">{awaitingBackgroundLabel(work, hints)}</span>}
       // ONE watched PR the table does not already row rides the title, as the GitHub wake card's ref
       // does; SEVERAL take a row of their own under the prose (see unrowedWatchRefs).
       aside={unrowed.length === 1 ? <WatchedRef watch={unrowed[0]} /> : undefined}
