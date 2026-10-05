@@ -21,7 +21,7 @@
 // fence wraps `code` and [links](…) that the registration's plain string cannot carry) and about
 // trailing prose (the worker appends a parenthetical), and strict about the question itself.
 import type { RegisteredQuestionView } from "@frizz/shared"
-import { type AnchorMessage, questionsByAnchor } from "./questionAnchor.ts"
+import { type AnchorMessage, questionsByAnchor, restEnd } from "./questionAnchor.ts"
 import { type MessageSegment, parseQuestionBlock, splitQuestionBlocks } from "./questionBlocks.ts"
 
 /** The rest a question's anchor closes: the index of its first message — the one after the previous
@@ -54,7 +54,8 @@ export function registeredStandingAt<Q extends { askedAt: string }>(
   questions: readonly Q[],
 ): Map<number, Q[]> {
   const byMessage = new Map<number, Q[]>()
-  for (const [anchor, group] of questionsByAnchor(messages, questions)) {
+  // The ASKING rest, not a later claim: a fence restating the question folds from where it was asked on.
+  for (const [anchor, group] of questionsByAnchor(messages, questions, { claims: false })) {
     for (let i = restStart(messages, anchor); i < messages.length; i++) {
       if (isTurn(messages[i])) continue
       const at = byMessage.get(i)
@@ -155,17 +156,14 @@ export function allFencesShadowed(
 // And the placement is NOT confined to the asking rest: a worker that rests again after the human
 // replied past the question writes its marker into THAT handoff, and the marker takes there.
 //
-// BUT A MARKER ONLY PLACES WITHIN THE REST THAT WROTE IT, and that is what `atRest` buys (2026-09-13).
-// The scan used to run from the question's own anchor to the end of the loaded window, so a marker from
-// an OLD rest kept the card pinned there forever — and the anchor path's at-rest re-anchor (see
-// questionAnchor: at rest, every open question belongs to the CURRENT rest) could never reach it,
-// because a placed question is subtracted from that path before it runs. The thread then rested again
-// with the question still open, the card stayed thousands of pixels up at the rest that asked it, and
-// the tail drew the group's bare disabled "Send answers" with nothing above it to answer. Which is the
-// 2026-08-31 report — "Why was this able to come to rest without a proper handoff?" — arriving again
-// through the marker, reported 2026-09-13 as "How did this thread pause without a sign-off?". At rest
-// the scan therefore starts at the CURRENT rest: a worker that wants its card in the handoff writes the
-// marker into the handoff, and one that says nothing gets the card at the tail where the rest is.
+// THE SCAN STARTS AT THE NEWEST REST THAT CLAIMS THE QUESTION (2026-10-05) — lib/questionAnchor: the
+// rest that asked it, or a later one whose ```awaiting fence names it under `questions:`. A marker in the
+// asking handoff therefore keeps the card in that prose for as long as no later rest claims it, which is
+// the point: a question stays embedded where the worker couched it, and a later rest that says nothing
+// about it leaves it there. A later fence that names it moves it to that rest — into its prose if a
+// marker there places it, otherwise under the fence. (From 2026-09-13 the scan instead started at the
+// CURRENT rest whenever the thread was at rest, so every marker but the newest handoff's stopped placing
+// and every open card fell to the tail — the stacking the maintainer reported on 2026-10-01.)
 
 /** The registration a ```question fence STANDS FOR, if any: the one its info-string id names, else the
  *  one its prose restates. The id is exact and the prose is not, so a worker that writes
@@ -193,20 +191,14 @@ export function markerIdsIn(text: string): string[] {
   return splitQuestionBlocks(text).flatMap((seg) => seg.kind === "question" && seg.registeredId && seg.text.trim() === "" ? [seg.registeredId] : [])
 }
 
-/** Where each registered question renders, given what the messages from its ask onward actually wrote:
- *  the LAST message (the newest handoff — the one the human is reading; an older placement is history)
- *  from the question's rest onward whose empty marker names its id. A question no loaded message names
- *  is absent from `placed` and renders at its anchor. Human turns never place anything — a wake carries
- *  no marker of the worker's.
- *
- *  `atRest` is the same caller knowledge questionsByAnchor takes, and it narrows the scan to the rest
- *  the human is reading: at rest an open question belongs to the CURRENT rest, so only a marker in that
- *  rest places it and a stale one from an older rest lets it fall back to the tail. Mid-flight the
- *  question still belongs to the rest it was asked at, and so does its marker. */
+/** Where each registered question renders, given what the messages from its claiming rest onward
+ *  actually wrote: the LAST message (the newest handoff — an older placement is history) from that rest
+ *  onward whose empty marker names its id. A question no loaded message names is absent from `placed`
+ *  and renders at its anchor. Human turns never place anything — a wake carries no marker of the
+ *  worker's. */
 export function placeQuestions<Q extends Pick<RegisteredQuestionView, "id"> & { askedAt: string }>(
-  messages: readonly (AnchorMessage & { text?: string })[],
+  messages: readonly AnchorMessage[],
   questions: readonly Q[],
-  opts: { atRest?: boolean } = {},
 ): QuestionPlacement<Q> {
   const placed = new Map<number, Q[]>()
   const placedIds = new Set<string>()
@@ -222,7 +214,7 @@ export function placeQuestions<Q extends Pick<RegisteredQuestionView, "id"> & { 
     }
     return ids
   }
-  for (const [anchor, group] of questionsByAnchor(messages, questions, opts)) {
+  for (const [anchor, group] of questionsByAnchor(messages, questions)) {
     for (const q of group) {
       const id = q.id.toLowerCase()
       let placedAt = -1
@@ -240,3 +232,30 @@ export function placeQuestions<Q extends Pick<RegisteredQuestionView, "id"> & { 
   return { placed, placedIds }
 }
 
+/** The placement as a surface that draws messages from `start` onward can honour it: a card placed by a
+ *  marker in a message ABOVE `start` has no message to render in, so it leaves `placed` and goes back to
+ *  its anchor group, which that surface draws at the top of what it shows — card and Send together. The
+ *  queue card is the surface: its window is cut at the previous rest, and since 2026-10-05 a marker in an
+ *  older rest keeps placing until a later fence claims the question. Left in, the card vanished and its
+ *  rest's Send flushed alone above the window, with nothing to answer. */
+export function placedFrom<Q extends Pick<RegisteredQuestionView, "id">>(placement: QuestionPlacement<Q>, start: number): QuestionPlacement<Q> {
+  if (start <= 0) return placement
+  const placed = new Map<number, Q[]>()
+  const placedIds = new Set<string>()
+  for (const [at, group] of placement.placed) {
+    if (at < start) continue
+    placed.set(at, group)
+    for (const q of group) placedIds.add(q.id)
+  }
+  return { placed, placedIds }
+}
+
+/** The rest each PLACED question sits in, as the index of the message closing it. A rest whose every
+ *  card is inside its prose has no stack of its own, so this is where the surface draws that rest's Send
+ *  — and only there: a Send-only stack at the transcript's tail with nothing above it to answer is the
+ *  2026-09-13 report ("How did this thread pause without a sign-off?"). */
+export function placedRestEnds<Q>(messages: readonly AnchorMessage[], placement: QuestionPlacement<Q>): Set<number> {
+  const ends = new Set<number>()
+  for (const at of placement.placed.keys()) ends.add(restEnd(messages, at))
+  return ends
+}

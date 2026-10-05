@@ -8,10 +8,10 @@
 // the transcript AS IT STOOD when the answer was sent. The open card's position comes from two readers —
 // a marker placement (lib/questionShadow placeQuestions) and the rest anchor (lib/questionAnchor
 // questionsByAnchor) — and both read only the messages. So each answer batch replays exactly those two
-// readers over the PREFIX of the transcript that existed before its `settledAt`, with `atRest` true: a
-// human answers a card at rest, and an at-rest card belongs to the rest the human was reading. What the
-// worker wrote after the answer (the answer itself, the turn it woke) is outside the prefix, so it can
-// neither move the card nor bury it.
+// readers over the PREFIX of the transcript that existed before its `settledAt`: the card stood at the
+// newest rest in that prefix that claimed it (the asking rest, or a later fence naming it), in the slot
+// of the newest marker there. What the worker wrote after the answer (the answer itself, the turn it
+// woke) is outside the prefix, so it can neither move the card nor bury it.
 //
 // A question whose rest is older than the loaded window (anchor -1) draws nothing here. An OPEN one
 // renders at the top of the window in that case, because it is still owed an answer and must not be out
@@ -57,7 +57,7 @@ function aboveTrailingEvents(messages: readonly AnchorMessage[], anchor: number)
 }
 
 export function settledQuestionPositions<S extends SettledPositionable>(
-  messages: readonly (AnchorMessage & { text?: string })[],
+  messages: readonly AnchorMessage[],
   settled: readonly S[],
 ): SettledPlacement<S> {
   const placed = new Map<number, S[]>()
@@ -82,10 +82,10 @@ export function settledQuestionPositions<S extends SettledPositionable>(
     const cut = Number.isFinite(settledAtMs) ? prefixLength(messages, settledAtMs) : messages.length
     if (cut === 0) continue
     const prefix = messages.slice(0, cut)
-    const placement = placeQuestions(prefix, batch, { atRest: true })
+    const placement = placeQuestions(prefix, batch)
     for (const [at, group] of placement.placed) add(placed, at, group)
     const unplaced = batch.filter((s) => !placement.placedIds.has(s.id))
-    for (const [anchor, group] of questionsByAnchor(prefix, unplaced, { atRest: true })) {
+    for (const [anchor, group] of questionsByAnchor(prefix, unplaced)) {
       if (anchor < 0) continue
       add(anchored, aboveTrailingEvents(prefix, anchor), group)
     }

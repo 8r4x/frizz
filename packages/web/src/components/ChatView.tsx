@@ -28,7 +28,7 @@ import { RestedCard, showsRestedCard } from "./RestedCard.tsx"
 import { ProviderErrorCard, providerErrorVisible } from "./ProviderErrorCard.tsx"
 import { parseAnswersCard, pairAllAnswers, unrenderedAnswers, type PairedAnswer } from "../lib/answersMessage.ts"
 import { questionsByAnchor } from "../lib/questionAnchor.ts"
-import { fenceStandsFor, placeQuestions, registeredStandingAt, type QuestionPlacement } from "../lib/questionShadow.ts"
+import { fenceStandsFor, placedRestEnds, placeQuestions, registeredStandingAt, type QuestionPlacement } from "../lib/questionShadow.ts"
 import { settledQuestionPositions, type SettledPlacement } from "../lib/settledQuestions.ts"
 import { FrizzWake } from "./FrizzWake.tsx"
 import { RecurringPromptLine } from "./RecurringPromptLine.tsx"
@@ -338,11 +338,10 @@ function ChatView({ slug, virtualized, phone = false, railBeside = false }: { sl
   // restating or naming one folds into its card.
   const shadowedByMessage = useMemo(() => registeredStandingAt(messages, openQuestions), [messages, openQuestions])
   // Where the worker PLACED its registered questions — the message whose empty ```question qst_… marker
-  // names each one (lib/questionShadow). A placed card renders in that slot and is subtracted from its
-  // anchor group; every other question renders at its anchor as before. At rest only a marker in the
-  // CURRENT rest places: a stale one from the rest that asked the question would otherwise strand the
-  // card up there while the handoff below it drew a bare Send button.
-  const placement = useMemo(() => placeQuestions(messages, openQuestions, { atRest: !running }), [messages, running, openQuestions])
+  // names each one, from the newest rest that claims the question onward (lib/questionShadow). A placed
+  // card renders in that slot and is subtracted from its anchor group; every other question renders at
+  // its anchor as before.
+  const placement = useMemo(() => placeQuestions(messages, openQuestions), [messages, openQuestions])
   // Where each ANSWERED question's card stood when it was answered — the same two readers, replayed over
   // the transcript as it was before the answer (lib/settledQuestions).
   const settledPlacement = useMemo(() => settledQuestionPositions(messages, settledQuestions), [messages, settledQuestions])
@@ -705,7 +704,7 @@ type VirtualThreadRow =
   | { key: "interactions"; kind: "interactions" }
   // A REGISTERED question, dropped at the REST IT WAS ASKED AT rather than at the tail — see
   // lib/questionAnchor. Its own row because it belongs BETWEEN two messages, which the tail cannot be.
-  | { key: string; kind: "questions"; questions: RegisteredQuestionView[] }
+  | { key: string; kind: "questions"; questions: RegisteredQuestionView[]; send?: boolean }
   // ANSWERED registered questions, greyed, in the slot the open card filled when it was answered — see
   // lib/settledQuestions. Its own row for the same reason: it sits between two messages.
   | { key: string; kind: "settled-questions"; questions: SettledQuestion[] }
@@ -953,36 +952,47 @@ function VirtualizedThreadTranscript({
     () => runtimeStatusGapFor({ thread, showWorking, registeredDone, restedCard, errorVisible }, activityMessages.map((entry) => entry.message)),
     [activityMessages, showWorking, thread, registeredDone, restedCard, errorVisible],
   )
-  // EVERY OPEN QUESTION, at the thread's CURRENT rest while it is at rest, and at the rest it was asked
-  // at while it is mid-flight — minus the ones a marker PLACED inside a message (placeQuestions). Passing
-  // `atRest` is what keeps a question the human replied PAST from stranding above their reply while the
-  // worker's newest handoff reads as a bare stop: at rest the tail is the rest that owes them the ask.
-  // `byRow` keys into
-  // `messageRows` (the coalesced list actually rendered, which drops messages the transcript does not
-  // draw), so the group hangs off the last row at or before its anchor; -1 means the rest is older than
-  // the loaded window and it goes above everything rather than back at the bottom, lying about being
-  // current. `tail` is the ordinary case — the worker asked and rested — and keeps the placement this
-  // had before.
+  // EVERY OPEN QUESTION, at the newest rest that CLAIMS it — the rest that asked it, or a later one whose
+  // ```awaiting fence names it under `questions:` (lib/questionAnchor) — minus the ones a marker PLACED
+  // inside a message (placeQuestions). Never pulled under a newer handoff that says nothing about it: that
+  // was the 2026-08-31..2026-10-05 rule, and it let a stale ask supersede the worker's own sign-off.
+  // `byRow` keys into `messageRows` (the coalesced list actually rendered, which drops messages the
+  // transcript does not draw), so the group hangs off the last row at or before its anchor; -1 means the
+  // rest is older than the loaded window and it goes above everything rather than back at the bottom,
+  // lying about being current. `tail` is the ordinary case — the worker asked and rested.
   const questionGroups = useMemo(() => {
     const tail: RegisteredQuestionView[] = []
     const byRow = new Map<number, RegisteredQuestionView[]>()
     const tailAnchor = messages.length - 1
-    // A question a marker PLACED renders inside its message, so it leaves its anchor group — but the
-    // group's Send stays: the tail stack draws the one "Send answers" for every card of the rest.
-    const unplaced = openQuestions.filter((q) => !placement.placedIds.has(q.id))
-    for (const [anchor, group] of questionsByAnchor(messages, unplaced, { atRest: !running })) {
-      if (anchor >= tailAnchor) { tail.push(...group); continue }
+    const rowOf = (anchor: number) => {
       let rowIdx = -1
       for (let i = 0; i < messageRows.length; i++) {
         if (messageRows[i].messageIndex > anchor) break
         rowIdx = i
       }
+      return rowIdx
+    }
+    const unplaced = openQuestions.filter((q) => !placement.placedIds.has(q.id))
+    for (const [anchor, group] of questionsByAnchor(messages, unplaced)) {
+      if (anchor >= tailAnchor) { tail.push(...group); continue }
+      const rowIdx = rowOf(anchor)
       const at = byRow.get(rowIdx)
       if (at) at.push(...group)
       else byRow.set(rowIdx, [...group])
     }
-    return { byRow, tail }
-  }, [messageRows, messages, openQuestions, placement.placedIds, running])
+    // A question a marker PLACED renders inside its message and leaves its anchor group, but its REST
+    // still needs a Send: the stack at that rest's end draws one even with no card of its own. Only at a
+    // rest that holds a placed card — a Send at the tail with nothing above it is the 2026-09-13 report.
+    let tailSend = false
+    const sendRows = new Set<number>()
+    for (const end of placedRestEnds(messages, placement)) {
+      if (end >= tailAnchor) { tailSend = true; continue }
+      const rowIdx = rowOf(end)
+      sendRows.add(rowIdx)
+      if (!byRow.has(rowIdx)) byRow.set(rowIdx, [])
+    }
+    return { byRow, tail, tailSend, sendRows }
+  }, [messageRows, messages, openQuestions, placement])
   // The ANSWERED questions' anchors, keyed into `messageRows` the same way: the last row at or before
   // the anchor. No tail special case — a settled card is not an ask, so it never rides the
   // interactions row; anchored at the last message it simply follows that message's row.
@@ -1012,14 +1022,14 @@ function VirtualizedThreadTranscript({
       next.push({ key: `earlier-history:${beforeCursor ?? "complete"}`, kind: "earlier-history" })
     }
     const before = questionGroups.byRow.get(-1)
-    if (before) next.push({ key: "questions:head", kind: "questions", questions: before })
+    if (before) next.push({ key: "questions:head", kind: "questions", questions: before, send: questionGroups.sendRows.has(-1) })
     messageRows.forEach((row, i) => {
       next.push({ ...row, kind: "message" as const })
       // Answered before anything still open at the same slot was, so drawn above it.
       const settledGroup = settledByRow.get(i)
       if (settledGroup) next.push({ key: `settled-questions:${row.key}`, kind: "settled-questions", questions: settledGroup })
       const group = questionGroups.byRow.get(i)
-      if (group) next.push({ key: `questions:${row.key}`, kind: "questions", questions: group })
+      if (group) next.push({ key: `questions:${row.key}`, kind: "questions", questions: group, send: questionGroups.sendRows.has(i) })
     })
     // THE ASK GOES AT THE TAIL. It was row 0 until 2026-08-02, which put an answerable card ABOVE the
     // operator's own first message — a transcript scrolled to its end (this list anchors there) left it
@@ -1520,11 +1530,11 @@ function VirtualizedThreadTranscript({
                 {/* The TAIL group only — questions asked at an older rest render up there, in place. The
                     in-flight answer stays here whatever the questions do: it is the human's newest turn,
                     and the delivered copy of it lands at the tail a second later. */}
-                <RegisteredQuestionStack thread={thread} questions={questionGroups.tail} inFlight={inFlightAnswers} showSend={placement.placedIds.size > 0} className="px-6 pt-5" />
+                <RegisteredQuestionStack thread={thread} questions={questionGroups.tail} inFlight={inFlightAnswers} showSend={questionGroups.tailSend} className="px-6 pt-5" />
               </>
             )
             : row.kind === "questions" ? (
-              <RegisteredQuestionStack thread={thread} questions={row.questions} className="px-6 pt-5" />
+              <RegisteredQuestionStack thread={thread} questions={row.questions} showSend={row.send} className="px-6 pt-5" />
             )
             : row.kind === "settled-questions" ? (
               <SettledQuestionStack questions={row.questions} className="px-6 pt-5" />

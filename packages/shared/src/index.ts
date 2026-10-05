@@ -470,11 +470,12 @@ export function parseAskUserQuestionAnswers(result: unknown, questions: readonly
 
 // ---- THE AWAITING FENCE ---------------------------------------------------------------------------
 // A worker ends every turn in ONE terminal state: it needs the human, it is waiting on work that is
-// actually running, or it is finished. Each is now said EITHER by a fence or by a registration — an
-// open `thread_question` row is a standing sign-off on its own, and so is an armed watch or a recorded
-// done, which is why a worker with a pending question rests normally and writes no fence at all. This
-// is the FENCE form of the middle one, and it is PURE STRUCTURE — a list of things frizz can look up,
-// a duration, and one line of prose.
+// actually running, or it is finished. Each is now said EITHER by a fence or by a registration — a
+// `thread_question` row asked at THIS rest is a standing sign-off on its own, and so is an armed watch or
+// a recorded done, which is why a worker that has just asked rests normally and writes no fence at all.
+// A question still open from an EARLIER rest is not: the worker names it under `questions:` or withdraws
+// it (2026-10-05). This is the FENCE form of the middle one, and it is PURE STRUCTURE — a list of things
+// frizz can look up, a duration, and one line of prose.
 //
 //   shells: [<runtime task id>, …]   background shells it launched   → checked against live telemetry
 //   agents: [<runtime agent id>, …]  sub-agents it dispatched        → checked against live telemetry
@@ -493,6 +494,11 @@ export function parseAskUserQuestionAnswers(result: unknown, questions: readonly
 //     - Approve the browser prompt   line, read VERBATIM (see awaitingSteps). A fence carrying them
 //                                    waits on the human: it needs no other name and no `for:`, and it
 //                                    always queues (awaitingNeedsInput reads it as `true`).
+//   questions: [qst_…, …]            The worker's registered questions it is STILL waiting on. A fence
+//                                    beside open questions must name every one of them (anything else
+//                                    is withdrawn with `unask`), and a card it names is drawn at THIS
+//                                    rest (see awaitingQuestions). Like `steps:` it names the human as
+//                                    the wait: no other name and no `for:` needed, and it always queues.
 //
 // THE FRONTMATTER IS REAL YAML (2026-08-24), parsed by the `yaml` package — the keys are PLURAL and take
 // SEQUENCES, block or flow. A bare scalar where a sequence is expected is accepted and normalised to a
@@ -548,7 +554,7 @@ export function parseAskUserQuestionAnswers(result: unknown, questions: readonly
 //   prose bodies       narrowed to `reason:` so the fence is machine-checkable — then given back in full
 //                      below the `---` delimiter, where prose cannot be mistaken for structure.
 export const AwaitingHint = z.object({
-  kind: z.enum(["shell", "agent", "timer", "pr", "issue", "for", "title", "needs_input", "step"]),
+  kind: z.enum(["shell", "agent", "timer", "pr", "issue", "for", "title", "needs_input", "step", "question"]),
   value: z.string(),
 })
 export type AwaitingHint = z.infer<typeof AwaitingHint>
@@ -633,7 +639,7 @@ const AWAITING_KEY_RE = /^([a-z][a-z_-]*):\s*(\S.*)?$/i
  *  never fall to the body, but are read verbatim rather than as YAML (see splitAwaitingFrontmatter).
  *  Anything else falls through to the body. `needs-input` is the same key spelled the way the other
  *  hyphenated kinds are. */
-const AWAITING_YAML_KEYS = new Set(["shells", "agents", "timers", "prs", "issues", "for", "title", "steps", "needs_input", "needs-input"])
+const AWAITING_YAML_KEYS = new Set(["shells", "agents", "timers", "prs", "issues", "questions", "for", "title", "steps", "needs_input", "needs-input"])
 
 /** Which singular hint kind each plural sequence key produces. The WIRE SHAPE is unchanged by the
  *  2026-08-24 cutover — every consumer still reads a flat `{kind, value}` list with SINGULAR kinds — so
@@ -658,6 +664,11 @@ export const AWAITING_HINT_VALUE_MAX = 200
  *  or the `needs_input:` answer out of AWAITING_HINT_MAX. */
 export const AWAITING_STEPS_MAX = 12
 export const AWAITING_STEP_VALUE_MAX = 500
+
+/** `questions:` rides after the capped hints for the same reason `steps:` does: a thread carrying many
+ *  open questions must still be able to name every one of them — the park is refused for any it leaves
+ *  out — without crowding a `prs:` entry or the `needs_input:` answer out of AWAITING_HINT_MAX. */
+export const AWAITING_QUESTIONS_MAX = 24
 
 /** `title:` — the resting card's heading in the WORKER'S OWN WORDS, replacing the derived one
  *  ("Awaiting" / "Background shells running", see awaitingBackgroundLabel).
@@ -777,7 +788,9 @@ export function splitAwaitingFrontmatter(raw: string): { body: string; hints: Aw
     .filter(Boolean)
     .slice(0, AWAITING_STEPS_MAX)
     .map((step) => ({ kind: "step", value: step.slice(0, AWAITING_STEP_VALUE_MAX) }))
-  return { body: rest.join("\n").trim(), hints: [...parsed.hints.slice(0, AWAITING_HINT_MAX), ...stepHints] }
+  const questionHints = parsed.hints.filter((h) => h.kind === "question").slice(0, AWAITING_QUESTIONS_MAX)
+  const capped = parsed.hints.filter((h) => h.kind !== "question").slice(0, AWAITING_HINT_MAX)
+  return { body: rest.join("\n").trim(), hints: [...capped, ...questionHints, ...stepHints] }
 }
 
 /** The steps written ON the `steps:` line: none, one, or a flow list. A flow list YAML cannot read — a
@@ -800,6 +813,25 @@ function inlineSteps(value: string): string[] {
  *  one, which is how every reader tells the two shapes apart. */
 export function awaitingSteps(hints: readonly AwaitingHint[] | undefined): string[] {
   return (hints ?? []).filter((h) => h.kind === "step").map((h) => h.value)
+}
+
+/** The registered questions the fence says it is still waiting on, as lowercased ids in the order
+ *  written — empty for a fence that names none.
+ *
+ *  WHY THE KEY EXISTS (maintainer 2026-10-05). Until then an open question was drawn at whatever rest
+ *  the thread had most recently reached, and it refused any awaiting fence outright — so a question the
+ *  human had replied past, or one a CI wake had buried, kept reappearing UNDER the worker's newest
+ *  handoff and took its place as the sign-off ("the pending questions that may or may not be relevant
+ *  kind of supersede how the agent actually signed off"). Now the card stays where it was asked, and a
+ *  worker that still needs the answer says so here; one it no longer needs it withdraws. A value that
+ *  carries more than the id (`qst_ab12 — the cache call`) is read down to the id, so a gloss never costs
+ *  the name. */
+export function awaitingQuestions(hints: readonly AwaitingHint[] | undefined): string[] {
+  return (hints ?? []).filter((h) => h.kind === "question").map((h) => questionIdOf(h.value))
+}
+
+function questionIdOf(value: string): string {
+  return (/qst_[a-z0-9]+/i.exec(value)?.[0] ?? value.trim()).toLowerCase()
 }
 
 function parseAwaitingYaml(text: string): { ok: boolean; hints: AwaitingHint[] } {
@@ -831,6 +863,8 @@ function parseAwaitingYaml(text: string): { ok: boolean; hints: AwaitingHint[] }
       // A BARE SCALAR IS ACCEPTED where a sequence is expected — `prs: acme/app#1` is what a worker
       // reaches for with one item, and refusing it would fail a fence that says exactly the right thing.
       for (const entry of Array.isArray(raw) ? raw : [raw]) push(itemKind, entry)
+    } else if (key === "questions") {
+      for (const entry of Array.isArray(raw) ? raw : [raw]) push("question", entry)
     } else if (key === "for") {
       push("for", raw)
     } else if (key === "needs_input" || key === "needs-input") {
@@ -868,7 +902,9 @@ export function awaitingFenceTitle(hints: readonly AwaitingHint[] | undefined): 
  *  beside steps is a contradiction read the safe way — a thread that is waiting on its human must never
  *  be the one that disappears from their queue. */
 export function awaitingNeedsInput(hints: readonly AwaitingHint[] | undefined): boolean | null {
-  if (awaitingSteps(hints).length > 0) return true
+  // Questions are the same answer for the same reason: a fence still waiting on the human's ANSWER is
+  // waiting on the human, and a `false` beside it is read the safe way.
+  if (awaitingSteps(hints).length > 0 || awaitingQuestions(hints).length > 0) return true
   let answer: boolean | null = null
   for (const h of hints ?? []) {
     if (h.kind !== "needs_input") continue
@@ -1681,6 +1717,10 @@ function signoffNudgeText(needsInput: boolean): string {
   "  followed cold; frizz reads them verbatim. Steps name the HUMAN as the wait, so the fence needs no",
   "  other name and no `for:`, and the thread goes into their queue. Their Done comes back to you as",
   "  their reply; anything else they need to say comes as a message of their own.",
+  "- `` ```awaiting `` with `questions:` — a question you registered at an EARLIER rest is still open and",
+  "  you still need its answer. Name every such question (`questions: [qst_…]`) and withdraw the rest with",
+  "  `mcp__frizz__unask`: a fence that leaves an open question out is refused. A named card is drawn at",
+  "  this rest; an unnamed one stays where you asked it.",
   "",
   "**STILL OWED counts things you are not going to do yourself.** A decision you are RECOMMENDING, a",
   "draft you wrote but did not send, follow-up work you discovered — all of it dies with the card, even",
@@ -1703,8 +1743,37 @@ function signoffNudgeText(needsInput: boolean): string {
 }
 
 export const SIGNOFF_NUDGE_MESSAGE = signoffNudgeText(false)
+
 /** The same reminder for a worker dispatched under the `needs_input:` contract (NEEDS_INPUT_REQUIRED_AT). */
 export const SIGNOFF_NUDGE_MESSAGE_NEEDS_INPUT = signoffNudgeText(true)
+
+/** The reminder for a fenceless rest that leaves questions from an EARLIER rest open (2026-10-05). A
+ *  question asked at THIS rest is the rest's own sign-off; one carried from before is not, because its
+ *  card is no longer drawn under the newest handoff — it stays where it was asked — so a rest that says
+ *  nothing about it reads as a bare stop while the thread sits in the queue on an ask nobody can see at
+ *  the bottom. The worker settles each one: name it, or withdraw it. Same marker as the reminder above,
+ *  so it folds out of the chat the same way. */
+export function carriedQuestionsNudgeMessage(questions: readonly { id: string; question: string }[], ops?: SignoffLiveOps, needsInput = false): string {
+  const one = questions.length === 1
+  const lines = [
+    `${SIGNOFF_NUDGE_MARKER} Nothing about your task has changed, and no new work is being asked of you.`,
+    "",
+    `${one ? "A question you registered at an EARLIER rest is" : "Questions you registered at EARLIER rests are"} still open, and this rest neither names ${one ? "it" : "them"} nor withdraws ${one ? "it" : "them"}:`,
+    "",
+    ...questions.map((q) => `- \`${q.id}\` — ${q.question}`),
+    "",
+    "Frizz does not draw an earlier rest's question under your newest handoff: its card stays where you",
+    `asked it. So say where ${one ? "it stands" : "each one stands"}:`,
+    "",
+    "- STILL NEED THE ANSWER → end with an ```awaiting fence naming it, `questions: [qst_…]`. A fence on",
+    "  questions needs no other name and no `for:`, and the thread stays in the human's queue. The card is",
+    "  drawn at this rest, under the reasoning you write below the `---` — what changed since you asked,",
+    "  if anything did.",
+    "- NO LONGER NEED IT → withdraw it with `mcp__frizz__unask`, then sign off as you otherwise would.",
+    ...liveOpsLines(ops, needsInput),
+  ]
+  return lines.join("\n")
+}
 
 // ---- THE FENCE CORRECTIONS (scheduler SOURCE 12) -------------------------------------------------
 // Frizz refusing a park and telling the worker why: a fence naming something that is not running, a
@@ -1731,8 +1800,10 @@ export const PARK_CORRECTION_NAMES_LEAD = "⚠️ Your ```awaiting fence names "
 export const PARK_CORRECTION_RETIRED_LEAD = "⛔ Your ```awaiting fence uses "
 /** The third refusal (2026-08-28): the fence was well-formed and everything it named was live, but a
  *  REGISTERED QUESTION stood open on the thread. A question outranks a park everywhere else — the queue
- *  rule, the resting card — so the fence is refused rather than drawn beside the ask (maintainer: "it
- *  should not be allowed, basically"). */
+ *  rule, the resting card — so the fence was refused outright rather than drawn beside the ask
+ *  (maintainer: "it should not be allowed, basically"). Since 2026-10-05 a fence may stand beside open
+ *  questions by NAMING every one under `questions:`; the refusal is for the ones it leaves out, or names
+ *  that are not open questions at all. The lead is unchanged, so old corrections on disk still fold. */
 export const PARK_CORRECTION_QUESTION_LEAD = "⚠️ Your ```awaiting fence landed while "
 /** The fourth (2026-10-01): a worker dispatched under the `needs_input:` contract parked without saying
  *  whether the human is needed, or said something that is neither `true` nor `false`. */

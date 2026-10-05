@@ -19,7 +19,7 @@ import { pairAllAnswers, unrenderedAnswers } from "../lib/answersMessage.ts"
 import { lastHumanTurnIndex } from "../lib/messagePresentation.ts"
 import { isOptimisticallySteering, useSteeredAt } from "../lib/steering.ts"
 import { questionsByAnchor } from "../lib/questionAnchor.ts"
-import { allFencesShadowed, placeQuestions, registeredStandingAt } from "../lib/questionShadow.ts"
+import { allFencesShadowed, placedFrom, placedRestEnds, placeQuestions, registeredStandingAt } from "../lib/questionShadow.ts"
 import { settledQuestionPositions } from "../lib/settledQuestions.ts"
 import { FenceCard, LimitPauseCard, Message, PermPolicyDenialCard, PermPromptBanner, PendingAskCard, VSpace, STEP, messageTailIsMeta, messageHeadIsMeta, messageRendersNothing, messageHasRenderableText, lastAssistantIndex } from "./ChatView.tsx"
 import { BLOCK_RADIUS, BLOCK_RADIUS_TOP } from "./TranscriptCard.tsx"
@@ -997,32 +997,37 @@ const QueueCard = memo(function QueueCard({ thread, leaving, frozen, onResolve, 
     () => coalesceToolActivityMessages(visible).map((entry) => ({ ...entry, messageIndex: entry.messageIndex + visibleStart })),
     [visible, visibleStart],
   )
-  // WHERE EACH OPEN QUESTION SITS: at the thread's CURRENT rest while it is at rest, and at the rest it
-  // was asked at while it is mid-flight — keyed by index into the FULL message list (the loop below
-  // carries that index as `globalIdx`). `tail` is the ordinary case — the worker asked and rested —
-  // above the composer, and `atRest` is what keeps a question the human replied PAST there rather than
-  // stranded above their reply while the card's newest handoff reads as a bare stop. A question a
-  // marker PLACED inside a message is subtracted here (lib/questionShadow placeQuestions, below).
+  // WHERE EACH OPEN QUESTION SITS: at the newest rest that CLAIMS it — the rest that asked it, or a later
+  // one whose ```awaiting fence names it under `questions:` (lib/questionAnchor) — keyed by index into the
+  // FULL message list (the loop below carries that index as `globalIdx`). `tail` is the ordinary case —
+  // the worker asked and rested, or named it in the fence it rested on — above the composer. A question
+  // a later rest says nothing about stays at its own rest, which on this card is usually above the window
+  // and flushes first; the worker is bumped until it names or withdraws one (server scheduler).
   // Where the worker PLACED its registered questions — the message whose empty ```question qst_… marker
   // names each one (lib/questionShadow). A placed card renders inside that message and leaves its
-  // anchor group; the tail stack still carries the one "Send answers" for the whole rest.
-  // At rest only a marker in the CURRENT rest places; a stale one from the asking rest lets the card
-  // fall back to the tail, where the rest the human is reading actually is.
-  const atRest = thread.runtime !== "running" && thread.runtime !== "spawning"
-  const placement = useMemo(() => placeQuestions(messages, openQuestions, { atRest }), [atRest, messages, openQuestions])
+  // anchor group; its rest's stack still carries a Send for it (placedRestEnds). A marker ABOVE the
+  // window places nothing here — that message is not drawn — so its card flushes first (placedFrom).
+  const placement = useMemo(() => placedFrom(placeQuestions(messages, openQuestions), visibleStart), [messages, openQuestions, visibleStart])
   const questionAnchors = useMemo(() => {
     const tail: RegisteredQuestionView[] = []
     const byAnchor = new Map<number, RegisteredQuestionView[]>()
     const tailAnchor = messages.length - 1
     const unplaced = openQuestions.filter((q) => !placement.placedIds.has(q.id))
-    for (const [anchor, group] of questionsByAnchor(messages, unplaced, { atRest })) {
+    for (const [anchor, group] of questionsByAnchor(messages, unplaced)) {
       if (anchor >= tailAnchor) { tail.push(...group); continue }
       const at = byAnchor.get(anchor)
       if (at) at.push(...group)
       else byAnchor.set(anchor, [...group])
     }
-    return { byAnchor, tail }
-  }, [atRest, messages, openQuestions, placement.placedIds])
+    let tailSend = false
+    const sendAnchors = new Set<number>()
+    for (const end of placedRestEnds(messages, placement)) {
+      if (end >= tailAnchor) { tailSend = true; continue }
+      sendAnchors.add(end)
+      if (!byAnchor.has(end)) byAnchor.set(end, [])
+    }
+    return { byAnchor, tail, tailSend, sendAnchors }
+  }, [messages, openQuestions, placement])
   const settledPlacement = useMemo(() => settledQuestionPositions(messages, settledQuestions), [messages, settledQuestions])
   // A thread dispatched after the free-form fence was retired never gets a fence controller: a
   // ```question with a body is prose there, drawn read-only, and the registered card is the only
@@ -1400,7 +1405,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, frozen, onResolve, 
                   const [anchor, group] = pending.shift()!
                   if (prevTailIsMeta !== null) out.push(<VSpace key={`qa-space-${anchor}`} h={STEP} />)
                   out.push(
-                    <RegisteredQuestionStack key={`qa-${anchor}`} thread={thread} questions={group} />,
+                    <RegisteredQuestionStack key={`qa-${anchor}`} thread={thread} questions={group} showSend={questionAnchors.sendAnchors.has(anchor)} />,
                   )
                   prevTailIsMeta = false
                 }
@@ -1708,7 +1713,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, frozen, onResolve, 
           is a gate on a turn already in flight. The tail IS the context for the question, so the card
           reads top to bottom: what happened, then what the worker needs decided, then the prompt box.
           It carries its own Send answers verb, so it sits above the fence path's identical button. */}
-      <RegisteredQuestionStack thread={thread} questions={questionAnchors.tail} inFlight={inFlightAnswers} showSend={placement.placedIds.size > 0} className="shrink-0 px-5 pb-4 pt-0" />
+      <RegisteredQuestionStack thread={thread} questions={questionAnchors.tail} inFlight={inFlightAnswers} showSend={questionAnchors.tailSend} className="shrink-0 px-5 pb-4 pt-0" />
       {/* Bottom of the card. Answerable question blocks add a "Send answers" action that composes the
           per-block answers into one reply — but the free-form composer stays PRESENT underneath it
           (maintainer 2026-07-22): answering the question is the primary path, not the only one, and

@@ -39,12 +39,18 @@ test("a folded fence leaves no Send button behind it", () => {
 
 // ---- PER-QUESTION PLACEMENT (2026-09-11) ----
 
-test("every Message site hands the message its placed questions, and the tail stack carries the Send for them", () => {
+test("every Message site hands the message its placed questions, and the stack at each placed card's rest carries its Send", () => {
   assert.equal((chat.match(/placed=\{placement\.placed\.get\(messageIndex\)\}/g) ?? []).length, 1, "plain transcript path")
   assert.equal((chat.match(/placed=\{placement\.placed\.get\(row\.messageIndex\)\}/g) ?? []).length, 1, "virtualized transcript path")
   assert.equal((queue.match(/placed=\{placement\.placed\.get\(globalIdx\)\}/g) ?? []).length, 2, "both queue-card message sites")
-  assert.equal((chat.match(/showSend=\{placement\.placedIds\.size > 0\}/g) ?? []).length, 1, "the thread page's tail stack")
-  assert.equal((queue.match(/showSend=\{placement\.placedIds\.size > 0\}/g) ?? []).length, 1, "the queue card's tail stack")
+  // The Send rides the rest a placed card sits in (placedRestEnds), never "any card placed anywhere": a
+  // card placed at an older rest with a Send at the tail and nothing above it is the 2026-09-13 report.
+  assert.equal((chat.match(/placedRestEnds\(messages, placement\)/g) ?? []).length, 1, "the thread page groups its Sends by rest")
+  assert.equal((queue.match(/placedRestEnds\(messages, placement\)/g) ?? []).length, 1, "the queue card groups its Sends by rest")
+  assert.equal((chat.match(/showSend=\{questionGroups\.tailSend\}/g) ?? []).length, 1, "the thread page's tail stack")
+  assert.equal((chat.match(/showSend=\{row\.send\}/g) ?? []).length, 1, "the thread page's anchored stacks")
+  assert.equal((queue.match(/showSend=\{questionAnchors\.tailSend\}/g) ?? []).length, 1, "the queue card's tail stack")
+  assert.equal((queue.match(/showSend=\{questionAnchors\.sendAnchors\.has\(anchor\)\}/g) ?? []).length, 1, "the queue card's anchored stacks")
 })
 
 test("a placed question leaves its anchor group on both surfaces, and each surface mounts ONE answering provider", () => {
