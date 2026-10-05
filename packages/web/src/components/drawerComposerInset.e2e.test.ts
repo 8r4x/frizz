@@ -33,7 +33,7 @@ test("thread drawer keeps the prompt box inset evenly, with the device inset the
       // half-leading, so a box-equal 12px reads as ~16px of air. Measure where the eye reads the row
       // ENDING — the baseline of its label — and hold THAT 12px off the bar's bottom edge, matching
       // the 12px above the composer's border. How much leading there is depends on the FONT, which is
-      // why the correction is a font-switched custom property and why this runs under both modes.
+      // why the correction is a custom property measured for the sans stack the app renders.
       const label = [...lastRow.querySelectorAll<HTMLElement>("span")]
         .reverse()
         .find((span) => span.childNodes.length === 1 && span.firstChild?.nodeType === 3 && /\S/.test(span.textContent ?? ""))
@@ -52,7 +52,6 @@ test("thread drawer keeps the prompt box inset evenly, with the device inset the
         // call sites): the column belongs to the composer, so it must not read as a separate block.
         hang: (ops.firstElementChild as HTMLElement).getBoundingClientRect().top - box.bottom,
         opticalBottom: bar.bottom - baseline,
-        boxBottom: bar.bottom - lastRow.getBoundingClientRect().bottom,
         chatFooterBottom: chatFooterStyle.paddingBottom,
       }
     })
@@ -68,16 +67,10 @@ test("thread drawer keeps the prompt box inset evenly, with the device inset the
     // on a desktop screen, so the bar's own 12px stays the whole inset there.
     assert.equal(inset.chatFooterBottom, "0px")
 
-    // The other font mode. The BOX gap must move (mono's baseline sits ~2px higher in the same line
-    // box) while the OPTICAL one holds — that difference is the whole reason the correction is a
-    // font-switched property rather than a Tailwind utility, and a single shared value fails here.
-    await page.evaluate(() => { document.documentElement.dataset.font = "mono" })
-    const mono = await measure()
-    assert.ok(
-      Math.abs(mono.opticalBottom - 12) <= 0.5,
-      `the optical inset survives the mono font mode (got ${mono.opticalBottom})`,
-    )
-    assert.notEqual(mono.boxBottom, inset.boxBottom, "the box gap tracks the font, so the optical one need not")
+    // No second font pass. This measured the mono stack too, and required the box gap to MOVE there,
+    // until the mono option was dropped on 2026-09-19 (cbb94225): its override of
+    // --ops-column-optical-inset went with it, so the sheet now carries the sans value alone and the
+    // product renders sans alone (the fixture's html pins it, as index.html does).
     assert.deepEqual(errors, [])
   } finally {
     await browser.close()
