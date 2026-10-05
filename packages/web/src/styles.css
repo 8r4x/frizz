@@ -1045,6 +1045,17 @@ a[href] {
   border-radius: 4px;
   padding: 0.05em 0.3em;
 }
+/* An inline chip must not make its LINE taller. The mono stack's metrics push a code fragment's line
+   box past the sans strut, so every line carrying a code span stood ~1.8px taller than the lines around
+   it — 25.59px against 23.8px in transcript prose (14px/1.7), 21.98px against 20px in a card's markdown,
+   22px against 20px in an inline run (measured 2026-10-05, sans) — and any paragraph or list mixing the
+   two spaced its lines unevenly. A steps card, where some items carry a command and some do not, showed
+   it most. `line-height: 1` keeps the fragment inside the strut; the chip's fill paints the content
+   area, which leading does not touch. Fenced code is left alone: its lines are the `<pre>`'s own. */
+.md-body :not(pre) > code,
+.md-inline code {
+  line-height: 1;
+}
 /* …except INSIDE A TRANSCRIPT CARD, whose own fill is panel-2 too (TranscriptCard): there the chip
    vanished into the card and left only its padding, so a command read as mono text with stray gaps on
    either side — most visibly in a steps list, where nearly every item carries one (2026-10-03). The
@@ -1056,15 +1067,6 @@ a[href] {
 }
 .card-md .md-body pre code {
   background: none;
-}
-/* An inline chip must not make its LINE taller. The mono stack's metrics push a code fragment's line
-   box above the sans strut, so a line carrying a command stood 1.9px taller than one without (21.98px
-   against 20px; 23.98px against 22.09px at the old 1.7) — and a steps list, where some items carry a
-   command and some do not, spaced its items unevenly. `line-height: 1` keeps the fragment inside the
-   strut; the chip's fill paints the content area, which leading does not touch. Fenced code is left
-   alone: its lines are the `<pre>`'s own. */
-.card-md .md-body :not(pre) > code {
-  line-height: 1;
 }
 /* Inline-only markdown (answer chips, the recommendation caption): honor inline emphasis/strong/del/
    links without md-body's block chrome. Code shares the prose chip above; emphasis maps to weight/style. */
