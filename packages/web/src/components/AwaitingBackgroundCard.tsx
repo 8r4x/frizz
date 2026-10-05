@@ -32,6 +32,7 @@ import { awaitingFenceTitle, awaitingSteps, isDirectSubAgent } from "@frizz/shar
 import { githubRefUrl } from "../lib/githubRef.ts"
 import { noteGithubRefs } from "../lib/githubHovercards.ts"
 import { AWAITING_FALLBACK_TITLE, AWAITING_NO_PROSE, awaitingProseBlock, prWatchRefs, STEPS_FALLBACK_TITLE } from "../lib/awaitingPresentation.ts"
+import { CHILD_STALE_DOT_CLASS, CHILD_STALE_SHELL_TITLE, CHILD_STALE_TITLE } from "../lib/childOps.ts"
 import { compactElapsedSince, formatCompactElapsed } from "../lib/durationLabels.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { useMarkdownHtml } from "../lib/useMarkdown.ts"
@@ -648,9 +649,13 @@ function ShellWatchRow({ watch, thread, slug, now }: {
   )
 }
 
-/** A running background shell as a row — the declared-watch row above once its target resolved, and
- *  the fullscreen rail's row for EVERY running shell, declared or not (a dev server the worker walked
- *  away from is still what is going on in the thread). */
+/** A background shell as a row — the declared-watch row above once its target resolved, and the
+ *  fullscreen rail's row for EVERY shell the thread tracks, declared or not (a dev server the worker
+ *  walked away from is still what is going on in the thread).
+ *
+ *  A STALE shell is a process the OS has confirmed gone (CHILD_STALE_SHELL_TITLE), so it drops the
+ *  shell blue and says "stale". It read "running · 3h" here until 2026-10-05: a declared watch keeps
+ *  its row after the shell it names dies, and that row is the reason the thread is back in the queue. */
 export function BgShellRow({ shell, slug, now, testId }: {
   shell: ThreadView["bgShells"][number]
   slug: string
@@ -658,19 +663,22 @@ export function BgShellRow({ shell, slug, now, testId }: {
   testId?: string
 }) {
   const elapsed = compactElapsedSince(shell.startedAt, now)
+  const running = shell.state === "running"
+  const word = running ? "running" : "stale"
   // A CODEX shell has an id (its processId) but no readable output — codex keeps that inside its own
   // session — so the row states its wait and declines the drill-in rather than opening a drawer that
   // could only report "unavailable". Same parting of the two affordances as the ops strip.
   const openable = shell.id && !shell.outputUnavailable
+  const state = running ? `running for ${elapsed}` : CHILD_STALE_SHELL_TITLE
   return (
     <WaitRow
       testKind="shell"
       testId={testId ?? shell.id ?? shell.label}
-      mark={<TerminalSquare size={12} className={`${ON_CAP} text-shell`} />}
+      mark={<TerminalSquare size={12} className={`${ON_CAP} ${running ? "text-shell" : "text-muted-60"}`} />}
       name={shell.label}
       onOpen={openable ? () => pushBackgroundShellDrawer(slug, shell.id!, { label: shell.label, startedAt: shell.startedAt }) : undefined}
-      title={openable ? `Read this shell's output — running for ${elapsed}` : shell.label}
-      status={elapsed ? `running · ${elapsed}` : "running"}
+      title={openable ? `Read this shell's output — ${state}` : running ? shell.label : `${shell.label} — ${state}`}
+      status={elapsed ? `${word} · ${elapsed}` : word}
     />
   )
 }
@@ -718,18 +726,24 @@ export function AgentRow({ agent, slug, now }: { agent: ThreadView["subAgents"][
   // The profile without its namespace: `frizz:opus-high` is how it is dispatched, `opus-high` is how the
   // maintainer says it, and the row has no width to spend on a prefix every row would repeat.
   const profile = agent.subagentType?.replace(/^frizz:/, "")
+  // STALE reaches the fullscreen rail only (this card's set is `liveAgents`): a child whose completion
+  // never arrived and whose transcript has gone quiet past its window (tailer `quietPastWindow`). It does
+  // not spin. It wears the flat dot every other surface gives a stale child, in a box the size of the
+  // spinner so the column keeps one footprint, and its status leads with the word.
+  const stale = agent.state === "stale"
   return (
     <WaitRow
       testKind="agent"
       testId={agent.id ?? agent.label}
-      // A sub-agent is ALWAYS in motion while it is on this card — it returns and re-invokes its parent —
-      // so it is always the spinner, never a static mark. Accent-yellow rather than the checks' amber,
-      // matching the rail's one-hue-per-runtime-concern (a sub-agent pulses accent, a shell pulses blue).
-      mark={<Spinner tone="border-accent" />}
+      // A running sub-agent is in motion — it returns and re-invokes its parent — so it is the spinner.
+      // Accent-yellow rather than the checks' amber, matching the rail's one-hue-per-runtime-concern (a
+      // sub-agent pulses accent, a shell pulses blue). A RESTED one (rail only) spins too: the rail rows
+      // direct children alone, so it stands for the fan-out still running beneath it.
+      mark={stale ? <span aria-hidden className={`inline-block size-3 p-[3px] ${ON_CAP}`}><span className={CHILD_STALE_DOT_CLASS} /></span> : <Spinner tone="border-accent" />}
       name={agent.label}
       onOpen={agent.id ? () => pushSubAgentDrawer(slug, agent.id!, { label: agent.label, subagentType: agent.subagentType, startedAt: agent.startedAt }) : undefined}
-      title={agent.id ? `Open this sub-agent — working for ${elapsed}` : agent.label}
-      status={[profile, elapsed].filter(Boolean).join(" · ")}
+      title={agent.id ? `Open this sub-agent — ${stale ? CHILD_STALE_TITLE : `working for ${elapsed}`}` : agent.label}
+      status={[stale ? "stale" : undefined, profile, elapsed].filter(Boolean).join(" · ")}
     />
   )
 }

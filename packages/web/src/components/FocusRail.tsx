@@ -17,8 +17,8 @@ import { AgentRow, BgShellRow, GithubWatchRow, ON_CAP, TimerRow, WaitGrid, WaitR
 import { transcriptBackgroundShells } from "./ChatView.tsx"
 
 // THE FULLSCREEN PAGE'S OPERATIONAL RAIL — what is going on in this thread, listed beside the transcript
-// (maintainer 2026-08-28): its live sub-agents, its running background shells, the pull requests and
-// timers it is watching, and the files its worker has edited.
+// (maintainer 2026-08-28): its sub-agents and background shells (live, or stale and saying so), the
+// pull requests and timers it is watching, and the files its worker has edited.
 //
 // IT IS THE AWAITING CARD'S TABLE, one surface over. Every row here is the card's own row component —
 // AgentRow, BgShellRow, GithubWatchRow, TimerRow, the same WaitRow for a file — in the card's own
@@ -220,18 +220,20 @@ export function FocusRail({ thread }: { thread: ThreadView }) {
   const files = transcript.data?.editedFiles ?? []
   const changeKey = useMemo(() => newestFileChangeKey(transcript.data?.messages ?? []), [transcript.data?.messages])
   useEditedFilesRefresh(thread.id, transcript.data !== undefined, changeKey, thread.runtime === "running" || thread.runtime === "spawning")
-  // The card's live children PLUS the rested ones: a direct child whose own run ended while sub-agents
-  // it dispatched are still working. The server emits a rested row only while that fan-out runs (tailer
-  // anchorRoots), so the branch is genuinely in motion — yet the card's `liveAgents` drops the rested
-  // root by state and the running grandchildren by depth, and the rail's Sub-agents group went empty
-  // with work in flight. The card keeps its own set: it counts the results the thread still AWAITS, and
-  // a rested child has already delivered its result.
-  const agents = (thread.subAgents ?? []).filter((a) => isDirectSubAgent(a) && (a.state === "running" || a.state === "rested"))
+  // EVERY DIRECT CHILD THE BOARD LISTS, in each of its three states — what the ops strip under the
+  // prompt box lists, because on /full this rail is that strip's replacement (ff185621) and a row it
+  // drops is shown nowhere. A RESTED child is one whose own run ended while sub-agents it dispatched are
+  // still working (the server emits it only while that fan-out runs, tailer anchorRoots), so it stands
+  // for the branch; a STALE one is quiet past its window and draws as such (AgentRow). This rail kept
+  // only running and rested until 2026-10-05, so a stale child vanished from /full altogether. The card
+  // keeps its own set: it counts the results the thread still AWAITS (`liveAgents`).
+  const agents = (thread.subAgents ?? []).filter(isDirectSubAgent)
   // The board's shells PLUS the transcript's: a Codex background exec is transcript-native and the board
   // reports none for it (ChatView.transcriptBackgroundShells). A Claude shell arrives through both, and
-  // the merge reconciles the two on its launch id, so it still draws once.
+  // the merge reconciles the two on its launch id, so it still draws once. A STALE one — a process the
+  // OS confirmed gone — stays listed, as on the strip, and BgShellRow says so.
   const transcriptShells = useMemo(() => transcriptBackgroundShells(transcript.data?.messages ?? []), [transcript.data?.messages])
-  const shells = mergeBackgroundShells(thread.bgShells ?? [], transcriptShells).filter((s) => s.state === "running")
+  const shells = mergeBackgroundShells(thread.bgShells ?? [], transcriptShells)
   // AN ARCHIVED THREAD WATCHES NOTHING, though its registrations stay armed for the day it is reopened:
   // the scheduler neither fires its timers nor polls its PRs and issues (scheduler.ts evalTimers, and the
   // per-watcher liveness skip). Rowed here, a past-due timer read "firing…" forever and a PR row froze on

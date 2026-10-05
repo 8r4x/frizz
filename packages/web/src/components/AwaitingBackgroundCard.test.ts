@@ -2,7 +2,8 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
-import { AwaitingBackgroundCard, AwaitingWaitTable, awaitingBackgroundLabel, awaitingBackgroundSubject, hasAwaitingWaitRows, restingOnSteps } from "./AwaitingBackgroundCard.tsx"
+import { AgentRow, AwaitingBackgroundCard, AwaitingWaitTable, awaitingBackgroundLabel, awaitingBackgroundSubject, hasAwaitingWaitRows, restingOnSteps } from "./AwaitingBackgroundCard.tsx"
+import { CHILD_STALE_DOT_CLASS, CHILD_STALE_SHELL_TITLE, CHILD_STALE_TITLE } from "../lib/childOps.ts"
 import type { ThreadView } from "@frizz/shared"
 
 // One card, three surfaces, and since 2026-08-15 one TABLE: every kind of live work the thread declared
@@ -255,6 +256,33 @@ test("a shell watch resolves its label off ANY of the three legal handles", () =
   // An UNRESOLVABLE target still renders, naming itself — never a vanished wait.
   const orphan = { ...thread([], []), watches: [shellWatch("bzz-nothing")] } as Parameters<typeof AwaitingBackgroundCard>[0]["thread"]
   assert.match(text(orphan), /bzz-nothing/)
+})
+
+// A declared watch outlives the shell it names: the OS confirms the process gone (tailer `shellIsGone`),
+// no completion ever arrives, and this row is the reason the thread is back in the queue. It read
+// "running · …" in the shell blue until 2026-10-05.
+test("a declared shell whose process is gone reads stale, never running", () => {
+  const dead = { ...thread([], [{ ...shell("running"), state: "stale" }]), watches: [shellWatch("bzvtnt3ig")] } as Parameters<typeof AwaitingBackgroundCard>[0]["thread"]
+  const html = render(dead)
+  const row = html.slice(html.indexOf('data-wait-kind="shell"'))
+  assert.match(row, /data-wait-status[^>]*>stale · /)
+  assert.doesNotMatch(row, /running/)
+  assert.doesNotMatch(row, /text-shell/, "a dead process does not wear the live shell blue")
+  assert.ok(row.includes(CHILD_STALE_SHELL_TITLE), "the tooltip says the process exited")
+})
+
+// STALE reaches only the fullscreen rail (this card's set is `liveAgents`), which rows every direct child
+// since 2026-10-05. It must not spin beside a child that has gone quiet past its window.
+test("the rail's row for a stale sub-agent wears the stale dot, never the spinner", () => {
+  const now = Date.parse("2026-07-28T09:30:00.000Z")
+  const stale = renderToStaticMarkup(createElement(AgentRow, { agent: agent("stale"), slug: "demo-thread", now }))
+  assert.ok(stale.includes(`class="${CHILD_STALE_DOT_CLASS}"`))
+  assert.doesNotMatch(stale, /animate-spin/)
+  assert.match(stale, /data-wait-status[^>]*>stale · opus-high · 30m</)
+  assert.ok(stale.includes(CHILD_STALE_TITLE))
+  const live = renderToStaticMarkup(createElement(AgentRow, { agent: agent("running"), slug: "demo-thread", now }))
+  assert.match(live, /animate-spin/)
+  assert.doesNotMatch(live, /stale/)
 })
 
 test("sub-agent rows are DIRECT and RUNNING only", () => {

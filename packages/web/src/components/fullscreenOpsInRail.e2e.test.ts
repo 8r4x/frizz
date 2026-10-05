@@ -29,9 +29,22 @@ test("/full lists the thread's ops in its rail, and under the prompt box only on
     // 1. Wide enough for the rail: every row is there, and none of them is under the prompt box.
     await page.setViewport({ width: 1440, height: 900 })
     await page.goto(`${baseUrl}/thread/full-rail-ops/full`, { waitUntil: "networkidle2" })
-    await page.waitForFunction(() => document.querySelectorAll("[data-focus-rail] [data-wait-row]").length === 4)
-    assert.deepEqual(await railKinds(), ["agent", "link", "link", "shell"])
+    await page.waitForFunction(() => document.querySelectorAll("[data-focus-rail] [data-wait-row]").length === 6)
+    assert.deepEqual(await railKinds(), ["agent", "agent", "link", "link", "shell", "shell"])
     assert.equal(await stripIn("main[data-standalone-thread]"), null, "the strip must not repeat the rail's rows")
+
+    // THE TWO ROWS THE RAIL USED TO DROP (until 2026-10-05), so on /full they were shown nowhere: a
+    // sub-agent quiet past its window, and a shell the OS reports gone. Each says what it is. The shell's
+    // verdict lands a probe tick after the first board read, so it is waited for rather than read once.
+    const railRow = (id: string) => `[data-focus-rail] [data-wait-row="${id}"]`
+    const statusOf = (id: string) => page.$eval(`${railRow(id)} [data-wait-status]`, (el) => (el as HTMLElement).innerText)
+    assert.match(await statusOf("toolu_fro_agent2"), /^stale · sonnet-low · /)
+    assert.equal(await page.$(`${railRow("toolu_fro_agent2")} [class*="animate-spin"]`), null, "a stale sub-agent does not spin")
+    assert.ok(await page.$(`${railRow("toolu_fro_agent2")} .rounded-full.bg-muted\\/30`), "…it wears the stale dot")
+    assert.equal(await page.$(`${railRow("toolu_fro_agent")} [class*="animate-spin"]`) !== null, true, "the live one still spins")
+    await page.waitForFunction((sel) => /^stale · /.test((document.querySelector(sel) as HTMLElement | null)?.innerText ?? ""), {}, `${railRow("toolu_fro_sh2")} [data-wait-status]`)
+    assert.equal(await page.$(`${railRow("toolu_fro_sh2")} svg.text-shell`), null, "a dead shell does not wear the live shell blue")
+    assert.match(await statusOf("toolu_fro_sh1"), /^running · /)
     // A saved URL is a real link out; a saved file opens in the page's own viewer.
     assert.equal(await page.$eval('[data-focus-rail] [data-wait-kind="link"] a', (a) => a.getAttribute("href")), "http://127.0.0.1:5173/project/demo")
     await page.click('[data-focus-rail] [data-wait-kind="link"] button')
@@ -44,7 +57,7 @@ test("/full lists the thread's ops in its rail, and under the prompt box only on
     await page.setViewport({ width: 1000, height: 900 })
     await page.waitForSelector("main[data-standalone-thread] [data-background-ops]")
     const strip = await page.$eval("main[data-standalone-thread] [data-background-ops]", (el) => (el as HTMLElement).innerText)
-    for (const row of ["Verify the rail carries every row", "Run the dev server", "Open dev server", "Working plan"]) {
+    for (const row of ["Verify the rail carries every row", "Audit the old projection", "Run the dev server", "Tail the old log", "Open dev server", "Working plan"]) {
       assert.ok(strip.includes(row), `the narrow strip lists "${row}"`)
     }
 
