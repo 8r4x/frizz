@@ -2281,6 +2281,15 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         if (a.state !== "rested") continue
         for (const h of [a.taskId, a.id, a.label]) if (h) finishedHandles.add(h)
       }
+      // A DEMOTED shell is a third case, neither finished nor missing: frizz has its launch, saw no
+      // completion notice, and can no longer find its process (tailer.ts probeShellsAlive). Calling that
+      // "nothing by that name" sent a worker hunting for a typo in an id it had copied exactly — and,
+      // before 2026-10-05, said so of a shell that was still running.
+      const staleShellHandles = new Set<string>()
+      for (const sh of tele.bgShells ?? []) {
+        if (sh.state !== "stale") continue
+        for (const h of [sh.taskId, sh.id, sh.label]) if (h) staleShellHandles.add(h)
+      }
       const firedTimers = new Set(
         deps.storage.listThreadTimers(row.slug).filter((t) => t.state === "fired").map((t) => t.id),
       )
@@ -2303,6 +2312,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           ? "already FIRED — its wake was delivered; there is nothing left to wait on"
           : finishedItem(i)
           ? "FINISHED — its result is waiting for you"
+          : i.kind === "shell" && staleShellHandles.has(i.value)
+          ? "GONE WITHOUT A COMPLETION NOTICE — frizz knows this shell, but nothing holds its output file and no process it could be is still running; read its output to see how it ended"
           : i.kind === "pr"
           ? "NOT REGISTERED — register it with `mcp__frizz__watch_pr` first, then name it here"
           : i.kind === "issue"

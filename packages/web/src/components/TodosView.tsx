@@ -19,7 +19,7 @@ import { pairAllAnswers, unrenderedAnswers } from "../lib/answersMessage.ts"
 import { lastHumanTurnIndex } from "../lib/messagePresentation.ts"
 import { isOptimisticallySteering, useSteeredAt } from "../lib/steering.ts"
 import { questionsByAnchor } from "../lib/questionAnchor.ts"
-import { allFencesShadowed, placedFrom, placedRestEnds, placeQuestions, registeredStandingAt } from "../lib/questionShadow.ts"
+import { allFencesShadowed, placedFrom, placedRestEnds, placeQuestions, questionsAtCurrentRest, registeredStandingAt } from "../lib/questionShadow.ts"
 import { settledQuestionPositions } from "../lib/settledQuestions.ts"
 import { FenceCard, LimitPauseCard, Message, PermPolicyDenialCard, PermPromptBanner, PendingAskCard, VSpace, STEP, messageTailIsMeta, messageHeadIsMeta, messageRendersNothing, messageHasRenderableText, lastAssistantIndex } from "./ChatView.tsx"
 import { BLOCK_RADIUS, BLOCK_RADIUS_TOP, BLOCK_RADIUS_INNER_BOTTOM } from "./TranscriptCard.tsx"
@@ -1008,6 +1008,8 @@ const QueueCard = memo(function QueueCard({ thread, leaving, frozen, onResolve, 
   // anchor group; its rest's stack still carries a Send for it (placedRestEnds). A marker ABOVE the
   // window places nothing here — that message is not drawn — so its card flushes first (placedFrom).
   const placement = useMemo(() => placedFrom(placeQuestions(messages, openQuestions), visibleStart), [messages, openQuestions, visibleStart])
+  // Whether an open question is THIS rest's ending, for the residual card below (RestedCard).
+  const questionsHere = useMemo(() => questionsAtCurrentRest(messages, openQuestions), [messages, openQuestions])
   const questionAnchors = useMemo(() => {
     const tail: RegisteredQuestionView[] = []
     const byAnchor = new Map<number, RegisteredQuestionView[]>()
@@ -1708,7 +1710,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, frozen, onResolve, 
           </div>
         )}
         {/* The residual rung, same as the thread view: a rest with no other card still states itself. */}
-        {!q.isLoading && showsRestedCard(thread, lastAgentIdx >= 0 ? messages[lastAgentIdx]?.text : undefined) && (
+        {!q.isLoading && showsRestedCard(thread, lastAgentIdx >= 0 ? messages[lastAgentIdx]?.text : undefined, questionsHere) && (
           <div className="mt-4">
             <RestedCard thread={thread} />
           </div>

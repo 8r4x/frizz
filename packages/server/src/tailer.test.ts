@@ -2,6 +2,8 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { mkdtempSync, writeFileSync, appendFileSync, utimesSync, readFileSync, rmSync, openSync, closeSync, statSync } from "node:fs"
 import { tmpdir } from "node:os"
+import { spawn } from "node:child_process"
+import { randomUUID } from "node:crypto"
 import { dirname, join } from "node:path"
 import { createStorage, type Storage, type SessionRow } from "./storage.ts"
 import { Bus } from "./bus.ts"
@@ -9,7 +11,7 @@ import type { ServerEvent } from "@frizz/shared"
 import { AwaitingHint, QUESTION_FENCE_RETIRED_AT } from "@frizz/shared"
 import { permMarkerPath, type Project } from "./project.ts"
 import { degradeIfAwaitingAnswer, deriveNeedsYou } from "./board.ts"
-import { parseLine, applyRecord, applyEvent, computeTurn, newTailState, createTailer, defaultBrokerDaemonAlive, hasQuestionBlock, isClaudeAuthErrorText, isRealUserMessage, parseSignalFence, markerDecision, pendingCallDeadline, unwrapShellCommand, FOREIGN_FRESH_MS, parseWindowsShellHolderReport, probeShellsAlive, windowsShellHolderCommand } from "./tailer.ts"
+import { parseLine, applyRecord, applyEvent, computeTurn, newTailState, createTailer, defaultBrokerDaemonAlive, hasQuestionBlock, isClaudeAuthErrorText, isRealUserMessage, parseSignalFence, markerDecision, pendingCallDeadline, unwrapShellCommand, FOREIGN_FRESH_MS, parseWindowsShellHolderReport, probeShellsAlive, findShellProcesses, windowsShellHolderCommand, type ShellLaunch } from "./tailer.ts"
 import { claudeBrokerRecordPath } from "./backend/claude-broker-host.ts"
 import type { AgentBackend, NormalizedEvent } from "./backend/types.ts"
 import { createClaudeBackend } from "./backend/claude.ts"
@@ -4527,6 +4529,249 @@ test("tailer: the real shell probe is async — the verdict lands on the NEXT ti
     assert.equal(living.second, "running", "a file this process holds open must never read as gone")
   } finally {
     closeSync(held)
+  }
+})
+
+// AN UNHELD OUTPUT FILE IS A QUESTION, NOT A VERDICT (2026-10-05). `exec cmd > out 2>&1` replaces the
+// shell with a process whose fds point at `out`, so nobody holds `<taskId>.output` while the work runs —
+// and lsof's "no holder" alone demoted exactly that shell, dropped it from `activity`, and refused a park
+// naming it "nothing by that name". The second instrument is the process table: a live process forked
+// inside the launch window whose PARENT names this session in its argv is the shell. This pins the
+// mapping with a scripted `ps`; the real-process cases below pin the instrument itself.
+function lstartOf(ms: number): string {
+  // `ps -o lstart` under LC_ALL=C, in local time: `Mon Oct  5 15:42:11 2026`.
+  const d = new Date(ms)
+  const day = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getDay()]
+  const month = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][d.getMonth()]
+  const hms = [d.getHours(), d.getMinutes(), d.getSeconds()].map((n) => String(n).padStart(2, "0")).join(":")
+  return `${day} ${month} ${String(d.getDate()).padStart(2, " ")} ${hms} ${d.getFullYear()}`
+}
+
+test("tailer: an unheld shell is looked for in the process table — forked in its launch window, under its session's CLI", async () => {
+  const sid = "11111111-2222-4333-8444-555555555555"
+  // The measured shape (a real worker, 2026-10-05): tool_use 22:42:10.955, fork 22:42:11, ack 22:42:11.492.
+  const launchedAtMs = Date.parse("2026-10-05T22:42:10.955Z")
+  const ackedAtMs = Date.parse("2026-10-05T22:42:11.492Z")
+  const forkMs = Date.parse("2026-10-05T22:42:11.000Z")
+  const table = [
+    `    1     0 ${lstartOf(forkMs - 86_400_000)}    `,
+    `  100     1 ${lstartOf(forkMs - 120_000)}    `, // the session's claude CLI
+    `  200     1 ${lstartOf(forkMs - 60_000)}    `, // ANOTHER session's CLI
+    `  500   100 ${lstartOf(forkMs)}    `, // the exec'd shell — pid, parent and fork time survive the exec
+    `  600   200 ${lstartOf(forkMs)}    `, // another session's command, forked the same second
+  ].join("\n")
+  const argv: Record<string, string> = {
+    "100": `/x/claude/2.1.288/claude --output-format stream-json --session-id=${sid} --strict-mcp-config`,
+    "200": "/x/claude/2.1.288/claude --resume 99999999-0000-4000-8000-000000000000",
+  }
+  const calls: string[][] = []
+  const ps = (async (file: string, args: string[], opts: { env?: NodeJS.ProcessEnv }) => {
+    assert.equal(file, "ps")
+    assert.equal(opts.env?.LC_ALL, "C", "lstart is read in the C locale, or the date parser meets a localized month")
+    calls.push(args)
+    if (args[0] === "-ax") return { stdout: table, stderr: "" }
+    const pids = args[args.indexOf("-p") + 1]!.split(",")
+    return { stdout: pids.filter((p) => argv[p]).map((p) => `${p.padStart(5)} ${argv[p]}`).join("\n"), stderr: "" }
+  }) as never
+  const at = (file: string, over: Partial<ShellLaunch> = {}): ShellLaunch => ({ outputFile: file, sessionId: sid, launchedAtMs, ackedAtMs, ...over })
+
+  const verdicts = await findShellProcesses([
+    at("/t/live.output"),
+    // Same window, but the only processes forked in it belong to other sessions.
+    at("/t/other.output", { sessionId: "00000000-0000-4000-8000-000000000000" }),
+    // An hour earlier: nothing forked then is alive.
+    at("/t/gone.output", { launchedAtMs: launchedAtMs - 3_600_000, ackedAtMs: ackedAtMs - 3_600_000 }),
+  ], { exec: ps, nowMs: ackedAtMs + 600_000 })
+  assert.deepEqual([...verdicts], [["/t/live.output", true], ["/t/other.output", false], ["/t/gone.output", false]])
+  assert.deepEqual(calls.map((c) => c[0]), ["-ax", "-ww"], "one table, then one argv listing for the candidates' parents")
+  assert.deepEqual(calls[1]!.at(-1)!.split(",").sort(), ["100", "200"], "only the parents of processes forked in a window are asked about")
+
+  // NO ACK (an entry from an older cache): the window runs to the probe's clock, which can only widen it.
+  assert.equal((await findShellProcesses([at("/t/x.output", { ackedAtMs: undefined })], { exec: ps, nowMs: ackedAtMs + 600_000 })).get("/t/x.output"), true)
+
+  // `ps` cannot answer ⇒ no verdict; a table nothing in it parses ⇒ no verdict either, never "empty machine".
+  const enoent = (async () => { throw Object.assign(new Error("spawn ps ENOENT"), { code: "ENOENT" }) }) as never
+  assert.deepEqual([...(await findShellProcesses([at("/t/live.output")], { exec: enoent }))], [["/t/live.output", undefined]])
+  const busybox = (async () => ({ stdout: "PID   USER     TIME  COMMAND\n    1 root      0:00 init\n", stderr: "" })) as never
+  assert.deepEqual([...(await findShellProcesses([at("/t/live.output")], { exec: busybox }))], [["/t/live.output", undefined]])
+
+  // Composed with the holder probe: an unheld file is alive when the table finds its process, and when
+  // the table cannot answer at all the holder verdict stands — exactly the behaviour before 2026-10-05.
+  const dir = tmp("frizz-shell-probe-composed-")
+  const file = join(dir, "x.output")
+  writeFileSync(file, "")
+  const lsofThen = (psExec: typeof ps) => (async (bin: string, args: string[], opts: { env?: NodeJS.ProcessEnv }) => {
+    if (bin === "lsof") throw Object.assign(new Error("exit 1"), { code: 1, stdout: "" })
+    return (psExec as unknown as (b: string, a: string[], o: unknown) => Promise<unknown>)(bin, args, opts)
+  }) as never
+  assert.equal((await probeShellsAlive([at(file)], { platform: "darwin", exec: lsofThen(ps), nowMs: ackedAtMs + 600_000 })).get(file), true)
+  assert.equal((await probeShellsAlive([at(file)], { platform: "darwin", exec: lsofThen(enoent) })).get(file), false)
+  // A bare path carries no launch facts, so it is asked only the holder question.
+  calls.length = 0
+  assert.equal((await probeShellsAlive([file], { platform: "darwin", exec: lsofThen(ps) })).get(file), false)
+  assert.equal(calls.length, 0, "no launch facts ⇒ the process table is never consulted")
+})
+
+// The tailer hands the probe what it needs to recognise the process: the row's session id, the launch
+// tool_use's timestamp, and the launch ACK's — which is folded from the ack record, so pin that it is.
+test("tailer: the probe is handed the session id and the tool_use and ack timestamps that bracket the fork", () => {
+  const h = harness()
+  h.storage.upsertSession(row())
+  fixture(h.logDir, "sid", [
+    IN_FLIGHT,
+    JSON.stringify(bashBg("toolu_sh", "Running the e2e harness", "exec nub e2e.mjs > e2e.out 2>&1")),
+    JSON.stringify(resultText("toolu_sh", "Command running in background with ID: bExec. Output is being written to: /tmp/tasks/bExec.output.")),
+  ])
+  const seen: ShellLaunch[] = []
+  const t = makeTailer(h, { shellAlive: (_file, launch) => (seen.push(launch), true) })
+  h.clock.ms = Date.parse("2026-07-01T00:00:01.000Z") + 10 * 60_000
+  t.tick()
+  assert.equal(t.get("t")?.bgShells[0]?.state, "running")
+  assert.deepEqual(seen, [{ outputFile: "/tmp/tasks/bExec.output", sessionId: "sid", launchedAtMs: Date.parse("2026-07-01T00:00:01.000Z"), ackedAtMs: Date.parse("2026-07-01T00:00:02.000Z") }])
+})
+
+// THE INSTRUMENT ITSELF, against real processes. A stand-in for Claude Code's CLI — a process naming the
+// session in its argv — forks each command the way Claude Code does (measured 2026-10-05): detached into
+// its own process group, stdout and stderr on `<taskId>.output`, its own copy of that fd closed. Then the
+// real probe (lsof, then ps) is asked about each shell, with a negative control for every way it can say
+// "gone": a shell that really exited, and a live one probed under the wrong session.
+const FAKE_CLAUDE_CLI = `
+const { spawn } = require("node:child_process")
+const { openSync, closeSync } = require("node:fs")
+require("node:readline").createInterface({ input: process.stdin })
+  .on("line", (line) => {
+    const { outputFile, command } = JSON.parse(line)
+    const fd = openSync(outputFile, "w")
+    const child = spawn("/bin/sh", ["-c", command], { detached: true, stdio: ["ignore", fd, fd] })
+    closeSync(fd)
+    process.stdout.write(JSON.stringify({ pid: child.pid }) + "\\n")
+  })
+  .on("close", () => process.exit(0))
+`
+
+async function fakeClaudeCli(sessionId: string) {
+  const cli = spawn(process.execPath, ["-e", FAKE_CLAUDE_CLI, "--", `--session-id=${sessionId}`], { stdio: ["pipe", "pipe", "inherit"] })
+  const pids: number[] = []
+  const acks: Array<(pid: number) => void> = []
+  let buffered = ""
+  cli.stdout!.on("data", (chunk: Buffer) => {
+    buffered += chunk.toString()
+    for (let i = buffered.indexOf("\n"); i >= 0; i = buffered.indexOf("\n")) {
+      const pid = (JSON.parse(buffered.slice(0, i)) as { pid: number }).pid
+      buffered = buffered.slice(i + 1)
+      pids.push(pid)
+      acks.shift()?.(pid)
+    }
+  })
+  return {
+    /** Launch one command; resolves with its pid and the launch facts a transcript would record. */
+    async launch(outputFile: string, command: string): Promise<{ pid: number; launch: ShellLaunch }> {
+      const launchedAtMs = Date.now()
+      const pid = await new Promise<number>((resolve) => {
+        acks.push(resolve)
+        cli.stdin!.write(JSON.stringify({ outputFile, command }) + "\n")
+      })
+      return { pid, launch: { outputFile, sessionId, launchedAtMs, ackedAtMs: Date.now() } }
+    },
+    /** Kill every process this stand-in started, by its exact pid, and the stand-in itself. */
+    close() {
+      for (const pid of pids) {
+        try { process.kill(pid, "SIGKILL") } catch { /* already gone */ }
+      }
+      cli.kill("SIGKILL")
+    },
+  }
+}
+
+const isGone = (pid: number) => {
+  try {
+    process.kill(pid, 0)
+    return false
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ESRCH"
+  }
+}
+async function until(cond: () => boolean, ms = 5000) {
+  for (const deadline = Date.now() + ms; !cond(); ) {
+    if (Date.now() > deadline) throw new Error("condition not met in time")
+    await new Promise((r) => setTimeout(r, 50))
+  }
+}
+
+test("tailer: the real probe finds an exec'd shell that redirected away from its output file, and still retires one that exited", { skip: process.platform === "win32" ? "lsof and ps are POSIX" : false }, async () => {
+  const dir = tmp("frizz-shell-exec-")
+  const sid = randomUUID()
+  const cli = await fakeClaudeCli(sid)
+  try {
+    // FIRST the one that dies, so its launch window cannot contain the live one's fork: `ps` reads fork
+    // times to the second and the window is widened a second each way, so they must sit >2s apart.
+    const exited = await cli.launch(join(dir, "exited.output"), `exec true > ${join(dir, "exited.log")} 2>&1`)
+    await until(() => isGone(exited.pid))
+    await new Promise((r) => setTimeout(r, 2500))
+    const live = await cli.launch(join(dir, "live.output"), `exec sleep 60 > ${join(dir, "live.log")} 2>&1`)
+    const held = await cli.launch(join(dir, "held.output"), "sleep 60")
+    await new Promise((r) => setTimeout(r, 300)) // let each `sh` finish its redirect and exec
+
+    const verdicts = await probeShellsAlive([exited.launch, live.launch, held.launch])
+    assert.equal(verdicts.get(held.launch.outputFile), true, "control: a shell that keeps its output file is held, as before")
+    assert.equal(verdicts.get(live.launch.outputFile), true, "an exec'd shell holding nothing is still found by its process")
+    assert.equal(verdicts.get(exited.launch.outputFile), false, "a shell whose process exited is still gone")
+
+    // The owner matters: the same live process, asked about under a session that is not its CLI's.
+    const stranger = { ...live.launch, sessionId: randomUUID() }
+    assert.equal((await probeShellsAlive([stranger])).get(live.launch.outputFile), false, "a process under another session's CLI is not this shell")
+
+    // And the live one, once it really dies, goes too — the same probe, the same shell. But `held` was
+    // forked in the same second under the same CLI, so it shares the window: while it runs, the dead one
+    // still reads alive. That is the documented bias (findShellProcesses) — a slower demotion, never a
+    // false one — and once the sibling goes, so does the verdict.
+    process.kill(live.pid, "SIGKILL")
+    await until(() => isGone(live.pid))
+    assert.equal((await probeShellsAlive([live.launch])).get(live.launch.outputFile), true, "a same-second sibling under the same CLI keeps it alive")
+    process.kill(held.pid, "SIGKILL")
+    await until(() => isGone(held.pid))
+    assert.equal((await probeShellsAlive([live.launch])).get(live.launch.outputFile), false, "the exec'd shell, killed, reads gone")
+  } finally {
+    cli.close()
+  }
+})
+
+// END TO END THROUGH THE TAILER: the transcript a real worker writes, the real (async, batched) probe,
+// and real processes. Before 2026-10-05 the exec'd shell read "stale" here while it ran.
+test("tailer: an exec'd background shell with redirected output reads running while it runs, stale once it dies", { skip: process.platform === "win32" ? "lsof and ps are POSIX" : false }, async () => {
+  const dir = tmp("frizz-shell-exec-tail-")
+  const sid = randomUUID()
+  const cli = await fakeClaudeCli(sid)
+  try {
+    const outputFile = join(dir, "bExec.output")
+    const shell = await cli.launch(outputFile, `exec sleep 60 > ${join(dir, "e2e.out")} 2>&1`)
+    const iso = (ms: number) => new Date(ms).toISOString()
+    const h = harness()
+    h.storage.upsertSession(row({ session_id: sid }))
+    fixture(h.logDir, sid, [
+      JSON.stringify({ type: "user", timestamp: iso(shell.launch.launchedAtMs! - 1000), message: { role: "user", content: "go" } }),
+      JSON.stringify({ ...bashBg("toolu_sh", "Running the e2e harness", "exec sleep 60 > e2e.out 2>&1"), timestamp: iso(shell.launch.launchedAtMs!) }),
+      JSON.stringify({ ...resultText("toolu_sh", `Command running in background with ID: bExec. Output is being written to: ${outputFile}.`), timestamp: iso(shell.launch.ackedAtMs!) }),
+    ])
+    const t = makeTailer(h)
+    // The read queues the probe and the verdict lands for the NEXT read, as in the lsof case above. The
+    // wait is fixed rather than polled on purpose: the "stale" read below is what proves it is long
+    // enough for a verdict to land, so the "running" read cannot pass by reading too early.
+    const settle = async () => {
+      t.get("t")
+      await new Promise((r) => setTimeout(r, 2500))
+      return t.get("t")?.bgShells[0]?.state
+    }
+    h.clock.ms = shell.launch.ackedAtMs! + 10 * 60_000 // past the grace window
+    t.tick()
+    assert.equal(await settle(), "running", "nobody holds its output file, and it is running")
+
+    process.kill(shell.pid, "SIGKILL")
+    await until(() => isGone(shell.pid))
+    h.clock.ms += 31_000 // past the alive verdict's TTL, so it is asked again
+    assert.equal(await settle(), "stale", "negative control: the same shell, dead, is demoted")
+  } finally {
+    cli.close()
   }
 })
 
