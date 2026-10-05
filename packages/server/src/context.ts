@@ -1040,7 +1040,8 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   // that has rested past the prompt-cache TTL and has nothing outstanding. The 504 MB figure that
   // motivated this was measured 2026-08-19, when frizz auto-mounted chrome-devtools into every worker
   // (159 MB of that total); frizz mounts no browser since 2026-08-26, so a thread in a project that
-  // brings none rests nearer ~345 MB and one that brings a browser is back at the old number. It is not an end: the transcript
+  // brings none rests nearer ~345 MB, and one that brings a browser is back at the old number only once it has
+  // used it — a project's stdio MCP servers start on first use since 2026-10-05 (lazy-mcp-host.ts). It is not an end: the transcript
   // is on disk and the next input (an operator message, a fired timer, a recurring prompt, a PR event —
   // all of which route through the bridge's followUp) cold-resumes it with `resume: true`. Above the TTL
   // that resume costs no extra tokens, because the cache is already gone.
