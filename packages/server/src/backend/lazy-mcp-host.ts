@@ -9,8 +9,8 @@
 //
 // HOW. The broker daemon hosts this. Each project stdio server reaches the worker as a REMOTE server
 // (`type: "http"`, a `127.0.0.1` URL served by this daemon) instead of a command, so Claude Code starts
-// nothing at boot. This host answers the handshake and the list methods (`initialize`, `tools/list`,
-// `prompts/list`, `resources/list`, `resources/templates/list`, `ping`) from a cache, and starts the
+// nothing at boot. This host answers the handshake and the list methods (`server/discover`, `initialize`,
+// `tools/list`, `prompts/list`, `resources/list`, `resources/templates/list`, `ping`) from a cache, and starts the
 // project's REAL command — same command, args, env and cwd the CLI would have used — on the first
 // request it cannot answer, normally the first `tools/call`. From then on it is a pipe: every message
 // either way is forwarded verbatim, including the server's own requests (`roots/list`, elicitation),
@@ -52,8 +52,14 @@ interface JsonRpcMessage {
   error?: { code: number; message: string; data?: unknown }
 }
 
-/** The methods a cache can answer: their result is a pure function of the server's definition. */
-const LIST_METHODS = new Set(["tools/list", "prompts/list", "resources/list", "resources/templates/list"])
+/** The methods a cache can answer: their answer is a pure function of the server's definition. `server/discover`
+ *  is the version probe Claude Code sends a remote server before `initialize` (2.1.289; a stdio server never
+ *  sees it) — a server that does not know it answers -32601 and the CLI falls back, so that answer is
+ *  cached like any other. Missing it here started the real server at every boot. */
+const CACHED_METHODS = new Set(["tools/list", "prompts/list", "resources/list", "resources/templates/list", "server/discover"])
+/** Only "the server does not have this method" is a durable error; anything else is this run's problem. */
+const METHOD_NOT_FOUND = -32601
+const CACHE_VERSION = 2
 const LIST_CHANGED: Record<string, string> = {
   "tools/list": "notifications/tools/list_changed",
   "prompts/list": "notifications/prompts/list_changed",
@@ -65,10 +71,18 @@ const FALLBACK_PROTOCOL_VERSION = "2025-06-18"
 const STDERR_TAIL_BYTES = 2048
 const MAX_BODY_BYTES = 64 * 1024 * 1024
 
+type CachedAnswer = Pick<JsonRpcMessage, "result" | "error">
 interface CacheRecord {
+  version: typeof CACHE_VERSION
   initialize?: unknown
-  /** `<method> <JSON params without _meta>` → result. */
-  lists: Record<string, unknown>
+  /** `<method> <JSON params without _meta>` → what the server answered. */
+  answers: Record<string, CachedAnswer>
+}
+
+function cacheable(response: JsonRpcMessage): CachedAnswer | undefined {
+  if (response.result !== undefined) return { result: response.result }
+  if (response.error?.code === METHOD_NOT_FOUND) return { error: response.error }
+  return undefined
 }
 
 export interface LazyMcpMountContext {
@@ -151,9 +165,9 @@ class LazyServer {
   private readCache(): CacheRecord {
     try {
       const parsed = JSON.parse(readFileSync(this.cachePath, "utf8")) as CacheRecord
-      if (parsed && typeof parsed === "object" && parsed.lists && typeof parsed.lists === "object") return parsed
+      if (parsed?.version === CACHE_VERSION && parsed.answers && typeof parsed.answers === "object") return parsed
     } catch {}
-    return { lists: {} }
+    return { version: CACHE_VERSION, answers: {} }
   }
 
   private writeCache(): void {
@@ -176,18 +190,19 @@ class LazyServer {
         this.clientInitParams = (message.params ?? {}) as Record<string, unknown>
         if (this.initResult !== undefined) return { jsonrpc: "2.0", id, result: this.initResult }
         if (this.cache.initialize !== undefined) return { jsonrpc: "2.0", id, result: this.cache.initialize }
-        await this.start()
+        await this.start(method)
         return { jsonrpc: "2.0", id, result: this.initResult }
       }
       if (method === "ping" && !this.child) return { jsonrpc: "2.0", id, result: {} }
-      if (LIST_METHODS.has(method) && !this.child) {
-        const cached = this.cache.lists[listKey(method, message.params)]
-        if (cached !== undefined) return { jsonrpc: "2.0", id, result: cached }
+      if (CACHED_METHODS.has(method) && !this.child) {
+        const cached = this.cache.answers[listKey(method, message.params)]
+        if (cached !== undefined) return { jsonrpc: "2.0", id, ...cached }
       }
-      await this.start()
+      await this.start(method)
       const response = await this.forward(message)
-      if (LIST_METHODS.has(method) && response.result !== undefined) {
-        this.cache.lists[listKey(method, message.params)] = response.result
+      const answer = CACHED_METHODS.has(method) ? cacheable(response) : undefined
+      if (answer) {
+        this.cache.answers[listKey(method, message.params)] = answer
         this.writeCache()
       }
       return response
@@ -219,16 +234,17 @@ class LazyServer {
 
   // ---- the server side -------------------------------------------------------------------------
 
-  private start(): Promise<void> {
-    this.ready ??= this.spawnAndInitialize().catch((error) => {
+  /** `reason` is the client method that needed the real server — the line that says why it ran. */
+  private start(reason: string): Promise<void> {
+    this.ready ??= this.spawnAndInitialize(reason).catch((error) => {
       this.ready = undefined
       throw error
     })
     return this.ready
   }
 
-  private async spawnAndInitialize(): Promise<void> {
-    this.log(`${this.name}: starting ${this.server.command}`)
+  private async spawnAndInitialize(reason: string): Promise<void> {
+    this.log(`${this.name}: starting ${this.server.command} for ${reason}`)
     const child = spawn(this.server.command, this.server.args ?? [], {
       cwd: this.context.cwd,
       env: { ...this.context.env, ...(this.server.env ?? {}) },
@@ -279,14 +295,15 @@ class LazyServer {
   /** Re-read every cached list from the live server; a difference updates the cache and tells the client. */
   private async refreshLists(): Promise<void> {
     const changed = new Set<string>()
-    for (const key of Object.keys(this.cache.lists)) {
+    for (const key of Object.keys(this.cache.answers)) {
       const space = key.indexOf(" ")
       const method = space < 0 ? key : key.slice(0, space)
       const params = space < 0 ? undefined : JSON.parse(key.slice(space + 1))
       const response = await this.internalRequest(method, params).catch(() => undefined)
-      if (!response || response.result === undefined) continue
-      if (JSON.stringify(response.result) !== JSON.stringify(this.cache.lists[key])) {
-        this.cache.lists[key] = response.result
+      const answer = response && cacheable(response)
+      if (!answer) continue
+      if (JSON.stringify(answer) !== JSON.stringify(this.cache.answers[key])) {
+        this.cache.answers[key] = answer
         changed.add(LIST_CHANGED[method] ?? "")
       }
     }

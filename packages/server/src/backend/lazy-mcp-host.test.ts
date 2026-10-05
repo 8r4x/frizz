@@ -72,14 +72,14 @@ async function mount(fx: Fixture, extraEnv: Record<string, string> = {}): Promis
 }
 
 let nextId = 0
-async function rpc(remote: RemoteMcpServer, method: string, params?: unknown): Promise<{ result?: any; error?: { message: string } }> {
+async function rpc(remote: RemoteMcpServer, method: string, params?: unknown): Promise<{ result?: any; error?: { code: number; message: string } }> {
   const response = await fetch(remote.url, {
     method: "POST",
     headers: { ...remote.headers, "content-type": "application/json", accept: "application/json, text/event-stream" },
     body: JSON.stringify({ jsonrpc: "2.0", id: ++nextId, method, ...(params === undefined ? {} : { params }) }),
   })
   assert.equal(response.status, 200)
-  return await response.json() as { result?: any; error?: { message: string } }
+  return await response.json() as { result?: any; error?: { code: number; message: string } }
 }
 
 async function notify(remote: RemoteMcpServer, message: object): Promise<number> {
@@ -143,7 +143,9 @@ test("with nothing cached, the handshake starts the real server once, and its an
 
 test("with a cache, the handshake and tools/list start NOTHING; the first tool call starts the real server", async () => {
   const fx = fixture()
+  // Claude Code 2.1.289 opens a remote server with a `server/discover` version probe, BEFORE initialize.
   const first = await mount(fx)
+  assert.equal((await rpc(first.remote, "server/discover")).error?.code, -32601)
   await rpc(first.remote, "initialize", INIT)
   await rpc(first.remote, "tools/list")
   await first.host.close()
@@ -152,6 +154,7 @@ test("with a cache, the handshake and tools/list start NOTHING; the first tool c
   // A new worker (a new host) on the same definition in the same cwd.
   const { host, remote } = await mount(fx)
   try {
+    assert.equal((await rpc(remote, "server/discover")).error?.code, -32601, "the probe's refusal is replayed, so the CLI falls back to initialize")
     const init = await rpc(remote, "initialize", INIT)
     assert.equal(init.result.instructions, "fake instructions", "the cached handshake carries the server's instructions")
     await notify(remote, { jsonrpc: "2.0", method: "notifications/initialized" })
