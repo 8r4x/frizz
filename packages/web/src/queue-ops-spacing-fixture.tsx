@@ -6,9 +6,11 @@ import { TooltipProvider } from "./components/Tooltip.tsx"
 import { store } from "./store.ts"
 import "./styles.css"
 
-// Browser QA for the vertical rhythm at the BOTTOM of a queue card: composer → BackgroundOpsStrip
-// (⤷ SHELL rows) → ThreadLifecycleFooter. The maintainer read the gap under the prompt box as too
-// large and the gap above the footer as too small; this fixture is the measuring surface.
+// Browser QA for the BOTTOM of a queue card: the docked prompt box and the line of op counts above it
+// (QueueOpsSummary), whose hover panel holds the ⤷ AGENT / SHELL / File / Link rows. Until 2026-10-05
+// the rows hung under the prompt box above a lifecycle footer, and this fixture measured that column's
+// rhythm (the maintainer read the gap under the prompt box as too large); the rows keep that rhythm
+// inside the panel, so it still measures them there.
 
 const SLUG = "queue-ops-spacing-demo"
 
@@ -49,8 +51,8 @@ const thread = {
   subAgents: new URLSearchParams(location.search).get("agents") === "1"
     ? [{ id: "agent-a", label: "Diff the queue card against the drawer footer", startedAt: "2026-07-18T09:05:00.000Z", state: "running" }]
     : [],
-  // ?shells=0 is the CONTROL case: with no live ops the strip unmounts, so the composer must still
-  // sit correctly above the lifecycle footer on the wrapper's own padding.
+  // ?shells=0 is the CONTROL case: with no live ops the counts line unmounts, so the prompt box must
+  // still sit correctly on the dock's own 12px.
   // Every row carries an `id` so it renders the dismiss × — the shipped row has had one on all three
   // densities since 2026-07-30, and the × is the tallest thing on the line, so a fixture without it
   // measures a row height the app never draws.

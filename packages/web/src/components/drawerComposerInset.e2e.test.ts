@@ -3,7 +3,7 @@ import test from "node:test"
 
 const baseUrl = process.env.FRIZZ_DRAWER_COMPOSER_INSET_E2E_URL
 
-test("thread drawer keeps the prompt box inset evenly while safe-area padding stays below lifecycle actions", {
+test("thread drawer keeps the prompt box inset evenly, with the device inset the column's last padding", {
   skip: !baseUrl,
   timeout: 60_000,
 }, async () => {
@@ -22,10 +22,9 @@ test("thread drawer keeps the prompt box inset evenly while safe-area padding st
     await page.goto(`${baseUrl}/drawer-composer-footer-fixture.html`, { waitUntil: "networkidle0" })
     const measure = () => page.$eval("[data-thread-action-bar]", (actionBar) => {
       const composer = actionBar.querySelector<HTMLElement>("[data-surface=drawerFooterFixture]")?.closest<HTMLElement>(".group")
-      const lifecycle = document.querySelector<HTMLElement>("[data-thread-lifecycle-footer]")
       const chatFooter = document.querySelector<HTMLElement>("[data-thread-chat-footer]")
       const ops = actionBar.querySelector<HTMLElement>("[data-background-ops]")
-      if (!composer || !lifecycle || !chatFooter || !ops) throw new Error("drawer footer fixture is incomplete")
+      if (!composer || !chatFooter || !ops) throw new Error("drawer footer fixture is incomplete")
       const bar = actionBar.getBoundingClientRect()
       const box = composer.getBoundingClientRect()
       const lastRow = ops.lastElementChild as HTMLElement
@@ -44,7 +43,6 @@ test("thread drawer keeps the prompt box inset evenly while safe-area padding st
       label.appendChild(probe)
       const baseline = probe.getBoundingClientRect().bottom
       probe.remove()
-      const lifecycleStyle = getComputedStyle(lifecycle)
       const chatFooterStyle = getComputedStyle(chatFooter)
       return {
         top: box.top - bar.top,
@@ -56,7 +54,6 @@ test("thread drawer keeps the prompt box inset evenly while safe-area padding st
         opticalBottom: bar.bottom - baseline,
         boxBottom: bar.bottom - lastRow.getBoundingClientRect().bottom,
         chatFooterBottom: chatFooterStyle.paddingBottom,
-        lifecycleBottom: lifecycleStyle.paddingBottom,
       }
     })
 
@@ -67,8 +64,9 @@ test("thread drawer keeps the prompt box inset evenly while safe-area padding st
       Math.abs(inset.opticalBottom - 12) <= 0.5,
       `the last ops row's baseline sits 12px off the bar's bottom edge, matching the composer's own inset (got ${inset.opticalBottom})`,
     )
+    // The chat footer carries the device's bottom inset now that no lifecycle footer sits under it — 0px
+    // on a desktop screen, so the bar's own 12px stays the whole inset there.
     assert.equal(inset.chatFooterBottom, "0px")
-    assert.ok(Number.parseFloat(inset.lifecycleBottom) >= 8, "safe-area floor belongs below lifecycle actions")
 
     // The other font mode. The BOX gap must move (mono's baseline sits ~2px higher in the same line
     // box) while the OPTICAL one holds — that difference is the whole reason the correction is a
