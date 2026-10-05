@@ -725,13 +725,11 @@ a[href] {
    these cards … The spacing isn't quite right"). Measured on the steps card, ink to ink: 9.75px between
    a paragraph's lines and 16px between list items at 1.7; 7.75px and 14px at 20px.
    Written as a RATIO (20px at this 13px) so it inherits the way the transcript's 1.7 does: a smaller
-   inline code chip or table cell takes proportionally smaller leading instead of a pinned 20px.
-   --md-task-line must track it, as it tracks the 1.7 below. */
+   inline code chip or table cell takes proportionally smaller leading instead of a pinned 20px. */
 .card-md .md-body {
   --md-step: 13px;
   font-size: 13px;
   line-height: calc(20 / 13);
-  --md-task-line: calc(20em / 13);
   color: inherit;
 }
 .md-body > :first-child {
@@ -832,9 +830,6 @@ a[href] {
      MIXED list (task items beside plain bullets) widens as a whole, so one list keeps one text
      column rather than two. */
   --md-task-gutter: 1.75em;
-  /* Must track this block's own line-height — the box is positioned, so it has no line box of its
-     own to ride and the first line's geometry has to be reconstructed from these two numbers. */
-  --md-task-line: 1.7em;
 }
 .md-body ul:has(> li > .md-task),
 .md-body ul:has(> li > p > .md-task),
@@ -842,34 +837,54 @@ a[href] {
 .md-body ol:has(> li > p > .md-task) {
   padding-left: var(--md-task-gutter);
 }
-/* The box gets its OWN column and is taken out of the inline flow — it is not a character in the
-   sentence (maintainer 2026-07-31: "checkbox on left, text on right. the checkbox should not be
-   inlined"). Two things follow, and both were broken while it was inline: every wrapped line now
-   starts under the TEXT instead of under the box, and the space marked emits after the span is
-   dropped as leading whitespace, so line one no longer starts ~0.6em right of line two.
-   `> p >` catches the loose-list shape, where the span lands inside a paragraph. */
+/* The box gets its OWN column — it is not a character in the sentence (maintainer 2026-07-31:
+   "checkbox on left, text on right. the checkbox should not be inlined"), so every wrapped line
+   starts under the TEXT, never under the box. It is still IN the line, though, as a zero-advance
+   inline-block: its negative margins add up to minus its own width, which hangs it in the gutter
+   and leaves the text where a plain bullet's text starts. `> p >` catches the loose-list shape,
+   where the span lands inside a paragraph.
+
+   IN THE LINE ON PURPOSE (2026-10-05). It was `position: absolute` until then, with its `top`
+   rebuilt from the line height plus two constants measured in MONO (the em box centred in the line,
+   the cap band's centre 0.331em below the em box top). The app renders only in sans since
+   2026-09-19, and in `system-ui` (SF Pro here) those constants are wrong: the box rode HIGH by
+   +2.62px in a card (13px, 20px leading), +2.54px in transcript prose (14px/1.7) and +5.07px at
+   28px. No CSS unit says where the baseline sits inside the line box, so no `top` can be right in
+   every font — but `vertical-align` is measured FROM the baseline. An empty inline-block's baseline
+   is its bottom margin edge, so raising it by `0.5cap − box/2` puts its centre exactly on
+   baseline − 0.5cap, the middle of the cap band, with `cap` resolved from whatever face the OS
+   picked. Re-measured 2026-10-05, cap-band centre minus box centre: against canvas `H` metrics,
+   +0.01px in a card, at 14px and at 28px, and within 0.02px with the face forced to Menlo, Georgia
+   and Helvetica Neue; against RENDERED ink at dsf 8 (box border rows vs the capitals' rows), −0.05px
+   in a card, +0.06px at 14px, +0.14px at 28px, where the old rule read +2.95 / +2.06 / +5.14. A
+   CSS-drawn mark's ink IS its border box, so this one correction serves all five states.
+
+   Because it is in the line, an EMPTY item (`- [ ]`) keeps one line's height with no `min-height`:
+   an inline-block alone still makes a line box. And the renderer emits no space after the span,
+   which would otherwise sit between box and text and push line one right of line two. */
 .md-body li:has(> .md-task),
 .md-body li:has(> p > .md-task) {
   list-style: none;
-  position: relative;
-  /* An EMPTY item (`- [ ]`, an unfilled task-list entry) has no in-flow content once the box is
-     positioned out, so its `<li>` would collapse to zero height and hide the box. One line's worth —
-     the line the box itself is placed on, so a card's tighter leading (`.card-md .md-body`) holds too. */
-  min-height: var(--md-task-line);
+}
+/* An atomic inline is a soft wrap opportunity on both sides, so a first word too long for the line
+   (an item that opens with a URL) broke AFTER the box, leaving the box alone on a line of its own and
+   the text starting on the next. Whether that boundary may break is decided by its nearest common
+   ancestor — the element holding the box — so that one goes `nowrap` and everything after the box
+   wraps again. `pre` is left out: its own `nowrap` is the UA's, which any author rule would beat. */
+.md-body li:has(> .md-task),
+.md-body li > p:has(> .md-task) {
+  text-wrap-mode: nowrap;
+}
+.md-body .md-task ~ :not(pre) {
+  text-wrap-mode: wrap;
 }
 .md-body .md-task {
-  position: absolute;
-  left: calc(0.3em - var(--md-task-gutter));
-  /* Centres the box's ink on the CAP BAND of the first line — not on the line box, which is what
-     `(line - box) / 2` alone gives and which left the box 2.64px LOW at 14px (the eye reads a mark
-     against baseline→cap-height, and the em box hangs a descender's worth below that). Built from
-     measured, purely font-relative terms so it scales exactly:
-       (line − 1em) / 2   half-leading: the em box's top inside the line box
-       + 0.331em          the cap band's centre below the em box top (baseline 0.714em, cap 0.638em)
-       − box / 2          centre the box on it
-     Re-measured at 14px and 28px; residual 0.00px at both. A CSS-drawn mark's ink IS its border box,
-     so this one correction serves all five states — there is no per-glyph term to add. */
-  top: calc((var(--md-task-line) - 1em) / 2 + 0.331em - var(--md-task-box) / 2);
+  display: inline-block;
+  /* The containing block for the inner glyph's `::after`. */
+  position: relative;
+  margin-left: calc(0.3em - var(--md-task-gutter));
+  margin-right: calc(var(--md-task-gutter) - 0.3em - var(--md-task-box));
+  vertical-align: calc(0.5cap - var(--md-task-box) / 2);
   box-sizing: border-box;
   width: var(--md-task-box);
   height: var(--md-task-box);
