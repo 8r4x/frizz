@@ -863,7 +863,9 @@ export function Composer({
   return (
     // Focused = the accent border: the visual handoff from the nav chevron to the box.
     // While a file drags over, the border dashes and a hint overlay appears (screenshot intake).
+    // `data-composer-box` is the bordered box itself: the Goal panel spans exactly its two edges.
     <div
+      data-composer-box
       className={`group relative rounded-xl border bg-bg transition-colors focus-within:border-accent ${
         dragging ? "border-dashed border-accent" : "border-border"
       }`}
