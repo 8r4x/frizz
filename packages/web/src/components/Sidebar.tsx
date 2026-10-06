@@ -566,7 +566,8 @@ export const ThreadRow = memo(function ThreadRow({
 }) {
   const foreign = !legacy && t.foreign === true
   // Snoozed rows are uniformly grayed as a whole; provisional titles retain their local dim treatment.
-  // A thread awaiting its OWN live sub-agent/Monitor is not Snoozed and stays fully active.
+  // A thread awaiting its OWN live sub-agent/Monitor is not Snoozed and stays fully active — unless its
+  // worker called that rest `watching` (2026-10-05), which parks it here like any other watcher.
   const snoozed = !legacy && isSnoozed(t)
   // A DONE THREAD IS GRAYED WHEREVER IT ROWS — the Done band, and the pinned band just the same
   // (maintainer 2026-09-11: "a thread that's marked as done should always be grayed out, even if it's

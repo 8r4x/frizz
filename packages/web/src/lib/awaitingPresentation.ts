@@ -131,12 +131,14 @@ export function awaitingProseBlock(body: string | undefined): string | null {
  *  It strips ONLY a line whose key is a key: a retired kind, or one of the live YAML keys. That
  *  narrowness is the point — a handoff that opens "Note: the macOS leg is flaky" is prose, and a filter
  *  keyed on "has a colon" would eat it. */
-const FENCE_SYNTAX_KEYS = new Set<string>([...RETIRED_AWAITING_KINDS, "shells", "agents", "timers", "prs", "issues", "for", "title"])
+// The answer lines are machinery too: `status:` (2026-10-05) and the `needs_input:` it replaced, in both
+// spellings the parser reads.
+const FENCE_SYNTAX_KEYS = new Set<string>([...RETIRED_AWAITING_KINDS, "shells", "agents", "timers", "prs", "issues", "for", "title", "status", "needs_input", "needs-input"])
 function stripFenceSyntax(body: string): string {
   return body
     .split("\n")
     .filter((line) => {
-      const key = /^\s*([a-z][a-z-]*):/i.exec(line)?.[1]?.toLowerCase()
+      const key = /^\s*([a-z][a-z_-]*):/i.exec(line)?.[1]?.toLowerCase()
       return !(key && FENCE_SYNTAX_KEYS.has(key))
     })
     .join("\n")

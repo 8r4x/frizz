@@ -264,7 +264,8 @@ export function externalThreads(threads: readonly ThreadView[]): ThreadView[] {
 //                        open session work — running, needs-you, bare rest, done-fenced, OR owning a
 //                        live sub-agent/background shell/Monitor. Never dimmed as a band.
 //   • held             — open, AT REST behind ANY declared ```awaiting fence (or the canonical
-//                        blocked+timer status) AND no live background op. Its own DIMMED band between
+//                        blocked+timer status) AND no live background op — or behind a rest its worker
+//                        called `watching`, live op or not (2026-10-05). Its own DIMMED band between
 //                        the rested rows and Done. The glyph and section share isSnoozed(), so a row can
 //                        never read as "snoozed" while sitting in the Active/Rested section. (The
 //                        hourglass GLYPH is not Snoozed's alone since 2026-09-07: a queued wait on a

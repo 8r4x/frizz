@@ -3248,8 +3248,10 @@ export function isDeclaredAwaiting(t: ThreadView): boolean {
 }
 
 // INTERNAL WORK: a thread with a LIVE sub-agent is awaiting its OWN dispatched child — not an external
-// event — so it is a fully ACTIVE thread and must never be dimmed (maintainer 2026-07-10: "when an
-// agent is merely awaiting its own sub-agents, we should NOT dim it — that's the differentiator").
+// event — so it is a fully ACTIVE thread and is not dimmed (maintainer 2026-07-10: "when an agent is
+// merely awaiting its own sub-agents, we should NOT dim it — that's the differentiator"). The one
+// exception is the worker's own word: a rest it called `watching` parks even with a child out, because
+// that child is watching the world for it (watchingRest, 2026-10-05).
 // Direct children only, matching the server's hasLiveBackgroundWork: `subAgents` also carries the live
 // DESCENDANTS under those children so the rows can nest, and those are a rendering concern that must
 // never move thread state (see isDirectSubAgent). A running descendant sits under a running direct child
@@ -3342,7 +3344,8 @@ export function futureSnoozedUntil(
 // waits (pr/ci/session), malformed/elapsed timers, and hintless fences stay OUT of it — rested (in the
 // queue) if their turn is over, Active if it isn't — so they cannot hide work an agent should own
 // through an in-band watcher. A canonical blocked+timer status remains a compatibility path only when
-// it carries the same explicit future ISO instant. A live child/Monitor wins, and archived rows go Done.
+// it carries the same explicit future ISO instant. A live child/Monitor wins unless the worker called the
+// rest `watching`, and archived rows go Done.
 export function isSnoozed(t: ThreadView, nowMs = Date.now()): boolean {
   const userSnooze = futureSnoozedUntil(t, nowMs) !== undefined
   if (t.state === "archived") return false
