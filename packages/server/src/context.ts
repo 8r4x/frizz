@@ -26,6 +26,7 @@ resumeThread,
 } from "./resume.ts"
 import { createClaudeBackend } from "./backend/claude.ts"
 import { createCodexBackend, codexSandbox } from "./backend/codex.ts"
+import { readCodexModels } from "./backend/codex-models.ts"
 import { createAcpBackend } from "./backend/acp-transcript.ts"
 import { createAcpBridge, type AcpBridge } from "./backend/acp-bridge.ts"
 import { readClaudePreflightAuth, readCodexAuthState, readCodexBinaryState } from "./backend/auth-status.ts"
@@ -230,11 +231,15 @@ export interface AppContext {
   // Same seam for Codex: the resolved app-server/backend executable, so codex logout targets
   // the binary frizz actually runs rather than whatever "codex" is first on PATH.
   codexBin?: string
+  // Exact only for Frizz's provisioned runtime. An explicit/PATH override is unknown and leaves the
+  // shared Codex cache ungated; see backend/codex-models.ts.
+  codexVersion?: string
 }
 
 export interface ContextOptions {
   claudeBin?: string // injectable dispatch executable (tests use a stand-in)
   codexBin?: string // injectable app-server executable; unused unless the bridge flag is enabled
+  codexVersion?: string // exact provisioned runtime version; undefined for an override/PATH fallback
   // startServer pins the owner-verified project before any SQLite/tailer/scheduler initialization.
   project?: Project
   /**
@@ -867,6 +872,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     storage,
     bus,
     backendFor,
+    codexModels: () => readCodexModels(undefined, opts.codexVersion),
     onChange: () => board.refresh(),
     onTranscriptChange: (slugs) => transcriptChange.emit(slugs),
     // The SDK's own reading of a headless broker session: its turn (so the fold's 5s unknown-stop_reason
@@ -937,8 +943,9 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     // Second wake source: every thread a subscription window cut off mid-turn gets its own "continue"
     // once that window rolls, over this same delivery path. The quota reader supplies the fallback
     // instant for a weekly limit, whose message text carries a clock but no date; readQuota memoizes,
-    // so consulting it per tick costs a live request only every few minutes.
-    readQuota,
+    // so consulting it per tick costs a live request only every few minutes. Read through the resolved
+    // runtimes, as the quota RPC does: a bare call would start whatever `codex` is first on PATH.
+    readQuota: () => readQuota({ claudeBin: opts.claudeBin, codexBin: opts.codexBin }),
     // The only runtime that can answer is the broker: its daemon record is on disk while the daemon
     // lives and is unlinked when it dies (liveBrokerRecords checks the pid), so "did the process that
     // took this wake survive" is one directory read. Codex and any row whose session moved on answer
@@ -1092,5 +1099,6 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     launchProjectId: opts.launchProjectId,
     claudeBin: opts.claudeBin,
     codexBin: opts.codexBin,
+    codexVersion: opts.codexVersion,
   }
 }
