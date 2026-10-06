@@ -33,7 +33,19 @@ export function QueueOpsSummary({ thread }: { thread: ThreadView }) {
   const closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   useEffect(() => () => clearTimeout(closeTimer.current), [])
   const groups = queueOpsCounts(thread)
-  if (groups.length === 0) return null
+  const panelRef = useRef<HTMLDivElement>(null)
+  const buttonRef = useRef<HTMLButtonElement>(null)
+  // The last op can end, or be stopped from its × in the panel, while the panel is open — and nothing
+  // then says close: its anchor unmounts with the line, so no pointer leaves it and Radix sends no
+  // change. Left `true`, the panel sprang open by itself, over the transcript, the next time the agent
+  // started anything. With nothing to count it is closed.
+  const empty = groups.length === 0
+  useEffect(() => {
+    if (!empty) return
+    clearTimeout(closeTimer.current)
+    setOpen(false)
+  }, [empty])
+  if (empty) return null
   const words = groups.map((group) => `${group.n} ${group.n === 1 ? group.one : group.many}`)
   const openNow = () => {
     clearTimeout(closeTimer.current)
@@ -44,6 +56,14 @@ export function QueueOpsSummary({ thread }: { thread: ThreadView }) {
   const closeSoon = () => {
     clearTimeout(closeTimer.current)
     closeTimer.current = setTimeout(() => setOpen(false), 150)
+  }
+  // THE KEYBOARD'S WAY IN. Focus opens the panel the way hover does, but it is portaled to the end of the
+  // page, so Tab from the line goes to the prompt box and the panel closes — its rows (open a drawer,
+  // stop a child) were Tab stops when they hung under the box. Enter, Space or ↓ on the line moves focus
+  // to the panel's first control; Escape there brings it back to the line.
+  const focusPanel = () => {
+    openNow()
+    requestAnimationFrame(() => panelRef.current?.querySelector<HTMLElement>("button, a[href], [tabindex]:not([tabindex='-1'])")?.focus())
   }
   return (
     // `-mt-2`: the dock's top inset is 12px, the same as its bottom; with this line in it the line takes
@@ -59,11 +79,19 @@ export function QueueOpsSummary({ thread }: { thread: ThreadView }) {
             onMouseEnter={openNow}
             onMouseLeave={closeSoon}
             onFocus={openNow}
+            ref={buttonRef}
             onClick={(event) => {
               // The line sits inside a queue card; the click is this control's, not the card's. A click
-              // OPENS, never toggles: with a mouse the hover already opened the panel.
+              // OPENS, never toggles: with a mouse the hover already opened the panel. A keyboard click
+              // (Enter or Space, `detail` 0) carries focus into it.
               event.stopPropagation()
-              openNow()
+              if (event.detail === 0) focusPanel()
+              else openNow()
+            }}
+            onKeyDown={(event) => {
+              if (event.key !== "ArrowDown") return
+              event.preventDefault()
+              focusPanel()
             }}
             onMouseDown={(event) => event.preventDefault()}
             className={`flex min-w-0 items-center gap-3 rounded-md px-1.5 py-0.5 text-[11.5px] outline-none transition-colors focus-visible:ring-1 focus-visible:ring-focus-ink-60 ${open ? "bg-panel-2 text-fg/85" : "text-muted-70 hover:bg-panel-2 hover:text-fg/85"}`}
@@ -94,6 +122,13 @@ export function QueueOpsSummary({ thread }: { thread: ThreadView }) {
           onMouseLeave={closeSoon}
           // Hover opened it, so focus stays where the operator left it — the caret in the prompt box.
           onOpenAutoFocus={(event) => event.preventDefault()}
+          onEscapeKeyDown={(event) => {
+            // Replaces the wrapper's handler, so it keeps that handler's one job: this Escape is the
+            // panel's, not the window's (App, or /full's exit).
+            event.stopPropagation()
+            if (panelRef.current?.contains(document.activeElement)) buttonRef.current?.focus()
+          }}
+          ref={panelRef}
           onClick={(event) => event.stopPropagation()}
           className="flex w-[440px] max-w-[calc(100vw-1.5rem)] flex-col px-3 py-2"
         >
