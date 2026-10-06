@@ -1009,7 +1009,7 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
           return
         }
         deliveredDedupe = null
-        // A MANUAL COMPACTION — the footer's "Compact now" — writes two user records after its boundary:
+        // A MANUAL COMPACTION — the context panel's "Compact now" — writes two user records after its boundary:
         // the command's `<command-name>/compact</command-name>` envelope and its
         // `<local-command-stdout>Compacted …</local-command-stdout>` output. Neither is the human
         // speaking, and the compact_boundary divider above already says what happened, with the token

@@ -756,7 +756,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   const claudeBroker = claudeBrokerBridgeEnabled()
     ? createClaudeAgentBrokerBridge({
         onEvent: (slug, sessionId, event) => claudeRuntimeIngest?.onEvent(slug, sessionId, event),
-        // The ceiling this thread's daemon actually runs under, which is what the footer's context dial
+        // The ceiling this thread's daemon actually runs under, which is what the header's context reading
         // has to divide by: a `[1m]` worker forked at the shipped 500K compacts at 500K, and reading its
         // fullness against 1M reported a comfortable 25% for a session that was half full.
         onCompactionWindow: (sessionId, window) => claudeRuntimeIngest?.noteCompactionWindow(sessionId, window),
@@ -878,7 +878,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     // reconstruct child lifecycle from English prose. See applyRuntimeTasks for the authority split.
     runtimeTasks: claudeRuntimeIngest ? (sessionId) => claudeRuntimeIngest.tasks(sessionId) : undefined,
     // The model's context SIZE for a broker Claude session. Claude names it nowhere on disk, so this
-    // is the only path to the footer readout's denominator for a Claude row (codex names its own on
+    // is the only path to the context reading's denominator for a Claude row (codex names its own on
     // every token_count and needs nothing here).
     runtimeContextWindow: claudeRuntimeIngest ? (sessionId) => claudeRuntimeIngest.contextWindow(sessionId) : undefined,
     // Codex's live background execs, off the app-server item stream. The counterpart of runtimeTasks

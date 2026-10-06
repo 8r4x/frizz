@@ -683,7 +683,7 @@ export const ThreadRow = memo(function ThreadRow({
         </span>
       </button>
       {/* The Mark-as verb survives ONLY on legacy rows (a .frizz verb). Session lifecycle controls
-          live in the thread footer. */}
+          live in the thread header's action strip. */}
       {legacy && (
         <div className="absolute right-1 top-1 hidden group-hover:flex items-stretch rounded-md bg-panel shadow-sm shadow-shadow-ink/30">
           <MarkAsButton slug={t.id} size="sm" />

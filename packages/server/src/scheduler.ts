@@ -825,7 +825,7 @@ function armedRest(row: RecurringRow): ArmedRest | undefined {
 // the emptied window. That made the pad a load-bearing file every worker had to maintain whether or not
 // it wanted one. The recurring prompt already solves the same problem better: the worker writes whatever
 // doc it likes in its scratch directory and LINKS it here, and the link comes back at exactly the moment
-// the context is gone. The row is durable, it is visible in the thread footer, and the operator can edit
+// the context is gone. The row is durable, it is visible in the thread's Goal panel, and the operator can edit
 // it — none of which a hook injection was.
 //
 // IT DOES NOT WAIT FOR REST, and that is the one place it deliberately parts company with SOURCE 5. A
@@ -3634,7 +3634,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   // in the emptied window, and a compaction happens while it is working. Nor does it consult whether the
   // thread signed off — a ```done fence answers "you stopped, is there more?", which is not the question
   // a compaction asks. A worker that genuinely wants these to stop clears the Goal, or the operator does
-  // it in the footer.
+  // it in the Goal panel.
   function evalCompactPrompts(nowMs: number): void {
     for (const row of deps.storage.allSessions()) {
       if (row.state === "archived" || row.archived === 1) continue

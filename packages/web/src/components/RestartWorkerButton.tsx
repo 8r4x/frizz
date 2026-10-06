@@ -61,7 +61,7 @@ export function RestartWorkerButton({ thread }: { thread: ThreadView }) {
         type="button"
         disabled={busy}
         aria-label="Restart worker"
-        // Focus must not leave the composer: same discipline as every other footer verb.
+        // Focus must not leave the composer: same discipline as every other header verb.
         onMouseDown={(e) => e.preventDefault()}
         onClick={() => {
           setBusy(true)
