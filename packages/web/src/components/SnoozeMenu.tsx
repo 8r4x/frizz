@@ -33,6 +33,11 @@ import { Tooltip } from "./Tooltip.tsx"
 // for Friday says so in its header, and the menu then leads with when it wakes and Wake now.
 export function SnoozeMenu({ thread, onSnoozed }: { thread: ThreadView; onSnoozed?: () => void }) {
   const [open, setOpen] = useState(false)
+  // Closing the menu hands focus back to the clock, and the tooltip opens on focus — where it then takes
+  // the next Escape for itself, so on /full one Escape closed the menu and the second only closed a
+  // tooltip nobody asked for, instead of leaving fullscreen. It stays quiet until focus or the pointer
+  // leaves the clock; focus itself still returns, which is the menu's keyboard contract.
+  const [tooltipQuiet, setTooltipQuiet] = useState(false)
   const [busy, setBusy] = useState(false)
   const [customOpen, setCustomOpen] = useState(false)
   const [customValue, setCustomValue] = useState("")
@@ -105,9 +110,15 @@ export function SnoozeMenu({ thread, onSnoozed }: { thread: ThreadView; onSnooze
 
   return (
     <>
-      <Menu open={open} onOpenChange={setOpen}>
+      <Menu
+        open={open}
+        onOpenChange={(next) => {
+          setOpen(next)
+          if (!next) setTooltipQuiet(true)
+        }}
+      >
         {/* The tooltip stands down while the menu is open: the menu's own first line already says it. */}
-        <Tooltip label={label} multiline={Boolean(prompt)} disabled={open}>
+        <Tooltip label={label} multiline={Boolean(prompt)} disabled={open || tooltipQuiet}>
           <MenuTrigger asChild>
             <button
               type="button"
@@ -117,6 +128,8 @@ export function SnoozeMenu({ thread, onSnoozed }: { thread: ThreadView; onSnooze
               aria-label={state ?? "Snooze"}
               // Focus must not leave the composer: same discipline as every other header verb.
               onMouseDown={(event) => event.preventDefault()}
+              onBlur={() => setTooltipQuiet(false)}
+              onPointerLeave={() => setTooltipQuiet(false)}
               className={`${snoozedUntil ? HEADER_ICON_CLASS.replace(/(^| )text-muted( |$)/, "$1text-attention-90$2") : HEADER_ICON_CLASS} ${open ? "bg-panel-2" : ""}`}
             >
               {busy ? <Loader2 size={14} strokeWidth={2} className="animate-spin" /> : <AlarmClock size={14} strokeWidth={2} />}
