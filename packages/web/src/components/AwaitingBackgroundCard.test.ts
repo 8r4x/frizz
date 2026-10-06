@@ -381,6 +381,13 @@ test("the snooze renders in the shared footer band, flush with the card's bottom
     createElement(AwaitingBackgroundCard, { thread: { ...t, state: "archived" } as typeof t }),
   )
   assert.doesNotMatch(past, /data-card-actions/)
+  // A `watching` rest is already parked in Snoozed by its worker (2026-10-05): the button would make the
+  // park it is in, so the card draws without it — and still states the wait. A `working` rest keeps it:
+  // that row is in the Running band, and the click is what moves it to Snoozed.
+  const watching = render({ ...t, waitStatus: "watching" } as typeof t)
+  assert.doesNotMatch(watching, /data-awaiting-snooze/)
+  assert.match(watching, /data-awaiting-background/, "the card itself still renders")
+  assert.match(render({ ...t, waitStatus: "working" } as typeof t), /data-awaiting-snooze="true"/)
 })
 
 // THE TABLE AS A PIECE (2026-08-28). The awaiting FENCE card draws it whenever the thread is NOT at rest

@@ -25,7 +25,7 @@ import { createWakeDeliveryStore } from "./wake-store.ts"
 // path. In PRODUCTION the runtime is always knowable, so the sent-and-confirm-later path is the only one
 // that ever runs. A cap that is only spent on the path tests take is not a cap; see the two tests at the
 // bottom of this file.
-// A dispatch instant BEFORE the `needs_input:` cut, for the cases that pin the legacy contract.
+// A dispatch instant BEFORE the answer-required cut, for the cases that pin the legacy contract.
 const LEGACY_SPAWN = new Date(Date.parse(NEEDS_INPUT_REQUIRED_AT) - 86_400_000).toISOString()
 
 function nudger(tele: Partial<SessionTelemetry>, opts: { setting?: string; runtime?: "alive" | "dead"; spawnedAt?: string } = {}) {
@@ -108,14 +108,15 @@ test("a rest with no fence is told how to sign off, and the text names all three
     // workers read before writing a fence, so a stale example here teaches the wrong syntax to exactly
     // the audience that most needs the right one.
     //
-    // This fixture spawns NOW, so it is a `needs_input:` thread (NEEDS_INPUT_REQUIRED_AT) and is taught
-    // the key with a fence that needs no prose; the legacy example is pinned against the legacy text.
+    // This fixture spawns NOW, so it is an answer-required thread (NEEDS_INPUT_REQUIRED_AT) and is taught
+    // `status:` with a fence that needs no prose; the legacy example is pinned against the legacy text.
     assert.match(h.delivered[0], /agents: \[<the id your runtime gave you>\]/)
-    assert.match(h.delivered[0], /needs_input: false/)
-    assert.match(h.delivered[0], /you owe NO write-up/)
+    assert.match(h.delivered[0], /status: working/)
+    for (const word of ["working", "watching", "needs_input"]) assert.match(h.delivered[0], new RegExp(`- \`${word}\` — `))
+    assert.match(h.delivered[0], /`working` and `watching` owe NO write-up/)
     assert.match(SIGNOFF_NUDGE_MESSAGE, /shells: \[<the id your runtime gave you>\]/)
     assert.match(SIGNOFF_NUDGE_MESSAGE, /prs: \[owner\/repo#123\]/)
-    assert.doesNotMatch(SIGNOFF_NUDGE_MESSAGE, /needs_input/, "a pre-cut worker is not taught a key its contract never had")
+    assert.doesNotMatch(SIGNOFF_NUDGE_MESSAGE, /needs_input|status:/, "a pre-cut worker is not taught a key its contract never had")
     // …and never the SINGULAR keys the 2026-08-24 YAML cutover retired. The example kept them for a
     // month after the park check started refusing them by name, so a worker that copied the reminder's
     // own fence was bumped for it.
@@ -272,7 +273,7 @@ for (const [what, arrange] of [
     st.armThreadWatch({ id: "wch_x", slug, kind: "shell", target: "bzvtnt3ig", createdAtMs: Date.now(), expiresAtMs: Date.now() + 7_200_000 })],
 ] as Array<[string, (st: ReturnType<typeof createStorage>, slug: string) => unknown]>) {
   test(`${what} is already a sign-off, so nothing is injected`, async () => {
-    // A watch is a sign-off only for a thread dispatched BEFORE the `needs_input:` cut — see the next
+    // A watch is a sign-off only for a thread dispatched BEFORE the answer-required cut — see the next
     // test — so that case runs on a legacy thread; `done` and `ask` are sign-offs on every contract.
     const h = nudger({}, what === "a registered watch" ? { spawnedAt: LEGACY_SPAWN } : {})
     try {
@@ -328,17 +329,17 @@ test("a new question does not cover an old one: the nudge lists only the carried
   } finally { h.close() }
 })
 
-// UNDER THE `needs_input:` CONTRACT A WATCH IS NOT A SIGN-OFF (2026-10-01). It says when the worker
-// wakes; whether the human is needed meanwhile is the fence's answer, so a rest behind a watch with no
-// fence queues (board.needsInputQueues) — and is told about the fence that would have kept it out.
-test("a registered watch alone is NOT a sign-off for a needs_input thread — the rest is taught the fence", async () => {
+// UNDER THE ANSWER-REQUIRED CONTRACT A WATCH IS NOT A SIGN-OFF (2026-10-01). It says when the worker
+// wakes; where the thread sits meanwhile is the fence's answer, so a rest behind a watch with no fence
+// queues (board.needsInputQueues) — and is told about the fence that would have kept it out.
+test("a registered watch alone is NOT a sign-off for an answer-required thread — the rest is taught the fence", async () => {
   const h = nudger({ bgShells: [{ label: "the suite", startedAt: "2026-08-12T00:00:00.000Z", state: "running", id: "toolu_x", taskId: "bzvtnt3ig" }] as SessionTelemetry["bgShells"] })
   try {
     h.storage.armThreadWatch({ id: "wch_x", slug: h.slug, kind: "shell", target: "bzvtnt3ig", createdAtMs: Date.now(), expiresAtMs: Date.now() + 7_200_000 })
     await h.s.tick()
     const nudges = h.nudges()
     assert.equal(nudges.length, 1)
-    assert.match(nudges[0].message, /needs_input: true\|false/, "the live-ops footer names the required answer")
+    assert.match(nudges[0].message, /a required `status:` \(`working`, `watching`\s+or `needs_input`\)/, "the live-ops footer names the required answer")
     assert.match(nudges[0].message, /In a fence: `shells: \[bzvtnt3ig\]`/, "and the id to name")
   } finally { h.close() }
 })

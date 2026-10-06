@@ -38,7 +38,7 @@ test("a question a later fence claimed and the human then answered stays at the 
     msg("user", "2026-09-25T10:00:00Z"),
     msg("assistant", "2026-09-25T10:02:00Z"), // asked here
     msg("user", "2026-09-25T10:03:00Z"), // replied past it
-    msg("assistant", "2026-09-25T10:04:00Z", "Still needed.\n\n```awaiting\nquestions: [qst_a]\nneeds_input: true\n```"),
+    msg("assistant", "2026-09-25T10:04:00Z", "Still needed.\n\n```awaiting\nquestions: [qst_a]\nstatus: needs_input\n```"),
     msg("user", "2026-09-25T10:09:00Z"), // the answer
   ]
   const { anchored } = settledQuestionPositions(messages, [settled("qst_a", "2026-09-25T10:01:30Z", "2026-09-25T10:08:00Z")])

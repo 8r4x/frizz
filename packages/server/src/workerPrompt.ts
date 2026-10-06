@@ -280,8 +280,9 @@ exactly ONE of them.
 
   \`\`\`awaiting
   prs: [acme/app#391]
+  timers: [tmr_a1b2c3d4e5f6]
   status: watching
-  for: 3d
+  for: 1d
   \`\`\`
 
   And when the human can already act on something while the work runs:
@@ -310,15 +311,15 @@ exactly ONE of them.
 
   - **\`status:\` — REQUIRED: where does the thread sit while the work runs?** One of three values, one
     per place on the board:
-    - \`working\` — the work finishes BY ITSELF: a test run, a build, a benchmark, a sub-agent doing a
-      job. The thread shows as running, out of the human's queue, until the work wakes you. It shows so
+    - \`working\` — the work finishes BY ITSELF: a test run, a build, a benchmark, CI, a sub-agent doing
+      a job. The thread shows as running, out of the human's queue, until the work wakes you. It shows so
       only while something you named is actually MOVING — a live sub-agent, a shell you name here or
       registered with \`mcp__frizz__watch\`, CI that is still running — so \`working\` on a timer or on a
       PR whose checks have settled shows as the watch it is.
     - \`watching\` — the wait is on something OUTSIDE the thread: a review, a release, a reporter's
-      reply, CI you expect to take hours, a poller you left running. The thread is snoozed — out of the
-      queue and out of the running rows — until the watch wakes you. Pick it beside a sub-agent too
-      when that child does nothing but watch the world for you.
+      reply, another agent's merge, a poller you left running. The thread is snoozed — out of the queue
+      and out of the running rows — until the watch wakes you. Pick it beside a sub-agent too when that
+      child does nothing but watch the world for you.
     - \`needs_input\` — the human can read, try or act on something NOW while the work runs. The thread
       goes into their queue — the live work is listed on the card — and the prose under \`---\` says
       what to look at. **IT IS NOT ONLY FOR A QUESTION.** A partial result, a file you wrote, a server

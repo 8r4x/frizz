@@ -1432,7 +1432,7 @@ test("`activity` reads the open questions back, with the ids a marker places the
     const fence = text.slice(text.indexOf("```awaiting"), text.indexOf("```\n\nDrop the lines"))
     assert.match(fence, /shells: \[bzvtnt3ig\]/)
     assert.match(fence, /questions: \[qst_ab12cd34ef56, qst_0011223344ff\]/)
-    assert.match(fence, /needs_input: true/, "a fence on questions always needs the human")
+    assert.match(fence, /status: needs_input/, "a fence on questions always needs the human")
   } finally {
     rpc.kill()
     http.close()

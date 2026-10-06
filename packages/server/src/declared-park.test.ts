@@ -235,7 +235,7 @@ function parkHarness(hints: FenceView["hints"], opts: { shells?: any[]; agents?:
   const sent: string[] = []
   storage.upsertSession({
     // A LEGACY dispatch unless a case says otherwise: these cases pin the item checks, and a thread under
-    // the `needs_input:` contract owes an answer they are not about (see the needs_input cases below).
+    // the answer-required contract owes a `status:` they are not about (see the answer cases below).
     slug, session_id: "sid", thread_name: `frizz-${slug}`, spawned_at: opts.spawnedAt ?? "2026-08-15T11:00:00.000Z",
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: restedAt, title_auto: 0,
     title: null, state: "open", meta: null, seen_at: null, transcript_id: null,
@@ -820,7 +820,7 @@ test("a fence naming ONLY questions is a park on the human: no other name and no
   try {
     askElectron(h)
     await h.s.tick()
-    assert.equal(h.queued().length, 0, "not nameless, not missing `needs_input:` (implied), not malformed")
+    assert.equal(h.queued().length, 0, "not nameless, not missing `status:` (implied), not malformed")
     assert.equal(parkIsHonoured(readAwaitingPark([{ kind: "question", value: ELECTRON.id }]), { shells: new Set(), agents: new Set(), timers: new Set(), prs: new Set() }), true)
   } finally { h.close() }
 })
@@ -885,11 +885,11 @@ test("parkForMaxMs: a park naming only issues and PRs earns the year; an issue b
   assert.equal(parkForMaxMs({ items: [{ kind: "issue", value: "acme/app#9" }, { kind: "shell", value: "bash_1" }], forMs: 1, steps: [], questions: [] }), AWAITING_FOR_MAX_MS)
 })
 
-// ---- THE `needs_input:` ANSWER (2026-10-01) -------------------------------------------------------
-// A worker dispatched at or after NEEDS_INPUT_REQUIRED_AT owes every park an answer to "does the human
-// need to look now?". A fence without one is not a park the board will honour, so the worker is told
-// which line is missing — but only once the items are right, because a fence naming dead work or none is
-// wrong for a reason the answer would not fix.
+// ---- THE `status:` ANSWER (2026-10-01 as `needs_input:`, 2026-10-05 as `status:`) ----------------
+// A worker dispatched at or after NEEDS_INPUT_REQUIRED_AT owes every park an answer to "where does this
+// rest sit?". A fence without one is not a park the board will honour, so the worker is told which line
+// is missing — but only once the items are right, because a fence naming dead work or none is wrong for a
+// reason the answer would not fix. The older `needs_input:` line still answers it.
 const NEW_CONTRACT = new Date(Date.parse(NEEDS_INPUT_REQUIRED_AT) + 60_000).toISOString()
 
 test("a new-contract park that gives no answer is corrected for exactly that line", async () => {
@@ -901,7 +901,10 @@ test("a new-contract park that gives no answer is corrected for exactly that lin
     assert.match(rows[0].fence_id, /^park:needs-input:/)
     assert.ok(rows[0].message.startsWith(PARK_CORRECTION_NEEDS_INPUT_LEAD))
     assert.equal(isParkCorrection(rows[0].message), true, "invisible in the chat like every other correction")
-    assert.match(rows[0].message, /`needs_input: false` — nothing for them yet/)
+    // It teaches the three places, by the words the worker writes.
+    assert.match(rows[0].message, /`status: working` — the work finishes by itself/)
+    assert.match(rows[0].message, /`status: watching` — the wait is on something outside the thread/)
+    assert.match(rows[0].message, /`status: needs_input` — the human can act on something now/)
     assert.match(rows[0].message, /no write-up/)
     // One per rest, however many ticks run over it.
     await h.s.tick()
@@ -909,20 +912,31 @@ test("a new-contract park that gives no answer is corrected for exactly that lin
   } finally { h.close() }
 })
 
-test("an answer that is neither true nor false is quoted back", async () => {
-  const h = parkHarness([{ kind: "shell", value: "bzvtnt3ig" }, { kind: "for", value: "2h" }, { kind: "needs_input", value: "yes" }], { shells: [LIVE_SHELL], spawnedAt: NEW_CONTRACT })
-  try {
-    await h.s.tick()
-    assert.match(h.queued()[0].message, /\(it says `needs_input: yes`\)/)
-  } finally { h.close() }
-})
-
-test("an answered new-contract park on live work is left alone — true or false", async () => {
-  for (const answer of ["false", "true"]) {
-    const h = parkHarness([{ kind: "shell", value: "bzvtnt3ig" }, { kind: "for", value: "2h" }, { kind: "needs_input", value: answer }], { shells: [LIVE_SHELL], spawnedAt: NEW_CONTRACT })
+test("an answer frizz cannot read is quoted back — the `status:` line it wrote, else the older one", async () => {
+  for (const [hint, quoted] of [
+    [{ kind: "status" as const, value: "wrking" }, "status: wrking"],
+    [{ kind: "needs_input" as const, value: "yes" }, "needs_input: yes"],
+  ] as const) {
+    const h = parkHarness([{ kind: "shell", value: "bzvtnt3ig" }, { kind: "for", value: "2h" }, hint], { shells: [LIVE_SHELL], spawnedAt: NEW_CONTRACT })
     try {
       await h.s.tick()
-      assert.deepEqual(h.queued(), [], `needs_input: ${answer}`)
+      assert.ok(h.queued()[0].message.includes(`(it says \`${quoted}\`)`), quoted)
+    } finally { h.close() }
+  }
+})
+
+test("an answered new-contract park on live work is left alone — every `status:`, and the older line", async () => {
+  for (const answer of [
+    { kind: "status" as const, value: "working" },
+    { kind: "status" as const, value: "watching" },
+    { kind: "status" as const, value: "needs_input" },
+    { kind: "needs_input" as const, value: "false" },
+    { kind: "needs_input" as const, value: "true" },
+  ]) {
+    const h = parkHarness([{ kind: "shell", value: "bzvtnt3ig" }, { kind: "for", value: "2h" }, answer], { shells: [LIVE_SHELL], spawnedAt: NEW_CONTRACT })
+    try {
+      await h.s.tick()
+      assert.deepEqual(h.queued(), [], `${answer.kind}: ${answer.value}`)
     } finally { h.close() }
   }
 })
@@ -934,7 +948,7 @@ test("a dead name outranks a missing answer — the item correction speaks first
     const rows = h.queued()
     assert.equal(rows.length, 1)
     assert.match(rows[0].fence_id, /^park:dead:/)
-    assert.doesNotMatch(rows[0].message, /needs_input: true` or/)
+    assert.doesNotMatch(rows[0].message, /gives no `status:`/)
   } finally { h.close() }
 })
 
@@ -965,7 +979,7 @@ test("a park on steps alone is honoured with no item and no for:, and runs on th
   assert.equal(parkIsHonoured(readAwaitingPark([{ kind: "for", value: "2h" }]), NOBODY_LIVE), false)
 })
 
-test("SOURCE 12 leaves a steps fence alone — legacy or new contract, no for:, no needs_input line", async () => {
+test("SOURCE 12 leaves a steps fence alone — legacy or new contract, no for:, no status line", async () => {
   for (const spawnedAt of ["2026-08-15T11:00:00.000Z", new Date(Date.parse(NEEDS_INPUT_REQUIRED_AT) + 60_000).toISOString()]) {
     const h = parkHarness(STEPS, { spawnedAt, body: "The publish step runs as the maintainer." })
     try {

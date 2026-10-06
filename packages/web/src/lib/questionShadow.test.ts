@@ -185,7 +185,7 @@ const STALE = [
   { role: "user", at: at(20), text: "Here's my answer to the OTHER question." },
   { role: "assistant", at: at(25), text: "Done. The first question is still open." },
 ]
-const CLAIM = (id: string, prose = "") => `${prose}\n\n\`\`\`awaiting\nquestions: [${id}]\nneeds_input: true\n\`\`\``
+const CLAIM = (id: string, prose = "") => `${prose}\n\n\`\`\`awaiting\nquestions: [${id}]\nstatus: needs_input\n\`\`\``
 
 test("a marker from an older rest keeps placing after the thread rests again — a rest that says nothing about the card leaves it", () => {
   const { placed } = placeQuestions(STALE, [QUESTION])

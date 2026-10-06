@@ -1318,6 +1318,12 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
       // the first of those is a shell. A watch the worker never fenced has no hints to read, so the dot
       // was the default by omission rather than by decision.
       if (eventSnoozed) return { node: waitNamesPr(t) ? github : restingShellDot, tip: eventSnoozed }
+      // A `watching` REST WITH NO FENCE TO READ (2026-10-05): a worker that rested behind a watch it
+      // registered, which the board reads as a watcher. The mark is the watch's own, as above.
+      if (t.waitStatus === "watching") {
+        const shell = (t.bgShells ?? []).some((s) => s.state === "running")
+        return { node: waitNamesPr(t) ? github : shell ? restingShellDot : hourglass, tip: "Snoozed until its watch reports back" }
+      }
       const timed = typeof t.revalidate === "string" ? formatAutoSnoozedUntil(t.revalidate) : null
       return { node: hourglass, tip: timed ?? "Auto-snoozed until a scheduled check" }
     }
