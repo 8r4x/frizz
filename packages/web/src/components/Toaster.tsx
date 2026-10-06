@@ -18,7 +18,9 @@ export function Toaster() {
   // directly on top of those buttons: a `link` toast — whose pill used to be pointer-events-auto —
   // swallowed every click meant for them for its full (5s) life. So: keep the strip click-through and
   // only let the explicit action button intercept (below), AND lift the whole toast above the drawer's
-  // bottom controls whenever a drawer is open so it does not cover them in the first place.
+  // bottom controls whenever a drawer is open so it does not cover them in the first place. With no
+  // drawer, the queue's docked prompt boxes hold that corner instead — send, paperclip and Goal — so the
+  // toast rides above the band they cover (`--queue-dock-inset`, lib/queueDockInset.ts; 0 off the queue).
   const drawerOpen = snap.drawers.some((drawer) => !drawer.closing)
 
   useEffect(() => {
@@ -31,7 +33,7 @@ export function Toaster() {
 
   if (!toast) return null
   return (
-    <div className={`pointer-events-none fixed right-4 z-[70] flex justify-end ${drawerOpen ? "bottom-20" : "bottom-4"}`}>
+    <div className={`pointer-events-none fixed right-4 z-[70] flex justify-end ${drawerOpen ? "bottom-20" : "bottom-[calc(var(--queue-dock-inset,0px)+1rem)]"}`}>
       <div
         data-toast
         role="status"

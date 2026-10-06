@@ -53,7 +53,9 @@ export function ThreadLifecycleActions({
   const available = threadLifecycleAvailability(thread)
   if (!available.lifecycle) return null
   return (
-    <span data-thread-lifecycle className="flex shrink-0 items-center gap-0.5">
+    // A named group, as the footer this replaced was a named landmark: "Thread lifecycle actions" is
+    // how a screen reader finds the verbs at the end of a header full of other icons.
+    <span data-thread-lifecycle role="group" aria-label="Thread lifecycle actions" className="flex shrink-0 items-center gap-0.5">
       <span aria-hidden data-lifecycle-rule className="mx-2.5 h-4 w-px shrink-0 bg-border" />
       {available.done ? (
         <DoneReadout />

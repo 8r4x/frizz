@@ -33,6 +33,7 @@ import { HeaderActions } from "./HeaderActions.tsx"
 import { ThreadLifecycleActions } from "./ThreadLifecycle.tsx"
 import { ThreadHeaderFacts } from "./ThreadHeaderFacts.tsx"
 import { QueueOpsSummary } from "./QueueOpsSummary.tsx"
+import { trackQueueDock } from "../lib/queueDockInset.ts"
 import { ThreadTitle } from "./ThreadTitle.tsx"
 import { DispatchForm } from "./NewThreadModal.tsx"
 import { StatusRow } from "./StatusRow.tsx"
@@ -139,7 +140,7 @@ function resumeNativeAnchoring(): void {
 //
 // The snooze itself is unchanged in effect — no session is stopped, the thread is already at rest and
 // stays alive; the card simply drops out of the queue and re-surfaces on its own when a shell finishes
-// and the worker acts on it. Distinct from the footer's wall-clock Snooze (a fixed deadline); this one
+// and the worker acts on it. Distinct from the header's wall-clock Snooze (a fixed deadline); this one
 // has no deadline and expires itself on the next rest.
 //
 // WHY THE CONTROL MOVED: the queue was the only surface that injected it, and a thread whose ```awaiting
@@ -792,6 +793,31 @@ const QueueCard = memo(function QueueCard({ thread, leaving, frozen, onResolve, 
   // than reading offsetHeight back, so the callback never forces a layout inside the observer.
   const cardRootRef = useRef<HTMLDivElement>(null)
   const restingHeight = useRef(0)
+  // THE DOCK'S STICKY RANGE STOPS AT THE HEADER. The dock's containing block is the whole card root (it
+  // sits outside the header's wrapper so that the header stops at the dock), and `bottom-0` alone let
+  // it rise to the root's top edge: a card coming in from the bottom of the screen showed its prompt box
+  // over its own header, square top corners inside the root's rounded arc. Sticky keeps the MARGIN box
+  // inside its containing block, so a top margin of the header's height holds the dock's border box
+  // below the header, and the header's wrapper hands that height back with a negative bottom margin so
+  // nothing moves in flow. Measured rather than assumed, because a wrapped title makes the header taller.
+  const headerRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const header = headerRef.current
+    const root = cardRootRef.current
+    if (!header || !root || typeof ResizeObserver === "undefined") return
+    // The exact height, not `offsetHeight`: that rounds, and a 65.375px header read as 65 let the dock's
+    // top border ride 0.375px over the header's bottom rule.
+    const ro = new ResizeObserver(() => root.style.setProperty("--queue-card-header-h", `${header.getBoundingClientRect().height}px`))
+    ro.observe(header)
+    return () => ro.disconnect()
+  }, [])
+  // The band the dock covers at the bottom of the screen, for the page's scroll padding and the toaster
+  // (lib/queueDockInset.ts). A collapsed card has no dock.
+  useEffect(() => {
+    const dock = collapsed ? null : cardRootRef.current?.querySelector<HTMLElement>(":scope > [data-thread-composer-box]")
+    if (!dock || typeof ResizeObserver === "undefined") return
+    return trackQueueDock(thread.id, dock)
+  }, [collapsed, thread.id])
   useEffect(() => {
     const el = cardRootRef.current
     if (!el || typeof ResizeObserver === "undefined") return
@@ -815,7 +841,10 @@ const QueueCard = memo(function QueueCard({ thread, leaving, frozen, onResolve, 
     }
     if (restingHeight.current > 0) {
       el.style.height = `${restingHeight.current}px`
-      el.style.overflow = "hidden"
+      // `clip`, never `hidden`: `hidden` makes the root a scroll container, which takes the header's and
+      // the dock's stickiness away mid-fade — a reply sent from the dock dropped the box it was typed in
+      // to the card's natural end, often below the screen, for the fade's whole duration.
+      el.style.overflow = "clip"
     }
   })
   // Raw server order — each message renders its `parts` in block order (fidelity). Memoized so the
@@ -1239,7 +1268,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, frozen, onResolve, 
     <RegisteredAnsweringProvider thread={thread}>
     {/* NO overflow-hidden: it would clip the sticky header out of stickiness. The header carries
         rounded-t so the card's top corners still look clipped; the root's BLOCK_RADIUS handles the bottom.
-        (The exit pin below does add one, for the fade's duration only, where stickiness is moot.) */}
+        (The exit pin above clips for the fade's duration with `overflow: clip`, which keeps stickiness.) */}
     <div
       ref={cardRootRef}
       data-queue-card-root={thread.id}
@@ -1289,14 +1318,14 @@ const QueueCard = memo(function QueueCard({ thread, leaving, frozen, onResolve, 
           sticky header "breaking out" of the card border during the scroll-off unstick. The dock sits
           BELOW this wrapper, so the root's rounded bottom corners are always the dock's, never the
           square-cornered header's. (No overflow here — that would neuter the header's stickiness.) */}
-      <div className="flex flex-col min-w-0">
+      <div className={`flex flex-col min-w-0 ${collapsed ? "" : "mb-[calc(-1*var(--queue-card-header-h,0px))]"}`}>
       {/* STICKY header: title + backing-doc filename + status_text on the left, whole-item icon actions
           on the right. Pins to the scroll container's top (opaque bg + bottom rule) as the body scrolls
           under it, so the actions stay reachable through a long card. Rounding is STATE-DEPENDENT:
           collapsed, the header IS the whole card and takes the full block radius; otherwise it is
           rounded-top-only + a border-b, the dock carrying the bottom corners (a rounded-top + border-b
           would read as squared/doubled edges inside the shell). */}
-      <div className={`sticky top-0 z-10 flex items-center gap-2 bg-panel px-5 py-3.5 max-[800px]:top-10 ${collapsed ? BLOCK_RADIUS : `${BLOCK_RADIUS_TOP} border-b border-border/60`}`}>
+      <div ref={headerRef} className={`sticky top-0 z-10 flex items-center gap-2 bg-panel px-5 py-3.5 max-[800px]:top-10 ${collapsed ? BLOCK_RADIUS : `${BLOCK_RADIUS_TOP} border-b border-border/60`}`}>
         <div className="min-w-0 flex-1">
           {/* The name is the same ThreadTitle the drawer header renders: click it to type a new title,
               hover it for the Claude refresh mark. It was a plain div with only the refresh mark until
@@ -1760,7 +1789,8 @@ const QueueCard = memo(function QueueCard({ thread, leaving, frozen, onResolve, 
           it, the way /full holds its prompt box, so a reply never means scrolling to the card's end
           (maintainer 2026-10-01: "have the prompt box be sticky at the bottom of the queue page the same
           way that it is on the full screen view"). It sits OUTSIDE the header's wrapper above, so the
-          header's stickiness stops at the dock's top edge and the two never overlap. The rule and the
+          header's stickiness stops at the dock's top edge; its own top margin (the header's height,
+          handed back by the wrapper) stops it at the header's bottom edge, so the two never overlap. The rule and the
           upward shade are always drawn, docked or not — the shade is what separates it from the
           transcript scrolling under it, and a rule that came and went would move the box by a pixel.
           The bottom corners are the root's arc one pixel in (BLOCK_RADIUS_INNER_BOTTOM): the root has no
@@ -1770,7 +1800,7 @@ const QueueCard = memo(function QueueCard({ thread, leaving, frozen, onResolve, 
       <ThreadComposerBox
         slug={thread.id}
         surface="queueComposer"
-        className={`sticky bottom-0 z-10 shrink-0 ${BLOCK_RADIUS_INNER_BOTTOM} border-t border-border/60 bg-panel px-5 pb-3 pt-3 shadow-[0_-12px_18px_-14px_var(--dock-shadow)]`}
+        className={`sticky bottom-0 z-10 mt-[var(--queue-card-header-h,0px)] shrink-0 ${BLOCK_RADIUS_INNER_BOTTOM} border-t border-border/60 bg-panel px-5 pb-3 pt-3 shadow-[0_-12px_18px_-14px_var(--dock-shadow)]`}
         // With an open ask the box is the deliberate escape hatch, so say so — otherwise "Reply to the
         // agent…" reads as a second way to answer the question rather than a way around it. A
         // REGISTERED question counts: it is answered on this same card, so with one open the box is the

@@ -126,6 +126,9 @@ export function SnoozeMenu({ thread, onSnoozed }: { thread: ThreadView; onSnooze
               data-snooze-menu
               data-snoozed={snoozedUntil ? "true" : "false"}
               aria-label={state ?? "Snooze"}
+              // The armed follow-up is the tooltip's second line; a screen reader hears it here, since the
+              // name stays the short state that the menu's own first line repeats.
+              aria-description={snoozedUntil && prompt ? prompt : undefined}
               // Focus must not leave the composer: same discipline as every other header verb.
               onMouseDown={(event) => event.preventDefault()}
               onBlur={() => setTooltipQuiet(false)}

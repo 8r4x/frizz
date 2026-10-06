@@ -150,6 +150,9 @@
    belongs. */
 html {
   scrollbar-width: none; /* Firefox */
+  /* The queue's docked prompt boxes cover this band of the screen (lib/queueDockInset.ts), so a control
+     focused under one is scrolled clear of it rather than left hidden behind it. 0 off the queue. */
+  scroll-padding-bottom: var(--queue-dock-inset, 0px);
 }
 html::-webkit-scrollbar {
   width: 0;
@@ -210,6 +213,15 @@ body {
    fullscreen icon sits between the two, so this does not match there, as intended. */
 :has(> [data-header-pill]:last-child) + [data-thread-lifecycle] > [data-lifecycle-rule] {
   margin-left: 17.5px;
+}
+
+/* In the queue card's ops panel (QueueOpsSummary) the saved files and links can be the panel's first
+   rows. ThreadLinks rules itself off from the rows above it, which is right in the drawer's strip and
+   a stray line across the panel's top edge here, where nothing is above it. */
+[data-queue-ops-panel] > [data-background-ops]:first-child > [data-thread-links]:first-child {
+  margin-top: 0;
+  border-top-width: 0;
+  padding-top: 0;
 }
 
 /* System sans-serif already centres small label icons optically: measured nudge 0px. */

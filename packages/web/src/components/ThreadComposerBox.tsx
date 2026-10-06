@@ -65,6 +65,7 @@ export function ThreadComposerBox({
   above,
   submitOverride,
   phoneBarOverride,
+  phoneChrome,
 }: {
   slug: string
   // Pure data- tag forwarded to the textarea. Also the two surfaces' only behavioral fork inside
@@ -95,6 +96,11 @@ export function ThreadComposerBox({
   // tap; the override returns once the field is empty and blurred. Ignored above the phone breakpoint
   // and on the queue card. See PhoneComposerLayout in Composer.tsx.
   phoneBarOverride?: (api: PhoneBarApi) => ReactNode
+  // Whether the thread around this box wears the PHONE's chrome (MobileThreadHeader and its ⋯ sheet),
+  // which is what the phone bar is built to sit under. ChatView knows: a drawer below the breakpoint
+  // does, and /full never does — it keeps the desktop header at every width. Absent, the breakpoint
+  // alone decides, as it did before the caller could say.
+  phoneChrome?: boolean
 }): ReactElement {
   const snap = useSnapshot(store)
   const thread = snap.board?.threads.find((candidate) => candidate.id === slug)
@@ -129,7 +135,9 @@ export function ThreadComposerBox({
   // on a phone). Its right-hand verb follows the thread: Done while it rests and can be completed,
   // Send once there is text, a dimmed ↑ while a turn runs.
   const isMobile = useIsMobile()
-  const phoneBar = isMobile && surface === "chatComposer"
+  // NOT on /full at a narrow width: that page keeps the desktop header, so its box is the desktop box
+  // too — the Goal rides this rail and nowhere else on desktop chrome, and the phone bar has no rail.
+  const phoneBar = (phoneChrome ?? isMobile) && surface === "chatComposer"
   const turnRunning = thread?.runtime === "running" || thread?.runtime === "spawning"
   // NOT WHILE THE THREAD WAITS ON STEPS (`steps:` in its last fence). The card above carries its own
   // "Done", which means "I did the steps" and sends a reply; this one would mean "archive the thread",

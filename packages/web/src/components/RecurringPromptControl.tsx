@@ -218,6 +218,16 @@ export function RecurringPromptControl({ thread }: { thread: ThreadView }) {
           // Radix otherwise autofocuses the first focusable child, which is a toggle segment — and a focus
           // ring sitting on "Off" reads as the toggle being SET to off by the act of opening the panel.
           onOpenAutoFocus={(e) => e.preventDefault()}
+          // ITS DRAGS ARE ITS OWN. The panel is portaled, but React bubbles its events up the component
+          // tree, and this control rides inside the Composer's rail — whose drop zone took a file dropped
+          // here as an attachment to the reply, and swallowed text dragged into the goal's own field.
+          // A file is still refused here rather than left to the browser, which would open it in place.
+          onDragOver={(e) => e.stopPropagation()}
+          onDragLeave={(e) => e.stopPropagation()}
+          onDrop={(e) => {
+            e.stopPropagation()
+            if (e.dataTransfer.files.length > 0) e.preventDefault()
+          }}
         >
           <PromptPanel thread={thread} armed={armed} close={() => setMode("closed")} />
         </PopoverContent>
