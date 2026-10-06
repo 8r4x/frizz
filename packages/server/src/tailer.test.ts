@@ -101,7 +101,7 @@ test("applyRecord: claude's post-compaction carry-over summary re-invokes but ne
   assert.equal(s.lastUserAt, "2026-07-01T00:00:00.000Z") // ROW ORDER unchanged
   // …and it is ALSO the only place a Claude transcript says a compaction just happened, which makes it
   // the post-compaction trigger's clock (scheduler SOURCE 7). Without this the trigger never fires on
-  // Claude at all — it would arm cleanly, report armed in the footer, and silently do nothing.
+  // Claude at all — it would arm cleanly, report armed in the Goal panel, and silently do nothing.
   assert.equal(s.lastCompactionAt, "2026-07-01T00:05:01.000Z")
 })
 
@@ -431,7 +431,7 @@ test("applyEvent: a compaction is harness motion — it advances the clock but m
 
 test("applyEvent: context-usage carries the reading AND latches the provider's window", () => {
   const s = newTailState("t", "s", "/x")
-  assert.equal(s.contextTokens, undefined, "no reading before any telemetry — the footer renders nothing")
+  assert.equal(s.contextTokens, undefined, "no reading before any telemetry — the header renders nothing")
   assert.equal(s.contextWindow, undefined)
   applyEvent(s, { kind: "context-usage", at: "2026-07-01T00:00:00.000Z", tokens: 25026, window: 258400 })
   assert.equal(s.contextTokens, 25026)

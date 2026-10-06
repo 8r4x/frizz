@@ -87,7 +87,7 @@ test("a thread nobody can park draws no snooze — foreign or archived", () => {
   // would be an affordance that cannot work.
   const foreign = { ...thread(rows, []), foreign: true } as Parameters<typeof AwaitingBackgroundCard>[0]["thread"]
   assert.doesNotMatch(render(foreign), /Snooze/)
-  // An ARCHIVED thread has no lifecycle verbs at all — the same rule the footer's strip applies.
+  // An ARCHIVED thread has no lifecycle verbs at all — the same rule the header's lifecycle strip applies.
   const archived = { ...thread(rows, []), state: "archived" } as Parameters<typeof AwaitingBackgroundCard>[0]["thread"]
   assert.doesNotMatch(render(archived), /Snooze/)
 })

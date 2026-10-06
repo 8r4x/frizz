@@ -2214,7 +2214,7 @@ export function applyRecord(state: TailState, rec: Record): void {
   if (compactSummaryRec && typeof rec.timestamp === "string") state.lastCompactionAt = rec.timestamp
   // The boundary's own `postTokens` is the context reading after the summary. An AUTO-compaction does
   // not need it — it fires mid-turn, and the next request's usage reports the smaller context anyway —
-  // but a MANUAL `/compact` (the footer's "Compact now") runs at rest and makes no model request at all,
+  // but a MANUAL `/compact` (the context panel's "Compact now") runs at rest and makes no model request at all,
   // so without this the dial kept showing the pre-compaction fill until the thread's next turn
   // (measured 2026-09-26: 40,467 tokens before and after a compaction whose boundary said 4,304).
   if (type === "system" && rec.subtype === "compact_boundary" && rec.isSidechain !== true) {
@@ -2562,7 +2562,7 @@ export function applyEvent(state: FoldState, ev: NormalizedEvent): void {
       break
     case "context-usage":
       // Pure telemetry — see the activity-clock note above. Read by the transcript projection (which
-      // brackets a compaction with the readings either side of it) and by the footer's fullness
+      // brackets a compaction with the readings either side of it) and by the header's fullness
       // readout. The window is latched rather than overwritten-to-absent: codex names it on every
       // token_count, but a build that stops doing so must not silently erase a real reading.
       state.contextTokens = ev.tokens

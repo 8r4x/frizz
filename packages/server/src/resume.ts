@@ -120,9 +120,9 @@ export function reopenArchivedThreadForFollowUp(
  * "not now"; a follow-up says "now", and the later instruction wins.
  *
  * Nothing is disarmed silently. The park is visible on the row (the sidebar's snoozed sentence) and in
- * the thread (the footer hourglass), so a bump that goes away leaves the surface it lived on empty — and
- * re-arming it is the same two clicks that armed it. `Wake now` remains the un-park verb for an operator
- * who wants the card back WITHOUT sending a turn.
+ * the thread (the header's amber snooze clock), so a bump that goes away leaves the surface it lived on
+ * empty — and re-arming it is the same two clicks that armed it. `Wake now` remains the un-park verb for
+ * an operator who wants the card back WITHOUT sending a turn.
  *
  * Cleared through `setSnoozedUntil(slug, null, null)`, the same call Wake now makes: the instant and the
  * prompt it armed are ONE fact, so dropping the deadline drops the bump with it. Unlike the un-archive

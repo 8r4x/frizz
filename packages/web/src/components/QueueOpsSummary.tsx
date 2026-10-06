@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState, type ReactNode } from "react"
+import { useEffect, useRef, useState } from "react"
 import { ExternalLink, FileText } from "lucide-react"
 import type { ThreadView } from "@frizz/shared"
-import { CHILD_RESTED_DOT_CLASS, CHILD_STALE_DOT_CLASS, mergeBackgroundShells, visibleChildOps } from "../lib/childOps.ts"
+import { CHILD_RESTED_DOT_CLASS, CHILD_STALE_DOT_CLASS } from "../lib/childOps.ts"
 import { isRunningOperation } from "../lib/operationIndicators.ts"
+import { queueOpsCounts, type QueueOpsKind } from "../lib/queueOpsCounts.ts"
 import { BackgroundOpsStrip } from "./ChatView.tsx"
 import { QueueSubAgentLines, hasQueueSubAgentLines } from "./QueueSubAgentLines.tsx"
 import { Popover, PopoverAnchor, PopoverContent } from "./ui/Popover.tsx"
@@ -22,7 +23,7 @@ import { Popover, PopoverAnchor, PopoverContent } from "./ui/Popover.tsx"
 // THE ROWS IN THE PANEL ARE THE REAL ONES — QueueSubAgentLines and BackgroundOpsStrip, the components
 // that drew them under the box — so a row still opens its drawer, stops its child, and reads its CI the
 // way it did. The COUNTS are taken from the same lists those components render, by the same filters, so
-// the line and the panel cannot disagree about how many there are.
+// the line and the panel cannot disagree about how many there are (lib/queueOpsCounts.ts).
 //
 // THE MARK IS THE ROWS' OWN LIVENESS DOT, in the row's hue (yellow agent, blue shell, violet watch), and
 // it pulses only while at least one row of that kind is running. Otherwise it is the rows' own settled
@@ -31,23 +32,7 @@ export function QueueOpsSummary({ thread }: { thread: ThreadView }) {
   const [open, setOpen] = useState(false)
   const closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   useEffect(() => () => clearTimeout(closeTimer.current), [])
-  const agents = visibleChildOps(thread.subAgents ?? [], "card")
-  const shells = mergeBackgroundShells(thread.bgShells ?? [], [])
-  const watches = (thread.watches ?? []).filter((watch) => watch.kind === "github")
-  const prs = watches.filter((watch) => watch.subject !== "issue")
-  const issues = watches.filter((watch) => watch.subject === "issue")
-  const links = thread.links ?? []
-  const files = links.filter((link) => link.kind === "file")
-  const urls = links.filter((link) => link.kind === "link")
-  const groups: { key: string; n: number; one: string; many: string; mark: ReactNode }[] = [
-    { key: "agent", n: agents.length, one: "agent", many: "agents", mark: <Dot hue="agent" states={agents.map((agent) => agent.state)} /> },
-    { key: "shell", n: shells.length, one: "shell", many: "shells", mark: <Dot hue="shell" states={shells.map((shell) => shell.state)} /> },
-    // A parked watcher IS live — its row is always `running` (BackgroundOpsStrip) — so its dot pulses.
-    { key: "pr", n: prs.length, one: "PR", many: "PRs", mark: <Dot hue="github" states={["running"]} /> },
-    { key: "issue", n: issues.length, one: "issue", many: "issues", mark: <Dot hue="github" states={["running"]} /> },
-    { key: "file", n: files.length, one: "file", many: "files", mark: <FileText aria-hidden className="h-[1em] w-[1em] text-muted-45" /> },
-    { key: "link", n: urls.length, one: "link", many: "links", mark: <ExternalLink aria-hidden className="h-[1em] w-[1em] text-muted-45" /> },
-  ].filter((group) => group.n > 0)
+  const groups = queueOpsCounts(thread)
   if (groups.length === 0) return null
   const words = groups.map((group) => `${group.n} ${group.n === 1 ? group.one : group.many}`)
   const openNow = () => {
@@ -92,7 +77,7 @@ export function QueueOpsSummary({ thread }: { thread: ThreadView }) {
                     child, so a 6px dot's bottom edge (not the slot's) landed on the baseline and the dot
                     rode ~2px low. An empty block synthesizes its baseline from its own bottom edge. */}
                 <span aria-hidden className="relative block h-[1em] w-[1em] shrink-0 self-baseline translate-y-[calc(0.5em_-_0.5cap)]">
-                  <span className="absolute inset-0 flex items-center justify-center">{group.mark}</span>
+                  <span className="absolute inset-0 flex items-center justify-center"><CountMark kind={group.key} states={group.states} /></span>
                 </span>
                 <span><span className="tabular-nums text-fg/85">{group.n}</span> {group.n === 1 ? group.one : group.many}</span>
               </span>
@@ -118,6 +103,17 @@ export function QueueOpsSummary({ thread }: { thread: ThreadView }) {
       </Popover>
     </div>
   )
+}
+
+function CountMark({ kind, states }: { kind: QueueOpsKind; states: readonly (string | undefined)[] }) {
+  switch (kind) {
+    case "agent": return <Dot hue="agent" states={states} />
+    case "shell": return <Dot hue="shell" states={states} />
+    case "pr":
+    case "issue": return <Dot hue="github" states={states} />
+    case "file": return <FileText aria-hidden className="h-[1em] w-[1em] text-muted-45" />
+    case "link": return <ExternalLink aria-hidden className="h-[1em] w-[1em] text-muted-45" />
+  }
 }
 
 function Dot({ hue, states }: { hue: "agent" | "shell" | "github"; states: readonly (string | undefined)[] }) {

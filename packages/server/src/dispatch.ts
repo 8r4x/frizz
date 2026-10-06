@@ -947,7 +947,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
           // armed, because a worker that rested without signing off had nothing to bring it back. The built-in
           // handoff bump does that now — it fires on exactly the rests that need it, carries the three terminal
           // states and lists the thread's live work with the ids a fence needs — so arming a Goal as well is the
-          // same nudge twice, and the maintainer called it redundant. Arming one is the FOOTER PANEL's job now,
+          // same nudge twice, and the maintainer called it redundant. Arming one is the GOAL PANEL's job now,
           // and that panel prefills the default text without switching any trigger on.
           deps.storage.setBackend(slug, "codex")
           // The codex SESSION id (not the thread id) matches the rollout filename the tailer scans for.
@@ -1072,7 +1072,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
           // armed, because a worker that rested without signing off had nothing to bring it back. The built-in
           // handoff bump does that now — it fires on exactly the rests that need it, carries the three terminal
           // states and lists the thread's live work with the ids a fence needs — so arming a Goal as well is the
-          // same nudge twice, and the maintainer called it redundant. Arming one is the FOOTER PANEL's job now,
+          // same nudge twice, and the maintainer called it redundant. Arming one is the GOAL PANEL's job now,
           // and that panel prefills the default text without switching any trigger on.
           deps.storage.setBackend(slug, "claude")
           deps.storage.setClaudeRuntime(slug, "broker")

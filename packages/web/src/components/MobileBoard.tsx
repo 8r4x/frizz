@@ -164,8 +164,8 @@ function ThreadMark({ kind, userSnoozed, moving }: { kind: SessionIndicatorKind;
 // SWIPE A ROW TO TRIAGE IT — snooze or finish without opening the thread.
 //
 // The two verbs are the two the queue actually needs away from a desk, and they are the SAME RPCs the
-// desktop's footer calls (`setThreadSnooze` with the user's own chosen preset, `markComplete`), so a
-// swipe and a click cannot mean different things.
+// desktop header's snooze menu and check call (`setThreadSnooze`, `completeThread`), so a swipe and a
+// click cannot mean different things. The swipe snoozes for the preset chosen in Settings.
 //
 // THE GESTURE, and the two details that decide whether it feels native rather than web:
 //
@@ -389,8 +389,8 @@ function MobileThreadRow({
           // out to a thread-file update and 500s on a session thread that has no `.md` behind it, which
           // is exactly what this swipe did on its first outing (verified: the wire call went out, came
           // back 500, and the row stayed in the queue while the desktop's own button on the same thread
-          // succeeded). The footer has always used the session-first mutation; so does this now.
-          markArchived(t.id) // the same optimism the footer runs on, so the row leaves the Queue at once
+          // succeeded). The desktop's check uses the session-first mutation; so does this now.
+          markArchived(t.id) // the same optimism the desktop's check runs on, so the row leaves the Queue at once
           try {
             const result = await rpc.completeThread({ slug: t.id, sessionId: t.sessionId ?? "", terminateLive: false })
             if (result.needsConfirmation) {

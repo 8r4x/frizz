@@ -2668,7 +2668,7 @@ export function createRouter(ctx: AppContext) {
       },
     }),
 
-    // THE RECURRING PROMPT (scheduler.ts SOURCES 4 and 5), from the footer panel. One mutation for the
+    // THE RECURRING PROMPT (scheduler.ts SOURCES 4 and 5), from the Goal panel. One mutation for the
     // text, both triggers and the cadence, because they are all views of one row: split apart, a tab
     // holding a stale copy of one field would clobber the rest on save.
     //
@@ -2691,7 +2691,7 @@ export function createRouter(ctx: AppContext) {
           throw new Error("This thread moved on; reopen it and try again")
         }
         // TURNING IT ON CANCELS WHAT THE THREAD WAS WAITING TO BE TOLD. Checked as a TRANSITION, not as
-        // a state: every edit in the footer panel rewrites this whole row (the text, the three triggers
+        // a state: every edit in the Goal panel rewrites this whole row (the text, the three triggers
         // and the cadence are one save), so re-firing on an unrelated cadence edit would quietly bin a
         // question the worker registered a moment ago.
         //
@@ -2706,7 +2706,7 @@ export function createRouter(ctx: AppContext) {
       },
     }),
 
-    // The WORKER arming its own, from `mcp__frizz__goal`. Same row the footer panel writes;
+    // The WORKER arming its own, from `mcp__frizz__goal`. Same row the Goal panel writes;
     // different caller, and therefore a different guard.
     //
     // Unguarded on session/generation ON PURPOSE — see SetOwnThreadRecurringPromptInput. The MCP server
@@ -2747,7 +2747,7 @@ export function createRouter(ctx: AppContext) {
     }),
 
     // The READ. A worker had no way to see the row it was writing: not after a compaction took the text
-    // with it, and not after the human edited it in the footer panel — so every arming was blind, and a
+    // with it, and not after the human edited it in the Goal panel — so every arming was blind, and a
     // `start` meant to adjust one trigger silently rewrote the human's words. This answers with the same
     // projection the board shows, so the two readers can never disagree.
     //

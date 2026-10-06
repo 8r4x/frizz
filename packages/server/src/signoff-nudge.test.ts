@@ -562,7 +562,7 @@ test("a Goal and the reminder are due for one rest: the reminder goes, the Goal 
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 1,
     title: slug, state: "open", meta: null, seen_at: null, transcript_id: null,
   } as SessionRow)
-  // An ordinary armed Goal — the stop hook and nothing else, which is what the footer panel arms when an
+  // An ordinary armed Goal — the stop hook and nothing else, which is what the Goal panel arms when an
   // operator flips one switch.
   storage.setRecurringPromptBySlug(slug, {
     prompt: "keep going", stopHook: true, heartbeat: false, postCompaction: false,
@@ -623,7 +623,7 @@ test("a cancellation on its way holds BOTH sources — the wake is the one deliv
   } as Partial<SessionTelemetry>)
   try {
     // The field sequence: the worker registered a question and rested; the operator armed a stop hook
-    // in the footer panel, whose handler cancelled the question and kicked the sweep.
+    // in the Goal panel, whose handler cancelled the question and kicked the sweep.
     h.storage.askThreadQuestion({
       id: "qst_cancelled", slug: h.slug,
       spec: JSON.stringify({ question: "SQLite or a JSON file?", kind: "question" }),

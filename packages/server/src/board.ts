@@ -1394,7 +1394,7 @@ export function resolvePendingPermission(row: Pick<SessionRow, "permission_pendi
   return parsed.success ? parsed.data : undefined
 }
 
-// The recurring prompt as BOTH readers see it: the board's footer panel (through the thread view below)
+// The recurring prompt as BOTH readers see it: the board's Goal panel (through the thread view below)
 // and the worker's own `mcp__frizz__goal` with `action: "get"` (through the router). One
 // projection because they must agree — a worker reading back a different row than the human is editing
 // is exactly the confusion the read action exists to end.

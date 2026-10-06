@@ -1909,7 +1909,7 @@ export function timerPromptMessage(prompt: string, fireAt: string): string {
  *  composes is frizz's own sentence about something outside the turn, so a hairline says all of it; this
  *  is the WORKER'S OWN prose, arbitrary and up to TIMER_PROMPT_MAX long. The recurring prompt collapses
  *  to a bare label for a reason that does NOT hold here — its text is the ARMED text, still legible and
- *  editable in the footer panel, so repeating it inline adds nothing (see RecurringPromptLine). A fired
+ *  editable in the Goal panel, so repeating it inline adds nothing (see RecurringPromptLine). A fired
  *  one-off has no such second home: the registration is gone the instant it delivers, so a bare hairline
  *  would destroy the only rendering of that text anywhere in the app.
  *
@@ -3200,7 +3200,7 @@ export const ThreadView = z.object({
   // further to do; otherwise the composer offers the upgrade, and the first message after the thread's
   // next compaction takes it on its own.
   modelUpgrade: z.object({ label: z.string(), staged: z.boolean() }).optional(),
-  // How full the session's context window is right now — the footer's fullness readout. BOTH halves
+  // How full the session's context window is right now — the header's fullness readout. BOTH halves
   // are provider-measured and the field is emitted ONLY when both are present, so a client never has
   // to decide what to do with half a fraction: absent ⇒ no reading, never a 0% dial. Codex reports
   // both on every `token_count`; a Claude row gets `tokens` from each assistant record's usage but
@@ -4023,7 +4023,7 @@ export const SetThreadPinnedInput = z.object({
 }).strict()
 export type SetThreadPinnedInput = z.infer<typeof SetThreadPinnedInput>
 
-// The recurring prompt's OPERATOR half — the footer popover, arming and disarming in ONE call. The
+// The recurring prompt's OPERATOR half — the Goal panel, arming and disarming in ONE call. The
 // text, the two triggers and the cadence are all views of one row, and splitting them into separate
 // mutations would let a tab holding only some of them clobber the rest on save.
 //
@@ -4091,7 +4091,7 @@ export const SetOwnThreadRecurringPromptInput = z.object({
 export type SetOwnThreadRecurringPromptInput = z.input<typeof SetOwnThreadRecurringPromptInput>
 
 // What the write ANSWERS with: the row it just overwrote. A `start` REPLACES whatever the thread held —
-// including text the HUMAN edited in the footer panel — and the writer could not previously see what it
+// including text the HUMAN edited in the Goal panel — and the writer could not previously see what it
 // destroyed. Returning the superseded row lets the tool say so in the same breath, so a blind overwrite
 // is at least a REPORTED one. `null` when the thread held nothing.
 export const SetOwnThreadRecurringPromptResult = z.object({
@@ -4101,7 +4101,7 @@ export type SetOwnThreadRecurringPromptResult = z.infer<typeof SetOwnThreadRecur
 
 // The READ half, from `mcp__frizz__goal` with `action: "get"`. Without it a worker can only
 // write: it cannot tell whether it is armed at all, what text it armed before its context was compacted
-// away, or whether the human has since edited it in the footer. Same caller rules as the write above —
+// away, or whether the human has since edited it in the Goal panel. Same caller rules as the write above —
 // keyed on the slug alone, and no thread parameter a model could aim at anyone else's row.
 export const GetOwnThreadRecurringPromptInput = z.object({
   slug: ThreadSlug,

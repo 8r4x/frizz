@@ -1681,7 +1681,7 @@ function mapResult(raw: Record<string, unknown>): ClaudeQueryEvent {
 }
 
 // `modelUsage` → {alias: contextWindow}, defensively. Everything here degrades to "no reading": this
-// is the footer's denominator, and a malformed/absent field must cost the readout, never the result
+// is the context reading's denominator, and a malformed/absent field must cost the readout, never the result
 // event (mapAssistant's incident note is the standing rule — a telemetry field may not kill a session).
 // Bounded at 32 aliases so a pathological payload cannot grow the per-turn event.
 function mapModelContextWindows(raw: unknown): Record<string, number> | undefined {
