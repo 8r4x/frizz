@@ -8,7 +8,7 @@ import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import watcher from "@parcel/watcher"
 import type { BoardSnapshot, ClaudeModel, ThreadView, RuntimeState, ThreadRecurringPrompt, ProviderError } from "@frizz/shared"
-import { AskedQuestionSchema, BoardDiffer, PermissionMode, SnoozeUntil, ThreadSlug, awaitingNeedsInput, awaitingSteps, isDirectSubAgent, needsInputRequired, questionAnswerMessage, questionsCancelledWakeMessage, type AskedQuestion, type PermissionMode as PermissionModeValue, type QuestionAnswer, type QuestionDismissal } from "@frizz/shared"
+import { AskedQuestionSchema, BoardDiffer, PermissionMode, SnoozeUntil, ThreadSlug, awaitingNeedsInput, awaitingStatus, awaitingSteps, isDirectSubAgent, needsInputRequired, questionAnswerMessage, questionsCancelledWakeMessage, type AskedQuestion, type PermissionMode as PermissionModeValue, type QuestionAnswer, type QuestionDismissal } from "@frizz/shared"
 import type { Bus } from "./bus.ts"
 import type { Project } from "./project.ts"
 import { isHeadlessRow, isBrokerClaudeRow, sessionTitleLocked, type ThreadQuestionRow } from "./storage.ts"
@@ -676,11 +676,15 @@ function heldByRunningChecks(github: GithubStatusBook, registered: ReadonlySet<s
   if (registered.size === 0) return false
   // ALL of them: an issue watch (never in the PR book) or a settled PR beside a running one means the
   // human has something to look at, so the thread queues.
-  return [...registered].every((key) => {
-    const status = github[key]
-    if (!status || status.checks !== "running" || status.state !== "open") return false
-    return !(status.running === 0 && (status.gated ?? 0) > 0)
-  })
+  return [...registered].every((key) => ciInMotion(github[key]))
+}
+
+/** CI that will settle BY ITSELF: a live `running` reading on an open PR, not held at the approval gate.
+ *  The one reading of "CI is moving" — heldByRunningChecks asks it of every watched PR, deriveWaitStatus
+ *  of any. */
+function ciInMotion(status: GithubStatusBook[string] | undefined): boolean {
+  if (!status || status.checks !== "running" || status.state !== "open") return false
+  return !(status.running === 0 && (status.gated ?? 0) > 0)
 }
 
 function hasLiveOwnWork(tele: SessionTelemetry | undefined, registeredPrWatches: ReadonlySet<string>): boolean {
@@ -1018,9 +1022,11 @@ export function deriveNeedsYou(
   // still wins (futureSnooze, checked first), so a card can be parked deliberately.
   if (limitPause) return true
   // THE WORKER'S OWN ANSWER (2026-10-01). A thread dispatched at or after NEEDS_INPUT_REQUIRED_AT says
-  // with `needs_input:` whether its rest needs the human, and every per-wait rule below is the guess that
-  // answer replaces — so none of them is consulted for it. Placed after every hard gate above: an ask, a
-  // crash, a limit stop and the human's own snooze are facts about the thread, not guesses about a wait.
+  // with `status:` (2026-10-05; `needs_input:` before it, still read) whether its rest needs the human,
+  // and every per-wait rule below is the guess that answer replaces — so none of them is consulted for
+  // it. Placed after every hard gate above: an ask, a crash, a limit stop and the human's own snooze are
+  // facts about the thread, not guesses about a wait. WHICH BAND a rest out of the queue sits in is a
+  // separate verdict — deriveWaitStatus — because the queue only asks whether the human is needed.
   //
   // AN ANSWER IS HONOURED FROM ANY THREAD, not only a new-contract one. A cold resume re-applies the
   // CURRENT worker prompt (router followUp / context.ts), so a thread dispatched before the cut can read
@@ -1118,17 +1124,18 @@ export function deriveNeedsYou(
 }
 
 // THE QUEUE RULE FOR A THREAD THAT ANSWERS FOR ITSELF — the at-rest tail of deriveNeedsYou for a worker
-// dispatched under the `needs_input:` contract (NEEDS_INPUT_REQUIRED_AT in @frizz/shared). Three rules,
+// dispatched under the answer-required contract (NEEDS_INPUT_REQUIRED_AT in @frizz/shared). Three rules,
 // where the legacy tail has one per kind of wait:
 //
-//  1. `needs_input: false` on a park frizz can honour keeps the thread OUT of the queue. The rail draws it
-//     in the Active band, as it drew every excused rest before. "Honour" is the scheduler's own reading
-//     (awaiting.needsInputParkHolds): every named item live and the `for:` not yet run out — so a wrong
-//     `false` cannot hide a thread that nothing will wake.
-//  2. Any other rest on running work QUEUES, with the resting card and its event-snooze: `true`, a fence
-//     with no answer (the scheduler bumps it), and a rest with work out and no fence at all (the sign-off
-//     nudge teaches the fence). This is where a live sub-agent, a registered watch and a PR whose CI is
-//     still running used to excuse the thread on frizz's guess; the worker says so now, or it queues.
+//  1. `status: working` or `status: watching` (or the older `needs_input: false`) on a park frizz can
+//     honour keeps the thread OUT of the queue. Which band it then sits in — Running or Snoozed — is
+//     deriveWaitStatus's verdict. "Honour" is the scheduler's own reading (awaiting.needsInputParkHolds):
+//     every named item live and the `for:` not yet run out — so a wrong answer cannot hide a thread that
+//     nothing will wake.
+//  2. Any other rest on running work QUEUES, with the resting card and its event-snooze: `needs_input`, a
+//     fence with no answer (the scheduler bumps it), and a rest with work out and no fence at all (the
+//     sign-off nudge teaches the fence). This is where a live sub-agent, a registered watch and a PR whose
+//     CI is still running used to excuse the thread on frizz's guess; the worker says so now, or it queues.
 //  3. A `done` handoff and a rest with nothing out queue as they always did.
 //
 // `excuseLiveOwnWork` false is deriveAwaitingBackground asking for the FACT, as it does of the legacy
@@ -1253,6 +1260,57 @@ export function deriveAwaitingBackground(
   // 2026-08-01 that covers a shell-only rest too — it now has NO queue card at all, so this card in the
   // drawer and on the standalone page is the only place that state is stated in words.
   return deriveNeedsYou({ ...row, bg_snooze_rested_at: null }, tele, runtime, hasActionableInteraction, nowMs, limitPause, false, deliveryProcessGone, {}, new Set(), armedTimerIds, armedWatches, openQuestions)
+}
+
+// WHICH BAND A REST OUT OF THE QUEUE SITS IN (2026-10-05) — ThreadView.waitStatus. deriveNeedsYou answers
+// only whether the human is needed, and "not needed" used to mean Running: the client read
+// `awaitingBackground` as motion, so a thread parked for a day on a CI watcher spun in the Running band
+// and counted as running work on the project rail (maintainer 2026-10-03: "This doesn't need input, but
+// that doesn't mean that it should be marked as currently active. It's just kind of like a watcher
+// thread"). Two answers, and the worker gives them in the fence's `status:` line:
+//
+//  - `working` — the wait finishes BY ITSELF: a benchmark, a test run, a sub-agent doing a job. Running,
+//    with a spinner. Believed only while something it names is actually MOVING — a live sub-agent, a
+//    shell the fence names or a watch registers, CI that is running and not held at the approval gate —
+//    so a `working` park on a timer or a settled PR reads as the watch it is.
+//  - `watching` — the wait is on the WORLD: a review, a release, a reporter, a poll for a change. Snoozed,
+//    and still. Honoured even beside a live sub-agent, because the contract hands a long wait to a
+//    sub-agent; the child keeps its own spinner on its own row.
+//
+// A fence that answers with the older `needs_input: false`, and a legacy fence with neither line, get
+// frizz's reading instead: `working` while a live sub-agent or moving CI is out, `watching` otherwise —
+// shells included, since a shell alone cannot say whether it is a test run or a watcher. That is what
+// moves the reported thread, a 23h shell watcher on a pre-cut fence, into Snoozed with no fence change.
+//
+// ABSENT for every other shape, which the client reads as the old placement: a queued rest (it never
+// spins), a rest that is not at rest, an archived row, a declared `needs_input` the human event-snoozed
+// (the click parks it, not this), and a message on its way to the worker — a follow-up or an answer the
+// transcript has not shown yet, whose row keeps its Running placement until the turn starts.
+export function deriveWaitStatus(
+  tele: SessionTelemetry | undefined,
+  runtime: RuntimeState,
+  needsYou: boolean,
+  awaitingBackground: boolean,
+  messageInFlight: boolean,
+  nowMs: number,
+  github: GithubStatusBook = {},
+  registeredPrWatches: ReadonlySet<string> = new Set(),
+  armedWatches: readonly RegisteredWatch[] = [],
+): ThreadView["waitStatus"] {
+  if (runtime !== "turn-idle" || needsYou || messageInFlight) return undefined
+  const liveChild = hasLiveBackgroundWork(tele)
+  if (!awaitingBackground && !liveChild) return undefined
+  const fence = tele?.lastFence?.kind === "awaiting" ? tele.lastFence : undefined
+  const declared = fence ? awaitingStatus(fence.hints) : null
+  if (declared === "needs_input") return undefined
+  if (declared === "watching") return "watching"
+  if (liveChild || [...registeredPrWatches].some((key) => ciInMotion(github[key]))) return "working"
+  if (declared !== "working") return "watching"
+  // A SHELL MOVES ONLY WHEN THE WORKER SAYS SO: named in the fence, or registered with a watch. An
+  // unnamed one is as likely a dev server nobody tore down as the job being waited on.
+  const namedShell = readAwaitingPark(fence?.hints ?? []).items.some((i) => i.kind === "shell" && resolveLiveWatchTarget(tele, i.value)?.kind === "shell")
+  const registeredShell = armedWatches.some((w) => w.kind === "shell" && Date.parse(w.expiresAt) > nowMs && resolveLiveWatchTarget(tele, w.target)?.kind === "shell")
+  return namedShell || registeredShell ? "working" : "watching"
 }
 
 // A REGISTERED session thread's view (id = row.slug). Runtime via the shared deriveRuntime (transport-aware);
@@ -1665,6 +1723,9 @@ function sessionThreadView(
   const needsYou = archived ? false : deriveNeedsYou(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, true, deliveryProcessGone, github, registeredPrWatches, armedTimerIds, armedWatches, questions.length, answerInFlight)
   const deliveryInFlight = !archived && deriveDeliveryInFlight(row, runtime, needsYou, deliveryProcessGone, answerInFlight, nowMs)
   const awaitingBackground = archived ? false : deriveAwaitingBackground(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, deliveryProcessGone, github, registeredPrWatches, armedTimerIds, armedWatches, questions.length)
+  // hasFreshDelivery rather than deliveryInFlight: the spin stops after a minute, and a message still on
+  // its way past that keeps its row where it was rather than parking it in Snoozed.
+  const waitStatus = archived ? undefined : deriveWaitStatus(tele, runtime, needsYou, awaitingBackground, answerInFlight || hasFreshDelivery(row, deliveryProcessGone), nowMs, github, registeredPrWatches, armedWatches)
   // A worker that exited with work still outstanding — a turn in flight, OR a sub-agent still reading
   // "running" (its parent is gone, so it cannot actually be live) — is a crash/stall, not a clean
   // handoff, so it cards as "stalled" not a bare "rest". Mirrors deriveNeedsYou's surfacing above.
@@ -1753,6 +1814,7 @@ function sessionThreadView(
     recurringPrompt: resolveRecurringPrompt(row),
     needsYou,
     awaitingBackground,
+    waitStatus,
     crashed,
     pendingInteraction: interactionPresence.pending,
     actionableInteraction: interactionPresence.needsUser,

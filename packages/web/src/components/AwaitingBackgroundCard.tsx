@@ -1061,7 +1061,7 @@ export function AwaitingBackgroundCard({ thread, fence, onSnooze, onSnoozeFailed
   //
   // OPTIONAL since 2026-09-04: a fence card in a SUB-AGENT's own transcript has no owning thread, so it
   // has no rows and no verb — but it is still this card, at this heading, with this prose.
-  thread?: Pick<ThreadView, "id" | "sessionId" | "kind" | "foreign" | "state" | "archived" | "awaitingBackground" | "runtime" | "bgSnoozed" | "subAgents" | "bgShells" | "watches" | "lastFence">
+  thread?: Pick<ThreadView, "id" | "sessionId" | "kind" | "foreign" | "state" | "archived" | "awaitingBackground" | "waitStatus" | "runtime" | "bgSnoozed" | "subAgents" | "bgShells" | "watches" | "lastFence">
   /** The fence this card STATES, when it is not the one the board is holding. Defaults to the thread's
    *  own `lastFence` — which is the at-rest case, and the only one until 2026-09-04.
    *
@@ -1125,7 +1125,10 @@ export function AwaitingBackgroundCard({ thread, fence, onSnooze, onSnoozeFailed
   // NOT ON A STEPS CARD. The thread is waiting on the reader, so the footer carries the steps' own verbs;
   // an event-snooze ("until new activity") would hide a card whose only new activity is the reader's own
   // reply. The header's wall-clock snooze (the alarm clock) still parks it for anyone who means "not now".
-  const snoozable = thread !== undefined && steps.length === 0 && showsRestingCard(thread) && threadLifecycleAvailability(thread).snooze
+  //
+  // NOT ON A `watching` REST EITHER (2026-10-05): its worker already parked it in Snoozed until the watch
+  // wakes it, which is the very park this button would make.
+  const snoozable = thread !== undefined && steps.length === 0 && thread.waitStatus !== "watching" && showsRestingCard(thread) && threadLifecycleAvailability(thread).snooze
   return (
     // The SAME shell as every transcript card (TranscriptCard). This card stacks directly under an
     // awaiting fence card on a queue card, and it used to be a visibly different object there —

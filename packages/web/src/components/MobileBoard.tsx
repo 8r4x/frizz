@@ -10,6 +10,7 @@ import {
   futureSnoozedUntil,
   lastActiveLabelAt,
   needsAction,
+  restIsWorking,
   sectionThreads,
   sessionIndicatorKind,
   type SessionIndicatorKind,
@@ -127,8 +128,10 @@ function AlarmMark({ size = 18 }: { size?: number }) {
   )
 }
 
-/** One kind → one mark. The kinds are the rail's; only the drawing is the phone's. */
-function ThreadMark({ kind, userSnoozed }: { kind: SessionIndicatorKind; userSnoozed?: boolean }) {
+/** One kind → one mark. The kinds are the rail's; only the drawing is the phone's. `moving` is the rail's
+ *  spinner question for an at-rest wait (inMotion below): a shell or PR rest plays only while its worker
+ *  called it `working`, and stays at rest in the queue and the Snoozed tab. */
+function ThreadMark({ kind, userSnoozed, moving }: { kind: SessionIndicatorKind; userSnoozed?: boolean; moving?: boolean }) {
   if (kind === "needs-input") return <AskMark />
   if (kind === "stalled") {
     return (
@@ -137,7 +140,7 @@ function ThreadMark({ kind, userSnoozed }: { kind: SessionIndicatorKind; userSno
       </StatusBox>
     )
   }
-  if (kind === "working" || kind === "background") return <PlayMark />
+  if (kind === "working" || moving) return <PlayMark />
   // Killed by a usage limit, auto-resume promised: the rail's yellow hourglass (see Sidebar), the
   // phone's drawing — accent like the stalled [!] above, hourglass because a wake is coming.
   if (kind === "limit") {
@@ -358,7 +361,10 @@ function MobileThreadRow({
   // thread parked on a PR whose CI has already settled counts as live work to the server flag behind
   // `isActivelyRunning` (it earns the resting card), while nothing about it is actually moving — so it
   // reads […] here, and a row that reads at-rest has to carry the rest time that goes with it.
-  const inMotion = t.runtime === "running" || t.runtime === "spawning" || kind === "working" || kind === "background"
+  // A shell or PR rest is in motion only when its worker called it `working` (groups.restIsWorking,
+  // 2026-10-05): the same rest in the queue or the Snoozed tab is a handoff, and carries its rest time.
+  const waitMoving = (kind === "background" || kind === "pr") && restIsWorking(t)
+  const inMotion = t.runtime === "running" || t.runtime === "spawning" || kind === "working" || waitMoving
   const wakes = tab === "snoozed" ? spanUntil(wakeAt(t, now), now) : null
   const right = tab === "snoozed" ? (wakes ? `wakes ${wakes}` : null) : inMotion ? null : ageSpan(at, now)
   const projectDir = useSnapshot(store).board?.projectDir
@@ -412,7 +418,7 @@ function MobileThreadRow({
         className="flex w-full items-start gap-3 px-4 py-[11px] text-left active:bg-hover"
       >
         <span className="flex h-[21px] shrink-0 items-center justify-center">
-          <ThreadMark kind={kind} userSnoozed={futureSnoozedUntil(t) !== undefined} />
+          <ThreadMark kind={kind} userSnoozed={futureSnoozedUntil(t) !== undefined} moving={waitMoving} />
         </span>
         <span className="flex min-w-0 flex-1 flex-col gap-px">
           <span className="flex min-w-0 items-baseline gap-2.5">

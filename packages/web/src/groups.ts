@@ -321,10 +321,10 @@ export function parkedAwaitingHint(_hints: readonly AwaitingHint[], _nowMs = Dat
 //
 // From 2026-07-30 the live-SUB-AGENT case did not reach here at all: the server excused such a thread
 // from the queue entirely (board.deriveNeedsYou), so `needsYou` was false and the row kept its spinner in
-// the running band. That still holds for a thread dispatched before the `needs_input:` cut, and for a
-// later one whose fence answers `needs_input: false`. It reaches here AGAIN (2026-10-01) for a worker that
-// answers `true` with a child still out, or rests on one with no fence: it asked for the human, so it
-// sits in the rested band with this ellipsis, and the child keeps its own spinner on its indented row.
+// the running band. That still holds for a thread dispatched before the answer-required cut, and for a
+// later one whose fence answers `status: working`. It reaches here AGAIN (2026-10-01) for a worker that
+// answers `needs_input` with a child still out, or rests on one with no fence: it asked for the human, so
+// it sits in the rested band with this ellipsis, and the child keeps its own spinner on its indented row.
 //
 // Still load-bearing for the EXITED parent whose children keep reading "running" until their transcript
 // goes stale. Without this it would resolve to "working" and hide the [!] stall mark behind a spinner
@@ -427,6 +427,16 @@ export function prChecksRunning(t: Pick<ThreadView, "watches">): boolean {
       w.kind === "github" && w.state === "armed" && w.github?.checks === "running" && w.github.state === "open" &&
       !(w.github.running === 0 && (w.github.gated ?? 0) > 0),
   )
+}
+
+/** DOES THIS REST SPIN? Only when its worker called it `working` and the server found the work moving —
+ *  ThreadView.waitStatus (board.deriveWaitStatus, 2026-10-05). The spinner means that and nothing else:
+ *  a QUEUED rest never carries the field, so a queue row never spins, and a `watching` rest is Snoozed
+ *  and still. Each at-rest arm that used to spin on its own reading — the shell's dot, the octocat over
+ *  running checks — keeps its glyph and asks this whether the frame around it moves (maintainer
+ *  2026-10-03: a watcher thread "shouldn't show up as actively running"). */
+export function restIsWorking(t: Pick<ThreadView, "waitStatus" | "runtime">): boolean {
+  return t.waitStatus === "working" && t.runtime === "turn-idle"
 }
 
 /** A PARENT THAT HAS RESTED WHILE ITS SUB-AGENTS ARE STILL OUT — its own turn is over (turn-idle) and a
@@ -598,8 +608,9 @@ export function sessionIndicatorKind(t: ThreadView): SessionIndicatorKind {
   // AWAITING A TIMER — the hourglass, in whichever band the row sits (awaitingTimerWatch). Below the
   // PR mark: a timer beside a PR watch is the watch's backstop, not the subject. Above the dot: a timer
   // park in the QUEUE wore the shell's blue dot until 2026-09-07, which claimed live work behind a
-  // thread whose only pending event is a wake frizz will deliver.
-  if (awaitingTimerWatch(t)) return "timer"
+  // thread whose only pending event is a wake frizz will deliver. NOT FOR A `working` REST: the timer
+  // there is the backstop of a shell the worker named, and that shell is the motion the row spins for.
+  if (awaitingTimerWatch(t) && !restIsWorking(t)) return "timer"
   // Below the two DECLARED states on purpose. A worker that fenced ```done while a server it never
   // killed keeps running is a one-click dismissal, not live work (FRIZZ.md: "name it in the body and
   // fence anyway"), and a parked ```awaiting is the human's gate — either story outranks "something it

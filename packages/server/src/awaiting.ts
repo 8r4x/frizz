@@ -115,7 +115,7 @@ interface LiveHandleRow {
 
 /** What frizz can actually see running for this thread, in the shape `unaccountedItems` checks against.
  *  Here rather than in the scheduler since 2026-10-01, because the BOARD reads it too: a
- *  `needs_input: false` park keeps its thread out of the queue only while it is honoured, and the board
+ *  `status: working`/`watching` park keeps its thread out of the queue only while it is honoured, and the board
  *  and the scheduler's integrity pass must agree on what "honoured" means (needsInputParkHolds).
  *
  *  A shell and a sub-agent each answer to THREE handles, because the fence names whichever string the
@@ -201,9 +201,11 @@ export function parkOnHuman(park: AwaitingPark): boolean {
 }
 
 /** Does this fence keep a NEW-CONTRACT thread out of the queue (see `needsInputRequired` in
- *  @frizz/shared)? The worker answered `needs_input: false`, and the park is one frizz can honour and has
- *  not run out. Anything less — `true`, no answer, a dead name, an elapsed `for:` — and the thread
- *  queues, which is the safe direction: a wrong `false` must never be a way to disappear.
+ *  @frizz/shared)? The worker answered `status: working` or `status: watching` (or the older
+ *  `needs_input: false`), and the park is one frizz can honour and has not run out. Anything less —
+ *  `needs_input`, no answer, a dead name, an elapsed `for:` — and the thread queues, which is the safe
+ *  direction: a wrong answer must never be a way to disappear. Which band it sits in once out of the
+ *  queue is board.deriveWaitStatus's call, not this one's.
  *
  *  `fenceAtMs` is when the fence landed (the worker's last word). An unknown instant does NOT hold —
  *  without it there is no `for:` to run out, and a park that cannot run out is the stall this grammar
