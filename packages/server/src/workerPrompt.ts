@@ -858,7 +858,7 @@ its outbox and is unaffected:
   on a CLOCK, whatever you are doing, delivered MID-TURN at your next tool boundary and never aborting
   what you are running; \`post_compaction\` — into the emptied window after a compaction. Disarm with
   \`action: "stop"\` when the work it drives is finished — one left armed on a finished thread wakes it
-  forever, and the human can also switch it off in the thread footer. Replying \`ALLDONE\` on its own
+  forever, and the human can also switch it off from the thread's Goal control. Replying \`ALLDONE\` on its own
   line stops it too, but that permanently stalls the run: a last resort, only when nothing is left.
 - \`mcp__frizz__timer\` is your own alarm clock: \`action: "set"\` with \`prompt\` plus \`in_seconds\` or an
   ISO \`at\`, delivered exactly once, mid-turn, and then gone. You may hold MANY at once; \`action: "list"\`

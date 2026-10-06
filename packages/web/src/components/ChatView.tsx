@@ -664,6 +664,9 @@ function ChatView({ slug, virtualized, phone = false, railBeside = false }: { sl
           phoneBarOverride={phone && openQuestions.length > 0
             ? (api) => <PhoneAnswerBar count={openQuestions.length} onAnswer={() => setAnswerSheetOpen(true)} onReply={api.editReply} />
             : undefined}
+          // The box matches the header above it: the phone bar under the phone's chrome, the desktop box
+          // (and its rail's Goal) under the desktop header — which /full keeps at every width.
+          phoneChrome={phone}
         />
       </div>
       {phone && answerSheetOpen && <RegisteredAnswerSheet questions={openQuestions} onClose={() => setAnswerSheetOpen(false)} />}
@@ -1728,13 +1731,21 @@ export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue
             sub-agent, and Doc drawers, all of which carry a corner "Close". Wired to the SAME animated
             close() as the backdrop/Esc path (markDrawerClosing + the 210ms slide-out), never an instant
             unmount. Absent in the main workpane (no onClose → no drawer to close). */}
+        {/* RULED OFF from the thread's verbs: the drawer's own chrome, not the thread's. Mark as done
+            closes the strip to its left, and with only `ml-0.5` between them the two squares sat 2px
+            apart — a near miss on Close archived the thread and shut the drawer, which looks exactly
+            like a close. Hidden at 640px and below, where the row spreads and the X already sits alone
+            at its far end. `ml-3`, not the lifecycle rule's `mx-2.5`: that one also gets the strip's
+            `gap-0.5`, which this one, outside the strip, does not. Ink, dsf 4: 19.75px from the check and
+            19px to the X, against the lifecycle rule's 20 and 19.5 (scripts/ink-gaps.mjs, 2026-10-05). */}
+        {onClose && <span aria-hidden data-close-rule className="ml-3 mr-2.5 h-4 w-px shrink-0 bg-border max-[640px]:hidden" />}
         {onClose && (
           <button
             type="button"
             aria-label="Close"
             data-dialog-initial-focus
             onClick={onClose}
-            className="icon-hover-outline ml-0.5 shrink-0 rounded-md p-1.5 text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg"
+            className="icon-hover-outline shrink-0 rounded-md p-1.5 text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg"
           >
             <X size={15} />
           </button>
@@ -3956,7 +3967,7 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
   const slug = useContext(ThreadSlugContext)
   // On the queue this dismisses THIS card through the user-initiated auto-scroll exit; null in the
   // drawer. Wired into both fence actions so Mark-as-done / park scroll the next card up, exactly like
-  // the footer's Mark-as-done and Snooze do (maintainer 2026-07-21: every card-dismissing control must).
+  // the header's Mark-as-done and Snooze do (maintainer 2026-07-21: every card-dismissing control must).
   const queueDismiss = useContext(QueueDismissContext)
   const board = useBoard()
   // Resolve the owning thread + whether whole-thread lifecycle actions are applicable (session, not
@@ -3965,7 +3976,7 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
   // transcript, where there's no ThreadSlugContext → the fence renders card-only).
   const fenceThread = slug ? threadBySlug(board, slug) : undefined
   const lifecycle = fenceThread ? threadLifecycleAvailability(fenceThread) : undefined
-  // Deliberately NOT `footer`: that stays true on a done thread — whose strip now renders as a
+  // Deliberately NOT `lifecycle`: that stays true on a done thread — whose header cluster renders as a
   // "Done" readout — and keying on it here would grow a live Mark-as-done button on the done fence of a
   // thread that is already archived.
   const canAct = !!(fenceThread && lifecycle?.archive)
@@ -3977,8 +3988,8 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
   const doneThreadRef = useRef<ThreadViewData | null>(null)
   if (canAct && fenceThread) doneThreadRef.current = fenceThread
   const doneThread = canAct && fenceThread ? fenceThread : doneThreadRef.current
-  // ON A PHONE THE CARD CARRIES NO VERB. The button below exists to be redundant with the lifecycle
-  // footer; the phone has no footer, and its bottom bar's Done (PhoneDoneButton) is that stable control —
+  // ON A PHONE THE CARD CARRIES NO VERB. The button below exists to be redundant with the header's
+  // check; the phone's header has none, and its bottom bar's Done (PhoneDoneButton) is that stable control —
   // so the card's copy would only draw the same verb twice, one above the other (the 2026-09-30 capture of
   // the phone thread flagged exactly that, and the approved design draws the card without it).
   const isMobile = useIsMobile()
