@@ -394,10 +394,10 @@ const WATCH = {
     "and frizz brings you back when it finishes, or when `for` runs out.\n\n" +
     "IT IS A ROW, NOT A SENTENCE. A ```awaiting fence has the lifetime of the message carrying it; this " +
     "survives your turn ending, a compaction and a frizz restart.\n\n" +
-    "IT DOES NOT REPLACE THE FENCE. Whether the human is needed while you wait is an answer about each " +
-    "REST, so every rest on running work still ends with a ```awaiting fence that names the work and " +
-    "answers `needs_input: true|false` — `false` keeps the thread out of the human's queue, and a rest " +
-    "with no fence lands in it.\n\n" +
+    "IT DOES NOT REPLACE THE FENCE. Where the thread sits while you wait is an answer about each REST, " +
+    "so every rest on running work still ends with a ```awaiting fence that names the work and answers " +
+    "`status: working|watching|needs_input` — `working` and `watching` keep the thread out of the " +
+    "human's queue, and a rest with no fence lands in it.\n\n" +
     "`for` IS REQUIRED and it is a DURATION, never an instant. When it runs out the row is CANCELLED " +
     "and you are woken to re-decide — that is deliberate, and it is what stops a wait outliving the " +
     "reason you made it. Register again if you still mean it.\n\n" +
@@ -896,19 +896,24 @@ async function activity() {
     .filter(([, ids]) => ids.length > 0)
     .map(([key, ids]) => `  ${key}: [${ids.join(", ")}]`)
   // Every open question rides the fence too: a fence that leaves one out is refused, and a fence on
-  // questions always queues, so its `needs_input:` answer is `true` whatever else it names.
+  // questions always queues, so its `status:` answer is `needs_input` whatever else it names. Otherwise
+  // the template guesses from the kinds — a shell or a sub-agent is usually work that finishes by itself,
+  // a PR, an issue or a timer a watch — and the prose tells the worker to correct it.
   const questionIds = questions.map((q) => q.id).filter(Boolean)
   if (questionIds.length > 0) block.push(`  questions: [${questionIds.join(", ")}]`)
+  const status = questionIds.length > 0 ? "needs_input" : byKind.shell.length + byKind.agent.length > 0 ? "working" : "watching"
   return (
     `${items.length} thing${items.length === 1 ? "" : "s"} running on this thread:\n\n${lines.join("\n")}\n\n` +
     "Name the ones you are ACTUALLY waiting on in your ```awaiting fence. The frontmatter is YAML — one " +
-    "PLURAL key per kind, taking a list — plus a required `for:` duration and a required " +
-    "`needs_input:` answer. `needs_input: false` (the human has nothing to act on yet) keeps the thread " +
-    "out of their queue and needs no prose at all; `needs_input: true` puts it in their queue, with what " +
-    "to look at BELOW a `---` line (there is no `reason:` key).\n\nEverything above, as a fence:\n\n" +
+    "PLURAL key per kind, taking a list — plus a required `for:` duration and a required `status:` " +
+    "answer: `working` (the work finishes by itself; the thread shows as running), `watching` (the wait " +
+    "is on something outside the thread; it is snoozed) or `needs_input` (the human can act on something " +
+    "now; it goes in their queue, with what to look at BELOW a `---` line — there is no `reason:` key). " +
+    "`working` and `watching` need no prose at all.\n\nEverything above, as a fence:\n\n" +
     "```awaiting\n" +
-    `${block.join("\n")}\n  needs_input: ${questionIds.length > 0 ? "true" : "false"}\n  for: 2h\n` +
-    "```\n\nDrop the lines you are not actually waiting on — a dev server you left running is not a wait." +
+    `${block.join("\n")}\n  status: ${status}\n  for: 2h\n` +
+    "```\n\nDrop the lines you are not actually waiting on — a dev server you left running is not a wait " +
+    "— and change `status:` if it names the wrong place." +
     "\n\nA `watch` registration (marked `[watched as …]` above) keeps the WAKE across a compaction and a " +
     "restart, but it does not replace the fence: name the work in the fence all the same." +
     askedBlock + linksBlock

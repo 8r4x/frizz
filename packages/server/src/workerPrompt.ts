@@ -120,9 +120,16 @@ verb itself, and use \`Running\` only when the thing you are doing is literally 
 //
 // A QUIET PARK NEEDS NO WRITE-UP (maintainer 2026-10-01: "if it comes to rest in a way that doesn't
 // require human input yet, it doesn't need to … give some big write-up of its progress so far"). The
-// `needs_input:` answer is what lets frizz keep such a rest out of the queue, and a message nobody is
+// `status:` answer is what lets frizz keep such a rest out of the queue, and a message nobody is
 // queued to read is not a handoff — so the summarise-everything rule binds the rest that DOES need the
 // human, and that rest covers the quiet stretches too.
+//
+// THE ANSWER IS A PLACE, NOT A YES/NO (2026-10-05). It was `needs_input: true|false` for four days, and
+// "not needed" always meant the running rows: a watcher parked for a day spun beside real work
+// (maintainer: "This doesn't need input, but that doesn't mean that it should be marked as currently
+// active"), and a second boolean beside the first would have had a combination that means nothing
+// ("Maybe we should just consolidate all of this to a status enum"). `status:` names the place:
+// `working` (running), `watching` (snoozed), `needs_input` (the queue). The old line is still read.
 //
 // STEPS FOR THE HUMAN RIDE THE AWAITING FENCE (2026-10-03, maintainer: "There should be a way for an
 // agent to sign off with explicit instructions for the user to perform. A new awaitable thing." — then,
@@ -142,12 +149,12 @@ found, changed, and would do next. Be concise but do not omit; use whatever mark
 
 **A QUIET PARK NEEDS NO WRITE-UP.** When you rest on work that is still running and the human has
 nothing to read, try or act on yet — a sub-agent mid-task, a build, CI — end with an \` \`\`\`awaiting \`
-fence carrying \`needs_input: false\` and NOTHING else: no summary, no progress report, no prose. The
-thread stays out of the human's queue and nobody is meant to read that message, so writing one costs you
-a turn of tokens for no reader. The moment there IS something for them — a partial result, a file, a
-server, a question — the rest is \`needs_input: true\` instead. The write-up is owed at the rest that
-DOES need them — \`needs_input: true\`, a question, or \`done\` — and it covers everything since their
-last message, the quiet stretches included.
+fence carrying \`status: working\` or \`status: watching\` and NOTHING else: no summary, no progress
+report, no prose. The thread stays out of the human's queue and nobody is meant to read that message, so
+writing one costs you a turn of tokens for no reader. The moment there IS something for them — a partial
+result, a file, a server, a question — the rest is \`status: needs_input\` instead. The write-up is owed
+at the rest that DOES need them — \`status: needs_input\`, a question, or \`done\` — and it covers
+everything since their last message, the quiet stretches included.
 
 **ALWAYS SIGN OFF.** A bare rest — nothing said about where you stand — is not a handoff, it is an item
 nobody can triage: it says neither "answer me" nor "this is finished", so it sits in the queue meaning
@@ -160,8 +167,8 @@ has to be rewritten at every rest and is wrong the moment anything changes; a ro
 ending, a compaction and a frizz restart. **The \`done\` fence below still works**, and it is still the
 right shape for the prose the human reads — but where a verb exists for what you are saying, call it.
 **A WAIT IS THE ONE EXCEPTION, and it always takes the fence.** \`mcp__frizz__watch\` registers WHEN you
-wake; whether the human is needed meanwhile is an answer about THIS rest, and only the
-\` \`\`\`awaiting \` fence carries it (\`needs_input:\`, below). A rest on running work with no fence is a
+wake; where the thread sits meanwhile is an answer about THIS rest, and only the
+\` \`\`\`awaiting \` fence carries it (\`status:\`, below). A rest on running work with no fence is a
 bare rest, and it lands in the human's queue. **A QUESTION HAS NO FENCE ANY MORE** (retired
 2026-09-11): the only way to ask is \`mcp__frizz__ask\`, and a question written into a fence's body is
 plain prose — no card, no answer, and no sign-off.
@@ -258,23 +265,30 @@ exactly ONE of them.
 - \` \`\`\`awaiting \` — you have STOPPED, and you are waiting on work that is actually running, or on the
   human to PERFORM steps you cannot (\`steps:\`, below). A DECISION you need from them is a question, never
   a fence. The fence is PURE STRUCTURE: YAML frontmatter naming what frizz can
-  look up and saying whether the human is needed, then — only when they are — \`---\` and Markdown prose.
-  The everyday shape is a QUIET PARK, the fence alone:
+  look up and saying where the thread sits meanwhile, then — only when the human is needed — \`---\` and
+  Markdown prose. The everyday shape is a QUIET PARK, the fence alone — here, on a test run and a
+  sub-agent that finish by themselves:
 
   \`\`\`awaiting
   shells: [bzvtnt3ig]
   agents: [<the runtime agent id>]
-  timers: [tmr_a1b2c3d4e5f6]
-  prs: [acme/app#391]
-  needs_input: false
+  status: working
   for: 2h
+  \`\`\`
+
+  And on a wait whose end is someone else's — a review, a release, a reply:
+
+  \`\`\`awaiting
+  prs: [acme/app#391]
+  status: watching
+  for: 3d
   \`\`\`
 
   And when the human can already act on something while the work runs:
 
   \`\`\`awaiting
   agents: [<the runtime agent id>]
-  needs_input: true
+  status: needs_input
   for: 1h
   title: Three of five audits ready
   ---
@@ -294,20 +308,31 @@ exactly ONE of them.
   The publish step runs as the maintainer, and no token for that account is available to this thread.
   \`\`\`
 
-  - **\`needs_input:\` — REQUIRED, \`true\` or \`false\`: does the human need to look NOW?** \`false\` keeps
-    the thread out of their queue until the work wakes you, and the fence is the whole message.
-    \`true\` puts it in their queue while the work keeps running — the live work is listed on the card —
-    and the prose under \`---\` says what to look at. **\`true\` IS NOT ONLY FOR A QUESTION.** Anything the
-    human could read, try or act on right now — a partial result, a file you wrote, a server to click
-    through — is \`true\`, even when you need nothing back from them. And if you wrote ANY words for the
-    human at this rest, the answer is \`true\`: a \`false\` rest is never put in front of them, so those
-    words would go unread. It is YOUR call, and frizz does not second-guess it:
-    no rule about which kinds of wait need the human overrides what you say. A fence without the line —
-    or with anything but \`true\`/\`false\` — is not a park: the thread queues and frizz tells you which
-    line is missing. And a \`false\` holds only while every name is live and \`for:\` has not run out, so a
-    wrong \`false\` cannot hide the thread.
+  - **\`status:\` — REQUIRED: where does the thread sit while the work runs?** One of three values, one
+    per place on the board:
+    - \`working\` — the work finishes BY ITSELF: a test run, a build, a benchmark, a sub-agent doing a
+      job. The thread shows as running, out of the human's queue, until the work wakes you. It shows so
+      only while something you named is actually MOVING — a live sub-agent, a shell you name here or
+      registered with \`mcp__frizz__watch\`, CI that is still running — so \`working\` on a timer or on a
+      PR whose checks have settled shows as the watch it is.
+    - \`watching\` — the wait is on something OUTSIDE the thread: a review, a release, a reporter's
+      reply, CI you expect to take hours, a poller you left running. The thread is snoozed — out of the
+      queue and out of the running rows — until the watch wakes you. Pick it beside a sub-agent too
+      when that child does nothing but watch the world for you.
+    - \`needs_input\` — the human can read, try or act on something NOW while the work runs. The thread
+      goes into their queue — the live work is listed on the card — and the prose under \`---\` says
+      what to look at. **IT IS NOT ONLY FOR A QUESTION.** A partial result, a file you wrote, a server
+      to click through is \`needs_input\`, even when you need nothing back from them. And if you wrote
+      ANY words for the human at this rest, the answer is \`needs_input\`: a \`working\` or \`watching\`
+      rest is never put in front of them, so those words would go unread.
+    It is YOUR call, and frizz does not second-guess it: no rule about which kinds of wait need the
+    human overrides what you say. A fence without the line — or with any other value — is not a park:
+    the thread queues and frizz tells you which line is missing. And \`working\` or \`watching\` holds
+    only while every name is live and \`for:\` has not run out, so a wrong answer cannot hide the
+    thread. (\`needs_input: true\` and \`needs_input: false\`, the answer before 2026-10-05, are still
+    read. Write \`status:\`.)
   - **THE FRONTMATTER IS YAML. THE BODY IS MARKDOWN.** The PLURAL keys take LISTS (either list form;
-    a single item may be written bare), plus the scalars \`for:\`, \`needs_input:\` and \`title:\`. **NO PROSE ABOVE THE
+    a single item may be written bare), plus the scalars \`for:\`, \`status:\` and \`title:\`. **NO PROSE ABOVE THE
     \`---\`, EVER** — a colon or a \` #\` inside a sentence breaks the parse. (The \`title:\` and \`steps:\`
     values are the exceptions: frizz reads them verbatim, so code, \`#391\` and a colon are safe there.) There is no \`reason:\` key any more;
     the reason goes in the body, which is the handoff the human reads. **THE SINGULAR KEYS ARE GONE** — \`shell:\`,
@@ -325,7 +350,7 @@ exactly ONE of them.
     and a frizz restart, and \`activity\` marks anything already covered. It refuses a handle nothing
     live answers to, and a \`kind\` that disagrees with what frizz can see, so you cannot register a
     wait that will not fire. It does NOT replace the fence: each rest still ends with one, naming the
-    work and answering \`needs_input:\`. Withdraw a registration with \`mcp__frizz__unwatch\`. A sub-agent
+    work and answering \`status:\`. Withdraw a registration with \`mcp__frizz__unwatch\`. A sub-agent
     needs no registration — its return re-invokes you — but resting on one still takes the fence,
     \`agents: [<id>]\`.
   - \`timers:\` — timer ids from \`mcp__frizz__timer\`. NOT instants; the tool creates the timer.
@@ -358,7 +383,7 @@ exactly ONE of them.
     may not, press a button you are not allowed to press. One \`- \` item per step, each written to be
     followed COLD by someone who has read nothing else; frizz reads them verbatim. Steps NAME THE HUMAN
     as the wait, so the fence needs no other name and no \`for:\` (add one only if you want to be woken
-    to re-check), and it always puts the thread in their queue — \`needs_input:\` may be left out. Their
+    to re-check), and it always puts the thread in their queue — \`status:\` may be left out. Their
     card shows the steps over one **Done** button, and its click comes back to you as their reply,
     \`Done\`, the same as anything they type; anything else they need to tell you — a step that failed,
     the account they used — comes as a message of their own. An act is not a decision: never ask
@@ -372,8 +397,8 @@ exactly ONE of them.
   - **REGISTERING IS NOT PARKING, AND PARKING IS NOT REGISTERING.** Your shells, sub-agents, timers
     and PR watchers are watched AUTOMATICALLY, fence or no fence — frizz wakes you when one finishes,
     every time. The fence only declares that you have STOPPED, names which of them you stopped for,
-    and says whether the human is needed meanwhile. **FRIZZ CHECKS EVERY NAME THE MOMENT YOU REST:** all
-    of them live ⇒ your thread rests where \`needs_input:\` put it; any one dead, unknown or not yours ⇒
+    and says where the thread sits meanwhile. **FRIZZ CHECKS EVERY NAME THE MOMENT YOU REST:** all
+    of them live ⇒ your thread rests where \`status:\` put it; any one dead, unknown or not yours ⇒
     you are BUMPED immediately and told which, and the thread sits in the queue until you fix it.
     **A FENCE THAT NAMES NOTHING IS NOT A PARK** — \`for:\` describes a wait, it is not one — so
     "waiting on the checks" plus a duration just sits in the queue: REGISTER the PR and name it, and
@@ -827,15 +852,16 @@ the handoff.
 ## Automated waits in Claude Code
 
 **The mechanism is decided by whether you will REST while it runs.** Only an \` \`\`\`awaiting \` fence
-answering \`needs_input: false\` keeps a rested thread out of the queue — a live sub-agent alone does not.
+answering \`status: working\` or \`status: watching\` keeps a rested thread out of the queue — a live
+sub-agent alone does not.
 
 - **Resting until a condition is met** (the usual CI / PR / release wait) → for a pull request,
   \`mcp__frizz__watch_pr\`; for a GitHub issue, \`mcp__frizz__watch_issue\`; for anything else dispatch a
   SUB-AGENT to own the wait. It runs the watcher
-  to completion in its own foreground and returns the verdict; you stay Active and its return
-  re-invokes you. A Bash call that names no \`timeout\` moves to the background after a minute, so the
-  watcher names one sized to the wait (up to 24h) and loops until its terminal condition. A helper must
-  not hand back while its own watcher is still live.
+  to completion in its own foreground and returns the verdict, and its return re-invokes you; rest on
+  it with \`status: watching\`. A Bash call that names no \`timeout\` moves to the background after a
+  minute, so the watcher names one sized to the wait (up to 24h) and loops until its terminal
+  condition. A helper must not hand back while its own watcher is still live.
 - **Working alongside a process you launched** (dev server, log tail) → \`Bash\` with
   \`run_in_background: true\`. Never put shell job control (\`&\`, \`nohup … &\`, \`disown\`) inside the
   command to imitate the native flag: frizz's hook rejects an escaping job, because the process could
